@@ -22,7 +22,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
  *  no type-only barrel import (avoids the heavy objects barrel graph). */
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
 import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
-import { deriveSubstanceKey } from "./resource-store";
+import { deriveSubstanceKey, removeFreshUnreferencedBlobResource } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
 import {
@@ -475,13 +475,30 @@ type Tx2Query = { text: string; values?: unknown[] };
 /** Everything of ONE artifact's write that is decided before its transaction opens (the bytes
  *  stored, the resource row committed, the producer plan resolved) and the queries of its
  *  transaction. */
+/** The resource row of one blob as Tx1 resolved it. `rowVersion` is the row's `xmin` as this write left it:
+ *  the guard of the removal of a fresh row (`removeFreshUnreferencedBlobResource`). */
+type ResolvedBlobResource = {
+  resourceId: string;
+  mime: string;
+  sizeBytes: number;
+  storageKey: string;
+  blobId: string;
+  isDedupe: boolean;
+  rowVersion: string | null;
+};
+
+/** The blobs one BATCH call has stored so far, by content hash, in the order they were resolved: what the
+ *  call must release when it files nothing (`releaseBatchBlobs`), and the resource row a later member with the
+ *  same bytes reuses without touching it again. */
+type BatchBlobs = Map<string, { blobStore: ReturnType<typeof createLocalDiskBlobStore>; orgId: string; newBlob: PreparedArtifactWrite["newBlob"]; authoritative: ResolvedBlobResource }>;
+
 type PreparedArtifactWrite = {
   input: CreateSemanticArtifactInput;
   artifactId: string;
   representationRevisionId: string;
   blobStore: ReturnType<typeof createLocalDiskBlobStore>;
   newBlob: Awaited<ReturnType<ReturnType<typeof createLocalDiskBlobStore>["put"]>>;
-  authoritative: { resourceId: string; mime: string; sizeBytes: number; storageKey: string; blobId: string; isDedupe: boolean };
+  authoritative: ResolvedBlobResource;
   originKind: ArtifactOriginKind;
   persistedRunId: string | null;
   planProduces: string[];
@@ -494,6 +511,7 @@ type PreparedArtifactWrite = {
 
 async function prepareArtifactWrite(
   input: CreateSemanticArtifactInput,
+  batchBlobs?: BatchBlobs,
 ): Promise<PreparedArtifactWrite> {
 
 
@@ -590,14 +608,11 @@ async function prepareArtifactWrite(
     sha256: newBlob.sha256,
   });
 
-  let authoritative: {
-    resourceId: string;
-    mime: string;
-    sizeBytes: number;
-    storageKey: string;
-    blobId: string;
-    isDedupe: boolean;
-  };
+  let authoritative: ResolvedBlobResource;
+  // A member of one batch whose bytes an earlier member of the SAME call already resolved reuses that
+  // resource row as it is, without a second upsert: the upsert of a hit rewrites the row, which would hide
+  // from `removeFreshUnreferencedBlobResource` that the row is still the version this call inserted.
+  const earlierMember = batchBlobs?.get(newBlob.sha256);
 
   try {
     // ---------------------------------------------------------------
@@ -612,7 +627,17 @@ async function prepareArtifactWrite(
     // metadata (DO UPDATE SET org_id = EXCLUDED.org_id is a no-op touch that
     // does NOT overwrite metadata; substance identity is immutable, and a
     // changed metadata would be a different substance with a different key).
-    const [resourceRes] = runPostgresQueriesSync({
+    const [resourceRes] = earlierMember
+      ? [{ rows: [{
+          resource_id: earlierMember.authoritative.resourceId,
+          mime: earlierMember.authoritative.mime,
+          size_bytes: earlierMember.authoritative.sizeBytes,
+          storage_key: earlierMember.authoritative.storageKey,
+          blob_id: earlierMember.authoritative.blobId,
+          is_new: false,
+          row_version: earlierMember.authoritative.rowVersion,
+        }] }]
+      : runPostgresQueriesSync({
       connectionString: getPostgresConnectionString(),
       transaction: true,
       queries: [
@@ -630,7 +655,7 @@ async function prepareArtifactWrite(
   VALUES ($1::text, $2::text, 'blob', $3::text, $4::text, $5::bigint, $6::text,
           jsonb_build_object('storageKey', $8::text, 'blobId', $7::text))
   ON CONFLICT (org_id, kind, substance_key) DO UPDATE SET org_id = EXCLUDED.org_id
-  RETURNING id, org_id, mime, size_bytes, metadata, (xmax = 0) AS is_new
+  RETURNING id, org_id, mime, size_bytes, metadata, (xmax = 0) AS is_new, xmin::text AS row_version
 ),
 blob_insert AS (
   -- Explicit ::text / ::bigint casts on every parameter in the SELECT-list.
@@ -652,7 +677,8 @@ SELECT
   r.size_bytes                  AS size_bytes,
   r.metadata->>'storageKey'     AS storage_key,
   r.metadata->>'blobId'         AS blob_id,
-  r.is_new                      AS is_new
+  r.is_new                      AS is_new,
+  r.row_version                 AS row_version
 FROM resource_op r`,
           values: [
             preallocatedResourceId,
@@ -676,6 +702,7 @@ FROM resource_op r`,
           storage_key: string | null;
           blob_id: string | null;
           is_new: boolean;
+          row_version?: string | null;
         }
       | undefined;
     if (!row) {
@@ -725,7 +752,11 @@ FROM resource_op r`,
       storageKey: rawStorageKey as string,
       blobId: rawBlobId as string,
       isDedupe: !row.is_new,
+      rowVersion: typeof row.row_version === "string" && row.row_version !== "" ? row.row_version : null,
     };
+    if (batchBlobs && !earlierMember) {
+      batchBlobs.set(newBlob.sha256, { blobStore, orgId: input.orgId, newBlob, authoritative });
+    }
     // Validate that the artifact_blobs row referenced by
     // resource.metadata.blobId actually exists, in a SEPARATE statement
     // (fresh snapshot). The Tx1 CTE-internal EXISTS would suffer from PG's
@@ -1259,6 +1290,25 @@ async function abandonArtifactWrite(p: PreparedArtifactWrite): Promise<void> {
   }
 }
 
+/** A BATCH that files nothing releases what it stored: the resource row and the `artifact_blobs` row of every
+ *  blob this call created FRESH (they count against the organization's quota and no artifact refers to them),
+ *  then its file. Each removal is guarded (`removeFreshUnreferencedBlobResource`): it happens only while the
+ *  row is the version this call inserted and no representation refers to it, so a concurrent writer that has
+ *  resolved onto the same bytes, or a transaction that did commit, keeps them. A removal that fails keeps the
+ *  rows (never worse than before); a blob that pre-existed this call (a dedupe) is not this call's to remove. */
+async function releaseBatchBlobs(batchBlobs: BatchBlobs): Promise<void> {
+  for (const { blobStore, orgId, authoritative: a } of batchBlobs.values()) {
+    if (a.isDedupe || a.rowVersion === null) continue;
+    let removed = false;
+    try {
+      removed = removeFreshUnreferencedBlobResource({ orgId, resourceId: a.resourceId, blobId: a.blobId, rowVersion: a.rowVersion });
+    } catch {
+      removed = false;
+    }
+    if (removed) await blobStore.deleteByStorageKey({ orgId, storageKey: a.storageKey }).catch(() => {});
+  }
+}
+
 /** What follows a COMMITTED transaction of one artifact: the dedupe-duplicate blob cleanup, the
  *  producer-outcome log, the matcher enqueue and the result. `queryBase` is where this artifact's
  *  queries begin in the transaction's result list. Nothing here may fail the committed write. */
@@ -1370,6 +1420,7 @@ async function finishArtifactWrite(
  */
 async function commitArtifactWrites(
   prepared: readonly PreparedArtifactWrite[],
+  batchBlobs?: BatchBlobs,
 ): Promise<Array<CreateSemanticArtifactResult>> {
   let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
   try {
@@ -1381,6 +1432,7 @@ async function commitArtifactWrites(
   } catch (err) {
     // The transaction failed AFTER the resource rows (Tx1) committed.
     for (const p of prepared) await abandonArtifactWrite(p);
+    if (batchBlobs) await releaseBatchBlobs(batchBlobs);
     // cinatra#4762: the in-flight fence of the produced event is surfaced typed
     // (PublishCallInFlightError); any other failure is thrown as it was.
     throw publishCallInFlightOr(err);
@@ -1409,8 +1461,10 @@ export async function createSemanticArtifact(
  * so either every artifact's rows (object + outbox, representation, audit, producer and binding
  * ops, the caller's follow-ons such as the ledger rows, the produced event) commit together or
  * none does. The row writers are `prepareArtifactWrite`'s and the commit is `commitArtifactWrites`:
- * the single and the batch path share both. Blobs stored before a rolled-back transaction are
- * content-addressed and keep the resource rows that own them, exactly as after a failed single write.
+ * the single and the batch path share both. A batch that files nothing leaves nothing that counts
+ * against the organization's quota: the resource and blob rows its call created fresh are removed
+ * (`releaseBatchBlobs`), guarded against a concurrent writer of the same bytes; a single write keeps
+ * its fresh rows after a failure, as it always has.
  *
  * The statements of one artifact are ~10; the batch is bounded by its caller (50 members) and by
  * the synchronous bridge's ceiling (`POSTGRES_SYNC_TIMEOUT_MS`, 30 s). Fresh artifact ids contend
@@ -1420,13 +1474,15 @@ export async function createSemanticArtifacts(
   inputs: readonly CreateSemanticArtifactInput[],
 ): Promise<CreateSemanticArtifactResult[]> {
   const prepared: PreparedArtifactWrite[] = [];
+  const batchBlobs: BatchBlobs = new Map();
   try {
-    for (const input of inputs) prepared.push(await prepareArtifactWrite(input));
+    for (const input of inputs) prepared.push(await prepareArtifactWrite(input, batchBlobs));
   } catch (err) {
     for (const p of prepared) await abandonArtifactWrite(p);
+    await releaseBatchBlobs(batchBlobs);
     throw err;
   }
-  return commitArtifactWrites(prepared);
+  return commitArtifactWrites(prepared, batchBlobs);
 }
 
 // Canonical default visibility per owner level (cinatra#1428). The owner axis

@@ -38,7 +38,8 @@ import {
   ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
 } from "./artifact-creation";
-import { ArtifactQuotaExceededError } from "./local-disk-blob-store";
+import { ArtifactQuotaExceededError, assertOrgQuotaRoom } from "./local-disk-blob-store";
+import { deriveSubstanceKey } from "./resource-store";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
@@ -1846,6 +1847,31 @@ export type ToolArtifactSetMember = {
   typedData?: Record<string, unknown>;
 };
 
+/** The bytes a list would ADD to the organization's stored bytes: each distinct content once (the members
+ *  share one resource per content hash), and none that an existing resource of the organization already holds.
+ *  `null` when the existing resources cannot be read (the quota check is then left to the blob store, as an
+ *  unreadable usage figure is). */
+async function newBytesOfList(orgId: string, contents: readonly string[], mime: string): Promise<number | null> {
+  const sizeBySha = new Map<string, number>();
+  for (const content of contents) {
+    const facts = artifactWriteFactsOfContent(content, mime);
+    sizeBySha.set(facts.sha256, facts.sizeBytes);
+  }
+  try {
+    const s = postgresSchema.replaceAll('"', '""');
+    const res = await pool().query(
+      `SELECT substance_key FROM "${s}"."resource" WHERE org_id = $1 AND kind = 'blob' AND substance_key = ANY($2::text[])`,
+      [orgId, [...sizeBySha.keys()].map((sha256) => deriveSubstanceKey({ kind: "blob", sha256 }))],
+    );
+    const held = new Set((res.rows as Array<{ substance_key: string }>).map((r) => r.substance_key));
+    let bytes = 0;
+    for (const [sha256, size] of sizeBySha) if (!held.has(deriveSubstanceKey({ kind: "blob", sha256 }))) bytes += size;
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
 export type ToolArtifactSetResult =
   | { ok: true; artifacts: Array<{ artifactId: string; representationRevisionId: string }>; deduped: boolean }
   /** cinatra#4762: `reason` is set only for a write refused while a publishing call of the run is in flight
@@ -2039,6 +2065,11 @@ export async function materializeToolArtifactSet(input: {
   });
   let created: Array<{ artifactId: string; representationRevisionId: string }>;
   try {
+    // The organization's quota is asked ONCE for everything this call would add, before the first byte is
+    // stored: a list that does not fit is refused with nothing stored (the creation path releases what a
+    // failed or lost write has stored, but a concurrent writer must never see room taken for a list that
+    // was never going to be filed).
+    await assertOrgQuotaRoom(input.orgId, () => newBytesOfList(input.orgId, input.members.map((m) => m.content), input.mime));
     created = await createSemanticArtifacts(
       input.members.map((member, i) =>
         claimedCreateInput({
@@ -2156,6 +2187,15 @@ async function reuseDifferences(input: {
   title: string;
   typedData: Record<string, unknown>;
   mustCarry: readonly string[];
+  /** Recipient-identifying keys compared in BOTH directions: the stored body must carry exactly this value
+   *  (trimmed) for a key whose expected value is a string, and nothing (absent, null or blank) for a key
+   *  whose expected value is null. A body that names a recipient the write does not name is another
+   *  message's body, however alike its bytes. */
+  recipient?: Readonly<Record<string, string | null>>;
+  /** The direct address of the message: a body that RECORDS an address under one of `keys` must record exactly
+   *  `value` (trimmed), and one that records any when `value` is null is another message's. A body that records
+   *  none is not refused for it (the body surface stores no address). */
+  address?: { readonly keys: readonly string[]; readonly value: string | null };
   /** Compare the typed data as a whole, in both directions: a key the stored object carries that the call
    *  does not (writer-owned fields apart) is a difference too, as is a key the call carries and it does not. */
   exact?: boolean;
@@ -2171,10 +2211,22 @@ async function reuseDifferences(input: {
   const keys = input.exact
     ? [...new Set([...wanted, ...(data === null ? [] : Object.keys(data).filter((k) => !owned.has(k)))])]
     : wanted;
+  const recipientKeys = Object.entries(input.recipient ?? {})
+    .filter(([key, expected]) => {
+      const stored = data === null ? undefined : data[key];
+      const present = typeof stored === "string" ? stored.trim() !== "" : stored !== undefined && stored !== null;
+      return expected === null ? present : !(typeof stored === "string" && stored.trim() === expected.trim());
+    })
+    .map(([key]) => key);
+  const addressKeys = (input.address?.keys ?? []).filter((key) => {
+    const stored = data === null ? undefined : data[key];
+    if (typeof stored !== "string" || stored.trim() === "") return false;
+    return input.address!.value === null || stored.trim() !== input.address!.value.trim();
+  });
   return {
     objectType: row === null || row.type !== input.objectTypeId,
     title: data === null || typeof data.title !== "string" || data.title.trim() !== input.title.trim(),
-    keys: keys.filter((k) => data === null || data[k] !== input.typedData[k]),
+    keys: [...new Set([...keys.filter((k) => data === null || data[k] !== input.typedData[k]), ...recipientKeys, ...addressKeys])],
   };
 }
 
@@ -2220,6 +2272,15 @@ export async function materializeFanoutMessageRevision(input: {
    * compared. A key that is not in `typedData` is not compared.
    */
   reuseMustCarry?: readonly string[];
+  /**
+   * The recipient-identifying keys of the message, compared in both directions against a body that was
+   * already filed (cinatra#3089): a key with a string value must be carried by the body, equal; a key with
+   * `null` must be absent from it. A message without a contact therefore reuses only a body without one,
+   * and a body that names an address the message does not have is not reused for it.
+   */
+  reuseRecipient?: Readonly<Record<string, string | null>>;
+  /** The message's direct address, compared with any address the body records (see `reuseDifferences`). */
+  reuseAddress?: { readonly keys: readonly string[]; readonly value: string | null };
 }): Promise<ToolArtifactMaterialization> {
   try {
     ensurePostgresSchema();
@@ -2284,6 +2345,8 @@ export async function materializeFanoutMessageRevision(input: {
           title: input.title,
           typedData: input.typedData,
           mustCarry: input.reuseMustCarry ?? Object.keys(input.typedData),
+          recipient: input.reuseRecipient,
+          address: input.reuseAddress,
         }),
       );
       return what === null

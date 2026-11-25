@@ -592,6 +592,67 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       expect(createSemanticArtifactMock).not.toHaveBeenCalled();
     });
 
+    // A draft WITHOUT a contact (a direct address) and a draft WITH one never share a body that names the other's recipient.
+    const noContact = { ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION, reuseRecipient: { contactId: null }, reuseAddress: { keys: ["recipientEmail", "email"], value: null as string | null } };
+    const withContact = (id: string) => ({
+      ...bodyInput(MESSAGES[0]),
+      typedData: { ...bodyInput(MESSAGES[0]).typedData, contactId: id },
+      reuseMustCarry: [...CORRELATION, "contactId"],
+      reuseRecipient: { contactId: id },
+      reuseAddress: { keys: ["recipientEmail", "email"], value: null as string | null },
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B9 a draft without a contact refuses a body of the same title and bytes that carries some contact, writing and binding nothing", async () => {
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", contactId: "c-9" }));
+      const outcome = await materializeFanoutMessageRevision(noContact);
+      expect(outcome).toMatchObject({ ok: false, code: CODE });
+      expect((outcome as { error: string }).error).toContain("keys: contactId");
+      expect((outcome as { error: string }).error).not.toContain("c-9");
+      nothingWritten();
+    });
+
+    it("B9 a draft without a contact reuses a body that carries none, however many other keys the body carries", async () => {
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", extra: "kept", contactId: "" }));
+      const outcome = await materializeFanoutMessageRevision(noContact);
+      expect(outcome).toMatchObject({ ok: true, deduped: true });
+      expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+    });
+
+    // red-first-expect: to match object { ok: false
+    it.each([
+      ["a different address", { recipientEmail: "other@example.test" }],
+      ["an address under the other key", { email: "other@example.test" }],
+    ])("B9 a draft with the direct address a@example.test refuses a body that records %s", async (_n, recorded) => {
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", ...recorded }));
+      const outcome = await materializeFanoutMessageRevision({
+        ...noContact,
+        reuseAddress: { keys: ["recipientEmail", "email"], value: "a@example.test" },
+      });
+      expect(outcome).toMatchObject({ ok: false, code: CODE });
+      expect((outcome as { error: string }).error).not.toContain("example.test");
+      nothingWritten();
+    });
+
+    it("B9 a draft with the direct address reuses a body that records the same address or none", async () => {
+      const draft = { ...noContact, reuseAddress: { keys: ["recipientEmail", "email"], value: "a@example.test" } };
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", recipientEmail: " a@example.test " }));
+      expect(await materializeFanoutMessageRevision(draft)).toMatchObject({ ok: true, deduped: true });
+      prefile(stored({ runId: "run-1", campaignId: "camp-1" }));
+      expect(await materializeFanoutMessageRevision(draft)).toMatchObject({ ok: true, deduped: true });
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B9 a draft with a contact refuses a body without a contact and a body of another contact, and reuses its own contact's body", async () => {
+      prefile(stored({ runId: "run-1", campaignId: "camp-1" }));
+      expect(await materializeFanoutMessageRevision(withContact("c-1"))).toMatchObject({ ok: false, code: CODE });
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", contactId: "c-2" }));
+      expect(await materializeFanoutMessageRevision(withContact("c-1"))).toMatchObject({ ok: false, code: CODE });
+      nothingWritten();
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", contactId: "c-1" }));
+      expect(await materializeFanoutMessageRevision(withContact("c-1"))).toMatchObject({ ok: true, deduped: true });
+    });
+
     it("B6 a fresh write, with no pre-filed body, is unchanged and stores the writer's own typed data", async () => {
       const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
       expect(outcome).toMatchObject({ ok: true, deduped: false });

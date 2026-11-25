@@ -408,6 +408,18 @@ export type EmailFanoutBodyWrite = {
    * query reads them from the body's data.
    */
   reuseMustCarry: string[];
+  /**
+   * The recipient-identifying keys of the draft, compared in both directions against a body the drafting
+   * step already filed: a string value must be carried by the body, `null` must be absent from it. A draft
+   * without a contact reuses only a body without one.
+   */
+  reuseRecipient: Record<string, string | null>;
+  /**
+   * The draft's direct address and the keys under which a pre-filed body could record an address: a body that
+   * records one must record this address, and any when the draft has none. The body this fan-out files records
+   * no address (PII stays on the recipient record), so a body that records none is not refused for it.
+   */
+  reuseAddress: { keys: string[]; value: string | null };
 };
 
 export type EmailFanoutBodyWriteResult =
@@ -500,6 +512,7 @@ export async function materializeEmailFanout(
         typeof draft.contactId === "string" && draft.contactId.trim() !== ""
           ? draft.contactId.trim()
           : undefined;
+      const directAddress = (draft.recipientEmail ?? draft.email ?? "").trim() || null;
       const subject = draft.subject ?? "";
       const markdown = draft.body ?? draft.bodyHtml ?? "";
       const typedData: Record<string, unknown> = {
@@ -523,6 +536,8 @@ export async function materializeEmailFanout(
           markdown,
           typedData,
           reuseMustCarry: ["runId", "campaignId", ...(contactId ? ["contactId"] : [])],
+          reuseRecipient: { contactId: contactId ?? null },
+          reuseAddress: { keys: ["recipientEmail", "email"], value: directAddress },
         });
       } catch (err) {
         throw new EmailBodyRefusedError(
@@ -594,6 +609,8 @@ async function loadDefaultEmitEmailFanout(): Promise<
             markdown: w.markdown,
             typedData: w.typedData,
             reuseMustCarry: w.reuseMustCarry,
+            reuseRecipient: w.reuseRecipient,
+            reuseAddress: w.reuseAddress,
           });
         },
         registeredTypes,

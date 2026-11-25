@@ -191,6 +191,54 @@ RETURNING id, org_id, kind, substance_key, mime, size_bytes, malware_scan_status
   };
 }
 
+/**
+ * Remove the blob resource a write created FRESH and the `artifact_blobs` row that owns its bytes, when the
+ * write did not commit and nothing refers to them, so the failed write leaves nothing that counts against the
+ * organization's quota. ONE transaction: the resource's advisory lock first (the lock `runResourceBlobGc`
+ * takes), then ONE statement that deletes only while ALL of these still hold at the moment of the delete:
+ *  - the row is the exact version the write inserted (`rowVersion` = its `xmin`): a concurrent writer of the
+ *    same bytes resolves onto this row by `ON CONFLICT DO UPDATE`, which writes a new row version, so a row
+ *    another writer has taken is never removed;
+ *  - no representation refers to the resource (a write whose commit actually landed is never undone).
+ * Returns whether the rows were removed. A statement that finds a changed row or a reference removes nothing.
+ */
+export function removeFreshUnreferencedBlobResource(input: {
+  orgId: string;
+  resourceId: string;
+  blobId: string;
+  rowVersion: string;
+}): boolean {
+  ensurePostgresSchema();
+  const res = runPostgresQueriesSync({
+    connectionString: conn(),
+    transaction: true,
+    queries: [
+      { text: `SELECT pg_advisory_xact_lock(hashtext($1))`, values: [input.resourceId] },
+      {
+        text: `WITH gone AS (
+  DELETE FROM "${q()}"."resource" r
+  WHERE r.id = $1 AND r.org_id = $2 AND r.kind = 'blob' AND r.xmin::text = $3
+    AND NOT EXISTS (
+      SELECT 1 FROM "${q()}"."representation" rep
+      WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+    )
+  RETURNING r.id
+),
+del_blob AS (
+  DELETE FROM "${q()}"."artifact_blobs" b
+  USING gone
+  WHERE b.id = $4 AND b.org_id = $2
+  RETURNING b.id
+)
+SELECT (SELECT count(*) FROM gone)::int AS removed`,
+        values: [input.resourceId, input.orgId, input.rowVersion, input.blobId],
+      },
+    ],
+  });
+  const row = (res?.[1]?.rows?.[0] ?? {}) as { removed?: number | string };
+  return Number(row.removed ?? 0) > 0;
+}
+
 export function getResource(orgId: string, id: string): ResourceRecord | null {
   ensurePostgresSchema();
   const res = runPostgresQueriesSync({

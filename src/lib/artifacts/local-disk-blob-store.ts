@@ -508,6 +508,35 @@ function applyQuotaVerdict(
   );
 }
 
+/**
+ * The organization quota's answer for bytes a caller is ABOUT to store, asked once for the whole of a batch
+ * before the first byte of it is stored (`put` checks one blob at a time, so a batch whose first blobs fit
+ * would otherwise store them before a later one is refused). Throws `ArtifactQuotaExceededError` in `enforce`
+ * mode when the organization's stored bytes plus `newBytes` exceed the quota, exactly the boundary `put`
+ * applies (a blob that fills the remaining room is accepted); in `warn` mode it only logs. Nothing is read when
+ * no quota is set, and an unanswerable usage read skips the check, as in `put`.
+ */
+export async function assertOrgQuotaRoom(
+  orgId: string,
+  /** The bytes the batch would ADD, asked only when a quota is set. */
+  newBytesOf: () => Promise<number | null> | number | null,
+  getUsedBytes: (orgId: string) => Promise<number | null> | number | null = defaultGetOrgUsageBytes,
+): Promise<void> {
+  const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
+  if (orgQuota <= 0) return;
+  const newBytes = await newBytesOf();
+  if (typeof newBytes !== "number" || newBytes <= 0) return;
+  const used = await getUsedBytes(orgId);
+  if (typeof used !== "number") return;
+  applyQuotaVerdict("org-quota", used, orgQuota);
+  if (used + newBytes <= orgQuota) return;
+  if (quotaMode() === "enforce") throw new ArtifactQuotaExceededError("org-quota", orgQuota, used + newBytes);
+  console.warn(
+    `[artifact-blob-store] org-quota would be exceeded by this batch (used=${used}, new=${newBytes}, limit=${orgQuota}) — ` +
+      `proceeding (mode=warn; set ${ARTIFACT_QUOTA_MODE_ENV}=enforce to reject)`,
+  );
+}
+
 export function createLocalDiskBlobStore(
   options?: LocalDiskBlobStoreOptions,
 ): BlobStore {

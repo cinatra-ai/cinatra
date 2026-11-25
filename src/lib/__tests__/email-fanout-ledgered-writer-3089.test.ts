@@ -154,6 +154,30 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
     ]);
   });
 
+  // red-first-expect: expected [ undefined, undefined, undefined ] to deeply equal
+  it("A5 every body write names the recipient keys a reused body is compared on, both ways: the contact, or none and the direct address", async () => {
+    const fx = makeFixture();
+    await materializeEmailFanout(
+      {
+        ...input,
+        drafts: [
+          twoDrafts[0]!,
+          { id: "d3", subject: "No contact", body: "Body three", step: 1 },
+          { id: "d4", subject: "Direct", body: "Body four", step: 1, recipientEmail: " a@example.test " },
+        ],
+        recipients: twoRecipients,
+      },
+      { writeBody: fx.writeBody, registeredTypes: ALL_TYPES },
+    );
+    const named = fx.bodyWrites.map((w) => w as BodyWrite & { reuseRecipient?: unknown; reuseAddress?: unknown });
+    expect(named.map((w) => w.reuseRecipient)).toEqual([{ contactId: "c1" }, { contactId: null }, { contactId: null }]);
+    expect(named.map((w) => w.reuseAddress)).toEqual([
+      { keys: ["recipientEmail", "email"], value: null },
+      { keys: ["recipientEmail", "email"], value: null },
+      { keys: ["recipientEmail", "email"], value: "a@example.test" },
+    ]);
+  });
+
   it("A3 a retried fan-out over the same drafts writes nothing new and returns the same artifact ids", async () => {
     const fx = makeFixture();
     const deps = { writeBody: fx.writeBody, registeredTypes: ALL_TYPES };
