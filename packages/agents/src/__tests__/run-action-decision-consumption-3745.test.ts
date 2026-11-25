@@ -204,7 +204,6 @@ function tableName(table: unknown): string {
 
 // The module is new with cinatra#3745. It is loaded inside each test, not at the top of the file: before the change
 // the file still loads and each test fails on the missing module.
-// red-first-expect: Cannot find module '/src/run-action-decision-consumption'
 const loadModule = () => import("../run-action-decision-consumption");
 async function consume(input: unknown) {
   const { consumeRunActionDecision } = await loadModule();
@@ -291,7 +290,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     let park: Promise<unknown> | null = null;
     // The new decision arrives right after the consumption chose the released one, and is given time to commit.
     h.afterDecisionRead = async () => { park = newPark(); await pause(); };
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     await park;
     expect(result).toMatchObject({ decisionId: "decision-1" });
@@ -309,7 +307,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
     h.parkHold = new Promise<void>((resolve) => { release = resolve; });
     const park = newPark();
     await pause();
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const consumption = consume(input()).catch((e: unknown) => e);
     await pause();
     // The consumption waits at the run row: it has not read the binding yet.
@@ -394,7 +391,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
   it("consumes once a released decision with no generation: a row of an older node is current until a reset", async () => {
     await loadModule();
     h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: null })]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decidedBy: "user-7" });
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
@@ -416,7 +412,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       decision({ id: "decision-a", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
         createdAt: ms, createdAtMicros: base + 500 }),
     ]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
     expect(consumptions()).toEqual([]);
     // The read orders as the store does (created_at, then id, newest first) and takes one row.
@@ -442,7 +437,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       { declaredRows: "[{" }, { declaredRows: JSON.stringify([{ label: "Subject" }]) }];
     for (const over of malformed) {
       h.tables.set(agentRunPublishDecisions, [decision(over)]);
-      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
       const refused = await consume(input()).catch((e: unknown) => e as Error & { code?: string });
       expect(refused).toMatchObject({ code: "action_person_decision_invalid" });
       expect(String((refused as Error).message)).not.toMatch(/not json|Subject/);

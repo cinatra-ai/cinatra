@@ -212,7 +212,6 @@ describe("cinatra#3033 — the display the server names is the display the previ
       actorCtx: { actor: { kind: "user", id: "u" }, orgId: ORG, roleHints: [] } as never,
     });
     expect(reading.complete).toBe(true);
-    // red-first-expect: expected undefined to be
     expect(reading.onlyTargetDisplay).toBe(drawnBy);
   });
 });

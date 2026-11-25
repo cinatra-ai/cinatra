@@ -171,7 +171,6 @@ function beforeFirstWrite(): string[] {
 }
 
 describe("a run's content writer takes the producing run's row before its first write (cinatra#4762)", () => {
-  // red-first-expect: expected [ …(3) ] to deeply equal [ { writer: 'create', …(1) }, …(2) ]
   it("create, update and publish lock the run once, after the advisory lock and before any insert or update", async () => {
     const outcomes: Array<{ writer: string; before: string[] }> = [];
     await createDashboard({ name: "Run board", config: DC, ownerLevel: "team", ownerId: TEAM }, runActor);

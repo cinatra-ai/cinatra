@@ -156,7 +156,6 @@ async function refusedWith(p: Promise<unknown>, code: string) {
 
 describe("an embedded child step on a development installation", () => {
   it("resolves to the child's own tool, read from the child's source at its own version", async () => {
-    // red-first-expect: child-not-materialized
     const world = makeWorld();
     const origin = await resolve(world);
     expect(origin).toEqual({
@@ -247,7 +246,6 @@ describe("an embedded child step on a development installation", () => {
   });
 
   it("refuses a child the canonical store holds archived or otherwise not live, before its source is read", async () => {
-    // red-first-expect: edge-not-live
     for (const status of ["archived", "uninstalled-tombstone"]) {
       const world = makeWorld((w) => {
         w.records[CHILD] = [row({ status })];
@@ -269,7 +267,6 @@ describe("an embedded child step on a development installation", () => {
   });
 
   it("refuses when the child's install record cannot be read, or is not an agent's", async () => {
-    // red-first-expect: origin-unreadable
     await refusedWith(resolve(makeWorld((w) => { w.records[CHILD] = new Error("store down"); })), "origin-unreadable");
     await refusedWith(resolve(makeWorld((w) => { w.records[CHILD] = [row({ kind: "artifact" })]; })),
       "edge-target-mismatch");

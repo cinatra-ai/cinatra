@@ -420,7 +420,6 @@ describe("capture capability serving", () => {
     const PUBLISH = { ...PAYLOAD, reviewTaskId: "publish-decision:subject", subject: "publish-decision" as const };
     const mintPublish = () => mintCaptureCapability(PUBLISH, { nowSeconds: NOW })!;
 
-    // red-first-expect: expected "vi.fn()" to be called with arguments: [ { runId: 'run-1', …(3) } ]
     it("is served through the row's own set, and the gate port is never read", async () => {
       const readPublishDecisionPinnedTargets = vi.fn(async () => [GATE_A_TARGET]);
       const ports = makePorts({ readPublishDecisionPinnedTargets });

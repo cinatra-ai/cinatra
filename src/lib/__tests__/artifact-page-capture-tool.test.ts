@@ -335,7 +335,6 @@ describe("cinatra#4223 page capture: the shared budget refuses before the captur
     expect(BUDGET_REFUSAL_ERRORS.concurrency_exceeded).toContain("2 page captures in flight");
   });
 
-  // red-first-expect: expected { ok: false, …(2) } to match object { ok: false, …(1) }
   it("a filing the in-flight fence refuses answers publish_call_in_flight and releases the lease (cinatra#4762)", async () => {
     // The fence's database abort, as the writer's transaction raises it.
     const fenceAbort = Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
