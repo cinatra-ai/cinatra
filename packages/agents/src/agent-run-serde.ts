@@ -812,17 +812,21 @@ export async function selectWayflowRunStepToolPolicy(input: {
   if (!routes.ok) throw new RunStepToolPolicyRefusal(routes.error);
   // cinatra#3089: the mounted file's own text (its digest is sourceSha256), from which the dispatch compiles the steps
   // that classify the run's pauses. A loader that sends none (an older one) leaves them uncompiled.
-  if (b.mountedSource !== undefined && (!text(b.mountedSource) || sha256(b.mountedSource) !== b.sourceSha256)) {
+  // The loader sends it once: as `mountedSource`, or, when it is the declaration source byte for byte, as that marker.
+  const mountedSource = b.mountedSourceIsDeclarationSource === true ? b.declarationSource : b.mountedSource;
+  if ((b.mountedSourceIsDeclarationSource !== undefined && (b.mountedSourceIsDeclarationSource !== true || b.mountedSource !== undefined)) ||
+      (mountedSource !== undefined && (!text(mountedSource) || sha256(mountedSource) !== b.sourceSha256))) {
     throw new RunStepToolPolicyRefusal("step_tool_loader_binding_invalid");
   }
   const policy = createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
     selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
-  return text(b.mountedSource) ? Object.freeze({ ...policy, mountedSource: b.mountedSource }) : policy;
+  return text(mountedSource) ? Object.freeze({ ...policy, mountedSource }) : policy;
 }
 
-/** The loader's answer holds the agent's graph about three times (its composed document, the bound and the mounted source); a larger
- * answer is refused before it is read in full, parsed, hashed or stored (cinatra#3745). */
-export const LOADER_SELECTION_MAX_BYTES = 8 * 1024 * 1024;
+/** The loader's answer holds the agent's graph up to three times (its composed document, the bound source and, when the
+ * loader transformed it, the mounted file's own text, cinatra#3089); a larger answer is refused before it is read in full,
+ * parsed, hashed or stored (cinatra#3745). 8 MiB held the first two; the third copy is at most one more 8 MiB. */
+export const LOADER_SELECTION_MAX_BYTES = 16 * 1024 * 1024;
 async function readLoaderAnswer(response: Response): Promise<unknown> {
   const declared = response.headers.get("content-length");
   if (declared !== null && !(Number(declared) <= LOADER_SELECTION_MAX_BYTES)) {

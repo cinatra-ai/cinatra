@@ -5108,7 +5108,13 @@ def _mount_one_sync(
         "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
         "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
         "declarationSource": raw_text,
-        "mountedSource": mounted_text,
+        # cinatra#3089: the mounted file's text goes once: when it is the
+        # declaration source byte for byte, only that is said.
+        **(
+            {"mountedSourceIsDeclarationSource": True}
+            if mounted_text == raw_text
+            else {"mountedSource": mounted_text}
+        ),
     })
     # Frozen host-only selection snapshot; a failed attachment
     # refuses the mount rather than minting step-only authority.
