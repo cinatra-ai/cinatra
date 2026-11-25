@@ -331,8 +331,8 @@ describe("agent_run_resume and a retired step", () => {
   it("a tombstoned step is refused and nothing is sent", async () => {
     parkAt("@cinatra/email-reviewer-agent:output");
     const answer = (await resume()) as { error?: string };
-    expect(durableRead).toHaveBeenCalledWith("run-1", "wayflow-task-1");
     expect(answer.error).toBe(RETIRED);
+    expect(durableRead).toHaveBeenCalledWith("run-1", "wayflow-task-1");
     nothingMoved();
   });
 
