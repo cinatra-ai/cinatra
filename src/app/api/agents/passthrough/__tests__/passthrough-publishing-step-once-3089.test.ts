@@ -1,40 +1,62 @@
 /**
  * cinatra#3089: a declared publishing step's tool call is performed AT MOST ONCE
- * per released decision. Before the tool's effect starts, the road claims the
- * decision in the durable consumption ledger (one insert that only one caller
- * wins); a call that does not win answers a fixed 409 and never reaches the
- * effect, and a claimed decision is not given back when the effect fails.
+ * per released decision, across roads. After the handler read its arguments and
+ * before the tool's effect starts, the road uses the decision through the agents
+ * package's single-use consumption (`consumeRunActionDecision`, cinatra#3745),
+ * which records it under the ledger key `publish_decision:<decision id>`: the
+ * key the guarded MCP road writes too. A decision already used answers a fixed
+ * 409 and never reaches the effect; a use is not given back when the effect
+ * fails.
  *
- * Drives the real route, the real run binding, the real declaration reader and
- * the owning package's real metadata, handlers and argument schema. The run
- * store, the publish-decision reads and the claim (an in-memory set standing in
- * for the ledger's conflict-free insert), the bridge-auth check, the actor
- * builder and the send's use cases are test doubles.
+ * Drives the real route, the real run binding and source-bound step proof, the
+ * real declaration reader, the real consumption caller and the owning package's
+ * real metadata, handlers and argument schema. The run store, the
+ * publish-decision reads, the consumption (a stand-in that keeps main's
+ * contract: a proof and a run write authority are required, one key per
+ * decision whatever the action, an already-used key is refused with
+ * `action_person_decision_already_consumed`), the authority mint, the
+ * bridge-auth check, the actor builder and the send's use cases are test
+ * doubles. The real consumption's single key across actions is pinned in
+ * packages/agents/src/__tests__/run-action-decision-consumption-3745.test.ts.
  */
 // red-first-expect: expected 403 to be 200
 import { afterAll, beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { createHmac } from "node:crypto";
 
-const h = vi.hoisted(() => ({
-  readAgentRunById: vi.fn(),
-  readAgentRunByContextId: vi.fn(),
-  publishCallAllowed: vi.fn(),
-  releasedPublishingStepDecisionId: vi.fn(),
-  claimPublishingStepCall: vi.fn(),
-  decisionId: "decision-1",
-  consumed: new Set<string>(),
-  claims: [] as unknown[],
-  sendFails: 0,
-  sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
-}));
+const h = vi.hoisted(() => {
+  class RunStepToolPolicyRefusal extends Error {
+    constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
+  }
+  return {
+    RunStepToolPolicyRefusal,
+    readAgentRunById: vi.fn(),
+    readAgentRunByContextId: vi.fn(),
+    publishCallAllowed: vi.fn(),
+    publishingStepCallReleased: vi.fn(),
+    verifyRunExecutedSource: vi.fn(),
+    consumeRunActionDecision: vi.fn(),
+    decisionId: "decision-1",
+    ledger: new Map<string, unknown>(),
+    consumptions: [] as Array<Record<string, unknown>>,
+    sendFails: 0,
+    sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
+  };
+});
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/agents", () => ({
   publishCallAllowed: h.publishCallAllowed,
-  releasedPublishingStepDecisionId: h.releasedPublishingStepDecisionId,
-  claimPublishingStepCall: h.claimPublishingStepCall,
+  publishingStepCallReleased: h.publishingStepCallReleased,
   readAgentRunById: h.readAgentRunById,
   readAgentRunByContextId: h.readAgentRunByContextId,
+}));
+vi.mock("@cinatra-ai/agents/store", () => ({
+  verifyRunExecutedSource: h.verifyRunExecutedSource,
+  consumeRunActionDecision: h.consumeRunActionDecision,
+  RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
+}));
+vi.mock("@/lib/org-write/run-authority-mint", () => ({
+  mintRunWriteAuthorityForMcp: vi.fn(async () => Object.freeze({ authority: "run-authority-under-test" })),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
 vi.mock("@cinatra-ai/mcp-server", async () => {
@@ -63,6 +85,8 @@ vi.mock("@/lib/primitive-handlers", () => ({
 }));
 vi.mock("@/lib/extension-host-context", () => ({
   prepareDeclaredRunToolArguments: async (_tool: string, input: unknown) => input,
+  runActionRefusalClassCode: (err: unknown) =>
+    err instanceof h.RunStepToolPolicyRefusal ? (err as { code: string }).code : null,
   OutwardActionRefusal: class OutwardActionRefusal extends Error {
     constructor(readonly code: string) { super(code); this.name = "OutwardActionRefusal"; }
   },
@@ -100,38 +124,75 @@ const SEND_INPUT = {
 const ATTEST_BEFORE = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 const PERFORMED = "publishing_step_call_performed";
 
-function stepHeaders(node = NODE) {
+const SOURCE = {
+  sourceSha256: "b".repeat(64),
+  executedSourceSha256: "c".repeat(64),
+  declarationSourceSha256: "d".repeat(64),
+};
+const VERIFIED_SOURCE = Object.freeze({ contextId: CTX, stepId: NODE, executionAttemptId: "attempt-1", ...SOURCE });
+const HOST_ACTION = {
+  toolName: SEND,
+  packageName: "@cinatra-ai/host",
+  version: "2817.1.0",
+  installId: "host-builtin",
+  digest: "host-builtin",
+};
+const MCP_ACTION = { toolName: SEND, packageName: "@cinatra-ai/host", version: "2817.1.0", installId: "host-builtin",
+  digest: "host-builtin" };
+
+/** The source-bound pair the runtime signs over the step, its task's attempt and the executing source. */
+function sourceHeaders(): Record<string, string> {
   const expiry = Math.floor(Date.now() / 1000) + 300;
-  const sig = createHmac("sha256", ATTEST_KEY).update(`s1\n${CTX}\n${node}\n${expiry}`).digest("hex");
-  return { "x-cinatra-step-node": node, "x-cinatra-step-attestation": `s1:${expiry}:${sig}` };
+  const attempt = VERIFIED_SOURCE.executionAttemptId;
+  const sig = createHmac("sha256", ATTEST_KEY)
+    .update(`s2\n${CTX}\n${NODE}\n${attempt}\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n${SOURCE.declarationSourceSha256}\n${expiry}`)
+    .digest("hex");
+  return {
+    "x-cinatra-step-node": NODE,
+    "x-cinatra-execution-attempt": attempt,
+    "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
+    "x-cinatra-raw-source": SOURCE.sourceSha256,
+    "x-cinatra-executed-source": SOURCE.executedSourceSha256,
+    "x-cinatra-declaration-source": SOURCE.declarationSourceSha256,
+  };
 }
 
 function makeReq(input: unknown = SEND_INPUT): Request {
   return new Request("http://localhost:3000/api/agents/passthrough", {
     method: "POST",
-    headers: { "content-type": "application/json", "x-cinatra-a2a-context-id": CTX, ...stepHeaders() },
+    headers: { "content-type": "application/json", "x-cinatra-a2a-context-id": CTX, ...sourceHeaders() },
     body: JSON.stringify({ tool: SEND, input, agent_run_id: RUN.id }),
   });
 }
 
+/** The consumption's contract on main (run-action-decision-consumption.ts): a proof and an authority are required;
+ *  the newest released decision of the step is used once under `publish_decision:<id>`, whatever the action. */
+async function consumeStandIn(input: { orgId?: string; runId?: string; authority?: unknown; proof?: { stepId?: string };
+  action?: Record<string, unknown> }) {
+  h.consumptions.push(input as Record<string, unknown>);
+  if (!input.orgId || !input.runId || !input.authority || !input.proof || !input.action) {
+    throw new h.RunStepToolPolicyRefusal("action_decision_input_invalid");
+  }
+  await Promise.resolve();
+  const key = `publish_decision:${h.decisionId}`;
+  if (h.ledger.has(key)) throw new h.RunStepToolPolicyRefusal("action_person_decision_already_consumed");
+  h.ledger.set(key, input.action);
+  return { consumptionKey: key, decisionId: h.decisionId, decidedBy: "user-7", stepId: input.proof.stepId,
+    action: input.action };
+}
+
 beforeEach(() => {
   h.sends.length = 0;
-  h.claims.length = 0;
-  h.consumed.clear();
+  h.consumptions.length = 0;
+  h.ledger.clear();
   h.sendFails = 0;
   h.decisionId = "decision-1";
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
   h.publishCallAllowed.mockReset().mockResolvedValue(true);
-  h.releasedPublishingStepDecisionId.mockReset().mockImplementation(async () => h.decisionId);
-  // The ledger's insert: the first caller of a decision wins, every later one does not.
-  h.claimPublishingStepCall.mockReset().mockImplementation(async (claim: { decisionId: string }) => {
-    h.claims.push(claim);
-    await Promise.resolve();
-    if (h.consumed.has(claim.decisionId)) return false;
-    h.consumed.add(claim.decisionId);
-    return true;
-  });
+  h.publishingStepCallReleased.mockReset().mockResolvedValue(true);
+  h.verifyRunExecutedSource.mockReset().mockResolvedValue(VERIFIED_SOURCE);
+  h.consumeRunActionDecision.mockReset().mockImplementation(consumeStandIn);
   process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
 });
 
@@ -157,30 +218,31 @@ describe("a declared publishing step's call, once per released decision", () => 
     expect(h.sends).toHaveLength(1);
   });
 
-  it("claims the decision with the run, its organisation, the verified step and the tool", async () => {
+  it("uses the decision through the consumption, with the run, its organisation, authority, proof and the tool", async () => {
     expect((await POST(makeReq())).status).toBe(200);
-    expect(h.claims).toEqual([
-      { decisionId: "decision-1", run: { id: RUN.id, orgId: RUN.orgId }, stepId: NODE, tool: SEND, executedSourceSha256: null },
+    expect(h.consumptions).toEqual([
+      { orgId: RUN.orgId, runId: RUN.id, authority: { authority: "run-authority-under-test" }, proof: VERIFIED_SOURCE,
+        action: HOST_ACTION },
     ]);
+    expect([...h.ledger.keys()]).toEqual(["publish_decision:decision-1"]);
   });
 
   it("a concurrent pair reaches the send once", async () => {
-    // The second call claims while the first call's claim is still open.
+    // The second call asks for the decision while the first call's use of it is still open.
     let entered!: () => void;
     let release!: () => void;
     const firstEntered = new Promise<void>((resolve) => (entered = resolve));
     const firstReleased = new Promise<void>((resolve) => (release = resolve));
-    const ledger = h.claimPublishingStepCall.getMockImplementation()!;
-    h.claimPublishingStepCall.mockImplementationOnce(async (claim: { decisionId: string }) => {
+    h.consumeRunActionDecision.mockImplementationOnce(async (input: Parameters<typeof consumeStandIn>[0]) => {
       entered();
       await firstReleased;
-      return ledger(claim);
+      return consumeStandIn(input);
     });
     const first = POST(makeReq());
     // A call that is answered without claiming does not hold the second one back.
     await Promise.race([firstEntered, first]);
     const second = POST(makeReq());
-    await vi.waitFor(() => expect(h.claims).toHaveLength(1));
+    await vi.waitFor(() => expect(h.consumptions).toHaveLength(1));
     release();
     const statuses = [(await first).status, (await second).status];
     expect(statuses.sort()).toEqual([200, 409]);
@@ -209,22 +271,45 @@ describe("a declared publishing step's call, once per released decision", () => 
   it("arguments the owning package's schema refuses use nothing: the call with the card's values is served after", async () => {
     const refused = await POST(makeReq({ campaignId: "" }));
     expect(refused.status).toBe(500);
-    expect(h.claims).toHaveLength(0);
+    expect(h.consumptions).toHaveLength(0);
     expect((await POST(makeReq())).status).toBe(200);
     expect(h.sends).toHaveLength(1);
   });
 
-  it("a claim that cannot be recorded refuses the call before the send", async () => {
-    h.claimPublishingStepCall.mockRejectedValueOnce(new Error("db down"));
+  it("a consumption the store cannot record is the run call's refusal, before the send", async () => {
+    h.consumeRunActionDecision.mockRejectedValueOnce(new h.RunStepToolPolicyRefusal("action_person_decision_unavailable"));
     const res = await POST(makeReq());
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(403);
+    expect(await codeOf(res)).toBe("action_person_decision_unavailable");
     expect(h.sends).toHaveLength(0);
+  });
+});
+
+describe("one use per decision across roads", () => {
+  it("a decision the guarded MCP road used makes the passthrough call answer 409", async () => {
+    await h.consumeRunActionDecision({ orgId: RUN.orgId, runId: RUN.id, authority: { authority: "mcp" },
+      proof: VERIFIED_SOURCE, action: MCP_ACTION });
+    const res = await POST(makeReq());
+    expect(res.status).toBe(409);
+    expect(await codeOf(res)).toBe(PERFORMED);
+    expect(h.sends).toHaveLength(0);
+  });
+
+  it("a decision the passthrough call used is refused to the guarded MCP road", async () => {
+    expect((await POST(makeReq())).status).toBe(200);
+    await expect(
+      h.consumeRunActionDecision({ orgId: RUN.orgId, runId: RUN.id, authority: { authority: "mcp" },
+        proof: VERIFIED_SOURCE, action: MCP_ACTION }),
+    ).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect([...h.ledger.keys()]).toEqual(["publish_decision:decision-1"]);
   });
 });
 
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
+  vi.doUnmock("@cinatra-ai/agents/store");
+  vi.doUnmock("@/lib/org-write/run-authority-mint");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");

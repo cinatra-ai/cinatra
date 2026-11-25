@@ -3,7 +3,7 @@ import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
 import "server-only";
 import { NextResponse } from "next/server";
 
-import { claimPublishingStepCall, publishCallAllowed, readAgentRunById, releasedPublishingStepDecisionId } from "@cinatra-ai/agents";
+import { publishCallAllowed, publishingStepCallReleased, readAgentRunById } from "@cinatra-ai/agents";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
@@ -56,6 +56,7 @@ import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch
 import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
 import {
+  consumePublishingStepDecision,
   declaresPassthroughPublishingStep,
   loadPassthroughPublishingStepHandler,
 } from "@/lib/passthrough-publishing-step-tools";
@@ -529,8 +530,7 @@ export async function POST(req: Request): Promise<Response> {
   // cinatra#3089: a declared publishing-step tool is served only to a verified
   // step the run's compiled flow lists as publishing, whose newest decision is
   // released. A step that is not listed is refused whatever its rows say.
-  const releasedDecisionId = publishingStepTool ? await releasedPublishingStepDecisionId(run, verifiedStepId) : null;
-  if (publishingStepTool && (releasedDecisionId === null || verifiedStepId === undefined)) {
+  if (publishingStepTool && !(await publishingStepCallReleased(run, verifiedStepId))) {
     return NextResponse.json(
       { error: "This tool is served only as a declared publishing step's call.", code: "publishing_step_required" },
       { status: 403 },
@@ -885,14 +885,16 @@ export async function POST(req: Request): Promise<Response> {
       // run write authority). The MCP boundary is not crossed; this road is the
       // one road for a run's outward call, and it is gated above by the step's
       // released decision. The call is performed at most once per released
-      // decision: after the handler read its arguments and before the effect
-      // starts, the decision is claimed in the consumption ledger; a call that
-      // does not win answers 409 and never reaches the effect, and a claim is
-      // never given back (another attempt takes a new release).
-      const claim = { decisionId: releasedDecisionId ?? "", run: { id: run.id, orgId: run.orgId }, stepId: verifiedStepId ?? "",
-        tool, executedSourceSha256: verifiedExecutedSource?.executedSourceSha256 ?? null };
+      // decision, across roads: after the handler read its arguments and
+      // before the effect starts, the decision is used through the agents
+      // package's single-use consumption (key `publish_decision:<id>`, the key
+      // the guarded MCP road writes too). A decision already used answers 409
+      // and never reaches the effect; a use is never given back (another
+      // attempt takes a new release). Any other refusal is the run call's 403.
       const beforeEffect = async () => {
-        if (!(await claimPublishingStepCall(claim))) throw new PublishingStepCallPerformed();
+        const used = await consumePublishingStepDecision({ tool, orgId: run.orgId, runId: run.id,
+          authority: orgWriteAuthority, proof: verifiedExecutedSource });
+        if (!used) throw new PublishingStepCallPerformed();
       };
       const handler = await loadPassthroughPublishingStepHandler(tool, { beforeEffect });
       if (typeof handler !== "function") {

@@ -3,8 +3,6 @@
 // flow AND that step's newest decision reads `released`. Unlike publishCallAllowed, a step that is not listed is refused
 // whatever its decision rows say, and every read failure refuses.
 // red-first-expect: publishingStepCallReleased is not a function
-// red-first-expect: releasedPublishingStepDecisionId is not a function
-// red-first-expect: claimPublishingStepCall is not a function
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeMock = vi.hoisted(() => ({
@@ -23,7 +21,6 @@ const decisions = vi.hoisted(() => ({
   readOpenDecisionForRun: vi.fn(),
   listDueParked: vi.fn(async () => []),
   listSettledWithWaitingRun: vi.fn(async () => []),
-  claimPublishDecisionConsumption: vi.fn(),
 }));
 vi.mock("../publish-decision-store", () => decisions);
 
@@ -94,64 +91,5 @@ describe("a read that cannot prove the step", () => {
   it("a decision read error refuses", async () => {
     decisions.readDecisionForRunNode.mockRejectedValue(new Error("db down"));
     expect(await publishingStepCallReleased(RUN, "send")).toBe(false);
-  });
-});
-
-const releasedPublishingStepDecisionId = (run: { id: string; templateId: string }, step: string | undefined) =>
-  (actions as unknown as {
-    releasedPublishingStepDecisionId: (r: typeof run, s: string | undefined) => Promise<string | null>;
-  }).releasedPublishingStepDecisionId(run, step);
-
-const claimPublishingStepCall = (input: Record<string, unknown>) =>
-  (actions as unknown as { claimPublishingStepCall: (i: Record<string, unknown>) => Promise<boolean> }).claimPublishingStepCall(input);
-
-describe("the released decision a call is performed under", () => {
-  it("is the id of the listed step's newest decision when it reads released", async () => {
-    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await releasedPublishingStepDecisionId(RUN, "send")).toBe("d1");
-  });
-
-  it("is none for a step the call may not take, and for a read error", async () => {
-    decisions.readDecisionForRunNode.mockResolvedValue(row("parked"));
-    expect(await releasedPublishingStepDecisionId(RUN, "send")).toBeNull();
-    decisions.readDecisionForRunNode.mockResolvedValue(row("released"));
-    expect(await releasedPublishingStepDecisionId(RUN, "other")).toBeNull();
-    expect(await releasedPublishingStepDecisionId(RUN, undefined)).toBeNull();
-    decisions.readDecisionForRunNode.mockRejectedValue(new Error("db down"));
-    expect(await releasedPublishingStepDecisionId(RUN, "send")).toBeNull();
-  });
-});
-
-describe("claimPublishingStepCall", () => {
-  beforeEach(() => {
-    decisions.claimPublishDecisionConsumption.mockReset().mockResolvedValue(true);
-  });
-
-  it("claims the decision in the run's organisation, naming the road and the tool", async () => {
-    expect(
-      await claimPublishingStepCall({
-        decisionId: "d1",
-        run: { id: "run-1", orgId: "org-1" },
-        stepId: "send",
-        tool: "email_outreach_send_initial_start",
-        executedSourceSha256: null,
-      }),
-    ).toBe(true);
-    expect(decisions.claimPublishDecisionConsumption).toHaveBeenCalledWith({
-      decisionId: "d1",
-      orgId: "org-1",
-      runId: "run-1",
-      stepId: "send",
-      toolIdentity: { road: "passthrough_publishing_step", tool: "email_outreach_send_initial_start" },
-      executedSourceSha256: null,
-    });
-  });
-
-  it("answers what the ledger answers, and a ledger error propagates", async () => {
-    decisions.claimPublishDecisionConsumption.mockResolvedValue(false);
-    const input = { decisionId: "d1", run: { id: "run-1", orgId: "org-1" }, stepId: "send", tool: "t", executedSourceSha256: "s" };
-    expect(await claimPublishingStepCall(input)).toBe(false);
-    decisions.claimPublishDecisionConsumption.mockRejectedValue(new Error("db down"));
-    await expect(claimPublishingStepCall(input)).rejects.toThrow("db down");
   });
 });

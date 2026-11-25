@@ -16,7 +16,6 @@ import {
   listDueParked,
   listSettledWithWaitingRun,
   readDecisionForRunNode,
-  claimPublishDecisionConsumption,
   readDispatchedPublishRows,
   readLatestDecisionForRun,
   readOpenDecisionForRun,
@@ -676,52 +675,23 @@ export async function publishCallAllowed(run: { id: string; templateId: string }
 
 /**
  * The call-site check of a tool its owning package declares as servable on the passthrough road only as a declared
- * publishing step's call (cinatra#3089): the id of the decision the call is performed under, only when the verified step
- * is listed in the run's compiled `publishingSteps` AND that step's newest decision reads `released`; else null. Unlike
- * publishCallAllowed, a step that is not listed is refused whatever its decision rows say, and so is a call with no
- * verified step, a template that is not found and a list stored as null. A read error refuses the call; it is logged by
- * the error's name only.
+ * publishing step's call (cinatra#3089): true only when the verified step is listed in the run's compiled
+ * `publishingSteps` AND that step's newest decision reads `released`. Unlike publishCallAllowed, a step that is not
+ * listed is refused whatever its decision rows say, and so is a call with no verified step, a template that is not
+ * found and a list stored as null. A read error refuses the call; it is logged by the error's name only.
  */
-export async function releasedPublishingStepDecisionId(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<string | null> {
-  if (typeof verifiedStepId !== "string" || verifiedStepId === "") return null;
+export async function publishingStepCallReleased(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
+  if (typeof verifiedStepId !== "string" || verifiedStepId === "") return false;
   try {
     const template = await readAgentTemplateById(run.templateId);
     const listed = template?.publishingSteps;
-    if (!Array.isArray(listed) || !listed.includes(verifiedStepId)) return null;
+    if (!Array.isArray(listed) || !listed.includes(verifiedStepId)) return false;
     const row = await readDecisionForRunNode(run.id, verifiedStepId);
-    return row?.status === "released" && typeof row.id === "string" && row.id !== "" ? row.id : null;
+    return row?.status === "released";
   } catch (err) {
     console.warn(`[publish-decision] a publishing step's call could not check its publish decision: ${nameOf(err)}`);
-    return null;
+    return false;
   }
-}
-
-/** True when a released decision serves the verified step's call (releasedPublishingStepDecisionId). */
-export async function publishingStepCallReleased(run: { id: string; templateId: string }, verifiedStepId: string | undefined): Promise<boolean> {
-  return (await releasedPublishingStepDecisionId(run, verifiedStepId)) !== null;
-}
-
-/**
- * Claim the released decision for its publishing step's one tool call, in the run's organisation, right before the
- * tool's effect starts (cinatra#3089): true for the one caller that wins, false when the call was already performed
- * for this decision. Never given back, also when the effect then fails; another attempt takes a new release. A ledger
- * error propagates, so the call is not performed.
- */
-export async function claimPublishingStepCall(input: {
-  decisionId: string;
-  run: { id: string; orgId: string };
-  stepId: string;
-  tool: string;
-  executedSourceSha256: string | null;
-}): Promise<boolean> {
-  return claimPublishDecisionConsumption({
-    decisionId: input.decisionId,
-    orgId: input.run.orgId,
-    runId: input.run.id,
-    stepId: input.stepId,
-    toolIdentity: { road: "passthrough_publishing_step", tool: input.tool },
-    executedSourceSha256: input.executedSourceSha256,
-  });
 }
 
 export interface PublishExpirySweepSummary {

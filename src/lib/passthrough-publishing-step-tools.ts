@@ -110,3 +110,47 @@ export async function loadPassthroughPublishingStepHandler(
   const handler = handlers.get(declaration.entry.name);
   return typeof handler === "function" ? (handler as PassthroughPrimitiveHandler) : null;
 }
+
+/** The install id and digest recorded for a host-wired primitive's owner: it is part of the host build, not a loaded
+ *  install, so it has no loaded identity (the marker the guarded MCP road records for a host built-in, cinatra#3745). */
+export const HOST_BUILTIN_ACTION_OWNER = "host-builtin";
+
+/**
+ * Use the step's released publish decision for this one call, through the agents package's single-use consumption
+ * (`consumeRunActionDecision`, cinatra#3745): the run's proof, attempt and bound source are checked, the step must
+ * declare the tool, the newest decision of the step must read `released`, and the decision is recorded as used under
+ * the ledger key `publish_decision:<decision id>`, in one transaction under the run's write authority. That is the one
+ * key every road writes, so a decision used here is used for the guarded MCP road too, and the reverse. True when this
+ * call used it; false when the decision was already used (by any call on any road). Every other refusal throws (a
+ * RunStepToolPolicyRefusal with its fixed code), and nothing is performed.
+ */
+export async function consumePublishingStepDecision(input: {
+  tool: string;
+  orgId: string;
+  runId: string;
+  authority: unknown;
+  proof: unknown;
+}): Promise<boolean> {
+  const { consumeRunActionDecision, RunStepToolPolicyRefusal } = await import("@cinatra-ai/agents/store");
+  const { HOST_PRIMITIVE_OWNER_PACKAGE, HOST_PRIMITIVE_RELEASE_VERSION } = await import("@cinatra-ai/mcp-server/capability-plan");
+  type Input = Parameters<typeof consumeRunActionDecision>[0];
+  try {
+    await consumeRunActionDecision({
+      orgId: input.orgId,
+      runId: input.runId,
+      authority: input.authority as Input["authority"],
+      proof: input.proof as Input["proof"],
+      action: {
+        toolName: input.tool,
+        packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
+        version: HOST_PRIMITIVE_RELEASE_VERSION,
+        installId: HOST_BUILTIN_ACTION_OWNER,
+        digest: HOST_BUILTIN_ACTION_OWNER,
+      },
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof RunStepToolPolicyRefusal && err.code === "action_person_decision_already_consumed") return false;
+    throw err;
+  }
+}

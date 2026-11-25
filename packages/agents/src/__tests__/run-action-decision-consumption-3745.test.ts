@@ -268,6 +268,27 @@ describe("the person's affirmative decision for the run's action, used once", ()
     expect(consumptions()).toHaveLength(1);
   });
 
+  // cinatra#3089: the passthrough road's publishing-step call uses the decision through this function with the host
+  // built-in identity of a host-wired tool; the guarded MCP road uses it with the tool's own owner. One key per decision,
+  // whatever the action, so a decision is used once across roads. Both pin behaviour this function already has.
+  // red-first-pin: one key per decision across roads (cinatra#3089)
+  // red-first-pin: and the reverse: a decision used on the guarded road is refused to the host built-in identity
+  const hostBuiltin = { toolName: "mail_send", packageName: "@cinatra-ai/host", version: "2817.1.0",
+    installId: "host-builtin", digest: "host-builtin" };
+  it("a decision used with one tool identity is refused to another: one key per decision across roads (cinatra#3089)", async () => {
+    await loadModule();
+    await expect(consume(input({ action: hostBuiltin }))).resolves.toMatchObject({ consumptionKey: "publish_decision:decision-1" });
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions()).toEqual([expect.objectContaining({ gateId: "publish_decision:decision-1", toolIdentity: hostBuiltin })]);
+  });
+
+  it("and the reverse: a decision used on the guarded road is refused to the host built-in identity (cinatra#3089)", async () => {
+    await loadModule();
+    await consume(input());
+    await expect(consume(input({ action: hostBuiltin }))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions()).toEqual([expect.objectContaining({ gateId: "publish_decision:decision-1", toolIdentity: action })]);
+  });
+
   it("of two concurrent consumptions exactly one commits; the primary key refuses the other", async () => {
     await loadModule();
     let waiting = 0; let open!: () => void;

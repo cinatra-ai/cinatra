@@ -1794,9 +1794,6 @@ export const agentRunOutwardActionPolicies = cinatraSchema.table("agent_run_outw
 });
 // A durable burned gate is never removed by gate/run deletion. No CASCADE and
 // no stored argument/parallel approval. Remote effect failure does not refund it.
-// A released publish decision (agent_run_publish_decisions) is burned in the same
-// ledger under gate_id `publish-decision:<decision id>` when its publishing step's
-// tool call is performed (cinatra#3089); an artifact-review gate id never has that prefix.
 export const artifactReviewActionConsumptions = cinatraSchema.table("artifact_review_action_consumptions", {
   gateId: text("gate_id").primaryKey(), runId: text("run_id").notNull(), orgId: text("org_id").notNull(),
   stepId: text("step_id").notNull(), toolIdentity: jsonb("tool_identity").notNull(),

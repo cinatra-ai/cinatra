@@ -24,18 +24,25 @@ const h = vi.hoisted(() => ({
   readAgentRunByContextId: vi.fn(),
   decision: { listed: true, status: "released" } as { listed: boolean; status: string | null },
   publishCallAllowed: vi.fn(),
-  releasedPublishingStepDecisionId: vi.fn(),
-  claimPublishingStepCall: vi.fn(),
+  publishingStepCallReleased: vi.fn(),
   sends: [] as Array<{ input: unknown; actor: unknown; frame: unknown }>,
 }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@cinatra-ai/agents", () => ({
   publishCallAllowed: h.publishCallAllowed,
-  releasedPublishingStepDecisionId: h.releasedPublishingStepDecisionId,
-  claimPublishingStepCall: h.claimPublishingStepCall,
+  publishingStepCallReleased: h.publishingStepCallReleased,
   readAgentRunById: h.readAgentRunById,
   readAgentRunByContextId: h.readAgentRunByContextId,
+}));
+// The single-use consumption of the decision (cinatra#3745) answers "used now" here; the once-per-decision rule is
+// pinned in passthrough-publishing-step-once-3089.test.ts.
+vi.mock("@cinatra-ai/agents/store", () => ({
+  verifyRunExecutedSource: vi.fn(),
+  consumeRunActionDecision: vi.fn(async () => ({})),
+  RunStepToolPolicyRefusal: class RunStepToolPolicyRefusal extends Error {
+    constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
+  },
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
 vi.mock("@cinatra-ai/mcp-server", async () => {
@@ -111,7 +118,7 @@ function makeReq(tool: string, headers: Record<string, string>, input: unknown =
 }
 
 // The two reads, over one decision state: publishCallAllowed serves a listed step only on `released` and a step that
-// is not listed unless its row holds it; releasedPublishingStepDecisionId serves a listed step on `released` only.
+// is not listed unless its row holds it; publishingStepCallReleased serves a listed step on `released` only.
 function decide(d: Decision) {
   h.decision = d;
 }
@@ -126,12 +133,9 @@ beforeEach(() => {
     if (status !== null) return status === "released";
     return !listed;
   });
-  h.releasedPublishingStepDecisionId.mockReset().mockImplementation(async (_run: unknown, step: string | undefined) =>
-    step !== undefined && h.decision.listed && h.decision.status === "released" ? "decision-1" : null,
+  h.publishingStepCallReleased.mockReset().mockImplementation(async (_run: unknown, step: string | undefined) =>
+    step !== undefined && h.decision.listed && h.decision.status === "released",
   );
-  // Each call claims its decision afresh here; the once-per-decision rule is pinned in
-  // passthrough-publishing-step-once-3089.test.ts.
-  h.claimPublishingStepCall.mockReset().mockResolvedValue(true);
   decide({ listed: true, status: "released" });
   process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
 });
@@ -150,8 +154,8 @@ describe("a declared tool on the passthrough road", () => {
     expect(send.input).toMatchObject({ campaignId: "camp-1", approvedDraftBundleRef: SEND_INPUT.approvedDraftBundleRef });
     expect(send.actor).toMatchObject({ actorType: "human", userId: "user-1", orgId: "org-1" });
     expect(send.frame).toMatchObject({ runId: RUN.id, userId: "user-1", orgId: "org-1", verifiedStepId: NODE });
-    expect(h.releasedPublishingStepDecisionId).toHaveBeenCalledTimes(1);
-    const [run, step] = h.releasedPublishingStepDecisionId.mock.calls[0] as [{ id: string; templateId: string }, unknown];
+    expect(h.publishingStepCallReleased).toHaveBeenCalledTimes(1);
+    const [run, step] = h.publishingStepCallReleased.mock.calls[0] as [{ id: string; templateId: string }, unknown];
     expect(run).toMatchObject({ id: RUN.id, templateId: RUN.templateId });
     expect(step).toBe(NODE);
   });
@@ -199,7 +203,7 @@ describe("an undeclared tool that is not on the allowlist", () => {
       const res = await POST(makeReq(tool, stepHeaders()));
       expect(res.status).toBe(403);
       expect(((await res.json()) as { error?: string }).error).toMatch(/not on the deterministic-passthrough allowlist/);
-      expect(h.releasedPublishingStepDecisionId).not.toHaveBeenCalled();
+      expect(h.publishingStepCallReleased).not.toHaveBeenCalled();
       expect(h.sends).toHaveLength(0);
       expect((await POST(makeReq(SEND, stepHeaders()))).status).toBe(200);
     },
@@ -209,7 +213,7 @@ describe("an undeclared tool that is not on the allowlist", () => {
     decide({ listed: false, status: null });
     const res = await POST(makeReq("trigger_config_set", stepHeaders(), {}));
     expect(res.status).toBe(200);
-    expect(h.releasedPublishingStepDecisionId).not.toHaveBeenCalled();
+    expect(h.publishingStepCallReleased).not.toHaveBeenCalled();
     // The declared send from the same step is refused: the step is not a listed publishing step.
     const send = await POST(makeReq(SEND, stepHeaders()));
     expect(send.status).toBe(403);
@@ -220,6 +224,7 @@ describe("an undeclared tool that is not on the allowlist", () => {
 afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
+  vi.doUnmock("@cinatra-ai/agents/store");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");
