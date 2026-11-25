@@ -26,8 +26,17 @@ import {
   resolveRendererIdForKind,
   buildA2UiMidRunTranslatorResolver,
   serverHitlRendererClaim,
+  parkedHitlStepIsAnswerableOnServer,
   __clearInstalledFieldRendererBindingsCache,
 } from "../field-renderer-bindings.server";
+import { parkedHitlStepIsAnswerable, resolveHitlGateRenderer } from "../orchestrator-mid-run-hitl";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  GROUPED_SETUP_FORM_RENDERER_ID,
+  PERSONAL_SKILL_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  SKILL_SELECTOR_RENDERER_ID,
+} from "../agent-builder-ids";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
@@ -228,5 +237,56 @@ describe("a renderer id is drawn by the same rule on the server and in the clien
         expect(drawn!.id).toBe(form);
       }
     }
+  });
+});
+
+// …AND FOR EVERY ID FAMILY. The host's own ids (the grouped setup form, the
+// plain form, the personal-skill and skill-selector fields with their bare
+// ids, the display-only review redirect) and every generated binding id, each
+// also in adversarial forms: an extra suffix, an `:output` variant, another
+// case, surrounding space. The server's "may this step be answered" and the
+// page's "is this step drawn with a Continue" (the entry the hosts resolve a
+// gate with, read by `parkedHitlStepIsAnswerable`) give the same answer.
+describe("a parked step is answerable on the server exactly when a page draws it", () => {
+  const GMAIL_CONTEXT = { connectedApps: ["gmail"], gmailAliases: [{ sendAsEmail: "a@b.c" }] };
+  const HOST_IDS = [
+    GROUPED_SETUP_FORM_RENDERER_ID,
+    SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+    PERSONAL_SKILL_RENDERER_ID,
+    SKILL_SELECTOR_RENDERER_ID,
+    "personal-skill",
+    "skill-selector",
+    ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  ];
+
+  // red-first-expect: parkedHitlStepIsAnswerableOnServer is not a function
+  it("every host id and every binding id, in every adversarial form", () => {
+    ensureDefaultFieldRenderersRegistered();
+    const bases = new Set<string>(HOST_IDS);
+    for (const b of GENERATED_FIELD_RENDERER_BINDINGS) {
+      bases.add(b.id);
+      bases.add(b.kind);
+    }
+    const forms = new Set<string>();
+    for (const id of bases) {
+      for (const form of [id, `${id}:anything`, `${id}:output`, `${id}x`, id.toUpperCase(), ` ${id} `, `${id}\n`]) {
+        forms.add(form);
+      }
+    }
+    const disagreements: string[] = [];
+    // With no values, and with values that carry a presentation hint (a step
+    // the host draws through its own generic renderer).
+    const VALUES = [{}, { presentation: { type: "choice" } }];
+    for (const form of [...forms].sort()) {
+      for (const values of VALUES) {
+        const server = parkedHitlStepIsAnswerableOnServer({ xRenderer: form, values });
+        const entry = resolveHitlGateRenderer("hitl-field", { "x-renderer": form, type: "string" }, GMAIL_CONTEXT as never);
+        const page = parkedHitlStepIsAnswerable(form, entry, values);
+        if (server !== page) {
+          disagreements.push(`${JSON.stringify(form)} ${JSON.stringify(values)}: server ${server}, page ${page}`);
+        }
+      }
+    }
+    expect(disagreements).toEqual([]);
   });
 });

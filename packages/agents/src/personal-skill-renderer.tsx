@@ -14,7 +14,7 @@ import {
   fetchPersonalSkillsForAgent,
   fetchInstalledSkillsForAgent,
 } from "./skill-actions";
-import { PERSONAL_SKILL_RENDERER_ID } from "./agent-builder-ids";
+import { PERSONAL_SKILL_RENDERER_ID, hostEntryDrawsRendererId } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
 // Condition — matches any field with x-renderer: "personal-skill"
@@ -23,7 +23,7 @@ import { PERSONAL_SKILL_RENDERER_ID } from "./agent-builder-ids";
 // ---------------------------------------------------------------------------
 
 export const isPersonalSkillField: FieldRendererCondition = (_fieldName, schema) =>
-  ([PERSONAL_SKILL_RENDERER_ID, "personal-skill"] as string[]).includes((schema as Record<string, unknown>)["x-renderer"] as string ?? "");
+  hostEntryDrawsRendererId(PERSONAL_SKILL_RENDERER_ID, (schema as Record<string, unknown>)["x-renderer"]);
 
 // ---------------------------------------------------------------------------
 // Renderer

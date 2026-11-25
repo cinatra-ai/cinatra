@@ -54,6 +54,7 @@ import {
   PERSONAL_SKILL_RENDERER_ID,
   SKILL_SELECTOR_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  hostEntryDrawsRendererId,
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
@@ -419,7 +420,7 @@ export function ensureDefaultFieldRenderersRegistered(): void {
     id: SCHEMA_FIELD_FALLBACK_RENDERER_ID,
     priority: 1,
     condition: (_fieldName, schema) =>
-      xRendererOf(schema) === SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+      hostEntryDrawsRendererId(SCHEMA_FIELD_FALLBACK_RENDERER_ID, xRendererOf(schema)),
     // Bypass floor: a registered renderer that resolves back through the registry
     // must NOT be the registry-first SchemaFieldRenderer, or matching its own
     // fallback xRenderer re-resolves this entry forever. SchemaOnlyFloorRenderer

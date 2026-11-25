@@ -18,7 +18,12 @@ import {
   type FieldRendererContext,
   type FieldRendererEntry,
 } from "./field-renderer-registry";
-import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  HOST_RENDERER_DRAWN_IDS,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+  hostEntryDrawsRendererId,
+} from "./agent-builder-ids";
 import { gateCarriesPresentationHint } from "./hitl-gate-submit";
 
 /**
@@ -138,6 +143,24 @@ export function rendererIdsDrawnForBinding(binding: { id: string; kind: string }
 }
 
 /**
+ * Which entry draws a step recorded under `xRenderer`, by id alone: one of the
+ * host's own entries (`HOST_RENDERER_DRAWN_IDS`) or one of `bindings`
+ * (`rendererIdsDrawnForBinding`), always by strict equality. `null` when no
+ * entry draws that id. The server reads it with the bindings it knows; the
+ * page's registry entries match by the same two rules.
+ */
+export function drawnHitlRendererClaim(
+  xRenderer: string,
+  bindings: ReadonlyArray<{ id: string; kind: string }>,
+): { id: string } | null {
+  for (const entryId of Object.keys(HOST_RENDERER_DRAWN_IDS)) {
+    if (hostEntryDrawsRendererId(entryId, xRenderer)) return { id: entryId };
+  }
+  const binding = bindings.find((b) => rendererIdsDrawnForBinding(b).includes(xRenderer));
+  return binding ? { id: binding.id } : null;
+}
+
+/**
  * The entry a LIVE HITL gate is drawn with: the entry the registry resolves for
  * the gate's recorded `x-renderer` id, and nothing else.
  *
@@ -192,7 +215,8 @@ export function resolveHitlGateRenderer(
  *   - the step carries a presentation hint in its values, which the host draws
  *     through its own generic renderer without a registry entry.
  * A step recorded with no renderer id (a tool-call approval) is answered by
- * the host's own Approve. Never for a tombstoned id. A step that no screen draws shows "no renderer
+ * the host's own Approve. Never for a tombstoned id, nor for the display-only
+ * artifact-review redirect. A step that no screen draws shows "no renderer
  * configured for this step" and no control, and the server refuses an answer
  * for it: the run stays parked.
  *
@@ -209,6 +233,9 @@ export function parkedHitlStepIsAnswerable(
   // answers it with its own Approve, with no screen.
   if (xRenderer === "") return true;
   if (isTombstonedHitlRendererId(xRenderer)) return false;
+  // The artifact-review redirect is display-only: it goes on only by the
+  // review's own decision, whatever its values carry.
+  if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return false;
   if (xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return true;
   if (claim != null) return true;
   return gateCarriesPresentationHint(values);

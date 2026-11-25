@@ -25,6 +25,30 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 const screenStateMock = vi.fn();
+// The app's Select drawn as a native one, so a pick is one change event.
+vi.mock("@/components/ui/select", async () => {
+  const R = await import("react");
+  type Kids = { children?: React.ReactNode };
+  function Select(props: Kids & { value?: string; onValueChange?: (v: string) => void; disabled?: boolean }) {
+    let id: string | undefined;
+    R.Children.forEach(props.children, (child) => {
+      const childId = (child as { props?: { id?: string } } | null)?.props?.id;
+      if (childId) id = childId;
+    });
+    return R.createElement(
+      "select",
+      { id, value: props.value ?? "", disabled: props.disabled, onChange: (e: { target: { value: string } }) => props.onValueChange?.(e.target.value) },
+      R.createElement("option", { value: "" }, ""),
+      props.children,
+    );
+  }
+  const SelectTrigger = () => null;
+  const SelectValue = () => null;
+  const SelectContent = (props: Kids) => R.createElement(R.Fragment, null, props.children);
+  const SelectItem = (props: Kids & { value: string }) => R.createElement("option", { value: props.value }, props.children);
+  return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem };
+});
+
 vi.mock("../agent-hitl-screen-actions", () => ({
   getAgentHitlScreenStateAction: (input: { runId: string }) => screenStateMock(input),
 }));
@@ -80,30 +104,76 @@ const FALLBACK_BINDING_IDS = [
   "@cinatra-ai/blog-pipeline-agent:idea-selection",
   "@cinatra-ai/email-recipient-selection-agent:campaign-recipients-review",
 ];
-/** An object answer and a scalar answer: what is typed, and what the plain form sends for it. */
+/**
+ * Every schema kind the plain form draws: the person's answer on its control
+ * (typed, ticked or picked), and what the plain form sends for it. Only a
+ * submit sends: the plain form's own Continue where it draws one, the host's
+ * Continue beneath the field where it does not (a box on a mid-run gate, a
+ * pick list).
+ */
 const FALLBACK_GATES: Array<{
   shape: string;
   schema: Record<string, unknown>;
   fieldName: string | undefined;
   inputId: string;
-  typed: string;
+  answer: (control: HTMLElement) => void;
+  /** Which submit sends it: the plain form's own, or the host's Continue beneath the field. */
+  submit: "plain form" | "host Continue";
   sent: Record<string, unknown>;
 }> = [
+  {
+    shape: "string",
+    schema: { type: "string", title: "Answer" },
+    fieldName: "answer",
+    inputId: "field-answer",
+    answer: (control) => fireEvent.change(control, { target: { value: "Ship it." } }),
+    submit: "plain form",
+    sent: { answer: "Ship it.", userResponse: "Ship it.", userResponseFieldName: "answer" },
+  },
+  {
+    shape: "number",
+    schema: { type: "number", title: "Answer" },
+    fieldName: "answer",
+    inputId: "field-answer",
+    answer: (control) => fireEvent.change(control, { target: { value: "42" } }),
+    submit: "plain form",
+    sent: { answer: 42, userResponse: "42", userResponseFieldName: "answer" },
+  },
+  {
+    shape: "boolean",
+    schema: { type: "boolean", title: "Answer" },
+    fieldName: "answer",
+    inputId: "field-answer",
+    answer: (control) => fireEvent.click(control),
+    submit: "host Continue",
+    sent: { answer: true, userResponse: "true", userResponseFieldName: "answer" },
+  },
+  {
+    shape: "enum",
+    schema: { type: "string", title: "Answer", enum: ["alpha", "beta"] },
+    fieldName: "answer",
+    inputId: "field-answer",
+    answer: (control) => fireEvent.change(control, { target: { value: "beta" } }),
+    submit: "host Continue",
+    sent: { answer: "beta", userResponse: "beta", userResponseFieldName: "answer" },
+  },
   {
     shape: "object",
     schema: { type: "object", properties: { selectedIdeaJson: { type: "string", title: "Selected idea" } } },
     fieldName: undefined,
     inputId: "field-selectedIdeaJson",
-    typed: "idea-7",
+    answer: (control) => fireEvent.change(control, { target: { value: "idea-7" } }),
+    submit: "plain form",
     sent: { selectedIdeaJson: "idea-7", userResponse: "idea-7" },
   },
   {
-    shape: "scalar",
-    schema: { type: "string", title: "Answer" },
+    shape: "array",
+    schema: { type: "array", title: "Answer", items: { type: "string" } },
     fieldName: "answer",
     inputId: "field-answer",
-    typed: "Ship it.",
-    sent: { answer: "Ship it.", userResponse: "Ship it.", userResponseFieldName: "answer" },
+    answer: (control) => fireEvent.change(control, { target: { value: "alpha\nbeta" } }),
+    submit: "plain form",
+    sent: { answer: ["alpha", "beta"], userResponse: '["alpha","beta"]', userResponseFieldName: "answer" },
   },
 ];
 
@@ -452,32 +522,40 @@ describe("AgentHitlScreenCard — an extension wrapper in fallback", () => {
   }
 });
 
-// THE REAL GENERATED BINDINGS IN FALLBACK (see the run panel's suite): an
-// object and a scalar answer typed into the plain form a real binding's wrapper
-// shows reach the run as the plain form sends them, on both hosts.
+// THE REAL GENERATED BINDINGS IN FALLBACK (see the run panel's suite): every
+// schema kind's answer in the plain form a real binding's wrapper shows is
+// sent by a submit only, as the plain form sends it, on both hosts.
 describe("AgentHitlScreenCard — a real generated binding whose component failed to load", () => {
   for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
     for (const id of FALLBACK_BINDING_IDS) {
-      for (const g of FALLBACK_GATES) {
-        // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
-        it(`${host}: ${id}: a ${g.shape} answer is sent as the resume text`, async () => {
-          await registerRealBindingInFallback(id);
-          askingFor(id, { inputSchema: g.schema, fieldName: g.fieldName ?? null });
-          const { container } = mountOn(host);
-          await settle();
-          await waitFor(() => expect(container.querySelector(`#${g.inputId}`)).not.toBeNull());
-          fireEvent.change(container.querySelector(`#${g.inputId}`)!, { target: { value: g.typed } });
-          const floorContinue = await waitFor(() => {
-            const button = floorContinueOf(g.inputId);
-            expect(button).not.toBeNull();
-            return button!;
-          });
-          fireEvent.click(floorContinue);
-          await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
-          expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
-          expect(approveMock.mock.calls[0]![1]).toMatchObject({ approved: true, ...g.sent });
-          expect(approveMock.mock.calls[0]![2]).toBeUndefined();
+      const answerAndSubmit = async (g: (typeof FALLBACK_GATES)[number]) => {
+        await registerRealBindingInFallback(id);
+        askingFor(id, { inputSchema: g.schema, fieldName: g.fieldName ?? null });
+        const { container } = mountOn(host);
+        await settle();
+        await waitFor(() => expect(container.querySelector(`#${g.inputId}`)).not.toBeNull());
+        g.answer(container.querySelector(`#${g.inputId}`)!);
+        // The answer alone sends nothing: only a submit does.
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(approveMock).not.toHaveBeenCalled();
+        const floorContinue = await waitFor(() => {
+          const button = floorContinueOf(g.inputId);
+          expect(button).not.toBeNull();
+          return button!;
         });
+        fireEvent.click(floorContinue);
+        await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+        expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
+        expect(approveMock.mock.calls[0]![1]).toMatchObject({ approved: true, ...g.sent });
+        expect(approveMock.mock.calls[0]![2]).toBeUndefined();
+      };
+      for (const g of FALLBACK_GATES.filter((row) => row.submit === "plain form")) {
+        // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+        it(`${host}: ${id}: a ${g.shape} answer is sent by the plain form's own submit only, as the plain form sends it`, () => answerAndSubmit(g));
+      }
+      for (const g of FALLBACK_GATES.filter((row) => row.submit === "host Continue")) {
+        // red-first-expect: to match object {
+        it(`${host}: ${id}: a ${g.shape} answer is sent by the host's Continue only, as the plain form sends it`, () => answerAndSubmit(g));
       }
     }
   }

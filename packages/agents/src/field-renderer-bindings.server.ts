@@ -31,14 +31,8 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
-import {
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  GROUPED_SETUP_FORM_RENDERER_ID,
-  PERSONAL_SKILL_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  SKILL_SELECTOR_RENDERER_ID,
-} from "./agent-builder-ids";
-import { parkedHitlStepIsAnswerable, rendererIdsDrawnForBinding } from "./orchestrator-mid-run-hitl";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { drawnHitlRendererClaim, parkedHitlStepIsAnswerable } from "./orchestrator-mid-run-hitl";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -188,23 +182,6 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
 }
 
 /**
- * THE HOST'S OWN ANSWERING RENDERER IDS: exactly the ids the host registers an
- * answering entry for in `ensureDefaultFieldRenderersRegistered` (the grouped
- * setup form, the plain form, the personal-skill and skill-selector fields, and
- * the two fields' bare ids). Listed by id, never read from the agent-builder
- * scope: that scope also names ids that no entry answers, the display-only
- * artifact-review redirect among them (`DISPLAY_ONLY_HITL_RENDERER_IDS`).
- */
-const HOST_ANSWERING_RENDERER_IDS: ReadonlySet<string> = new Set([
-  GROUPED_SETUP_FORM_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-  PERSONAL_SKILL_RENDERER_ID,
-  SKILL_SELECTOR_RENDERER_ID,
-  "personal-skill",
-  "skill-selector",
-]);
-
-/**
  * THE DISPLAY-ONLY STEP IDS: a step parked under one of them is drawn as a card
  * with no answer of its own. The artifact-review redirect is one: the host draws
  * it inline (`register-default-renderers.ts`, cinatra#1796) with no approve
@@ -217,25 +194,15 @@ const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
 
 /**
  * What claims a parked step's recorded renderer id on the server, where no
- * component registry exists: the host's own answering ids
- * (`HOST_ANSWERING_RENDERER_IDS`) and every binding the page registers from
- * (the generated build bindings and the installed packages,
- * `getMergedFieldRendererBindings`), by the ids a screen draws it for
- * (`rendererIdsDrawnForBinding`, the client registry's own rule). `null`
- * when nothing declares the id any more, and for a display-only id.
+ * component registry exists: `drawnHitlRendererClaim` over every binding the
+ * page registers from (the generated build bindings and the installed
+ * packages, `getMergedFieldRendererBindings`) and the host's own entries, by
+ * the same strict-equality rules the page's registry entries match with.
+ * `null` when nothing draws the id, and for a display-only id.
  */
 export function serverHitlRendererClaim(xRenderer: string): { id: string } | null {
   if (DISPLAY_ONLY_HITL_RENDERER_IDS.has(xRenderer)) return null;
-  if (
-    HOST_ANSWERING_RENDERER_IDS.has(xRenderer) ||
-    xRenderer.startsWith(`${GROUPED_SETUP_FORM_RENDERER_ID}:`)
-  ) {
-    return { id: xRenderer };
-  }
-  const binding = getMergedFieldRendererBindings().find((b) =>
-    rendererIdsDrawnForBinding(b).includes(xRenderer),
-  );
-  return binding ? { id: binding.id } : null;
+  return drawnHitlRendererClaim(xRenderer, getMergedFieldRendererBindings());
 }
 
 /**

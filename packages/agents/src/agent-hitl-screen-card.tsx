@@ -163,6 +163,7 @@ import {
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
   buildFieldGateAnswer,
+  buildSchemaFloorGatePayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -829,7 +830,7 @@ export function AgentHitlScreenFields({
     : undefined;
   // An answer the plain form hands up from inside an extension wrapper
   // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
-  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
+  const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
 
   return (
     <div
@@ -886,12 +887,27 @@ export function AgentHitlScreenFields({
           onChange={
             isMidRun
               ? async (next: unknown) => {
-                  // An answer the plain form hands up from inside an extension
-                  // wrapper (`FloorAnswerMarkContext`) is sent as the plain form
-                  // sends it, whatever the registry entry says: the buffer
-                  // below keeps objects only and waits for a Continue the
-                  // wrapper's form does not show.
-                  if (answerIsFloorDrawn()) {
+                  // A value the plain form hands up from inside an extension
+                  // wrapper (`FloorAnswerMarkContext`) takes the plain form's
+                  // shape, whatever the registry entry says. Its own submit
+                  // sends it; a change (a box, a pick) is held for the
+                  // Continue beneath and sends nothing by itself.
+                  const floorAnswer = floorAnswerKind();
+                  if (floorAnswer === "change") {
+                    let held: Record<string, unknown>;
+                    try {
+                      held = buildSchemaFloorGatePayload({
+                        schema: gate.inputSchema,
+                        next,
+                        fieldName: gate.fieldName ?? undefined,
+                      });
+                    } catch {
+                      return;
+                    }
+                    onBuffer({ ...buffered, ...held });
+                    return;
+                  }
+                  if (floorAnswer === "submit") {
                     const { payload, payloadFieldName } = buildFieldGateAnswer({
                       drawnByFloor: true,
                       reviewTaskId: gate.reviewTaskId,
@@ -927,7 +943,7 @@ export function AgentHitlScreenFields({
                   // …and so is an answer the plain form hands up from inside
                   // an extension wrapper (`FloorAnswerMarkContext`).
                   const { payload, payloadFieldName } = buildFieldGateAnswer({
-                    drawnByFloor: answerIsFloorDrawn() || gateDrawnBySchemaFloor(gate.xRenderer, entry),
+                    drawnByFloor: floorAnswerKind() !== null || gateDrawnBySchemaFloor(gate.xRenderer, entry),
                     reviewTaskId: gate.reviewTaskId,
                     fieldName: gate.fieldName ?? undefined,
                     next,

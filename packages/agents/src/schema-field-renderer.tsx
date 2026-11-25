@@ -57,31 +57,66 @@ export const GateContinueHoldContext = createContext<boolean>(false);
 export const RendererFloorReportContext = createContext<((floored: boolean) => void) | null>(null);
 
 /**
+ * How a value the plain form hands up reached the host: `"submit"` when the
+ * person pressed the plain form's own submit (its Continue, or Enter on its
+ * control), `"change"` when a field changed and nothing was submitted (a box
+ * ticked or a choice picked where the plain form draws no Continue of its own).
+ */
+export type FloorAnswerKind = "change" | "submit";
+
+/**
  * WHERE A MOUNTED RENDERER MARKS AN ANSWER AS THE PLAIN FORM'S. A host that
  * mounts a gate's renderer provides the setter of `useFloorAnswerMark` below.
  * An extension wrapper that shows the plain form in place of its component
- * (while it loads, after a failed load or a crash) calls it with `true` around
- * each answer the plain form hands up, and with `false` right after, so the
- * mark holds only while that one answer is handed to the host. The host reads
- * it at the start of its answer handler and answers the gate as the plain form
- * does (`buildFieldGateAnswer`), whatever the static registry entry says. It
- * draws nothing and re-renders nothing. Here for the route-graph reason given
- * above.
+ * (while it loads, after a failed load or a crash) calls it with the answer's
+ * kind around each value the plain form hands up, and with `null` right after,
+ * so the mark holds only while that one value is handed to the host. The host
+ * reads it at the start of its answer handler. The mark decides the FORM of
+ * what is sent (the plain form's, `buildFieldGateAnswer`, whatever the static
+ * registry entry says); its kind decides WHETHER anything is sent now: a
+ * `"submit"` is sent, a `"change"` is held for the host's own Continue and
+ * never sent by itself. It draws nothing and re-renders nothing. Here for the
+ * route-graph reason given above.
  */
-export const FloorAnswerMarkContext = createContext<((answering: boolean) => void) | null>(null);
+export const FloorAnswerMarkContext = createContext<((kind: FloorAnswerKind | null) => void) | null>(null);
 
 /**
- * The host's side of `FloorAnswerMarkContext`: a reader (is the answer being
- * handed up now the plain form's?) and the stable setter to provide. A ref, so
- * a mark never re-renders the host.
+ * The host's side of `FloorAnswerMarkContext`: a reader (is the value being
+ * handed up now the plain form's, and how did it come?) and the stable setter
+ * to provide. A ref, so a mark never re-renders the host.
  */
-export function useFloorAnswerMark(): readonly [() => boolean, (answering: boolean) => void] {
-  const markRef = useRef(false);
+export function useFloorAnswerMark(): readonly [() => FloorAnswerKind | null, (kind: FloorAnswerKind | null) => void] {
+  const markRef = useRef<FloorAnswerKind | null>(null);
   const read = useCallback(() => markRef.current, []);
-  const mark = useCallback((answering: boolean) => {
-    markRef.current = answering;
+  const mark = useCallback((kind: FloorAnswerKind | null) => {
+    markRef.current = kind;
   }, []);
   return [read, mark] as const;
+}
+
+/**
+ * WHERE THE PLAIN FORM SAYS A VALUE IS SUBMITTED. The extension wrapper
+ * provides it around the plain form it shows; the plain form calls it with
+ * `true` around the value its own submit hands up (`useSubmitAnswer`) and
+ * `false` right after, so the wrapper can tell a submit from a change.
+ * Nothing else provides it, so everywhere else it is a no-op.
+ */
+export const FloorSubmitContext = createContext<((submitting: boolean) => void) | null>(null);
+
+/** The plain form's own submit: `onChange`, said to be a submit (`FloorSubmitContext`). */
+function useSubmitAnswer(onChange: (value: unknown) => unknown): (value: unknown) => unknown {
+  const saySubmitting = useContext(FloorSubmitContext);
+  return useCallback(
+    (value: unknown) => {
+      saySubmitting?.(true);
+      try {
+        return onChange(value);
+      } finally {
+        saySubmitting?.(false);
+      }
+    },
+    [saySubmitting, onChange],
+  );
 }
 
 /**
@@ -512,6 +547,8 @@ export function numberFieldError(
 
 export function SchemaFieldRenderer(props: Props) {
   const { fieldName, schema, value, onChange, disabled, required, error: callerError, context, onBusyChange, saveNow, assistResponseKey, mode, registerFlush, hideSubmit, bypassRegistry, onDraftChange } = props;
+  const submitAnswer = useSubmitAnswer(onChange);
+  const inExtensionFallback = useContext(FloorSubmitContext) !== null;
 
   const title = (schema as { title?: string }).title;
   const description = (schema as { description?: string }).description;
@@ -648,7 +685,7 @@ export function SchemaFieldRenderer(props: Props) {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onChange(submitValue);
+      await submitAnswer(submitValue);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
     } finally {
@@ -778,6 +815,12 @@ export function SchemaFieldRenderer(props: Props) {
   // `false`.
   if (type === "boolean") {
     const ownsContinue = !hideSubmit;
+    // A host hands a gate's one boolean field the gate's whole values record
+    // (`setupFieldRendererValue`). Shown in an extension wrapper's place
+    // (`FloorSubmitContext`), where a tick is held for the host's Continue, the
+    // box shows that field's own slot of the record, so what it shows is what
+    // that Continue sends. Elsewhere it reads the value as before (cinatra#4506).
+    const boxValue = inExtensionFallback && isPlainObject(value) ? value[fieldName] : value;
     const submitBoolean = async () => {
       if (booleanSendRef.current) return;
       booleanSendRef.current = true;
@@ -791,7 +834,7 @@ export function SchemaFieldRenderer(props: Props) {
       <div className="flex items-start gap-3">
         <Checkbox
           id={`field-${fieldName}`}
-          checked={ownsContinue ? stagedChecked : Boolean(value)}
+          checked={ownsContinue ? stagedChecked : Boolean(boxValue)}
           onCheckedChange={(next) => (ownsContinue ? setStagedChecked(next === true) : onChange(Boolean(next)))}
           disabled={ownsContinue ? disabled || submitting : disabled}
         />
@@ -1106,6 +1149,7 @@ function SingleTextObjectField(props: ObjectFieldProps & { textProperty: string 
     fieldName, schema, value, onChange, disabled, required, error,
     label, description, hideSubmit, registerFlush, textProperty,
   } = props;
+  const submitAnswer = useSubmitAnswer(onChange);
 
   const properties = useMemo(
     () =>
@@ -1215,7 +1259,7 @@ function SingleTextObjectField(props: ObjectFieldProps & { textProperty: string 
       setSubmitting(true);
       setSubmitError(null);
       try {
-        await onChange(undefined);
+        await submitAnswer(undefined);
       } catch (err) {
         setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
       } finally {
@@ -1227,7 +1271,7 @@ function SingleTextObjectField(props: ObjectFieldProps & { textProperty: string 
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onChange(buildValue(raw));
+      await submitAnswer(buildValue(raw));
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
     } finally {
@@ -1296,6 +1340,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
     fieldName, schema, value, onChange, disabled, required, error,
     label, description, context, hideSubmit, registerFlush,
   } = props;
+  const submitAnswer = useSubmitAnswer(onChange);
 
   const properties = useMemo(
     () =>
@@ -1661,7 +1706,7 @@ function StructuredObjectField(props: ObjectFieldProps) {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onChange(omitted ? undefined : assembled);
+      await submitAnswer(omitted ? undefined : assembled);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
     } finally {
@@ -1758,6 +1803,7 @@ function JsonObjectField(props: ObjectFieldProps) {
     fieldName, value, onChange, disabled, required, error,
     label, description, hideSubmit, registerFlush,
   } = props;
+  const submitAnswer = useSubmitAnswer(onChange);
 
   // `value` IS this field's own value on every surface — the per-field panels
   // unwrap their envelope at the call site (`setupFieldRendererValue`,
@@ -1835,7 +1881,7 @@ function JsonObjectField(props: ObjectFieldProps) {
       setSubmitting(true);
       setSubmitError(null);
       try {
-        await onChange(undefined);
+        await submitAnswer(undefined);
       } catch (err) {
         setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
       } finally {
@@ -1848,7 +1894,7 @@ function JsonObjectField(props: ObjectFieldProps) {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onChange(result.value);
+      await submitAnswer(result.value);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
     } finally {

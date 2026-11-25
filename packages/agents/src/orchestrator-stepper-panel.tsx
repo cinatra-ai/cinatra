@@ -797,7 +797,7 @@ function HitlApprovalCard({
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
   // An answer the plain form hands up from inside an extension wrapper
   // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
-  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
+  const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   if (bufferKey !== null && bufferKey !== prevBufferKey) {
     setPrevBufferKey(bufferKey);
@@ -1580,13 +1580,30 @@ function HitlApprovalCard({
             onChange={
               isMidRunHitl
                 ? async (next: unknown) => {
-                    // An answer the plain form hands up from inside an
+                    // A value the plain form hands up from inside an
                     // extension wrapper (`FloorAnswerMarkContext`, read before
-                    // anything is awaited) is sent as the plain form sends it,
-                    // whatever the registry entry says: the buffer below keeps
-                    // objects only and waits for a Continue the wrapper's form
-                    // does not show.
-                    if (answerIsFloorDrawn() && !isSetupGateTaskId(interruptContext.reviewTaskId)) {
+                    // anything is awaited) takes the plain form's shape,
+                    // whatever the registry entry says. Its own submit sends
+                    // it; a change (a box, a pick) is held for the Continue
+                    // below and sends nothing by itself.
+                    const floorAnswer = floorAnswerKind();
+                    if (floorAnswer !== null && !isSetupGateTaskId(interruptContext.reviewTaskId)) {
+                      if (floorAnswer === "change") {
+                        let held: Record<string, unknown>;
+                        try {
+                          held = buildSchemaFloorGatePayload({
+                            schema: interruptContext.schema,
+                            next,
+                            fieldName: interruptContext.fieldName,
+                          });
+                        } catch {
+                          return;
+                        }
+                        if (isGateOnScreen(rendererGateKey)) {
+                          setBufferedHitlValue({ ...bufferedHitlValue, ...held });
+                        }
+                        return;
+                      }
                       await submitSchemaFieldGate(next);
                       return;
                     }
@@ -1665,7 +1682,7 @@ function HitlApprovalCard({
                     if (
                       fallbackGateAsksForFields ||
                       fallbackGateAsksForOneValue ||
-                      (answerIsFloorDrawn() && !isSetupGateTaskId(interruptContext.reviewTaskId))
+                      (floorAnswerKind() !== null && !isSetupGateTaskId(interruptContext.reviewTaskId))
                     ) {
                       await submitSchemaFieldGate(next);
                       return;

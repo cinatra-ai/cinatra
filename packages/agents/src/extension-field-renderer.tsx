@@ -25,7 +25,7 @@ import {
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { FloorAnswerMarkContext, RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, FloorSubmitContext, RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
@@ -96,6 +96,14 @@ export function makeExtensionFieldRenderer(
     // An answer the plain form hands up from inside this wrapper is the plain
     // form's (`FloorAnswerMarkContext`): the host answers it as the floor does.
     const markFloorAnswer = useContext(FloorAnswerMarkContext);
+    // Is the plain form handing up the value of its own submit
+    // (`FloorSubmitContext`)? Read when the value reaches `onChange`: a submit
+    // is marked `"submit"`, every other value `"change"`, which the host holds
+    // and never sends by itself.
+    const floorSubmittingRef = useRef(false);
+    const sayFloorSubmitting = useCallback((submitting: boolean) => {
+      floorSubmittingRef.current = submitting;
+    }, []);
     const floored = degraded || crashed;
     useEffect(() => {
       reportFloor?.(floored);
@@ -175,11 +183,11 @@ export function makeExtensionFieldRenderer(
       ...(heldAtCrash ? { disabled: true } : {}),
       onChange: (next: unknown) => {
         // The plain form awaits what the host returns: it is handed back.
-        markFloorAnswer?.(true);
+        markFloorAnswer?.(floorSubmittingRef.current ? "submit" : "change");
         try {
           return props.onChange(next);
         } finally {
-          markFloorAnswer?.(false);
+          markFloorAnswer?.(null);
         }
       },
       schema: floorSchema,
@@ -191,7 +199,11 @@ export function makeExtensionFieldRenderer(
             : props.context.xRenderer,
       },
     };
-    const floor = createElement(SchemaOnlyFloorRenderer, floorProps);
+    const floor = createElement(
+      FloorSubmitContext.Provider,
+      { value: sayFloorSubmitting },
+      createElement(SchemaOnlyFloorRenderer, floorProps),
+    );
     if (degraded || resolved === null) return floor;
     const resolvedProps: FieldRendererProps =
       reportValidity === undefined

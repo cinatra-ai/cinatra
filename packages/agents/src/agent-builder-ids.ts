@@ -69,5 +69,25 @@ export const TRIGGER_WAIT_STATUS_RENDERER_ID = id("trigger-wait-status");
  * mid-run (no auto-emitted Continue row). */
 export const ARTIFACT_REVIEW_REDIRECT_RENDERER_ID = id("artifact-review-redirect");
 
+/**
+ * THE HOST'S OWN DRAWN RENDERER IDS: for each entry the host registers for
+ * itself, exactly the x-renderer ids its condition matches (strict equality:
+ * no prefix, no `:variant`, no case or space folding). The entries' conditions
+ * read this, and so does the server's check that a parked step is drawn, so
+ * the two cannot disagree. The display-only artifact-review redirect is not an
+ * entry: it is drawn inline with no answer of its own.
+ */
+export const HOST_RENDERER_DRAWN_IDS: Readonly<Record<string, readonly string[]>> = {
+  [GROUPED_SETUP_FORM_RENDERER_ID]: [GROUPED_SETUP_FORM_RENDERER_ID],
+  [SCHEMA_FIELD_FALLBACK_RENDERER_ID]: [SCHEMA_FIELD_FALLBACK_RENDERER_ID],
+  [PERSONAL_SKILL_RENDERER_ID]: [PERSONAL_SKILL_RENDERER_ID, "personal-skill"],
+  [SKILL_SELECTOR_RENDERER_ID]: [SKILL_SELECTOR_RENDERER_ID, "skill-selector"],
+};
+
+/** Does the host entry `entryId` draw a field whose x-renderer is `xRenderer`? */
+export function hostEntryDrawsRendererId(entryId: string, xRenderer: unknown): boolean {
+  return typeof xRenderer === "string" && (HOST_RENDERER_DRAWN_IDS[entryId] ?? []).includes(xRenderer);
+}
+
 /** Skill id: the agentic agent-builder compiler skill. */
 export const COMPILER_AGENTIC_SKILL_ID = id("agent-builder-compiler-agentic");

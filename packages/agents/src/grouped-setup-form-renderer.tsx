@@ -16,7 +16,7 @@ import {
 } from "./field-renderer-registry";
 import { jsonSchemaToZod } from "./json-schema-to-zod";
 import { SchemaFieldRenderer } from "./schema-field-renderer";
-import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import { GROUPED_SETUP_FORM_RENDERER_ID, hostEntryDrawsRendererId } from "./agent-builder-ids";
 import { resolveFieldLabel } from "./humanize-field-name";
 
 // ---------------------------------------------------------------------------
@@ -28,10 +28,8 @@ import { resolveFieldLabel } from "./humanize-field-name";
 
 export { GROUPED_SETUP_FORM_RENDERER_ID };
 
-export const isGroupedSetupFormField: FieldRendererCondition = (_fieldName, schema) => {
-  const xRenderer = (schema as { "x-renderer"?: string })["x-renderer"];
-  return xRenderer === GROUPED_SETUP_FORM_RENDERER_ID;
-};
+export const isGroupedSetupFormField: FieldRendererCondition = (_fieldName, schema) =>
+  hostEntryDrawsRendererId(GROUPED_SETUP_FORM_RENDERER_ID, (schema as { "x-renderer"?: unknown })["x-renderer"]);
 
 // ---------------------------------------------------------------------------
 // GroupedSetupFormRenderer — composes per-field sub-renderers into a single

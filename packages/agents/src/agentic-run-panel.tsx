@@ -108,6 +108,7 @@ import {
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
   buildFieldGateAnswer,
+  buildSchemaFloorGatePayload,
   type GateValidityStore,
 } from "./hitl-gate-submit";
 import {
@@ -1821,7 +1822,7 @@ export function AgenticRunPanel({
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
   // An answer the plain form hands up from inside an extension wrapper
   // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
-  const [answerIsFloorDrawn, markFloorAnswer] = useFloorAnswerMark();
+  const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
   const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
   if (
     bufferedHitlValueKey !== null &&
@@ -3396,14 +3397,31 @@ export function AgenticRunPanel({
                             )
                       }
                       onChange={isMidRunHitl ? async (next: unknown) => {
-                        // An answer the plain form hands up from inside an
+                        // A value the plain form hands up from inside an
                         // extension wrapper (`FloorAnswerMarkContext`, read
-                        // before anything is awaited) is sent as the plain form
-                        // sends it, whatever the registry entry says: the buffer
-                        // below keeps objects only and waits for a Continue the
-                        // wrapper's form does not show.
-                        if (answerIsFloorDrawn()) {
-                          const floorAnswer = buildFieldGateAnswer({
+                        // before anything is awaited) takes the plain form's
+                        // shape, whatever the registry entry says. Its own
+                        // submit sends it; a change (a box, a pick) is held for
+                        // the Continue below and sends nothing by itself.
+                        const floorAnswer = floorAnswerKind();
+                        if (floorAnswer === "change") {
+                          let held: Record<string, unknown>;
+                          try {
+                            held = buildSchemaFloorGatePayload({
+                              schema: effectiveHitlContext.inputSchema,
+                              next,
+                              fieldName: effectiveHitlContext.fieldName,
+                            });
+                          } catch {
+                            return;
+                          }
+                          if (isHitlGateOnScreen(rendererGateKey)) {
+                            setBufferedHitlValue({ ...bufferedHitlValue, ...held });
+                          }
+                          return;
+                        }
+                        if (floorAnswer === "submit") {
+                          const floorPayload = buildFieldGateAnswer({
                             drawnByFloor: true,
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             fieldName: effectiveHitlContext.fieldName,
@@ -3416,8 +3434,8 @@ export function AgenticRunPanel({
                           await performGateSubmit({
                             reviewTaskId: effectiveHitlContext.reviewTaskId,
                             xRenderer: effectiveHitlContext.xRenderer,
-                            payload: floorAnswer.payload,
-                            payloadFieldName: floorAnswer.payloadFieldName,
+                            payload: floorPayload.payload,
+                            payloadFieldName: floorPayload.payloadFieldName,
                             trackApproving: false,
                             suppressGate: false,
                             clearAttachmentsOnSuccess: false,
@@ -3474,7 +3492,7 @@ export function AgenticRunPanel({
                         // read before anything is awaited.
                         const { payload, payloadFieldName } = buildFieldGateAnswer({
                           drawnByFloor:
-                            answerIsFloorDrawn() ||
+                            floorAnswerKind() !== null ||
                             gateDrawnBySchemaFloor(
                               effectiveHitlContext.xRenderer,
                               hitlRendererEntry.entry,
