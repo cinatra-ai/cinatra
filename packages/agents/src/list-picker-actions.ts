@@ -3,10 +3,15 @@
 import "server-only";
 
 import { resolveCrmListReader } from "@/lib/crm-integration-providers";
-import { requireActorContext, requireAuthSession } from "@/lib/auth-session";
+import {
+  requireActorContext,
+  requireAuthSession,
+  resolveOrgRoleForUser,
+} from "@/lib/auth-session";
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
+import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
-import { readAgentRunById } from "./store";
+import { readAgentRunById, readLatestDurableHitlGateArtifact } from "./store";
 
 // The picker still exposes the legacy `AvailableListSummary` shape so its
 // downstream consumers (orchestrator panels, list-curator scrape renderer,
@@ -69,7 +74,7 @@ export type AvailableListSummary = {
  * the actor's ACTIVE org — never `run.orgId`, which would weaken the cross-org
  * guard.
  */
-async function requireRunReadAccess(runId: unknown): Promise<void> {
+async function requireRunReadAccess(runId: unknown): Promise<AgentRunRecord | null> {
   const session = await requireAuthSession();
   const kernel = await requireActorContext();
   const actor = actorFromSession(session);
@@ -85,10 +90,10 @@ async function requireRunReadAccess(runId: unknown): Promise<void> {
   if (typeof runId !== "string" || runId.trim() === "") {
     // Same hidden-run absence as an unknown id — no DB round-trip needed.
     await enforceRunAccess(null, actor, "read", roleHints);
-    return;
+    return null;
   }
 
-  await readAgentRunById(runId, actor, roleHints);
+  return readAgentRunById(runId, actor, roleHints);
 }
 
 /**
@@ -201,4 +206,169 @@ export async function fetchAvailableLists(
     lastUpdated: null,
     memberType: l.objectType,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// The list step's new read (cinatra#3562)
+// ---------------------------------------------------------------------------
+
+/**
+ * What a list step holds: the CRM lists by id and name, and whether the read
+ * worked. The step's `value` has this shape, and so has the answer of
+ * `readListStepContent`.
+ */
+export type ListStepContent = {
+  lists: Array<{ id: string; name: string }>;
+  listsRead: "ok" | "failed";
+};
+
+/** The fixed refusal when the run is not waiting at a list step. */
+const LIST_STEP_NOT_WAITING = "list_step_not_waiting";
+
+/** A run that waits for a person stands at this status. */
+const WAITING_RUN_STATUS = "pending_approval";
+
+/** The renderer id of a list step ends with this. */
+const LIST_STEP_RENDERER_SUFFIX = ":list-picker";
+
+/** The tool the flow itself reads the lists with; its boundary decision is asked for the run. */
+const CRM_LIST_READ_TOOL = "crm_list_search";
+
+function failedListStepContent(): ListStepContent {
+  return { lists: [], listsRead: "failed" };
+}
+
+/**
+ * May the RUN itself read the CRM lists? The same boundary decision the
+ * flow's own list-read tool call is checked with (`enforceMcpBoundary`, the
+ * `connector_instance` / `list` classification), asked for the run's own
+ * frame: the run's organization, the person the run acts for, and the run's
+ * stored on-behalf-of ceiling. A ceiling narrower than the organization is
+ * refused there, before any role short-circuit.
+ *
+ * Fail-closed: a run without a stored ceiling (its own call falls back to the
+ * machine token, which the boundary refuses), a run without a person, and any
+ * fault while the decision is asked answer `false`.
+ */
+async function runMayReadCrmLists(run: AgentRunRecord): Promise<boolean> {
+  if (!run.oboCeiling || run.oboCeiling.length === 0) return false;
+  if (typeof run.runBy !== "string" || run.runBy.length === 0) return false;
+  try {
+    const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
+    const orgRole = await resolveOrgRoleForUser(run.orgId, run.runBy);
+    const decision = await enforceMcpBoundary({
+      primitiveName: CRM_LIST_READ_TOOL,
+      delegatedRestricted: false,
+      ctx: {
+        orgId: run.orgId,
+        userId: run.runBy,
+        ...(orgRole ? { orgRole } : {}),
+        runId: run.id,
+        oboCeiling: run.oboCeiling,
+      },
+    });
+    return decision.allowed === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The lists a read answered, as the step draws them: only a non-blank id and
+ * a non-blank name, and a repeated id once (the first one read).
+ */
+function toListStepLists(
+  lists: ReadonlyArray<{ id?: unknown; name?: unknown }>,
+): ListStepContent["lists"] {
+  const seen = new Set<string>();
+  const out: ListStepContent["lists"] = [];
+  for (const list of lists) {
+    const id = list?.id;
+    const name = list?.name;
+    if (typeof id !== "string" || id.trim() === "") continue;
+    if (typeof name !== "string" || name.trim() === "") continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name });
+  }
+  return out;
+}
+
+/**
+ * Read the CRM lists again for the list step the run waits at (cinatra#3562).
+ * A step's Try again calls this; nothing is sent to the run, the run does not
+ * resume, and no gate is answered. The checks, in order:
+ *
+ *   1. the signed-in person may read the run (the run page's rule, as
+ *      `fetchAvailableLists`); a refusal is thrown before anything else is read;
+ *   2. the run waits now (`pending_approval`) at a list step: its newest
+ *      durable gate names a renderer that ends with `:list-picker`, and, when
+ *      a review task is named, it is that gate's. Otherwise the fixed refusal
+ *      `list_step_not_waiting` is thrown and no CRM call is made. This is
+ *      stricter than `fetchAvailableLists`, which reads the lists for any run
+ *      the person may read;
+ *   3. the run itself may read the CRM lists (`runMayReadCrmLists`); if not,
+ *      the failed shape, with no CRM call;
+ *   4. the CRM list read, with the same arguments as `fetchAvailableLists`. A
+ *      missing capability and a failed read answer the failed shape; no error
+ *      text leaves this function, and the log line is fixed words.
+ *
+ * Each read that passes check 2 writes one log line with the run and the
+ * review task, and no value.
+ */
+export async function readListStepContent(
+  runId: string,
+  reviewTaskId?: string,
+): Promise<ListStepContent> {
+  const run = await requireRunReadAccess(runId);
+
+  const namedTask =
+    typeof reviewTaskId === "string" && reviewTaskId.length > 0 ? reviewTaskId : null;
+  const gate =
+    run !== null && run.status === WAITING_RUN_STATUS
+      ? await readLatestDurableHitlGateArtifact(run.id).catch(() => null)
+      : null;
+  if (
+    run === null ||
+    gate === null ||
+    typeof gate.xRenderer !== "string" ||
+    !gate.xRenderer.endsWith(LIST_STEP_RENDERER_SUFFIX) ||
+    (namedTask !== null && gate.reviewTaskId !== namedTask)
+  ) {
+    console.warn("[list-picker] a new list read was refused: the run is not waiting at a list step");
+    throw new Error(LIST_STEP_NOT_WAITING);
+  }
+
+  console.info(
+    `[list-picker] the list step is read again (run ${run.id}, review task ${gate.reviewTaskId})`,
+  );
+
+  if (!(await runMayReadCrmLists(run))) {
+    console.warn("[list-picker] the run may not read the CRM lists; the step shows the failed read");
+    return failedListStepContent();
+  }
+
+  const reader = resolveCrmListReader();
+  if (!reader) {
+    console.warn(
+      "[list-picker] no crm-list-reader capability is registered; the step shows the failed read",
+    );
+    return failedListStepContent();
+  }
+
+  let lists;
+  try {
+    lists = await reader.searchLists({ query: "", objectType: "contact" });
+  } catch (err) {
+    console.warn(
+      `[list-picker] the CRM list search failed (${describeSearchFailure(err)}); the step shows the failed read`,
+    );
+    return failedListStepContent();
+  }
+
+  if (!Array.isArray(lists)) {
+    console.warn("[list-picker] the CRM list search answered no list array; the step shows the failed read");
+    return failedListStepContent();
+  }
+  return { lists: toListStepLists(lists), listsRead: "ok" };
 }

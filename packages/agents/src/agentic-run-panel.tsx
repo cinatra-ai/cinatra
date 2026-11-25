@@ -82,6 +82,7 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-car
 import { ReviewGateBlocked, ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
+import { readListStepContent } from "./list-picker-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
 // user_envelope attachment wrap, the setup/grouped/mid-run resume-payload
 // discrimination, and the #817 context-selector envelope synthesis all
@@ -103,6 +104,7 @@ import {
   isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  listStepRefreshFor,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1786,6 +1788,29 @@ export function AgenticRunPanel({
     (forGate: string) => liveHitlGateKeyRef.current === forGate,
     [],
   );
+  // THE LIST STEP'S TRY AGAIN (cinatra#3562): a new read of the lists for the
+  // list step the run waits at, drawn in place by the renderer. It answers no
+  // gate and resumes nothing; see `listStepRefreshFor`.
+  const listStepXRenderer = effectiveHitlContext?.xRenderer ?? null;
+  const listStepReviewTaskId = effectiveHitlContext?.reviewTaskId ?? null;
+  const listStepRefresh = useMemo(
+    () =>
+      listStepXRenderer !== null && listStepReviewTaskId !== null
+        ? listStepRefreshFor(
+            {
+              xRenderer: listStepXRenderer,
+              reviewTaskId: listStepReviewTaskId,
+              isCurrentWaitingStep:
+                isPendingApproval &&
+                gateBlocked === null &&
+                answeredReviewTaskId !== listStepReviewTaskId,
+              mode: "edit",
+            },
+            (reviewTaskId) => readListStepContent(runId, reviewTaskId),
+          )
+        : undefined,
+    [listStepXRenderer, listStepReviewTaskId, isPendingApproval, gateBlocked, answeredReviewTaskId, runId],
+  );
 
   // cinatra#3423 — the resume re-read described above, wired where the gate
   // context is known. `parkedWithNoGate` is the run saying it is standing at a
@@ -3430,6 +3455,7 @@ export function AgenticRunPanel({
                       }}
                       context={hitlRendererEntry.context}
                       mode="edit"
+                      onRequestRefresh={listStepRefresh}
                       // A suggestion applied by a replaced renderer is no answer
                       // to the gate on screen either (cinatra#3380).
                       onApply={(suggestions: Record<string, unknown>) => {

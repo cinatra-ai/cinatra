@@ -157,4 +157,18 @@ export type FieldRendererProps = {
    * MUST degrade gracefully when absent/malformed.
    */
   bindingParams?: Readonly<Record<string, unknown>>;
+  /**
+   * Ask the host to read this step's content again (cinatra#3562). The host
+   * reads it for the step the run is waiting at and resolves with a value of
+   * the same shape as this step's `value`; the renderer draws that value in
+   * place of `value`. Nothing is sent to the run: the step is not answered, the
+   * run does not resume, and the Continue stays as the renderer's own reports
+   * leave it. The promise never rejects: a failed read resolves with the
+   * step's own failed shape. Absent means the step offers no new read (the
+   * step is not the one the run waits at, it is drawn read-only or disabled,
+   * or the host has no read for this step). The function may change between
+   * renders, so a renderer calls it on a press and does not key an effect on
+   * it. Optional and additive, so the ABI generation stays 1.
+   */
+  onRequestRefresh?: () => Promise<unknown>;
 };

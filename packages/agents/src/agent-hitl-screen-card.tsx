@@ -139,6 +139,7 @@ import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
+import { readListStepContent } from "./list-picker-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
@@ -148,6 +149,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  listStepRefreshFor,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -728,6 +730,7 @@ export function AgentHitlScreenFields({
   hideRendererSubmit,
   registerFlush,
   gateKey,
+  onRequestRefresh,
 }: {
   runId: string;
   /** THE HOST THIS REGION IS DRAWN ON — §I's hierarchy is a fact about the
@@ -762,6 +765,9 @@ export function AgentHitlScreenFields({
   registerFlush?: (key: string, fn: () => Promise<void>) => void;
   /** The gate identity a registration is tagged with. */
   gateKey?: string;
+  /** A list step's new read (cinatra#3562), handed to the renderer through the
+   *  shared props contract; see `listStepRefreshFor`. */
+  onRequestRefresh?: () => Promise<unknown>;
 }): ReactElement {
   const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
@@ -899,6 +905,7 @@ export function AgentHitlScreenFields({
             midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })
           }
           registerFlush={registerRendererFlush}
+          onRequestRefresh={onRequestRefresh}
         />
       )}
     </div>
@@ -1491,6 +1498,17 @@ export function AgentHitlScreenCard({
           hideRendererSubmit={cardOwnsSetupSend}
           registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
           gateKey={gateKey ?? ""}
+          // The list step's Try again (cinatra#3562): only for the gate the card
+          // asks now, drawn with the reader's own session.
+          onRequestRefresh={listStepRefreshFor(
+            {
+              xRenderer: gate.xRenderer,
+              reviewTaskId: gate.reviewTaskId,
+              isCurrentWaitingStep: cookieSession === true && !withholdRenderer,
+              mode: "edit",
+            },
+            (reviewTaskId) => readListStepContent(runId, reviewTaskId),
+          )}
         />
         </RendererFloorReportContext.Provider>
         {isMidRun && !isGroupedSetup ? (
