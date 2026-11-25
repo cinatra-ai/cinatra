@@ -814,8 +814,11 @@ def test_mount_records_the_selected_source_binding(
         "executedSourceSha256",
         "declarationSourceSha256",
         "declarationSource",
+        "mountedSource",
     }
     assert binding["sourceSha256"] == mounted.fingerprint
+    # cinatra#3089: the mounted file's own bytes, before any composition.
+    assert binding["mountedSource"] == raw
     assert binding["sourceSha256"] == hashlib.sha256(raw.encode()).hexdigest()
     executed = fake_loader.loaded[0]
     assert binding["executedSourceSha256"] == hashlib.sha256(

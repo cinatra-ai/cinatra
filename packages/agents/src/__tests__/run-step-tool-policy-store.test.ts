@@ -1,8 +1,9 @@
 import { beforeEach, describe, it, expect, vi } from "vitest";
 import { createHash } from "node:crypto";
-const h=vi.hoisted(()=>({bound:undefined as unknown,run:{id:"run",orgId:"org",status:"running",executionAttemptId:"attempt",a2aContextId:"ctx"},calls:[] as string[]}));
+const h=vi.hoisted(()=>({bound:undefined as unknown,run:{id:"run",orgId:"org",status:"running",executionAttemptId:"attempt",a2aContextId:"ctx"} as Record<string,unknown>,calls:[] as string[]}));
 vi.mock("../schema",()=>({agentRuns:{id:"id",orgId:"org"},agentRunOutwardActionPolicies:{runId:"run",orgId:"org",policy:"policy"}}));
-vi.mock("../db",()=>({db:{transaction:()=>{throw Error("must use guarded seam");}}}));
+// cinatra#3089: the pause's read of the bound row (readRunPauseSteps) is a plain select.
+vi.mock("../db",()=>({db:{transaction:()=>{throw Error("must use guarded seam");},select:()=>({from(){return this;},where:async()=>h.bound?[{policy:(h.bound as {policy:unknown}).policy}]:[]})}}));
 vi.mock("../org-write-run-seam",()=>({guardedRunWrite:async(authority:unknown,input:{orgId:string;runId:string},body:(tx:object)=>Promise<unknown>)=>{
  if(!authority||input.orgId!=="org"||input.runId!=="run")throw Error("ordinary authority refused");h.calls.push("org-first-guard");let n=0;
  const tx={select:()=>{const current=n++;return {from(){return this;},where(){return this;},for(){h.calls.push("row-fence");return Promise.resolve(current===0?[h.run]:h.bound?[h.bound]:[]);}};},insert:()=>({values:(value:unknown)=>({onConflictDoNothing:async()=>{h.calls.push("insert-once");h.bound??=value;}})}),
@@ -36,5 +37,35 @@ describe("immutable first dispatch source binding through actual guarded store s
  it("refuses absent authority, stopped run, wrong context and stale attempt",async()=>{
   await expect(bindRunStepToolPolicy({...input(),authority:undefined as never})).rejects.toThrow("ordinary authority refused");
   for(const change of [{status:"completed"},{a2aContextId:"other"},{executionAttemptId:"other"}]){Object.assign(h.run,{status:"running",a2aContextId:"ctx",executionAttemptId:"attempt"},change);await expect(bindRunStepToolPolicy(input())).rejects.toThrow("step_tool_dispatch_binding_mismatch");expect(h.bound).toBeUndefined();}
+ });
+});
+
+// cinatra#3089: the steps compiled from the mounted source are bound with it, in the same row and write. A binding
+// without them (written before they were bound) reads as none, so a pause reads as before; never a failure.
+describe("the pause steps bound with the source (cinatra#3089)",()=>{
+ const steps={steps:[{stepNumber:1,artifactReviewGateNode:"g",artifactReviewTargetsInput:"t"}]};
+ const serde=()=>import("../agent-run-serde");
+ it("binds the steps it is given with the source, in the one insert",async()=>{
+  await bindRunStepToolPolicy({...input(),pauseSteps:{approvalPolicy:steps}} as never);
+  expect(h.calls.slice(0,3)).toEqual(["org-first-guard","row-fence","insert-once"]);
+  // red-first-expect: readRunPauseSteps is not a function
+  expect(await (await serde()).readRunPauseSteps("run","org")).toEqual({approvalPolicy:steps});
+ });
+ it("a binding written before steps were bound reads as none (the rolling-upgrade rule), and so does no binding",async()=>{
+  // red-first-expect: readRunPauseSteps is not a function
+  expect(await (await serde()).readRunPauseSteps("run","org")).toBeNull();
+  await bindRunStepToolPolicy(input());
+  expect((h.bound as {policy:unknown}).policy).toEqual(policy);
+  expect(await (await serde()).readRunPauseSteps("run","org")).toBeNull();
+ });
+ it("a binding that records no steps (none could be compiled) refuses the read",async()=>{
+  await bindRunStepToolPolicy({...input(),pauseSteps:null} as never);
+  await expect((await serde()).readRunPauseSteps("run","org")).rejects.toThrow("no pause steps were compiled");
+ });
+ it("a retry re-binds the same source and keeps the first dispatch's steps",async()=>{
+  await bindRunStepToolPolicy({...input(),pauseSteps:{approvalPolicy:steps}} as never);
+  h.run.executionAttemptId="attempt-b";
+  await bindRunStepToolPolicy({...input(),executionAttemptId:"attempt-b",pauseSteps:{approvalPolicy:{steps:[]}}} as never);
+  expect(await (await serde()).readRunPauseSteps("run","org")).toEqual({approvalPolicy:steps});
  });
 });
