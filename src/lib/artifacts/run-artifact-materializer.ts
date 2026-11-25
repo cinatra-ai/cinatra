@@ -26,6 +26,7 @@ import {
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { createSemanticArtifact } from "./artifact-creation";
+import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
   TEXT_AUTHORING_COMPATIBLE_MIMES,
@@ -39,6 +40,7 @@ import {
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
   recordFanoutReuseMaterialization,
+  restampReusedRevision,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -835,6 +837,25 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
 }
 
 /**
+ * cinatra#4762 — THE ONE RESULT of a write that hands back a finalized revision it did not write (a ledger hit, the
+ * winner of a concurrent drive, a fan-out message's own or bound mid-run body). Every such return goes through here,
+ * so none can skip the restamp: the revision's existing event records the attempt this write runs in
+ * (materialization-ledger restampReusedRevision), and an approval of these bytes counts for it.
+ */
+async function reusedArtifact(
+  run: { runId: string; orgId: string },
+  filed: { artifactId: string; representationRevisionId: string },
+): Promise<{ ok: true; artifactId: string; representationRevisionId: string; deduped: true }> {
+  await restampReusedRevision({
+    runId: run.runId,
+    orgId: run.orgId,
+    artifactId: filed.artifactId,
+    representationRevisionId: filed.representationRevisionId,
+  });
+  return { ok: true, artifactId: filed.artifactId, representationRevisionId: filed.representationRevisionId, deduped: true };
+}
+
+/**
  * Shared write core for both materialization paths (cinatra#923 EndNode
  * bindings, cinatra#925 `artifact_materialize` tool): registry/accepts/
  * write-gate validation on an ALREADY-RESOLVED {extension, title, mime,
@@ -955,12 +976,8 @@ export async function writeClaimedArtifact(input: {
     };
   }
   if (claim.kind === "finalized") {
-    return {
-      ok: true,
-      artifactId: claim.artifactId,
-      representationRevisionId: claim.representationRevisionId,
-      deduped: true,
-    };
+    // cinatra#4762: a retry of identical bytes writes nothing.
+    return reusedArtifact(input, claim);
   }
 
   let created: { artifactId: string; representationRevisionId: string };
@@ -1017,12 +1034,8 @@ export async function writeClaimedArtifact(input: {
         ledgerId: claim.ledgerId,
       });
       if (winner) {
-        return {
-          ok: true,
-          artifactId: winner.artifactId,
-          representationRevisionId: winner.representationRevisionId,
-          deduped: true,
-        };
+        // cinatra#4762: the winner's revision is this write's.
+        return reusedArtifact(input, winner);
       }
     }
     throw err;
@@ -1527,7 +1540,16 @@ export type ToolArtifactMaterialization =
       /** true when the idempotency ledger already held finalized refs. */
       deduped: boolean;
     }
-  | { ok: false; error: string };
+  /** cinatra#4762: `reason` is set only for a write refused while a publishing call of the run is in flight
+   *  (temporary: the same call is taken once that call has ended); every other refusal carries none. */
+  | { ok: false; error: string; reason?: typeof PUBLISH_CALL_IN_FLIGHT_CODE };
+
+/** cinatra#4762: the answer to a write the in-flight fence refused. */
+const PUBLISH_CALL_IN_FLIGHT_REFUSAL = {
+  ok: false,
+  reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+  error: "a publishing call of this run is in flight; try again once it has ended",
+} as const;
 
 /**
  * Materialize ONE artifact for a mid-flow `artifact_materialize` passthrough
@@ -1697,6 +1719,7 @@ export async function materializeToolArtifact(input: {
       ...(resolved.reviewed ? { originKind: "live_generator" as const } : {}),
     });
   } catch (err) {
+    if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_REFUSAL;
     return {
       ok: false,
       error: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -1792,7 +1815,7 @@ export async function materializeFanoutMessageRevision(input: {
       ...messageKey,
       outputId: input.outputId,
     });
-    if (own) return { ok: true, ...own, deduped: true };
+    if (own) return await reusedArtifact(input, own);
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
@@ -1801,7 +1824,7 @@ export async function materializeFanoutMessageRevision(input: {
         outputId: input.outputId,
         ...prefiled,
       });
-      return { ok: true, ...prefiled, deduped: true };
+      return await reusedArtifact(input, prefiled);
     }
 
     return await writeClaimedArtifact({
@@ -1822,6 +1845,7 @@ export async function materializeFanoutMessageRevision(input: {
       typedData: input.typedData,
     });
   } catch (err) {
+    if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_REFUSAL;
     return {
       ok: false,
       error: `message body materialization failed: ${err instanceof Error ? err.message : String(err)}`,

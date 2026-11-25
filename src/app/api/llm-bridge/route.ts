@@ -975,7 +975,20 @@ async function readRunPolicyBeforeProvider(
   }
 }
 
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    return await handleBridge(req, (release) => { releases.push(release); });
+  } finally {
+    for (const release of releases) await release();
+  }
+}
+
+async function handleBridge(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   // Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   let bridgeActorContext: ActorContext | undefined;
   const isBridgeAuthorized = isAuthorizedBridgeRequest(req);
@@ -1240,7 +1253,7 @@ export async function POST(req: Request): Promise<Response> {
   // before any provider is reached. The run is the one the token proved, else the
   // one the context-id header names; the step is the verified step above, or none.
   const publishRun = runFromToken ?? runFromContextId;
-  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId))) {
+  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId, holdRelease))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },

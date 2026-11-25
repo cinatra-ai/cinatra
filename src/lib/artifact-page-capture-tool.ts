@@ -11,6 +11,7 @@ import { registerAllObjectTypes } from "@/lib/register-all-object-types";
 import { isArtifactExtensionWriteAllowed } from "@/lib/artifacts/artifact-extension-access";
 import { captureDegradeCopy, type CaptureDegradeReason } from "@/lib/artifacts/registered-page-render";
 import { fileFirstArtifactWrite, logFilingFailure } from "@/lib/artifacts/first-artifact-filing";
+import { isPublishCallInFlightAbort } from "@/lib/lifecycle/lifecycle-emit";
 import {
   acquirePageCaptureLease,
   MAX_CONCURRENT_PAGE_CAPTURES_PER_RUN,
@@ -72,6 +73,8 @@ export type ArtifactPageCaptureRefusal =
   | "write_refused"
   | "data_rejected"
   | "capture_too_large"
+  /** cinatra#4762: a publishing call of the run is in flight; temporary, try again once it has ended. */
+  | "publish_call_in_flight"
   | PageCaptureBudgetRefusal
   | CaptureDegradeReason;
 
@@ -211,6 +214,10 @@ export async function captureArtifactPage(
       await releaseLease(input, lease.lease);
     }
   } catch (err) {
+    // cinatra#4762: nothing was filed, and the same call is taken once the publishing call has ended.
+    if (isPublishCallInFlightAbort(err)) {
+      return { ok: false, reason: "publish_call_in_flight", error: "a publishing call of this run is in flight; try again once it has ended" };
+    }
     logToolFailure(input, err);
     return { ok: false, reason: "write_refused", error: PAGE_CAPTURE_UNEXPECTED_ERROR };
   }

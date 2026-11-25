@@ -172,11 +172,17 @@ export interface ObjectBackedReviewPorts extends ObjectBackedReadPorts {
    * decide about it. Without this the first review of a row that had already
    * been pinned would open no gate. Idempotent on the deterministic event id, so
    * a second reviewer of the same snapshot adds nothing.
+   *
+   * cinatra#4762: `producerRunId` is the run that opened the review. A new event
+   * names that run and the attempt the open runs in; an existing event of that
+   * run records that attempt (the shared reuse restamp), so the review counts in
+   * the run's own publish fence. Null: no run asked, the event names none.
    */
   ensureProducedEventForReusedSnapshot(input: {
     orgId: string;
     artifactId: string;
     representationRevisionId: string;
+    producerRunId: string | null;
   }): Promise<void>;
 }
 
@@ -238,6 +244,7 @@ export async function openObjectBackedReview(
       orgId: input.orgId,
       artifactId: input.objectId,
       representationRevisionId: snapshot.representationRevisionId,
+      producerRunId: input.createdByRunId ?? null,
     });
   }
 
@@ -362,24 +369,43 @@ export async function serverObjectBackedReviewPorts(opts: {
       orgId,
       artifactId,
       representationRevisionId,
+      producerRunId,
     }) => {
+      const { postgresSchema, getPostgresConnectionString } = await import("@/lib/postgres-config");
+      const schema = postgresSchema.replaceAll('"', '""');
+      // cinatra#4762: the event the open emits names the run that opened the
+      // review and the attempt it runs in. Guarded on its absence: an existing
+      // event is moved only by the shared reuse restamp below.
       const op = emitModule.maybeBuildProducedEventInsertOp(
-        (await import("@/lib/postgres-config")).postgresSchema.replaceAll('"', '""'),
+        schema,
         {
           orgId,
           artifactId,
           representationRevisionId,
           emitter: "object_snapshot_mint",
           originKind: opts.originKind,
+          producerRunId,
+          producerAttempt: emitModule.producerAttemptForRun(producerRunId),
+        },
+        {
+          whereExistsSql: `NOT EXISTS (SELECT 1 FROM "${schema}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
         },
       );
       if (!op) return;
       const { runPostgresQueriesSync } = await import("@/lib/postgres-sync");
-      const { getPostgresConnectionString } = await import("@/lib/postgres-config");
-      runPostgresQueriesSync({
-        connectionString: getPostgresConnectionString(),
-        queries: [op],
-      });
+      // The run row FOR KEY SHARE first, in its own statement, as every writer
+      // of a run's output takes it (lifecycle-emit producerRunLockOps).
+      try {
+        runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          transaction: true,
+          queries: [...emitModule.producerRunLockOps(schema, producerRunId, op), op],
+        });
+      } catch (err) {
+        throw emitModule.publishCallInFlightOr(err);
+      }
+      const { restampReusedRevision } = await import("./materialization-ledger");
+      await restampReusedRevision({ runId: producerRunId, orgId, artifactId, representationRevisionId });
     },
   };
 }

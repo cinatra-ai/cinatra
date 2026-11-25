@@ -312,4 +312,46 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: true });
     expect(sendTask).toHaveBeenCalledTimes(2);
   });
+
+  // cinatra#4762: the publish gate stops a run that reached it with no approved review and writes no decision row; the
+  // stop's recorded reason is its hold.
+  const NO_REVIEW = "No approved review came before this change outside Cinatra.";
+  const stoppedRun = (error: string | null) => ({
+    id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a", status: "stopped", a2aContextId: "ctx-1", error,
+  });
+
+  // red-first-expect: expected { ok: true } to deeply equal { ok: false, …(1) }
+  it("a run stopped for want of an approved review is refused, sent nothing, and put back to stopped", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(stoppedRun(NO_REVIEW));
+    expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_review_not_approved" });
+    expect(moves()).toEqual([["run-1", "stopped", "queued"], ["run-1", "queued", "stopped"]]);
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: expected { ok: true } to deeply equal { ok: false, …(1) }
+  it("the reason is read again under the claim: a record read before it, of an earlier stop, does not let the run pass", async () => {
+    storeMock.readAgentRunById.mockResolvedValueOnce(stoppedRun("stopped by operator")).mockResolvedValue(stoppedRun(NO_REVIEW));
+    expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_review_not_approved" });
+    expect(sendTask).not.toHaveBeenCalled();
+    // A run row that cannot be read under the claim refuses too.
+    vi.clearAllMocks();
+    storeMock.readAgentRunById.mockResolvedValueOnce(stoppedRun(null)).mockResolvedValue(null);
+    expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_review_not_approved" });
+    expect(moves().at(-1)).toEqual(["run-1", "queued", "stopped"]);
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a run stopped for another reason is resumed as before", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(stoppedRun("stopped by operator"));
+    expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: true });
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("this resume is the only road out of a stopped run: every other resume road starts from pending_approval", async () => {
+    const { __LEGAL_TRANSITIONS__ } = await vi.importActual<typeof import("../run-status")>("../run-status");
+    expect([...__LEGAL_TRANSITIONS__].filter((edge) => edge.startsWith("stopped->"))).toEqual(["stopped->queued"]);
+    const out = execFileSync("git", ["grep", "-l", "-E", "\"stopped\",[[:space:]]*\"queued\"", "--", "src", "packages",
+      ":(exclude)**/__tests__/**", ":(exclude)**/*.test.*", ":(exclude)**/*.spec.*"], { cwd: REPO, encoding: "utf8" });
+    expect(out.split("\n").filter(Boolean)).toEqual(["packages/agents/src/orchestrator-actions.ts"]);
+  });
 });
