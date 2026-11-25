@@ -1291,6 +1291,25 @@ export function declaredHitlCardReady(card: DeclaredHitlCard, staged: Record<str
 /** The keys a host adds beside a declared card's answer on its Continue. */
 const DECLARED_CARD_HOST_KEYS = new Set(["approved", "approvedAt", "stepNumber"]);
 
+/**
+ * WHAT A HOST'S CONTINUE SENDS FOR A DECLARED CARD: the answer the card staged,
+ * with the host's approval and its time, and nothing else (no approval-note
+ * lift, no list or context-selector rule, no declared-schema copy). Files
+ * pending on the host are wrapped as on every other step, so the server refuses
+ * them with its own sentence rather than the host dropping them unseen.
+ */
+export function declaredCardContinuePayload(
+  staged: Record<string, unknown>,
+  pendingAttachments: ReadonlyArray<LlmAttachmentRef> = [],
+): Record<string, unknown> {
+  const payload = { ...staged, approved: true, approvedAt: new Date().toISOString() };
+  return pendingAttachments.length > 0 ? applyAttachmentEnvelopeUserResponseOnly(payload, pendingAttachments) : payload;
+}
+
+/** The refusal of a composer or tool answer to a step a declared card draws. */
+export const DECLARED_CARD_ANSWERED_ON_CARD =
+  "This step is answered on its card. Fill its fields there, then press its Continue.";
+
 export const DECLARED_CARD_ANSWER_REFUSAL =
   "This step's card asks for an answer this request did not give, so nothing was sent. " +
   "Fill every field on the card and press its Continue; files cannot be sent with it.";

@@ -39,6 +39,16 @@ const stream = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("../use-ag-ui-run-stream", () => ({ useAgUiRunStream: () => stream.current }));
 
 const CARD_ID = "@acme/card-fixture-agent:brief";
+// A card on an id a host otherwise reads as the list step (cinatra#3470): the
+// card's rule governs it, with no list pick and no approval note.
+const LIST_ID = "@acme/card-fixture-agent:list-picker";
+/** A presentation hint beside the card: the card draws the step, not the hint. */
+const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
+const CASES: Array<[string, string, Record<string, unknown>]> = [
+  ["a plain declared card", CARD_ID, {}],
+  ["a declared card beside a presentation hint", CARD_ID, HINT],
+  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
+];
 const SCREEN = {
   layout: "card",
   sections: [
@@ -49,13 +59,13 @@ const SCREEN = {
   carry: ["topic"],
 };
 
-function cardStream() {
+function cardStream(id: string = CARD_ID, extra: Record<string, unknown> = {}) {
   return {
     status: "pending_approval", error: null, presentationHint: null, isLive: true, streamedText: "",
     interruptContext: {
-      xRenderer: CARD_ID,
-      schema: { type: "object", "x-renderer": CARD_ID, properties: { angle: { type: "string", title: "Angle" } } },
-      values: { stepNumber: 1, topic: "Audit trails for agent runs" },
+      xRenderer: id,
+      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } } },
+      values: { stepNumber: 1, topic: "Audit trails for agent runs", ...extra },
       reviewTaskId: "gate-card-3470",
     },
   };
@@ -67,7 +77,10 @@ function continueButtons(): HTMLButtonElement[] {
 
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
-  registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+  registerFieldRendererBindings([
+    { id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
+    { id: LIST_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
+  ]);
   stream.current = cardStream();
 });
 afterEach(() => {
@@ -81,11 +94,13 @@ afterAll(() => {
 });
 
 describe("the run panel draws a declared card and holds its Continue until the field is written", () => {
-  it("shows the declared note, fact and field; Continue waits for text and then sends the one staged answer", async () => {
+  it.each(CASES)("%s: shows the declared note, fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra) => {
+    stream.current = cardStream(id, extra);
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
     await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     const screen = document.querySelector("[data-declared-hitl-screen]")!;
+    expect(document.body.textContent).not.toContain("Hint item");
     expect(screen.textContent).toContain("Check the brief before it is written.");
     expect(screen.querySelector('[data-conformance-id="hitl-declared-facts"]')?.textContent).toContain("Audit trails for agent runs");
     expect(continueButtons()).toHaveLength(1);

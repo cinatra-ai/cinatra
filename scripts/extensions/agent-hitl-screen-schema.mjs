@@ -30,6 +30,24 @@ export const MAX_HITL_SCREEN_BYTES = 8192;
 export const MID_RUN_ONLY_MESSAGE =
   "a declared screen is drawn only at a mid-run step: the binding must declare midRunHitl: true";
 
+// Binding-id endings a host reads as a step with its own submit rule (the list
+// step, the setup forms, the list-curator reviews, the context selector). A
+// card on such an id is refused at generation so a pack author meets no
+// ambiguity; at run time a declared card governs its step whatever its id ends
+// with (packages/agents/src/field-renderer-registry.ts, declaredCardEntryOf).
+export const HOST_RULE_ID_SUFFIXES = Object.freeze([
+  ":list-picker",
+  ":setup-form",
+  ":scrape-schema-review",
+  ":final-list-review",
+  ":context-selector",
+]);
+
+/** The host-rule ending a binding id carries, or null. */
+export function hostRuleSuffixOf(id) {
+  return typeof id === "string" ? (HOST_RULE_ID_SUFFIXES.find((x) => id.endsWith(x)) ?? null) : null;
+}
+
 const MAX_TEXT = 600;
 const MAX_LIST = 8;
 const MAX_SECTIONS = 16;

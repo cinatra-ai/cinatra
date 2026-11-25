@@ -36,21 +36,36 @@ const SCREEN = {
   carry: ["topic"],
 };
 
-const asking = {
-  state: "asking" as const,
-  runId: RUN_ID,
-  screenRef: "hitl-screen-ref-task-3470",
-  gate: {
-    reviewTaskId: "task-3470",
-    xRenderer: CARD_ID,
-    inputSchema: { type: "object", properties: { angle: { type: "string", title: "Angle" } } },
-    currentValues: { topic: "Audit trails for agent runs" },
-    fieldName: undefined,
-  },
-};
+// A card on an id a host otherwise reads by its suffix (cinatra#3470): the
+// card's rule governs it.
+const LIST_ID = "@acme/card-fixture-agent:list-picker";
+/** A presentation hint beside the card: the card draws the step, not the hint. */
+const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
+const CASES: Array<[string, string, Record<string, unknown>]> = [
+  ["a plain declared card", CARD_ID, {}],
+  ["a declared card beside a presentation hint", CARD_ID, HINT],
+  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
+];
+
+function askingFor(id: string, extra: Record<string, unknown> = {}) {
+  return {
+    state: "asking" as const,
+    runId: RUN_ID,
+    screenRef: "hitl-screen-ref-task-3470",
+    gate: {
+      reviewTaskId: "task-3470",
+      xRenderer: id,
+      inputSchema: { type: "object", properties: { angle: { type: "string", title: "Angle" } } },
+      currentValues: { topic: "Audit trails for agent runs", ...extra },
+      fieldName: undefined,
+    },
+  };
+}
+let asking = askingFor(CARD_ID);
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
+  asking = askingFor(CARD_ID);
   fieldRendererRegistry.clear();
   ensureDefaultFieldRenderersRegistered();
   screenStateMock.mockImplementation(async () => asking);
@@ -86,12 +101,14 @@ function mount(host: LifecycleCardHost) {
 const cardContinue = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
 
 describe("AgentHitlScreenCard draws a declared card (cinatra#3470)", () => {
-  it("chat_thread: the Continue is held until the field holds text, then sends the one staged answer", async () => {
-    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+  it.each(CASES)("chat_thread, %s: the Continue is held until the field holds text, then sends the one staged answer", async (_name, id, extra) => {
+    asking = askingFor(id, extra);
+    registerFieldRendererBindings([{ id, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
     const { container } = mount("chat_thread");
     await settle();
     await waitFor(() => expect(container.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     expect(container.textContent).toContain("Check the brief before it is written.");
+    expect(container.textContent).not.toContain("Hint item");
     await waitFor(() => expect(cardContinue(container)).not.toBeNull());
     expect(cardContinue(container)!.disabled).toBe(true);
 

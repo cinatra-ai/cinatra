@@ -21,7 +21,7 @@
 // Dependency-free on purpose (imported by build scripts, TS host code via
 // `allowJs`, and tests).
 
-import { MID_RUN_ONLY_MESSAGE, validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
+import { MID_RUN_ONLY_MESSAGE, hostRuleSuffixOf, validateHitlScreen } from "./agent-hitl-screen-schema.mjs";
 
 export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "blog-idea-selection",
@@ -205,6 +205,13 @@ export function validateFieldRendererDeclarations(packageName, raw) {
       }
       if (component !== undefined) {
         errors.push(`${where}.screen: the host draws a declared screen, so the binding declares no component`);
+        return;
+      }
+      const suffix = hostRuleSuffixOf(id);
+      if (suffix !== null) {
+        errors.push(
+          `${where}.screen: a binding id ending in "${suffix}" names a step the host answers by its own rule; give the card's binding another id`,
+        );
         return;
       }
       normalizedScreen = checked.screen;

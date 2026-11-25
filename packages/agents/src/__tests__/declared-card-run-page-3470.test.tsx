@@ -49,6 +49,16 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 }));
 
 const CARD_ID = "@acme/card-fixture-agent:brief";
+// A card on an id the stepper otherwise reads as the list step (cinatra#3470):
+// the card's rule governs it, with no approval note.
+const LIST_ID = "@acme/card-fixture-agent:list-picker";
+/** A presentation hint beside the card: the card draws the step, not the hint. */
+const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
+const CASES: Array<[string, string, Record<string, unknown>]> = [
+  ["a plain declared card", CARD_ID, {}],
+  ["a declared card beside a presentation hint", CARD_ID, HINT],
+  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
+];
 const SCREEN = {
   layout: "card",
   sections: [
@@ -59,11 +69,11 @@ const SCREEN = {
 };
 type PanelProps = import("../orchestrator-stepper-panel").OrchestratorStepperPanelProps;
 
-function panelProps(): PanelProps {
+function panelProps(id: string = CARD_ID): PanelProps {
   return {
     runId: "run-3470", initialStatus: "pending_approval", initialError: null, agUiEnabled: false as boolean | null,
     agentPackageName: "@acme/card-fixture-agent", inputParams: {},
-    stepperSteps: [{ index: 1, stepNumber: 1, label: "Check the brief", xRenderer: CARD_ID }],
+    stepperSteps: [{ index: 1, stepNumber: 1, label: "Check the brief", xRenderer: id }],
     agentId: "acme/card-fixture-agent", lgThreadId: null, templateId: "tmpl-3470", templateName: "Card Fixture Agent",
   };
 }
@@ -74,13 +84,10 @@ function continueButtons(): HTMLButtonElement[] {
 
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
-  registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
-  stream.interruptContext = {
-    xRenderer: CARD_ID,
-    schema: { type: "object", "x-renderer": CARD_ID, properties: { angle: { type: "string", title: "Angle" } } },
-    values: { stepNumber: 1, topic: "Audit trails for agent runs" },
-    reviewTaskId: "gate-card-3470",
-  };
+  registerFieldRendererBindings([
+    { id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
+    { id: LIST_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
+  ]);
   const body = JSON.stringify({ reviewGate: { ref: null, awaiting: false } });
   vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "Content-Type": "application/json" } })));
 });
@@ -96,10 +103,17 @@ afterAll(() => {
 });
 
 describe("the run page draws a declared card and holds its Continue until the field is written", () => {
-  it("shows the declared fact and field; Continue waits for text and then sends the one staged answer", async () => {
-    render(<OrchestratorStepperPanel {...panelProps()} />);
+  it.each(CASES)("%s: shows the declared fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra) => {
+    stream.interruptContext = {
+      xRenderer: id,
+      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } } },
+      values: { stepNumber: 1, topic: "Audit trails for agent runs", ...extra },
+      reviewTaskId: "gate-card-3470",
+    };
+    render(<OrchestratorStepperPanel {...panelProps(id)} />);
     await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     const screen = document.querySelector("[data-declared-hitl-screen]")!;
+    expect(document.body.textContent).not.toContain("Hint item");
     expect(screen.textContent).toContain("Audit trails for agent runs");
     expect(continueButtons()).toHaveLength(1);
     expect(continueButtons()[0]!.disabled).toBe(true);

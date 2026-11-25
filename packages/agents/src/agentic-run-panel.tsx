@@ -49,7 +49,7 @@ import {
   type PublishDecisionCardRead,
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, declaredCardEntryOf, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -93,6 +93,8 @@ import {
   applyRendererApprovalNote,
   buildChatGateSubmitPayload,
   createGateValidityStore,
+  declaredCardContinuePayload,
+  DECLARED_CARD_ANSWERED_ON_CARD,
   gateAwaitsRendererValue,
   gateCarriesPresentationHint,
   hasUsableListPick,
@@ -1498,6 +1500,9 @@ export function AgenticRunPanel({
       // as the Continue drawn for the gate does.
       const gateKey = hitlGateIdentityKey(ctx);
       if (gateValidity.isHeld(gateKey)) return;
+      // cinatra#3470: a step a declared card draws is answered by the card's
+      // own Continue only (`declaredCardEntryOf`); the composer sends it nothing.
+      if (declaredCardEntryOf(ctx.xRenderer) !== null) throw new Error(DECLARED_CARD_ANSWERED_ON_CARD);
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
@@ -2084,6 +2089,12 @@ export function AgenticRunPanel({
     ? agentUIOverrideRegistry.resolve("STATE_SNAPSHOT", agentPackageName)
     : null;
 
+  // THE ONE DECISION FIRST (cinatra#3470): a step whose binding declares a
+  // valid card is drawn and answered by that card alone. Every special case
+  // below (the presentation hint, the list step, the approval-note lift, the
+  // context selector, the declared-schema rule) applies only when this is null.
+  const stepCard = isPendingApproval ? declaredCardEntryOf(effectiveHitlContext?.xRenderer) : null;
+
   // Resolve renderer entry for inline HITL bubble.
   const hitlRendererEntry = (() => {
     if (!isPendingApproval || !effectiveHitlContext?.xRenderer) return null;
@@ -2103,11 +2114,13 @@ export function AgenticRunPanel({
     // component renders a gate is decided by its `x-renderer` id, never by the
     // interrupt's field name. Only the rendered field IDENTITY below carries
     // the real name.
-    const entry = fieldRendererRegistry.resolve(
-      HITL_PLACEHOLDER_FIELD_NAME,
-      fieldSchema,
-      context,
-    );
+    const entry =
+      stepCard ??
+      fieldRendererRegistry.resolve(
+        HITL_PLACEHOLDER_FIELD_NAME,
+        fieldSchema,
+        context,
+      );
     // Strip "x-renderer" before passing to the renderer so renderers that
     // internally call fieldRendererRegistry.resolve (e.g. SchemaFieldRenderer)
     // don't re-match themselves and enter an infinite recursion loop.
@@ -2121,7 +2134,7 @@ export function AgenticRunPanel({
   // Guard also rejects arrays and shape-less objects — mirrors the A2UiAdapter
   // guard.
   const hitlPresentationHint: PresentationHint | null = (() => {
-    if (!effectiveHitlContext) return null;
+    if (!effectiveHitlContext || stepCard) return null;
     const cv = effectiveHitlContext.currentValues;
     if (typeof cv !== "object" || cv === null) return null;
     const candidate = (cv as { presentation?: unknown }).presentation;
@@ -2143,6 +2156,7 @@ export function AgenticRunPanel({
   // note, and send nothing while nothing is picked. The tool-call approval
   // banner is drawn only when no renderer is, so its Approve is never this.
   const drawsMidRunListStep =
+    stepCard === null &&
     Boolean(effectiveHitlContext) &&
     hitlPresentationHint === null &&
     Boolean(hitlRendererEntry?.entry) &&
@@ -2304,6 +2318,22 @@ export function AgenticRunPanel({
           // Reported unsendable: the press sends nothing (the drawn state can
           // lag the report by one frame; the store cannot).
           if (gateValidity.isHeld(activeGateKey)) return;
+          // A DECLARED CARD (cinatra#3470): its readiness held this control, and
+          // its staged answer is what is sent; no rule below applies to it.
+          if (stepCard) {
+            if (stepCard.continueReady?.(bufferedHitlValue) !== true) return;
+            await performGateSubmit({
+              reviewTaskId: effectiveHitlContext.reviewTaskId,
+              xRenderer: effectiveHitlContext.xRenderer,
+              payload: declaredCardContinuePayload(bufferedHitlValue, pendingAttachmentsRef.current),
+              trackApproving: true,
+              suppressGate: true,
+              clearAttachmentsOnSuccess: true,
+              errorMode: "toast",
+              holdKey: activeGateKey,
+            });
+            return;
+          }
           // A LIST STEP WITH NOTHING PICKED (cinatra#3562) sends nothing: its
           // snapshot would name no list (`listId: ""`). The list step reports
           // nothing yet, so the Continue stays drawn, and a press is refused
@@ -3238,6 +3268,8 @@ export function AgenticRunPanel({
                 // orchestrator-stepper-panel's classifyMidRunHitl entry for
                 // `:output`, `:list-picker` and the manifest flag.
                 const isMidRunHitl =
+                  // A declared card (cinatra#3470) is a mid-run step on every host.
+                  stepCard !== null ||
                   effectiveHitlContext.xRenderer.endsWith(":output") ||
                   // A list step on a mid-run gate (cinatra#3562): its binding
                   // declares no `midRunHitl` flag, and the stepper reads it by
@@ -3260,9 +3292,9 @@ export function AgenticRunPanel({
                 // Grouped-setup forms (x-renderer === GROUPED_SETUP_FORM_RENDERER_ID or
                 // its :output variant) have their own submit button — auto-approve after
                 // the form submits so the user sees exactly ONE Continue button.
-                const isGroupedSetup = isGroupedSetupRenderer(
-                  effectiveHitlContext.xRenderer,
-                );
+                const isGroupedSetup =
+                  stepCard === null &&
+                  isGroupedSetupRenderer(effectiveHitlContext.xRenderer);
                 // cinatra#3532 — WHOSE CONTROL THE SEND IS ON THIS SETUP GATE.
                 // The card states the rule in `cardOwnsTheSetupSend`; read on
                 // this surface's own host it says: the run page is a PRIMARY
@@ -3467,13 +3499,19 @@ export function AgenticRunPanel({
                         drawn exactly as before. */}
                     {isMidRunHitl &&
                       !isGroupedSetup &&
-                      renderApprovalActionsRow({
-                        awaitingRendererValue: gateAwaitsRendererValue(
-                          hitlRendererEntry.fieldSchema,
-                          bufferedHitlValue,
-                        ),
-                        declaredSchema: hitlRendererEntry.fieldSchema,
-                      })}
+                      renderApprovalActionsRow(
+                        // A declared card's own readiness holds its Continue
+                        // (cinatra#3470), never the declared-schema rule.
+                        stepCard
+                          ? {}
+                          : {
+                              awaitingRendererValue: gateAwaitsRendererValue(
+                                hitlRendererEntry.fieldSchema,
+                                bufferedHitlValue,
+                              ),
+                              declaredSchema: hitlRendererEntry.fieldSchema,
+                            },
+                      )}
                     {/* cinatra#3532 — the product's Continue for a setup field
                         whose renderer declares no submit control of its own:
                         the same control the fallback field's card draws, and it

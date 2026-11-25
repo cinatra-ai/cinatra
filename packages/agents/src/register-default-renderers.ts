@@ -308,6 +308,7 @@ export function registerFieldRendererBindings(
         credentialSafe: true,
         midRunHitl: true,
         continueReady: (staged) => declaredHitlCardReady(card, staged),
+        declaredCard: true,
       });
       continue;
     }

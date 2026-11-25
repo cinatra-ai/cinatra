@@ -92,4 +92,13 @@ describe("a binding's screen at generation", () => {
     expect(withComponent.entries).toEqual([]);
     expect(withComponent.errors.join()).toMatch(/declares no component/);
   });
+
+  it.each([":list-picker", ":setup-form", ":scrape-schema-review", ":final-list-review", ":context-selector"])(
+    "is refused on a binding id ending in %s, a step the host answers by its own rule",
+    (suffix) => {
+      const out = validateFieldRendererDeclarations(PKG, [binding({ id: `${PKG}${suffix}`, screen: CARD })]);
+      expect(out.entries).toEqual([]);
+      expect(out.errors.join()).toMatch(new RegExp(`ending in "${suffix}" names a step the host answers by its own rule`));
+    },
+  );
 });

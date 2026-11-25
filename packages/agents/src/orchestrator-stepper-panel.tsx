@@ -128,6 +128,7 @@ import {
   applyRendererApprovalNote,
   createGateValidityStore,
   buildSchemaFieldGatePayload,
+  declaredCardContinuePayload,
   gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
@@ -161,7 +162,7 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, declaredCardEntryOf, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -936,15 +937,23 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = fieldRendererRegistry.resolve(
-    HITL_PLACEHOLDER_FIELD_NAME,
-    fieldSchema,
-    context,
-  );
+  // THE ONE DECISION FIRST (cinatra#3470): a step whose binding declares a
+  // valid card is drawn and answered by that card alone; the suffix and kind
+  // rules below (mid-run classification, the grouped setup form, the
+  // approval-note lifts, the context selector, the declared-schema rule)
+  // apply only when this is null.
+  const stepCard = declaredCardEntryOf(interruptContext.xRenderer);
+  const entry =
+    stepCard ??
+    fieldRendererRegistry.resolve(
+      HITL_PLACEHOLDER_FIELD_NAME,
+      fieldSchema,
+      context,
+    );
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
-  const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
+  const isMidRunHitl = stepCard !== null || classifyMidRunHitl(interruptContext.xRenderer);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper
@@ -952,15 +961,17 @@ function HitlApprovalCard({
   const isOutputHitl =
     interruptContext.xRenderer.endsWith(":output") ||
     interruptContext.xRenderer.endsWith("-output");
-  const isGroupedSetup = isGroupedSetupRenderer(interruptContext.xRenderer, {
-    includeSetupFormSuffix: true,
-  });
+  const isGroupedSetup =
+    stepCard === null &&
+    isGroupedSetupRenderer(interruptContext.xRenderer, {
+      includeSetupFormSuffix: true,
+    });
   // cinatra#3380 — a mid-run gate that declares a value its renderer must
   // produce (`hitl-gate-submit.ts`) keeps its outer Continue unavailable
   // until the renderer has written one. A gate that declares none is held by
   // nothing.
   const continueAwaitsRendererValue =
-    isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
+    stepCard === null && isMidRunHitl && gateAwaitsRendererValue(renderSchema, bufferedHitlValue);
   // The gate this card's renderer is drawn for (cinatra#3380).
   const rendererGateKey = hitlGateIdentityKey(interruptContext);
 
@@ -1077,55 +1088,61 @@ function HitlApprovalCard({
       approved: true,
       approvedAt: new Date().toISOString(),
     };
-    // Renderer-specific approvalNote lifts (list-picker / setup-form /
-    // scrape-schema-review / final-list-review) — snapshot exactly what was
-    // approved at this gate for the downstream continuation. Shared with
-    // agentic-run-panel via ./hitl-gate-submit.
-    // A lifted list-step note is the resume text (cinatra#3562): the server
-    // sends a nonblank `userResponse` before the note, so the list step's
-    // lift removes any `userResponse` from the payload. The attachment
-    // envelope below wraps the note (`applyAttachmentEnvelope`).
-    const approvalNoteLift = liftRendererApprovalNote(
-      interruptContext.xRenderer,
-      bufferedHitlValue,
-    );
-    nextBuffered = applyRendererApprovalNote(
-      interruptContext.xRenderer,
-      nextBuffered,
-      approvalNoteLift,
-    );
-    // #817: context-selector gate — synthesize the selection envelope when the
-    // renderer emitted none (zero-candidate slot; /api/context-finalize would
-    // 422 on the non-JSON value). A real toggle already set
-    // bufferedHitlValue.userResponse — the helper PRESERVES it (only fills
-    // when absent).
-    nextBuffered = withContextSelectorEnvelope(
-      interruptContext.xRenderer,
-      interruptContext.values,
-      nextBuffered,
-    );
-    // Wrap the legacy `userResponse` text with the WayFlow envelope when
-    // paperclip attachments are pending. Skip wrap for setup gates because the
-    // server path doesn't read userResponse there; only enter the wrap when
-    // attachments.length > 0. PRESERVE any renderer-authored userResponse
-    // already on nextBuffered; clobbering it would change WayFlow text.
-    // Fallback "[Approved by operator]" mirrors review-task-actions.ts
-    // server default when no userResponse text exists.
-    const isSetupGate = isSetupGateTaskId(interruptContext.reviewTaskId);
-    if (!isSetupGate && pendingAttachmentsRef.current.length > 0) {
-      // Share the precedence-and-wrap pure helper with the renderer-inline
-      // submits. Server-side precedence userResponse → approvalNote → default
-      // is mirrored inside `pickLegacyResumeText`.
-      nextBuffered = applyAttachmentEnvelope(
-        nextBuffered,
-        pendingAttachmentsRef.current,
+    if (stepCard) {
+      // A declared card (cinatra#3470): its staged answer is what is sent; no
+      // lift, envelope rule or declared-schema copy below applies to it.
+      nextBuffered = declaredCardContinuePayload(bufferedHitlValue, pendingAttachmentsRef.current);
+    } else {
+      // Renderer-specific approvalNote lifts (list-picker / setup-form /
+      // scrape-schema-review / final-list-review) — snapshot exactly what was
+      // approved at this gate for the downstream continuation. Shared with
+      // agentic-run-panel via ./hitl-gate-submit.
+      // A lifted list-step note is the resume text (cinatra#3562): the server
+      // sends a nonblank `userResponse` before the note, so the list step's
+      // lift removes any `userResponse` from the payload. The attachment
+      // envelope below wraps the note (`applyAttachmentEnvelope`).
+      const approvalNoteLift = liftRendererApprovalNote(
+        interruptContext.xRenderer,
+        bufferedHitlValue,
       );
-    }
-    // cinatra#3380 — on a mid-run gate, a key the gate declares and the renderer
-    // wrote is sent as the renderer wrote it, over approved, approvedAt and every
-    // lift and wrap above.
-    if (isMidRunHitl) {
-      nextBuffered = withDeclaredRendererValues(renderSchema, bufferedHitlValue, nextBuffered);
+      nextBuffered = applyRendererApprovalNote(
+        interruptContext.xRenderer,
+        nextBuffered,
+        approvalNoteLift,
+      );
+      // #817: context-selector gate — synthesize the selection envelope when the
+      // renderer emitted none (zero-candidate slot; /api/context-finalize would
+      // 422 on the non-JSON value). A real toggle already set
+      // bufferedHitlValue.userResponse — the helper PRESERVES it (only fills
+      // when absent).
+      nextBuffered = withContextSelectorEnvelope(
+        interruptContext.xRenderer,
+        interruptContext.values,
+        nextBuffered,
+      );
+      // Wrap the legacy `userResponse` text with the WayFlow envelope when
+      // paperclip attachments are pending. Skip wrap for setup gates because the
+      // server path doesn't read userResponse there; only enter the wrap when
+      // attachments.length > 0. PRESERVE any renderer-authored userResponse
+      // already on nextBuffered; clobbering it would change WayFlow text.
+      // Fallback "[Approved by operator]" mirrors review-task-actions.ts
+      // server default when no userResponse text exists.
+      const isSetupGate = isSetupGateTaskId(interruptContext.reviewTaskId);
+      if (!isSetupGate && pendingAttachmentsRef.current.length > 0) {
+        // Share the precedence-and-wrap pure helper with the renderer-inline
+        // submits. Server-side precedence userResponse → approvalNote → default
+        // is mirrored inside `pickLegacyResumeText`.
+        nextBuffered = applyAttachmentEnvelope(
+          nextBuffered,
+          pendingAttachmentsRef.current,
+        );
+      }
+      // cinatra#3380 — on a mid-run gate, a key the gate declares and the renderer
+      // wrote is sent as the renderer wrote it, over approved, approvedAt and every
+      // lift and wrap above.
+      if (isMidRunHitl) {
+        nextBuffered = withDeclaredRendererValues(renderSchema, bufferedHitlValue, nextBuffered);
+      }
     }
     let didApprove = false;
     try {
@@ -2207,11 +2224,14 @@ function ReadOnlyHitlReplay(props: {
       templateId: props.templateId,
       xRenderer: props.xRenderer,
     };
-    const entry = fieldRendererRegistry.resolve(
-      HITL_PLACEHOLDER_FIELD_NAME,
-      fieldSchema,
-      ctx,
-    );
+    // A declared card replays as the card that asked (cinatra#3470).
+    const entry =
+      declaredCardEntryOf(props.xRenderer) ??
+      fieldRendererRegistry.resolve(
+        HITL_PLACEHOLDER_FIELD_NAME,
+        fieldSchema,
+        ctx,
+      );
     const RendererComponent = entry?.renderer;
     if (RendererComponent) {
       const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
