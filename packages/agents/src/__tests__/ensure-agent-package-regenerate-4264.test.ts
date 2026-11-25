@@ -119,8 +119,6 @@ beforeEach(() => {
   readAgentTemplateByPackageNameMock.mockReset();
 });
 
-// Before the fix the loader skips without a check, so the awaited load resolves with the skip result where these cases expect a refusal:
-// red-first-expect: promise resolved "{ templateId: 'tpl-gemini'
 describe("cinatra#4264 A1b review 1 — the same-version skip checks a stored regenerate list against the flow on disk", () => {
   it("REFUSES the skip when the row and the manifest keep a list the flow on disk no longer honours", async () => {
     const lifecycle = { regenerate: STALE };

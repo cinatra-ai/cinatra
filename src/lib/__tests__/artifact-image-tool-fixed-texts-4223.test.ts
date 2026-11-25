@@ -227,6 +227,16 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     expectLoggedWithoutText();
   });
 
+  it("a first filing the in-flight fence refuses answers publish_call_in_flight, never a failed write (cinatra#4762)", async () => {
+    // The fence's database abort, as the writer's transaction raises it.
+    const fenceAbort = Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
+    m.createSemanticArtifact.mockRejectedValue(fenceAbort);
+    const outcome = await generateArtifactImage(call, deps());
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error("unreachable");
+    expect(outcome.reason).toBe("publish_call_in_flight");
+  });
+
   it("a schema refusal keeps its own reason and answers the fixed data sentence", async () => {
     m.createSemanticArtifact.mockRejectedValue(
       new Error(`object payload does not satisfy the declared schema: ${SECRET_DETAIL}`),

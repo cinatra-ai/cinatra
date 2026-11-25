@@ -54,6 +54,7 @@ import { createHash } from "node:crypto";
 import {
   findFinalizedDeclarativeMaterialization,
   recordLlmEmitMaterialization,
+  restampReusedRevision,
 } from "./materialization-ledger";
 
 const ARTIFACT_TYPE_SUFFIX = ":artifact";
@@ -216,34 +217,44 @@ export async function authorArtifact(
   // extension is absorbed rather than erroring. Advisory: any lookup
   // failure falls through to the normal emit path.
   if (input.runId) {
+    let finalized: Awaited<ReturnType<typeof findFinalizedDeclarativeMaterialization>> = null;
     try {
       const contentHash = createHash("sha256")
         .update(input.content, "utf8")
         .digest("hex");
-      const finalized = await findFinalizedDeclarativeMaterialization({
+      finalized = await findFinalizedDeclarativeMaterialization({
         orgId: input.orgId,
         runId: input.runId,
         extension: input.extension,
         contentHash,
       });
-      if (finalized) {
-        console.warn(
-          `[artifact-authoring] WARN double-path emit absorbed: run=${input.runId} extension=${input.extension} already materialized these bytes declaratively (artifact=${finalized.artifactId}) — strip the persistence prose from the agent's prompts (cinatra#923/#924)`,
-        );
-        return {
-          ok: true,
-          artifactId: finalized.artifactId,
-          representationRevisionId: finalized.representationRevisionId,
-          depth: 0,
-          authoringStepId: null,
-          dedupedFromDeclarativeMaterialization: true,
-        };
-      }
     } catch (err) {
       console.warn(
         "[artifact-authoring] advisory declarative-dedupe lookup failed (continuing with the normal emit):",
         err instanceof Error ? err.message : err,
       );
+    }
+    if (finalized) {
+      // cinatra#4762: the absorbed emit writes nothing; the declared revision's
+      // event records this attempt. Outside the advisory catch: a refusal of the
+      // restamp is the emit's answer, never a fall-through to a second write.
+      await restampReusedRevision({
+        runId: input.runId,
+        orgId: input.orgId,
+        artifactId: finalized.artifactId,
+        representationRevisionId: finalized.representationRevisionId,
+      });
+      console.warn(
+        `[artifact-authoring] WARN double-path emit absorbed: run=${input.runId} extension=${input.extension} already materialized these bytes declaratively (artifact=${finalized.artifactId}) — strip the persistence prose from the agent's prompts (cinatra#923/#924)`,
+      );
+      return {
+        ok: true,
+        artifactId: finalized.artifactId,
+        representationRevisionId: finalized.representationRevisionId,
+        depth: 0,
+        authoringStepId: null,
+        dedupedFromDeclarativeMaterialization: true,
+      };
     }
   }
 

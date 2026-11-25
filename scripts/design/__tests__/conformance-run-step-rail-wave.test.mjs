@@ -353,13 +353,41 @@ describe("every readiness claim is checked against the shipped tree", () => {
     ).toEqual([]);
   });
 
+  it("confirms a screen a row calls session-bound reads the session, and that no fixture route carries one", () => {
+    const wrong = [];
+    for (const row of RUN_STEP_RAIL_ROWS) {
+      for (const { module, screen } of row.evidence.sessionScreens ?? []) {
+        const full = path.join(REPO_ROOT, module);
+        expect(existsSync(full), `${row.surface}: ${module} does not exist`).toBe(true);
+        const text = readFileSync(full, "utf8");
+        const start = text.indexOf(`export async function ${screen}(`);
+        const end = start === -1 ? -1 : text.indexOf("\nexport ", start + 1);
+        const body = start === -1 ? "" : text.slice(start, end === -1 ? undefined : end);
+        if (!body.includes("getAuthSession()")) wrong.push(`${row.surface} -> ${module}#${screen}`);
+      }
+    }
+    expect(
+      wrong,
+      `${wrong.join(", ")}: the screen no longer reads the signed-in session in its own body, so the row may no longer say a session is what the harness cannot give it.`,
+    ).toEqual([]);
+    const fixtures = collectSources(path.join(REPO_ROOT, "src", "app", "design-fixtures"), []);
+    const withSession = fixtures
+      .filter((f) => /@\/lib\/auth-session|getAuthSession\(|getActorContext\(/.test(readFileSync(f, "utf8")))
+      .map((f) => path.relative(REPO_ROOT, f));
+    expect(
+      withSession,
+      `${withSession.join(", ")}: a fixture route now reads a session, so the rows that say the harness carries none must mount their surface for real or name another blocker.`,
+    ).toEqual([]);
+  });
+
   it("leaves no unmounted row resting on prose alone", () => {
     const unfalsifiable = RUN_STEP_RAIL_ROWS.filter(
       (row) =>
         !row.mounted &&
         row.evidence.absentAnchors.length === 0 &&
         row.evidence.absentActions.length === 0 &&
-        row.evidence.unexportedModules.length === 0,
+        row.evidence.unexportedModules.length === 0 &&
+        (row.evidence.sessionScreens ?? []).length === 0,
     ).map((row) => row.surface);
     expect(
       unfalsifiable,

@@ -102,6 +102,12 @@ export const LIFECYCLE_HITL_SCREEN_PATH = "/api/lifecycle-views/hitl-screen";
 export const LIFECYCLE_PUBLISH_DECISION_PATH = "/api/lifecycle-views/publish-decision";
 
 /**
+ * The BROKER ANSWER to the publish card (cinatra#4758): Allow or Do not allow, from a credential-declaring host. A
+ * cookie host never uses it and keeps its server action; the server hands the answer to the same decision roads.
+ */
+export const LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH = "/api/lifecycle-views/publish-decision/decide";
+
+/**
  * The BROKER ANSWER to that question (cinatra#2930, lifecycle-b W3).
  *
  * The other half of the path above, and it exists for the same reason: a server

@@ -5,10 +5,6 @@ vi.mock("../mcp-access",()=>({}));
 vi.mock("../tools/skills",()=>({}));
 import type * as StepToolOfferPolicy from "../step-tool-offer-policy";
 import { orchestrateSubmitBatchV2 } from "../index";
-// The module the fix adds is loaded inside each test, not at the top of the
-// file: before the fix the file still loads and each test fails on the
-// missing module.
-// red-first-expect: Cannot find module '/src/step-tool-offer-policy'
 let intersectStepToolNames!: typeof StepToolOfferPolicy.intersectStepToolNames;
 let restrictMcpServerOffer!: typeof StepToolOfferPolicy.restrictMcpServerOffer;
 let restrictStepToolOffers!: typeof StepToolOfferPolicy.restrictStepToolOffers;

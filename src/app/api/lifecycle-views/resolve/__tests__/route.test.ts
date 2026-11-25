@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const d = vi.hoisted(() => ({ actor: vi.fn(), resolve: vi.fn(), prompt: vi.fn() }));
+const d = vi.hoisted(() => ({ actor: vi.fn(), resolve: vi.fn(), prompt: vi.fn(), reading: { headers: null, pinnedCount: 0, complete: false } as Record<string, unknown> }));
 vi.mock("@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor", () => ({ resolveReviewActorContext: d.actor }));
 vi.mock("@/lib/lifecycle/widget-lifecycle-actor", () => ({ resolveWidgetLifecycleActorContext: vi.fn(), mintWidgetReviewIslandUrl: vi.fn() }));
 vi.mock("@/lib/assistant-widget-handles", () => ({ resolveAssistantWidgetBinding: vi.fn() }));
 vi.mock("@/lib/lifecycle/lifecycle-card-refetch", () => ({ resolveLifecycleCardState: d.resolve }));
 vi.mock("@/lib/lifecycle/lifecycle-suggestion-chips", () => ({ attachLifecycleSuggestions: async (s: unknown) => s }));
 vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => ({ attachLifecycleSettledOutcome: async (s: unknown) => s }));
-vi.mock("@/lib/lifecycle/lifecycle-target-headers", () => ({ readReviewTargetHeadersReading: async () => ({ headers: null, pinnedCount: 0, complete: false }) }));
+vi.mock("@/lib/lifecycle/lifecycle-target-headers", () => ({ readReviewTargetHeadersReading: async () => d.reading }));
 vi.mock("@/lib/lifecycle/trigger-schedule-proposal-card", () => ({ resolveTriggerScheduleProposalCard: vi.fn() }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({ readReviewGateRecordedPrompt: d.prompt }));
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
@@ -15,7 +15,7 @@ process.env.BETTER_AUTH_SECRET ??= "test-secret-for-review-note";
 const ref = encodeLifecycleGateRef({ runId: "run", reviewTaskId: "task" })!;
 const actor = { actor: { actorType: "human", userId: "reader", source: "route" }, orgId: "org", roleHints: { actorOrganizationId: "org" } };
 function post(viewType = "artifact_review_gate", r = ref) { return new Request("https://app.example/api/lifecycle-views/resolve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ viewType, ref: r }) }); }
-beforeEach(() => { vi.clearAllMocks(); d.actor.mockResolvedValue(actor); d.resolve.mockResolvedValue({ kind: "artifact_review_gate", state: { state: "pending", canDecide: true, canComment: true }, body: null }); d.prompt.mockResolvedValue("  a red fox in snow  "); });
+beforeEach(() => { vi.clearAllMocks(); d.reading = { headers: null, pinnedCount: 0, complete: false }; d.actor.mockResolvedValue(actor); d.resolve.mockResolvedValue({ kind: "artifact_review_gate", state: { state: "pending", canDecide: true, canComment: true }, body: null }); d.prompt.mockResolvedValue("  a red fox in snow  "); });
 describe("approved app-artifact-review §VI authorized envelope-only Note", () => {
   it("adds the pinned producer words only after resolving the current reader; the body stays null", async () => {
     const res = await POST(post()); expect(res.status).toBe(200);
@@ -39,5 +39,27 @@ describe("approved app-artifact-review §VI authorized envelope-only Note", () =
   });
   it("no credential never reaches the prompt reader", async () => {
     d.actor.mockResolvedValue(null); expect((await POST(post())).status).toBe(401); expect(d.resolve).not.toHaveBeenCalled(); expect(d.prompt).not.toHaveBeenCalled();
+  });
+});
+const HEADER = { title: "The post", typeLabel: "Blog Post", objectType: "type:post", revisionId: "rev-1", facts: ["text/markdown"] };
+describe("cinatra#3033 — the display that draws the one pinned target travels beside the envelope", () => {
+  it("a pending gate over one target carries the display the reading names", async () => {
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "markdown" };
+    expect((await (await POST(post())).json()).targetDisplay).toBe("markdown");
+  });
+  it("a target the reading names as drawn by any other display carries that, too", async () => {
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "other" };
+    expect((await (await POST(post())).json()).targetDisplay).toBe("other");
+  });
+  it("a gate whose reading names no one target's display carries none", async () => {
+    d.reading = { headers: [HEADER, { ...HEADER, revisionId: "rev-2" }], pinnedCount: 2, complete: true, onlyTargetDisplay: null };
+    const body = await (await POST(post())).json();
+    expect(body).not.toHaveProperty("targetDisplay");
+    expect(body).not.toHaveProperty("targetForm");
+  });
+  it("a settled gate carries no display", async () => {
+    d.resolve.mockResolvedValue({ kind: "artifact_review_gate", state: { state: "settled", outcome: "approved" }, body: null });
+    d.reading = { headers: [HEADER], pinnedCount: 1, complete: true, onlyTargetDisplay: "markdown" };
+    expect(await (await POST(post())).json()).not.toHaveProperty("targetDisplay");
   });
 });

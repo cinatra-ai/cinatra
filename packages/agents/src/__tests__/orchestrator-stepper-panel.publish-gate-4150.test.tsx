@@ -8,7 +8,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 vi.mock("lucide-react", async () => {
   const actual = await vi.importActual<typeof import("lucide-react")>("lucide-react");
@@ -58,8 +58,10 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
 }));
 
 const publishStateMock = vi.fn();
+const publishDecideMock = vi.fn();
 vi.mock("../publish-decision-card-actions", () => ({
   getPublishDecisionCardStateAction: (input: { runId: string }) => publishStateMock(input),
+  decidePublishDecisionCardAction: (input: unknown) => publishDecideMock(input),
 }));
 
 const RUN_ID = "run-4150-flow";
@@ -68,6 +70,7 @@ const PENDING = {
   runId: RUN_ID,
   agentName: "Blog publisher",
   rows: [{ label: "Title", value: "Spring launch" }],
+  decisionId: "d1",
   mayDecide: true,
 };
 
@@ -387,5 +390,39 @@ describe("OrchestratorStepperPanel at a publish gate (cinatra#4150)", () => {
     expect(container.querySelectorAll(CARD)).toHaveLength(1);
     // The settled record stands ABOVE the working surface, never in its place.
     expect(container.textContent).toContain(WORKING);
+  });
+});
+
+// cinatra#4758: THE DECIDE DOOR on the stepper panel (a publishing flow run on the run page).
+describe("OrchestratorStepperPanel's publish card decides (cinatra#4758)", () => {
+  const button = (container: HTMLElement, label: string) =>
+    [...container.querySelectorAll<HTMLButtonElement>(`${CARD} button`)].find((b) => b.textContent === label)!;
+
+  it("a reader who may approve: Allow is live and sends through the session door; a second answer is reported", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    publishDecideMock.mockResolvedValue("not_open");
+    const { container } = await mountPanel();
+    await waitFor(() => expect(container.querySelectorAll(CARD)).toHaveLength(1));
+    expect(button(container, "Allow").disabled).toBe(false);
+    expect(button(container, "Do not allow").disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(button(container, "Allow"));
+    });
+    await waitFor(() => expect(container.textContent).toContain("This request is no longer open"));
+    expect(publishDecideMock).toHaveBeenCalledWith({ runId: RUN_ID, decisionId: "d1", answer: "approve", note: "" });
+  });
+
+  it("the controls follow the reader: live for one who may approve, disabled with the reason for one who may only view", async () => {
+    publishStateMock.mockImplementation(async () => PENDING);
+    const decider = await mountPanel();
+    await waitFor(() => expect(decider.container.querySelectorAll(CARD)).toHaveLength(1));
+    expect(button(decider.container, "Allow").disabled).toBe(false);
+    decider.unmount();
+    publishStateMock.mockImplementation(async () => ({ ...PENDING, mayDecide: false }));
+    const { container } = await mountPanel();
+    await waitFor(() => expect(container.querySelectorAll(CARD)).toHaveLength(1));
+    expect(button(container, "Allow").disabled).toBe(true);
+    expect(button(container, "Do not allow").disabled).toBe(true);
+    expect(container.textContent).toContain("Deciding whether this change is made needs approve access on the run");
   });
 });

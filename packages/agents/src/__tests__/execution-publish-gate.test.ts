@@ -202,11 +202,19 @@ const transitions = () =>
     ([, from, to, patch]) => ({ from, to, error: patch?.error }),
   );
 
+// cinatra#4762: a publish card opens only after an approved review earlier in the run; these cases hold one
+// (publish-gate-review-before-4762.test.ts drives the cases without one).
+const listReviews = vi.fn(async (_runId: string) => [{ id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-01-01"), fingerprint: "a".repeat(64), resolvedBy: "user-reviewer", successorGateId: null }]);
+const hasPendingProducedReview = vi.fn(async () => false);
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
 const previousKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 beforeAll(() => {
   process.env.CINATRA_CONTEXT_ATTEST_KEY = KEY;
+  seamSlot.__cinatraArtifactReviewGateSeam = { listReviews, hasPendingProducedReview };
 });
 afterAll(() => {
+  seamSlot.__cinatraArtifactReviewGateSeam = previousSeam;
   if (previousKey === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = previousKey;
   vi.doUnmock("@cinatra-ai/agent-ui-protocol/server");
@@ -241,6 +249,8 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
       a2aContextId: CONTEXT,
       surfacedValues: SURFACED,
       declaredRows: [{ label: "Title", input: "title" }],
+      // cinatra#4762: the row is written only while the run is still at the attempt that reached the gate.
+      attemptGeneration: 0,
     });
     expect(transitions()).toEqual([{ from: "running", to: "pending_approval", error: undefined }]);
     expect(decisions.insertParkedDecision.mock.invocationCallOrder[0]!).toBeLessThan(
@@ -248,6 +258,16 @@ describe("a run that reaches a publish gate (A4 without the moment)", () => {
     );
     expect(onInterruptSpy).not.toHaveBeenCalled();
     expect(gateStore.rememberWayflowGateTask).not.toHaveBeenCalled();
+  });
+
+  // cinatra#4758: the pause records its own gate task in the compare-and-set that enters it, so the run row names this
+  // gate's task for exactly this pause, and a Publish's claim bound to that task lands only here.
+  // Red first at 7ca04b14: the park move named no task. Red now against main without cinatra#4762: the move names no
+  // attempt generation.
+  it("the park move writes the gate's own task id with the pause", async () => {
+    await pause(sign(GATE));
+    // cinatra#4762: the move also carries the reset generation of the attempt that reached the gate.
+    expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ attemptGeneration: 0, pauseTaskId: TASK });
   });
 
   it("the decision keeps the rows of the plan the attempt was DISPATCHED with, never the live template's (review finding 2)", async () => {

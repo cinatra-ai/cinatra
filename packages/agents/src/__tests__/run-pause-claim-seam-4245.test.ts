@@ -474,6 +474,25 @@ describe("the claim module's guards", () => {
     });
   });
 
+  // cinatra#4758: a claim taken for a named gate task lands only while the run waits at that task, in the same statement
+  // that checks the generation, and a refusal at another task is "moved-on".
+  it("a claim bound to a gate task lands only at that task, and a refusal at another task is moved-on", async () => {
+    shared.returningRows = [[{ expiresAt: new Date() }] as unknown as { id: string }[]];
+    await claimPause({ ...REF, taskId: "task-1" }, SESSION);
+    const where = render(shared.whereConds[0]);
+    expect(where.sql).toContain(`${RUNS}."a2a_task_id" = $`);
+    expect(where.params).toContain("task-1");
+    shared.returningRows = [[]];
+    shared.selectRows = [{ status: "pending_approval", generation: 2, phase: null, task: "task-7" }];
+    expect(await claimPause({ ...REF, taskId: "task-1" }, SESSION)).toEqual({
+      kind: "refused",
+      reason: "moved-on",
+      status: "pending_approval",
+      generation: 2,
+    });
+    await expect(claimPause({ ...REF, taskId: "" }, SESSION)).rejects.toThrow(/empty pause task id/);
+  });
+
   it("all four throw a database error", async () => {
     shared.returningError = new Error("the database went away");
     await expect(claimPause(REF, SESSION)).rejects.toThrow("the database went away");

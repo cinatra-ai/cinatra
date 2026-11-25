@@ -168,6 +168,16 @@ export const WIDGET_LIFECYCLE_PUBLISH_DECISION_ROUTE_PATH =
   "/api/lifecycle-views/publish-decision";
 
 /**
+ * Where a widget ANSWER to the publish card is submitted (cinatra#4758): Allow or Do not allow. It belongs to
+ * `lifecycle.decide`, separate from the read audience above, for the hitl submit's reason: a token that may show the
+ * card does not thereby become a token that may answer it. Whether this person may decide THIS run is still the run's
+ * own access rules (`run.execute` then `run.approveHitl`), taken against their live standing by the same decision
+ * roads the app's card uses. A token minted before this audience existed is refused here, fail-closed.
+ */
+export const WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH =
+  "/api/lifecycle-views/publish-decision/decide";
+
+/**
  * Where a widget ANSWER to that question is submitted (cinatra#2930,
  * lifecycle-b W3) — the broker branch of the run's own HITL gate.
  *
@@ -760,6 +770,8 @@ export const WIDGET_EXTENSION_SCOPES = {
       // `lifecycle.read` shows the question; this one answers it, and the two are
       // deliberately not the same grant.
       WIDGET_LIFECYCLE_HITL_SCREEN_SUBMIT_ROUTE_PATH,
+      // cinatra#4758 -- answering the publish card, under the same rule, with its sentence below.
+      WIDGET_LIFECYCLE_PUBLISH_DECISION_DECIDE_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant.
@@ -769,7 +781,7 @@ export const WIDGET_EXTENSION_SCOPES = {
      * there is none.
      */
     consentCopy:
-      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, and answer a question an agent has paused to ask you — the same decisions, with the same permissions, as inside Cinatra.",
+      "Let you approve, reject or comment on those work items from this site, confirm, adjust or skip the skills a run was about to use, answer a question an agent has paused to ask you, and allow or not allow an agent to publish what it made — the same decisions, with the same permissions, as inside Cinatra.",
   },
   [WIDGET_CONVERSATION_READ_SCOPE]: {
     audiences: [
