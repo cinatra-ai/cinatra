@@ -247,6 +247,14 @@ export type McpBoundaryRequest = {
    * it is refused with `outward_effect_requires_recorded_decision`.
    */
   outwardOwner?: Readonly<{ kind: string; packageName: string; version: string }> | null;
+  /**
+   * cinatra#3745: the names of the tool's two input fields that carry the item
+   * the call acts on and its revision (the planned `outward.subject`), or null
+   * when the tool declares none. Read by the guarded outward run action only.
+   */
+  outwardSubject?: Readonly<{ artifactId: string; representationRevisionId: string }> | null;
+  /** cinatra#3745: the call's prepared arguments, read only for the subject fields. */
+  toolArguments?: unknown;
 };
 
 function statusShouldBlock(status: EnforcementStatus): boolean {
@@ -313,7 +321,8 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
     const host = await import("@/lib/extension-host-context");
     refusalCodeOf = host.runActionRefusalClassCode;
     // 1 + 2: the step proof from the frame, the owner's loaded identity.
-    const checked = host.checkOutwardRunAction({ frame: req.ctx, toolName: req.primitiveName, owner: req.outwardOwner });
+    const checked = host.checkOutwardRunAction({ frame: req.ctx, toolName: req.primitiveName, owner: req.outwardOwner,
+      subject: req.outwardSubject ?? null, args: req.toolArguments });
     // The boundary's other rules; a call they refuse never uses the decision up.
     const decision = await decideMcpBoundary(req, true);
     if (!decision.allowed && decision.shouldBlock) return decision;

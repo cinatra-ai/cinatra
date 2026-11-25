@@ -30,7 +30,8 @@ const h = vi.hoisted(() => {
 vi.mock("@/lib/mcp-server", () => ({
   buildHostSelfPrimitiveHandlers: async () => new Map([["objects_get", {
     handler: async (input: unknown) => { h.handled.push(input); return { structuredContent: { ok: true } }; },
-    planned: { name: "objects_get", registeredName: "objects_get", declaredOutward: null },
+    planned: { name: "objects_get", registeredName: "objects_get", declaredOutward: null, identityFailure: null,
+      dispatchTarget: { kind: "host", packageName: "@cinatra-ai/host", version: "1.0.0", name: "objects_get" } },
   }]]),
 }));
 vi.mock("@/lib/authz/mcp-boundary", () => ({ enforceMcpBoundary: async () => ({ allowed: true }) }));

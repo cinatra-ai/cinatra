@@ -20,6 +20,11 @@
 //   - the newest decision of exactly this run and that node, in the run's
 //     current attempt, reads `released`, names the person who decided it and belongs to
 //     the run's organization;
+//   - when the tool declares a subject (`outward.subject`: the input fields that carry the item it acts on and its
+//     revision), the call's item and revision are among the items the released decision surfaced: the
+//     `{artifactId, representationRevisionId}` lists under the decision's own artifacts rows, read by the review
+//     target reader (`normalizeReviewTargets`, one malformed entry refuses the row). A tool without a subject (one
+//     that takes free text) is bound to the decision only;
 //   - no consumption of that decision exists; the insert of the consumption row
 //     (its primary key is the decision's key) is the fence, so of two concurrent
 //     consumptions exactly one commits.
@@ -58,6 +63,8 @@ import {
 } from "./schema";
 import { CURRENT_ATTEMPT, decodeStoredPublishDecision, type PublishDecisionRow } from "./publish-decision-store";
 import { findPublishingAncestor } from "./validate-oas-runtime-invariants";
+import { publishRowKind } from "./publish-decision-card";
+import { normalizeReviewTargets } from "@/lib/artifacts/artifact-review-target";
 
 /** The tool that would act and the loaded extension version that owns it (the loaded identity's fields). */
 export type RunActionToolIdentity = {
@@ -68,12 +75,20 @@ export type RunActionToolIdentity = {
   readonly digest: string;
 };
 
+/** The item and revision a call acts on, read from its arguments by the tool's declared subject fields. */
+export type RunActionSubject = {
+  readonly artifactId: string;
+  readonly representationRevisionId: string;
+};
+
 export type ConsumeRunActionDecisionInput = {
   readonly orgId: string;
   readonly runId: string;
   readonly authority: OrgWriteAuthority;
   readonly proof: VerifiedExecutedRunSource;
   readonly action: RunActionToolIdentity;
+  /** The call's item and revision when the tool declares a subject; absent or null when it declares none. */
+  readonly subject?: RunActionSubject | null;
 };
 
 export type RunActionDecisionConsumption = {
@@ -110,6 +125,38 @@ function readActionIdentity(value: unknown): RunActionToolIdentity {
   return Object.freeze(out) as unknown as RunActionToolIdentity;
 }
 
+/** One frozen plain copy of the call's subject, or null when the tool declares none; refused when malformed. */
+function readSubject(value: unknown): RunActionSubject | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return refuse("action_subject_invalid");
+  const out: Record<string, string> = {};
+  for (const key of ["artifactId", "representationRevisionId"] as const) {
+    const d = Object.getOwnPropertyDescriptor(value, key);
+    if (!d || !("value" in d) || d.value === undefined || d.value === null) return refuse("action_subject_missing");
+    if (!fieldValid(d.value)) return refuse("action_subject_invalid");
+    out[key] = d.value;
+  }
+  return Object.freeze(out) as unknown as RunActionSubject;
+}
+
+/** True when the subject is one of the items the released decision surfaced: an entry of a valid target list under
+ *  one of the decision's own artifacts rows (the rows it kept at its park). A decision that kept no rows (an older
+ *  row) surfaced no item this can prove, so nothing is among them. */
+function decisionReleasedSubject(decision: PublishDecisionRow, subject: RunActionSubject): boolean {
+  const rows = decision.declaredRows;
+  if (!Array.isArray(rows)) return false;
+  const surfaced = decision.surfacedValues;
+  for (const row of rows) {
+    if (publishRowKind(row) !== "artifacts") continue;
+    if (!Object.prototype.hasOwnProperty.call(surfaced, row.input)) continue;
+    const targets = normalizeReviewTargets(surfaced[row.input]);
+    if (!targets.ok) continue;
+    if (targets.targets.some((t) => t.artifactId === subject.artifactId &&
+        t.representationRevisionId === subject.representationRevisionId)) return true;
+  }
+  return false;
+}
+
 /** The top-level publishing node of the bound graph whose decision covers the step; refused when there is none, more
  *  than one, or it declares no publication. */
 function readDecisionNode(source: string, stepId: string): string {
@@ -137,6 +184,10 @@ function readDecisionNode(source: string, stepId: string): string {
  *   - `action_person_decision_not_affirmative`: it was declined, expired or ended with the run;
  *   - `action_person_decision_invalid`: the store cannot read the row, or it reads released but names no person, or
  *     another organization;
+ *   - `action_subject_missing` / `action_subject_invalid`: the tool declares a subject and the call's item or revision
+ *     is absent or not a string;
+ *   - `action_subject_not_released`: the call's item and revision are not among the items the released decision
+ *     surfaced;
  *   - `action_person_decision_already_consumed`: it was used before (by this or any other action);
  *   - `action_person_decision_unavailable`: a store failure.
  */
@@ -147,6 +198,7 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
   const proof = parseVerifiedExecutedRunSource(input.proof);
   if (!proof) refuse("action_decision_input_invalid");
   const action = readActionIdentity(input.action);
+  const subject = readSubject(input.subject);
   const p = proof as VerifiedExecutedRunSource;
   try {
     return await withRunActionPolicyTransaction({ orgId, runId, authority: input.authority }, async (tx) => {
@@ -194,6 +246,9 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
           !Number.isFinite(decision.decidedAt.getTime()) || !fieldValid(decision.id)) {
         refuse("action_person_decision_invalid");
       }
+      // The call acts on the item and revision the person released, compared under the decision row's lock, in the
+      // transaction that marks the decision used: a refusal here consumes nothing.
+      if (subject && !decisionReleasedSubject(decision, subject)) refuse("action_subject_not_released");
       const consumptionKey = `${PUBLISH_DECISION_CONSUMPTION_PREFIX}${decision.id}`;
       const used = await tx.select({ gateId: artifactReviewActionConsumptions.gateId })
         .from(artifactReviewActionConsumptions).where(eq(artifactReviewActionConsumptions.gateId, consumptionKey));
@@ -202,7 +257,7 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
         gateId: consumptionKey, runId, orgId, stepId: p.stepId,
         // A plain copy: the frozen identity is stored as its fields, never as the object. The step column holds the
         // tool step; the node whose decision is used up is recorded beside the identity.
-        toolIdentity: { ...action, decisionNodeId }, executedSourceSha256: p.executedSourceSha256,
+        toolIdentity: { ...action, decisionNodeId, ...(subject ? { subject: { ...subject } } : {}) }, executedSourceSha256: p.executedSourceSha256,
       }).onConflictDoNothing().returning({ gateId: artifactReviewActionConsumptions.gateId });
       if (inserted.length !== 1 || inserted[0]!.gateId !== consumptionKey) refuse("action_person_decision_already_consumed");
       return Object.freeze({ consumptionKey, decisionId: decision.id, decidedBy: decision.decidedBy as string,

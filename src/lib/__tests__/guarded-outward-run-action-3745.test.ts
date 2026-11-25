@@ -14,9 +14,10 @@
  * `@/lib/extension-host-context` and the real loaded-identity registry. The
  * audit writer, the classification reader and the extension-registry reader
  * are test doubles, as is the run store: its consumption double keeps one
- * released decision per (run, step) for the tools that step declares and
- * refuses as the real store does (its own refusals and its single-use fence are
- * pinned in packages/agents).
+ * released decision per (run, step) for the tools that step declares, with the
+ * items and revisions the decision released, and refuses as the real store does
+ * (its own refusals, its comparison of the call's subject with the released
+ * items and its single-use fence are pinned in packages/agents).
  */
 import "server-only";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +41,8 @@ const store = vi.hoisted(() => {
   class RunStepToolPolicyRefusal extends Error {
     constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
   }
-  type Decision = { tools: Set<string>; consumed: boolean };
+  type Released = { artifactId: string; representationRevisionId: string };
+  type Decision = { tools: Set<string>; consumed: boolean; released: Released[] };
   return {
     RunStepToolPolicyRefusal,
     decisions: new Map<string, Decision>(),
@@ -77,10 +79,11 @@ const runFrame = (over: Partial<Record<string, unknown>> = {}): McpRequestContex
 type ToolResult = { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
 
 /** One runtime server with the two outward tools; `owner` stamps an extension owner (absent: a host built-in). */
-async function buildServer(owner?: { packageName: string; version: string }) {
+async function buildServer(owner?: { packageName: string; version: string },
+  subject?: { artifactId: string; representationRevisionId: string }) {
   const handled: string[] = [];
   const config = (name: string) => ({
-    title: name, description: name, outward: {},
+    title: name, description: name, outward: subject ? { subject } : {},
     ...(owner ? { cinatraPrimitive: { ownerPackage: owner.packageName, resolvedVersion: owner.version,
       dispatchTarget: { kind: "extension-default", packageName: owner.packageName, version: owner.version, name } } } : {}),
   });
@@ -102,8 +105,8 @@ async function buildServer(owner?: { packageName: string; version: string }) {
   })._registeredTools;
   return {
     handled,
-    call: async (name: string, frame: McpRequestContext): Promise<ToolResult> =>
-      (await mcpRequestContextStorage.run(frame, () => registry[name]!.handler({}, {}))) as ToolResult,
+    call: async (name: string, frame: McpRequestContext, args: unknown = {}): Promise<ToolResult> =>
+      (await mcpRequestContextStorage.run(frame, () => registry[name]!.handler(args, {}))) as ToolResult,
   };
 }
 
@@ -113,17 +116,23 @@ describe("the guarded outward run action", () => {
   beforeEach(() => {
     __resetCapabilityRegistry();
     store.decisions.clear();
-    store.decisions.set("run-1|step-1", { tools: new Set([OUTWARD]), consumed: false });
+    store.decisions.set("run-1|step-1", { tools: new Set([OUTWARD]), consumed: false,
+      released: [{ artifactId: "post-1", representationRevisionId: "revision-A" }] });
     store.fail = null;
     store.consume.mockReset().mockImplementation(async (input: {
       orgId: string; runId: string; authority: unknown;
       proof: { stepId: string }; action: { toolName: string };
+      subject?: { artifactId: string; representationRevisionId: string } | null;
     }) => {
       if (store.fail) throw store.fail;
       if (!input.authority) throw new store.RunStepToolPolicyRefusal("action_decision_input_invalid");
       const decision = store.decisions.get(`${input.runId}|${input.proof.stepId}`);
       if (!decision) throw new store.RunStepToolPolicyRefusal("action_person_decision_missing");
       if (!decision.tools.has(input.action.toolName)) throw new store.RunStepToolPolicyRefusal("step_tool_not_declared");
+      if (input.subject && !decision.released.some((r) => r.artifactId === input.subject!.artifactId &&
+          r.representationRevisionId === input.subject!.representationRevisionId)) {
+        throw new store.RunStepToolPolicyRefusal("action_subject_not_released");
+      }
       if (decision.consumed) throw new store.RunStepToolPolicyRefusal("action_person_decision_already_consumed");
       decision.consumed = true;
       return Object.freeze({ consumptionKey: "publish_decision:d-1", decisionId: "d-1", decidedBy: "person-1",
@@ -292,6 +301,63 @@ describe("the guarded outward run action", () => {
       expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
       expect(store.consume).not.toHaveBeenCalled();
       expect(server.handled).toEqual([]);
+    });
+  });
+  // cinatra#3745: a released decision is used only for the item and revision it released. The tool's declared subject
+  // names the input fields that carry them; the boundary reads them from the call and hands them to the consumption.
+  describe("a tool that declares a subject", () => {
+    const FIELDS = { artifactId: "postId", representationRevisionId: "postRevision" };
+
+    // red-first-expect: expected true to be falsy
+    it("is admitted once for the released item and revision, which the consumption receives", async () => {
+      const server = await buildServer(undefined, FIELDS);
+      const result = await server.call(OUTWARD, runFrame(), { postId: "post-1", postRevision: "revision-A", body: "x" });
+      expect(result.isError).toBeFalsy();
+      expect(server.handled).toEqual([OUTWARD]);
+      expect((store.consume.mock.calls[0]![0] as { subject?: unknown }).subject)
+        .toEqual({ artifactId: "post-1", representationRevisionId: "revision-A" });
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("is refused for another revision of the released item, and the decision stays unused", async () => {
+      const server = await buildServer(undefined, FIELDS);
+      const result = await server.call(OUTWARD, runFrame(), { postId: "post-1", postRevision: "revision-B" });
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_subject_not_released`);
+      expect(server.handled).toEqual([]);
+      expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+      // The released revision is still admitted afterwards: the refusal used nothing up.
+      const admitted = await server.call(OUTWARD, runFrame(), { postId: "post-1", postRevision: "revision-A" });
+      expect(admitted.isError).toBeFalsy();
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("is refused, before any consumption, when the call omits the item or the revision", async () => {
+      const server = await buildServer(undefined, FIELDS);
+      for (const args of [{ postId: "post-1" }, { postRevision: "revision-A" }, {}]) {
+        const result = await server.call(OUTWARD, runFrame(), args);
+        expect(result.content?.[0]?.text).toContain(`${REASON}:action_subject_missing`);
+      }
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(server.handled).toEqual([]);
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("is refused, before any consumption, when the item or the revision is not a string", async () => {
+      const server = await buildServer(undefined, FIELDS);
+      for (const args of [{ postId: 7, postRevision: "revision-A" }, { postId: "post-1", postRevision: ["revision-A"] },
+        { postId: "", postRevision: "revision-A" }]) {
+        const result = await server.call(OUTWARD, runFrame(), args);
+        expect(result.content?.[0]?.text).toContain(`${REASON}:action_subject_invalid`);
+      }
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(server.handled).toEqual([]);
+    });
+
+    it("a tool without a subject hands the consumption no subject (it is bound to the decision only)", async () => {
+      const server = await buildServer();
+      await server.call(OUTWARD, runFrame(), { postId: "post-9", postRevision: "revision-Z" });
+      expect((store.consume.mock.calls[0]![0] as { subject?: unknown }).subject ?? null).toBeNull();
+      expect(server.handled).toEqual([OUTWARD]);
     });
   });
 });

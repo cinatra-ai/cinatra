@@ -23,6 +23,7 @@ import {
 import * as auditModule from "@/lib/authz/audit";
 import * as augmentModule from "@/lib/authz/inventory-augment";
 import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
+import * as edgeServingModule from "@/lib/extension-edge-bound-serving";
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
 import { mcpRequestContextStorage, type McpRequestContext } from "@cinatra-ai/mcp-server";
 import type { ExtensionMcpToolConfig } from "@cinatra-ai/sdk-extensions/mcp-contract";
@@ -420,8 +421,29 @@ describe("the retained-version self-invoker road holds a declared outward tool o
     return { captured, handled };
   }
 
+  /**
+   * cinatra#3745: the self-invoker resolves the caller's edge before the boundary
+   * on a run's frame and serves the retained entry only to a caller whose edge
+   * pins its version, through the pinned dispatch. The run's edge pins the
+   * retained version here; the pinned dispatch's strict versioned serve is the
+   * retained registration at that version (the real resolution reads the run's
+   * dependency edges from the store).
+   */
+  function pinRunEdgeToRetained() {
+    vi.spyOn(edgeServingModule, "resolveEdgeBoundExtensionVersion").mockResolvedValue({
+      kind: "versioned", version: VERSION, resolvedInstallId: "install-retained",
+    });
+    vi.spyOn(edgeServingModule, "dispatchPlannedExtensionMcpTool").mockImplementation(async (planned, input) => {
+      if (planned.expected !== "versioned" || planned.version !== VERSION) throw new Error("not the pinned version");
+      const retained = resolveVersionKeyedMcpTool(planned.packageName, planned.version, planned.name);
+      if (retained.kind !== "serve") throw new Error(`"${planned.name}" is not served at ${planned.version}`);
+      return retained.value.handler(input);
+    });
+  }
+
   it("plans `outward: {}` as outward and refuses the call on a run's frame with the named reason, without invoking the handler", async () => {
     const { captured, handled } = captureRetained({});
+    pinRunEdgeToRetained();
     expect(captured.planned.declaredOutward).toEqual({ subject: null });
     await expect(
       mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
@@ -431,6 +453,7 @@ describe("the retained-version self-invoker road holds a declared outward tool o
 
   it("plans a declared subject as exactly that subject and refuses the call on a run's frame with the named reason", async () => {
     const { captured, handled } = captureRetained({ subject: { ...SUBJECT_FIELDS } });
+    pinRunEdgeToRetained();
     expect(captured.planned.declaredOutward).toEqual({ subject: SUBJECT_FIELDS });
     await expect(
       mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
@@ -438,12 +461,24 @@ describe("the retained-version self-invoker road holds a declared outward tool o
     expect(handled).toEqual([]);
   });
 
-  it("serves a retained registration without the declaration on a run's frame", async () => {
+  it("serves a retained registration without the declaration on a run's frame whose edge pins it", async () => {
     const { captured, handled } = captureRetained();
+    pinRunEdgeToRetained();
     expect(captured.planned.declaredOutward).toBeNull();
     await expect(
       mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
     ).resolves.toEqual({ served: true });
     expect(handled).toEqual([TOOL]);
+  });
+
+  it("refuses the retained entry on a run's frame whose edge does not pin its version, before the boundary", async () => {
+    const { handled } = captureRetained();
+    vi.spyOn(edgeServingModule, "resolveEdgeBoundExtensionVersion").mockResolvedValue({ kind: "none" });
+    // red-first-expect: promise resolved "{ served: true }" instead of rejecting
+    await expect(
+      mcpRequestContextStorage.run(runMemberFrame(), () => callHostPrimitive(TOOL, {})),
+    ).rejects.toMatchObject({ code: "action_owner_unresolved" });
+    expect(handled).toEqual([]);
+    expect(auditSpy).not.toHaveBeenCalled();
   });
 });

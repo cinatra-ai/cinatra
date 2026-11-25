@@ -390,6 +390,10 @@ export async function createMcpRuntimeServer(input: {
           // cinatra#3745: the planned owner, so an outward call on a run frame takes
           // the guarded outward run action (null when the identity failed: refused).
           outwardOwner: planned.identityFailure === null ? planned.dispatchTarget : null,
+          // cinatra#3745: the planned subject fields and the prepared arguments, so
+          // a released decision is used only for the item and revision it named.
+          outwardSubject: planned.declaredOutward?.subject ?? null,
+          toolArguments: cbArgs[0],
         });
         if (!decision.allowed && decision.shouldBlock) {
           return {

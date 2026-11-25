@@ -1645,7 +1645,7 @@ import type { ActionJson } from "@cinatra-ai/sdk-extensions";
 import { parseVerifiedExecutedRunSource, type VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { assertRunStepToolAllowed, consumeRunActionDecision, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal,
-  type RunActionDecisionConsumption, type RunActionToolIdentity } from "@cinatra-ai/agents/store";
+  type RunActionDecisionConsumption, type RunActionSubject, type RunActionToolIdentity } from "@cinatra-ai/agents/store";
 import { HOST_PRIMITIVE_OWNER_PACKAGE } from "@cinatra-ai/mcp-server/capability-plan";
 import { isProxy } from "node:util/types";
 
@@ -1808,7 +1808,37 @@ export type CheckedOutwardRunAction = Readonly<{
   authority: OrgWriteAuthority;
   proof: VerifiedExecutedRunSource;
   action: RunActionToolIdentity;
+  /** The item and revision the call acts on, read from its arguments by the
+   * tool's declared subject fields; null when the tool declares no subject. */
+  subject: RunActionSubject | null;
 }>;
+
+/** The names of a tool's two input fields that carry its item and revision (the
+ * planned `outward.subject`). */
+export type OutwardActionSubjectFields = Readonly<{ artifactId: string; representationRevisionId: string }>;
+
+/**
+ * The item and revision a call acts on, read from its own arguments by the
+ * declared field names: each an own data property holding a non-empty string.
+ * Throws `action_subject_missing` (an argument or a field is absent) or
+ * `action_subject_invalid` (the declared names, or a value, are not strings).
+ */
+function readCallSubject(fields: unknown, args: unknown): RunActionSubject {
+  if (!fields || typeof fields !== "object") throw new OutwardActionRefusal("action_subject_invalid");
+  const artifactField = ownString(fields, "artifactId");
+  const revisionField = ownString(fields, "representationRevisionId");
+  if (!artifactField || !revisionField) throw new OutwardActionRefusal("action_subject_invalid");
+  if (!args || typeof args !== "object" || Array.isArray(args)) throw new OutwardActionRefusal("action_subject_missing");
+  const read = (field: string): string => {
+    const d = Object.getOwnPropertyDescriptor(args, field);
+    if (!d || !("value" in d) || d.value === undefined || d.value === null) {
+      throw new OutwardActionRefusal("action_subject_missing");
+    }
+    if (typeof d.value !== "string" || d.value.length === 0) throw new OutwardActionRefusal("action_subject_invalid");
+    return d.value;
+  };
+  return Object.freeze({ artifactId: read(artifactField), representationRevisionId: read(revisionField) });
+}
 
 function ownString(value: object, key: string): string | undefined {
   const d = Object.getOwnPropertyDescriptor(value, key);
@@ -1820,11 +1850,17 @@ function ownString(value: object, key: string): string | undefined {
  * run frame; `owner` is the planned owner of the tool. Throws
  * `action_executed_source_missing_or_stale` (no current step proof on the
  * frame), `action_write_authority_missing` (the frame carries no run write
- * authority), `action_owner_unresolved` (no owner identity), or the loaded-
- * identity refusals; returns the checked action otherwise. Reads no store.
+ * authority), `action_owner_unresolved` (no owner identity), the loaded-
+ * identity refusals, or, for a tool that declares a subject, `action_subject_missing`
+ * / `action_subject_invalid` (the call's item or revision argument is absent or
+ * not a string); returns the checked action otherwise. Reads no store.
  */
 export function checkOutwardRunAction(input: {
   frame: unknown; toolName: string; owner: OutwardActionOwner | null | undefined;
+  /** The tool's declared subject fields (null: the tool declares no subject). */
+  subject?: OutwardActionSubjectFields | null;
+  /** The call's prepared arguments. */
+  args?: unknown;
 }): CheckedOutwardRunAction {
   const frame = input.frame;
   if (!frame || typeof frame !== "object") throw new OutwardActionRefusal("action_executed_source_missing_or_stale");
@@ -1856,7 +1892,9 @@ export function checkOutwardRunAction(input: {
     action = Object.freeze({ toolName: input.toolName, packageName: identity.packageName, version: identity.version,
       installId: identity.installId, digest: identity.digest });
   }
-  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action });
+  // The item and revision the call acts on, read by the declared field names.
+  const subject = input.subject === undefined || input.subject === null ? null : readCallSubject(input.subject, input.args);
+  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action, subject });
 }
 
 /**
@@ -1878,7 +1916,7 @@ export async function consumeOutwardRunAction(checked: CheckedOutwardRunAction):
   }
   try {
     return await consumeRunActionDecision({ orgId: checked.orgId, runId: checked.runId,
-      authority: checked.authority, proof: checked.proof, action });
+      authority: checked.authority, proof: checked.proof, action, subject: checked.subject });
   } catch (err) {
     if (runActionRefusalClassCode(err)) throw err;
     throw new RunStepToolPolicyRefusal("action_person_decision_unavailable");

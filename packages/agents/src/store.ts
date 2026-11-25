@@ -4040,5 +4040,5 @@ export {
 export { bindRunStepToolPolicy, readRunStepToolPolicy, readCurrentRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
 export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, assertRunStepToolAllowed, RunStepToolPolicyRefusal } from "./agent-run-serde";
 // cinatra#3745: the single-use consumption of a person's decision; its caller is the host's guarded outward run action.
-export { consumeRunActionDecision, type RunActionToolIdentity, type RunActionDecisionConsumption } from "./run-action-decision-consumption";
+export { consumeRunActionDecision, type RunActionSubject, type RunActionToolIdentity, type RunActionDecisionConsumption } from "./run-action-decision-consumption";
 export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

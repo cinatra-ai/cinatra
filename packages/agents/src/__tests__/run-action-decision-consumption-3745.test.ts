@@ -490,6 +490,92 @@ describe("the person's affirmative decision for the run's action, used once", ()
   });
 });
 
+// cinatra#3745: a released decision is used only for the item and revision it released. A tool that declares a subject
+// hands its call's item and revision to the consumption; they are compared, under the decision row's lock and in the
+// transaction that marks the decision used, with the `{artifactId, representationRevisionId}` lists under the decision's
+// own artifacts rows. A refusal consumes nothing.
+describe("the call's item and revision are among the items the released decision surfaced", () => {
+  const RELEASED = { artifactId: "post-1", representationRevisionId: "revision-A" };
+  const releasedDecision = (over: Row = {}) => decision({
+    surfacedValues: JSON.stringify({ subject: "Hello", posts: [RELEASED, { artifactId: "post-2", representationRevisionId: "revision-C" }] }),
+    declaredRows: JSON.stringify([{ label: "Subject", input: "subject" }, { kind: "artifacts", label: "Posts", input: "posts" }]),
+    ...over,
+  });
+  beforeEach(() => { h.tables.set(agentRunPublishDecisions, [releasedDecision()]); });
+
+  it("consumes the decision once for a released item and revision, and records the subject beside the identity", async () => {
+    await loadModule();
+    const result = await consume(input({ subject: RELEASED }));
+    expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1" });
+    // red-first-expect: expected [ { …(7) } ] to deeply equal [ ObjectContaining{…} ]
+    expect(consumptions()).toEqual([expect.objectContaining({
+      toolIdentity: { ...action, decisionNodeId: SEND_STEP, subject: RELEASED } })]);
+    await expect(consume(input({ subject: { artifactId: "post-2", representationRevisionId: "revision-C" } })))
+      .rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+  });
+
+  it("refuses another revision of the released item, and consumes nothing: the released revision still goes through", async () => {
+    await loadModule();
+    // red-first-expect: promise resolved "{ …(5) }" instead of rejecting
+    await expect(consume(input({ subject: { ...RELEASED, representationRevisionId: "revision-B" } })))
+      .rejects.toMatchObject({ code: "action_subject_not_released" });
+    expect(consumptions()).toEqual([]);
+    expect(h.calls).not.toContain("insert:consumption");
+    await expect(consume(input({ subject: RELEASED }))).resolves.toMatchObject({ decisionId: "decision-1" });
+    expect(consumptions()).toHaveLength(1);
+  });
+
+  it("refuses an item the decision did not surface, or an item paired with another item's revision", async () => {
+    await loadModule();
+    for (const subject of [{ artifactId: "post-3", representationRevisionId: "revision-A" },
+      { artifactId: "post-1", representationRevisionId: "revision-C" }]) {
+      // red-first-expect: promise resolved "{ …(5) }" instead of rejecting
+      await expect(consume(input({ subject }))).rejects.toMatchObject({ code: "action_subject_not_released" });
+    }
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a subject when the decision surfaced no item it can prove", async () => {
+    await loadModule();
+    const cases: Row[] = [
+      // Only a text row: the value under an undeclared input is not a released item.
+      { declaredRows: JSON.stringify([{ label: "Subject", input: "subject" }]) },
+      // An older row that kept no declared rows.
+      { declaredRows: null },
+      // A target list with one malformed entry refuses the whole row.
+      { surfacedValues: JSON.stringify({ posts: [RELEASED, { artifactId: "post-2" }] }) },
+      // A text value under the artifacts row's input.
+      { surfacedValues: JSON.stringify({ posts: "post-1 revision-A" }) },
+    ];
+    for (const over of cases) {
+      h.tables.set(agentRunPublishDecisions, [releasedDecision(over)]);
+      // red-first-expect: promise resolved "{ …(5) }" instead of rejecting
+      await expect(consume(input({ subject: RELEASED }))).rejects.toMatchObject({ code: "action_subject_not_released" });
+    }
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a subject whose item or revision is absent or not a string, before any transaction", async () => {
+    await loadModule();
+    for (const subject of [{ artifactId: "post-1" }, { representationRevisionId: "revision-A" }, {}]) {
+      // red-first-expect: promise resolved "{ …(5) }" instead of rejecting
+      await expect(consume(input({ subject }))).rejects.toMatchObject({ code: "action_subject_missing" });
+    }
+    for (const subject of [{ artifactId: 7, representationRevisionId: "revision-A" }, { ...RELEASED, artifactId: "" },
+      { ...RELEASED, representationRevisionId: ["revision-A"] }, "post-1", ["post-1", "revision-A"]]) {
+      await expect(consume(input({ subject }))).rejects.toMatchObject({ code: "action_subject_invalid" });
+    }
+    expect(h.calls).toEqual([]);
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("a call of a tool without a subject is bound to the decision only", async () => {
+    await loadModule();
+    await expect(consume(input({ subject: null }))).resolves.toMatchObject({ decisionId: "decision-1" });
+    expect(consumptions()).toEqual([expect.objectContaining({ toolIdentity: { ...action, decisionNodeId: SEND_STEP } })]);
+  });
+});
+
 // The email-outreach shape: the send step declares the tool and sits in a subflow definition that the top-level node
 // `sender_flow` runs. A publish decision is recorded only for a top-level node that publishes, keyed by that node, so
 // the decision that covers the send step is the decision of `sender_flow`.

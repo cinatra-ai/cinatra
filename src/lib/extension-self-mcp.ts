@@ -196,13 +196,32 @@ export async function callHostPrimitive(
         `registered under that name. Known primitives are the host's MCP tool set; check the name.`,
     );
   }
-  // The captured wrapper. A delegated-restricted extension call REPLACES it
-  // below with a version-pinned dispatch; everything else runs it as before.
+  // The captured wrapper. A delegated-restricted extension call, and every
+  // extension call on a run frame, REPLACES it below with a version-pinned
+  // dispatch; everything else runs it as before.
   let handler = captured.handler;
+  // The planned entry the boundary decides against. On a run frame it is the
+  // entry of the version that will execute for this caller (cinatra#3745), never
+  // the union winner's when another version would run.
+  let boundPlanned: PlannedPrimitive = captured.planned;
 
   const { evaluateDelegatedChatAdmission } = await import(
     "@cinatra-ai/mcp-server/delegated-chat-admission"
   );
+
+  /** Pin the dispatch to the identity that was authorized: an extension entry
+   *  runs through the pinned dispatch, which resolves once and refuses on a
+   *  mismatch. A host primitive has no edges, so its captured handler stays. */
+  const pinDispatchTo = async (identity: PlannedPrimitive) => {
+    const pinned = identity.dispatchTarget;
+    if (pinned && pinned.kind !== "host") {
+      const { dispatchAuthorizedExtensionPrimitive } = await import(
+        "@/lib/extension-authorized-dispatch"
+      );
+      handler = (pinnedInput: unknown) =>
+        dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
+    }
+  };
 
   const invoke = async () => {
     const ctx = mcpRequestContextStorage.getStore();
@@ -266,14 +285,8 @@ export async function callHostPrimitive(
       //
       // Host primitives are unaffected: they have no edges, so there is nothing
       // to drift and the captured handler is already the only thing that runs.
-      const pinned = identity.dispatchTarget;
-      if (pinned && pinned.kind !== "host") {
-        const { dispatchAuthorizedExtensionPrimitive } = await import(
-          "@/lib/extension-authorized-dispatch"
-        );
-        handler = (pinnedInput: unknown) =>
-          dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
-      }
+      boundPlanned = identity;
+      await pinDispatchTo(identity);
     }
     // (b) Deny-by-default MCP boundary — identical gate to the live transport.
     // Fail CLOSED on a deny OR any boundary error.
@@ -288,7 +301,23 @@ export async function callHostPrimitive(
       // call is that tool's inner call, so its own name is not checked against the
       // step's offer (`inner`).
       if (ctx?.runId) {
-        const { prepareDeclaredRunToolArguments } = await import("@/lib/extension-host-context");
+        const { prepareDeclaredRunToolArguments, OutwardActionRefusal } = await import("@/lib/extension-host-context");
+        // cinatra#3745: ONE RESOLUTION FOR THE CHECK AND THE EXECUTION. The
+        // captured entry is the union winner's registration, and its wrapper
+        // re-resolves the caller's edge, so it may execute another version (a
+        // retained pin) than the one whose declaration and owner the boundary
+        // would read. The caller's edge is resolved here first; the planned entry
+        // is used only when it describes exactly the version this caller is
+        // served, and the handler is pinned to that identity (the pinned
+        // dispatch refuses on any later drift). When the resolution names no
+        // version this entry describes, the call is refused. A host primitive
+        // has no edges: its entry is the only one that runs.
+        if (!ctx.delegatedRestricted && captured.planned.dispatchTarget?.kind !== "host") {
+          const identity = await resolveCallerBoundIdentity(captured.planned);
+          if (!identity) throw new OutwardActionRefusal("action_owner_unresolved");
+          boundPlanned = identity;
+          await pinDispatchTo(identity);
+        }
         input = await mcpRequestContextStorage.run(ctx, () =>
           prepareDeclaredRunToolArguments(primitiveName, input, { inner: true }));
       }
@@ -296,11 +325,14 @@ export async function callHostPrimitive(
         primitiveName,
         ctx,
         delegatedRestricted: !!ctx?.delegatedRestricted,
-        // The outward declaration of the captured primitive's planned entry.
-        declaresOutward: captured.planned.declaredOutward !== null,
-        // cinatra#3745: the captured primitive's planned owner, for the guarded
-        // outward run action (null when the identity failed: refused).
-        outwardOwner: captured.planned.identityFailure === null ? captured.planned.dispatchTarget : null,
+        // The outward declaration of the planned entry the call executes.
+        declaresOutward: boundPlanned.declaredOutward !== null,
+        // cinatra#3745: that entry's planned owner, for the guarded outward run
+        // action (null when the identity failed: refused), its declared subject
+        // fields and the call's prepared arguments.
+        outwardOwner: boundPlanned.identityFailure === null ? boundPlanned.dispatchTarget : null,
+        outwardSubject: boundPlanned.declaredOutward?.subject ?? null,
+        toolArguments: input,
       });
     } catch (err) {
       // cinatra#3745: a refused run call keeps its refusal class and code (its
