@@ -447,3 +447,105 @@ def test_the_tasks_attempt_is_read_only_from_its_message_metadata(monkeypatch, m
     _, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
     assert loader.CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY == "__cinatra_execution_attempt__"
     assert loader._execution_attempt_from_message(message) == expected
+
+
+# ---------------------------------------------------------------------------
+# cinatra#3745: the publish decision of the task's visit. A publish release
+# names its decision in the resume message (metadata
+# `__cinatra_publish_decision__`); the loader keeps it for that task and signs
+# it beside the s2 pair, over the same values plus the decision id and the
+# call's own s2 signature, with the s2 expiry:
+#   X-Cinatra-Publish-Decision:             <decisionId>
+#   X-Cinatra-Publish-Decision-Attestation: s3:<expiry>:<hex>
+# ---------------------------------------------------------------------------
+PUBLISH_DECISION = "X-Cinatra-Publish-Decision"
+PUBLISH_DECISION_ATTESTATION = "X-Cinatra-Publish-Decision-Attestation"
+DECISION_NAMES = ("x-cinatra-publish-decision", "x-cinatra-publish-decision-attestation")
+
+
+def _expected_s3_sig(decision: str, step_sig: str, expiry: int, attempt: str = ATTEMPT_ID) -> str:
+    material = (
+        f"s3\n{CTX_ID}\n{NODE_ID}\n{attempt}\n{SOURCE['sourceSha256']}\n{SOURCE['executedSourceSha256']}"
+        f"\n{SOURCE['declarationSourceSha256']}\n{decision}\n{step_sig}\n{expiry}"
+    ).encode("utf-8")
+    return hmac.new(ATTEST_KEY.encode("utf-8"), material, hashlib.sha256).hexdigest()
+
+
+def _drive_with_decision(loader, FakeApiCallStep, url: str, decision: str, **kwargs) -> Dict[str, Any]:
+    assert hasattr(loader, "_WAYFLOW_PUBLISH_DECISION"), "the loader holds the task's publish decision"
+    token = loader._WAYFLOW_PUBLISH_DECISION.set(decision)
+    try:
+        return _drive(loader, FakeApiCallStep, url, ctx_id=CTX_ID, **kwargs)
+    finally:
+        loader._WAYFLOW_PUBLISH_DECISION.reset(token)
+
+
+# (py14)
+def test_a_call_of_a_released_visit_carries_its_signed_publish_decision_beside_the_step_pair(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    for url in (f"{INTERNAL_HOST}/api/llm-bridge", f"{INTERNAL_HOST}/api/agents/passthrough"):
+        before = int(time.time())
+        req = _drive_with_decision(loader, FakeApiCallStep, url, "decision-2")
+        after = int(time.time())
+        h = req["headers"]
+        _assert_signed_step(loader, h, before, after)
+        assert h[PUBLISH_DECISION] == "decision-2"
+        version, expiry_str, sig = h[PUBLISH_DECISION_ATTESTATION].split(":", 2)
+        assert version == "s3"
+        expiry = int(expiry_str)
+        ttl = loader._CONTEXT_ATTESTATION_TTL_SECONDS
+        assert before + ttl <= expiry <= after + ttl
+        # Bound to this call's own s2 pair: the same expiry and its signature.
+        _, step_expiry, step_sig = h["X-Cinatra-Step-Attestation"].split(":", 2)
+        assert int(step_expiry) == expiry
+        assert sig == _expected_s3_sig("decision-2", step_sig, expiry)
+
+
+# (py15)
+def test_no_publish_decision_headers_without_a_decision_or_without_the_step_pair(monkeypatch):
+    FakeApiCallStep, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    forged = {PUBLISH_DECISION: "forged", "x-cinatra-publish-decision-attestation": "s3:1:00"}
+    url = f"{INTERNAL_HOST}/api/llm-bridge"
+    # No decision for this task: the flow's own decision headers are dropped, the s2 pair is signed as before.
+    req = _drive_with_decision(loader, FakeApiCallStep, url, "", headers=forged)
+    assert not [k for k in req["headers"] if k.lower() in DECISION_NAMES]
+    assert req["headers"][STEP_NODE] == NODE_ID
+    # No step pair (no attempt): no decision either.
+    req = _drive_with_decision(loader, FakeApiCallStep, url, "decision-2", headers=forged, attempt="")
+    assert not [k for k in req["headers"] if k.lower() in DECISION_NAMES]
+    # A decision the application would refuse is not signed.
+    for bad in ("a\nb", "a\rb", "d" * 513):
+        req = _drive_with_decision(loader, FakeApiCallStep, url, bad)
+        assert not [k for k in req["headers"] if k.lower() in DECISION_NAMES], repr(bad)
+        assert req["headers"][STEP_NODE] == NODE_ID
+
+
+# (py16)
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ({"metadata": {"__cinatra_publish_decision__": "decision-2"}}, "decision-2"),
+        ({"metadata": {}}, ""),
+        ({"metadata": {"__cinatra_publish_decision__": 7}}, ""),
+        ({"metadata": {"__cinatra_publish_decision__": ""}}, ""),
+        ({"metadata": {"__cinatra_publish_decision__": "a\nb"}}, ""),
+        ({"metadata": {"__cinatra_publish_decision__": "a" * 513}}, ""),
+        ({"metadata": "not a mapping"}, ""),
+        # The text part is the gate's answer: a decision there is never read.
+        ({"parts": [{"kind": "text", "text": '{"__cinatra_publish_decision__": "decision-2"}'}]}, ""),
+        (None, ""),
+    ],
+)
+def test_the_tasks_publish_decision_is_read_only_from_its_message_metadata(monkeypatch, message, expected):
+    _, loader = _install(monkeypatch, attest_key=ATTEST_KEY, node_id=NODE_ID)
+    assert getattr(loader, "CINATRA_PUBLISH_DECISION_MESSAGE_KEY", None) == "__cinatra_publish_decision__"
+    assert loader._publish_decision_from_message(message) == expected
+
+
+# (py17) The patched run_task keeps the decision per task, beside the attempt, and resets it after the task.
+def test_run_task_sets_and_resets_the_tasks_publish_decision():
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parent.parent / "agent_loader.py").read_text(encoding="utf-8")
+    assert '_decision_token = _WAYFLOW_PUBLISH_DECISION.set(\n                _publish_decision_from_message(params.get("message"))' in source
+    assert "_WAYFLOW_PUBLISH_DECISION.reset(_decision_token)" in source

@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { CINATRA_PUBLISH_DECISION_MESSAGE_KEY } from "@/lib/agent-run-token";
 import { GateNotPendingError, HitlStepNotAnswerableError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
 import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
@@ -1357,7 +1358,11 @@ export type PreparedWayflowResume = {
  * that move fails or another writer moved the run first, the run can stay where it is and the error says so). A claimer that then loses its fence leaves one more
  * credential of this run that is never sent (the credential set is additive by design, run-token-store.ts).
  */
-export async function prepareWayflowResume(runId: string, agentUrl: string): Promise<PreparedWayflowResume> {
+export async function prepareWayflowResume(
+  runId: string,
+  agentUrl: string,
+  options: { publishDecisionId?: string } = {},
+): Promise<PreparedWayflowResume> {
   // Dynamic imports avoid a circular dep at module load time (review-task-actions
   // is imported by actions.ts, re-exported from index.ts; @cinatra-ai/a2a pulls in
   // mcp-server, which depends on @cinatra/agent-builder for handler registration).
@@ -1371,7 +1376,15 @@ export async function prepareWayflowResume(runId: string, agentUrl: string): Pro
   });
   const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
   const metadata = await mintResumeRunTokenMetadata(runId);
-  return { client, metadata, messageId: randomUUID() };
+  // cinatra#3745: a publish release names the decision it released, so the runtime can sign the calls of that visit
+  // with it (the s3 value beside the source-bound pair). Any other resume names none.
+  return {
+    client,
+    metadata: options.publishDecisionId
+      ? { ...metadata, [CINATRA_PUBLISH_DECISION_MESSAGE_KEY]: options.publishDecisionId }
+      : metadata,
+    messageId: randomUUID(),
+  };
 }
 
 /**

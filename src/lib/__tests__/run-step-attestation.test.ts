@@ -64,6 +64,10 @@ const api = runToken as unknown as {
   RUN_DECLARATION_SOURCE_HEADER?: string;
   RUN_EXECUTION_ATTEMPT_HEADER?: string;
   CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY?: string;
+  verifyRunStepPublishDecision?: (input: Record<string, unknown>) => string | null;
+  RUN_PUBLISH_DECISION_HEADER?: string;
+  RUN_PUBLISH_DECISION_ATTESTATION_HEADER?: string;
+  CINATRA_PUBLISH_DECISION_MESSAGE_KEY?: string;
 };
 
 function hmacHex(key: string, material: string): string {
@@ -340,6 +344,77 @@ describe("source-bound step verification (s2)", () => {
       // Correctly signed, so the null comes from the length refusal alone.
       expect(verify(at(field, 513)), `${field} 513`).toBeNull();
     }
+  });
+});
+
+describe("the publish decision a step's call was made under (s3)", () => {
+  const RAW = "a".repeat(64);
+  const EXECUTED = "b".repeat(64);
+  const DECLARATION = "c".repeat(64);
+  const ATTEMPT = "attempt-a";
+  const DECISION = "decision-2";
+  // The proof as the s2 verifier answered it for the same call.
+  const proof = { stepId: NODE, contextId: CTX, executionAttemptId: ATTEMPT, sourceSha256: RAW,
+    executedSourceSha256: EXECUTED, declarationSourceSha256: DECLARATION };
+  // The call's own s2 value, as the runtime signs it beside the s3 pair.
+  function stepSigned(expiry = NOW_S + 300): string {
+    return `s2:${expiry}:${hmacHex(KEY, `s2\n${CTX}\n${NODE}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${expiry}`)}`;
+  }
+  function signed(opts: { key?: string; expiry?: number; decision?: string; node?: string; step?: string } = {}): string {
+    const expiry = opts.expiry ?? NOW_S + 300;
+    const stepSig = (opts.step ?? stepSigned(expiry)).split(":")[2];
+    return `s3:${expiry}:${hmacHex(opts.key ?? KEY,
+      `s3\n${CTX}\n${opts.node ?? NODE}\n${ATTEMPT}\n${RAW}\n${EXECUTED}\n${DECLARATION}\n${opts.decision ?? DECISION}\n${stepSig}\n${expiry}`)}`;
+  }
+  const input = (over: Record<string, unknown> = {}) => ({ key: KEY, proof, publishDecisionId: DECISION,
+    attestation: signed(), stepAttestation: stepSigned(), nowMs: NOW_MS, ...over });
+  function verify(value: Record<string, unknown>) {
+    expect(typeof api.verifyRunStepPublishDecision).toBe("function");
+    return api.verifyRunStepPublishDecision!(value);
+  }
+
+  it("names its two headers and the resume message's key", () => {
+    expect([api.RUN_PUBLISH_DECISION_HEADER, api.RUN_PUBLISH_DECISION_ATTESTATION_HEADER])
+      .toEqual(["x-cinatra-publish-decision", "x-cinatra-publish-decision-attestation"]);
+    // A cross-language ABI with docker/wayflow/agent_loader.py (no shared import).
+    expect(api.CINATRA_PUBLISH_DECISION_MESSAGE_KEY).toBe("__cinatra_publish_decision__");
+  });
+
+  it("answers the decision id signed over the same step, attempt and source as the call's proof", () => {
+    expect(verify(input())).toBe(DECISION);
+  });
+
+  it("answers null for another decision, step, key or expiry window, a missing value or an s2 value", () => {
+    expect(verify(input({ publishDecisionId: "decision-1" }))).toBeNull();
+    expect(verify(input({ attestation: signed({ decision: "decision-1" }) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ node: "other-step" }) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ key: OTHER_KEY }) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S - 61 }), stepAttestation: stepSigned(NOW_S - 61) }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S + 601 }), stepAttestation: stepSigned(NOW_S + 601) }))).toBeNull();
+    expect(verify(input({ key: "" }))).toBeNull();
+    expect(verify(input({ publishDecisionId: null }))).toBeNull();
+    expect(verify(input({ attestation: null }))).toBeNull();
+    expect(verify(input({ attestation: signed().replace(/^s3/, "s2") }))).toBeNull();
+    expect(verify(input({ proof: { ...proof, extra: "x" } }))).toBeNull();
+  });
+
+  it("is valid only beside the s2 value it was signed with", () => {
+    // Another s2 value of the same step, attempt and source, a second later (for example a later visit's call).
+    const later = stepSigned(NOW_S + 301);
+    expect(verify(input({ stepAttestation: later }))).toBeNull();
+    expect(verify(input({ attestation: signed({ expiry: NOW_S + 301 }), stepAttestation: later }))).toBe(DECISION);
+    // The same expiry but another s2 signature.
+    expect(verify(input({ stepAttestation: `s2:${NOW_S + 300}:${"e".repeat(64)}` }))).toBeNull();
+    expect(verify(input({ attestation: signed({ step: `s2:${NOW_S + 300}:${"e".repeat(64)}` }) }))).toBeNull();
+    expect(verify(input({ stepAttestation: null }))).toBeNull();
+    expect(verify(input({ stepAttestation: signed() }))).toBeNull();
+  });
+
+  it("refuses a decision id with a line break or longer than 512 characters", () => {
+    const at = (decision: string) => input({ publishDecisionId: decision, attestation: signed({ decision }) });
+    expect(verify(at("d\nx"))).toBeNull();
+    expect(verify(at("d".repeat(513)))).toBeNull();
+    expect(verify(at("d".repeat(512)))).toBe("d".repeat(512));
   });
 });
 
