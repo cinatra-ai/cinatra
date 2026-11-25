@@ -80,6 +80,13 @@ const storeMock = vi.hoisted(() => {
     rows,
     readAgentRunById: vi.fn(),
     readAgentTemplateById: vi.fn(),
+    // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
+    readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
+      const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+      // No template: no steps were bound (a dispatch needs the row), so the pause read fails.
+      if (!t) throw new Error("no pause steps are bound to the run");
+      return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
+    }),
     readAgentTemplates: vi.fn(async () => []),
     readAgentTemplateVersionBySemver: vi.fn(async () => null),
     readAgentTemplateVersionById: vi.fn(async () => null),
@@ -289,8 +296,8 @@ async function emitAndRead(
   return { emitted, ctx: ctx! };
 }
 
-// cinatra#3089: a template read that throws is retried inside the handler; a
-// read that then works decides the pause as on main (here: no template found).
+// cinatra#3089: a template read that throws is retried inside the handler; here
+// the read that then works finds no template, so no steps are bound to the run.
 // The publish classification's own read takes the first fault, the pause's
 // first read the second.
 function faultThenAbsent() {
@@ -476,11 +483,9 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.currentValues.output).toBe("cut {");
     });
 
-    it("the template read fails before the sole gate is known, then works: no run input fills the gate", async () => {
+    it("the template read fails, then no steps are bound to the run: no gate is drawn, so no run input fills one", async () => {
       faultThenAbsent();
-      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectStoppedUnread(road, gateTask(undefined));
     });
 
     it("the template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
@@ -488,11 +493,9 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       await expectStoppedUnread(road, gateTask(undefined));
     });
 
-    it("the run's template is absent: no run input fills the gate", async () => {
+    it("no steps are bound to the run (cinatra#3089): no gate is drawn, so no run input fills one", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(null);
-      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
-      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
-      expectNoRunInput(emitted, ctx);
+      await expectStoppedUnread(road, gateTask(undefined));
     });
 
     it("the template's steps are not a list: no run input fills the gate", async () => {
@@ -598,11 +601,9 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(["campaignId"]);
     });
 
-    it("a context-shaped message whose template read fails, then works: no run input fills it", async () => {
+    it("a context-shaped message whose template read fails, then no steps are bound: no gate is drawn, so no run input fills one", async () => {
       faultThenAbsent();
-      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE));
-      expect(ctx.currentValues.selectedRefs).toEqual([]);
-      expectNoRunInput(emitted, ctx);
+      await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
     it("a context-shaped message whose template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
@@ -610,11 +611,9 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
-    it("a context-shaped message whose template is absent: no run input fills it", async () => {
+    it("a context-shaped message with no steps bound to the run (cinatra#3089): no gate is drawn, so no run input fills one", async () => {
       storeMock.readAgentTemplateById.mockResolvedValue(null);
-      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE));
-      expect(ctx.currentValues.selectedRefs).toEqual([]);
-      expectNoRunInput(emitted, ctx);
+      await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });
 
     it("a flagged gate with the artifact-review marker whose review core opens no review: the ordinary gate withholds the keys", async () => {

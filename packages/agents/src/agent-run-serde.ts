@@ -27,6 +27,7 @@ import {
 import { readOwnerContainmentResolver } from "./owner-containment-port";
 import { db } from "./db";
 import { agentTemplates, agentRuns, agentRunOutwardActionPolicies } from "./schema";
+import { canonicalPolicyText } from "./orchestrator-gate-predicate";
 import { AgentAuthPolicySchema } from "./auth-policy";
 // cinatra#2485 C — the pure install-scope evaluator lives with the rest of
 // the agent auth policy; the async guard below resolves its inputs.
@@ -854,12 +855,47 @@ export function withRunActionPolicyTransaction<T>(input: {
   return guardedRunWrite(input.authority, { orgId: input.orgId, runId: input.runId,
     capability: "run.execute" }, (tx) => body(tx as unknown as RunActionPolicyTx));
 }
+/** cinatra#3089: the steps that classify the pauses of a run, bound beside its source, in the same row and write.
+ *  The template row is read twice: by the dispatch before it selects the source, and here, in the bind's transaction,
+ *  after the selection. Only when both reads agree (no install or recompile wrote the row in between) are the steps
+ *  bound (`settled`); otherwise the record says so and a pause of the run stops (PAUSE_POLICY_UNREAD). The pause never
+ *  reads the mutable template row. */
+export const RUN_PAUSE_STEPS_KEY = "pauseSteps";
+export type DispatchTemplateRead = { packageVersion: string | null; approvalPolicy: unknown };
+export type RunPauseSteps = { packageVersion: string | null; approvalPolicy: unknown };
+async function readSettledPauseSteps(tx: RunActionPolicyTx, templateId: string, read: DispatchTemplateRead): Promise<unknown> {
+  const [row] = await tx.select({ packageVersion: agentTemplates.packageVersion, approvalPolicy: agentTemplates.approvalPolicy })
+    .from(agentTemplates).where(eq(agentTemplates.id, templateId));
+  let approvalPolicy: unknown;
+  try { approvalPolicy = row ? JSON.parse(row.approvalPolicy) : undefined; } catch { approvalPolicy = undefined; }
+  const packageVersion = row?.packageVersion ?? null;
+  const settled = row !== undefined && approvalPolicy !== undefined && packageVersion === read.packageVersion &&
+    canonicalPolicyText(approvalPolicy) === canonicalPolicyText(read.approvalPolicy);
+  return settled ? { version: 1, settled: true, packageVersion, approvalPolicy } : { version: 1, settled: false };
+}
+/** The steps bound to the run's source. Throws when none are bound (a run bound before they were, a lost write, or a
+ *  dispatch whose two reads of the template row disagreed): the caller stops the pause, never reads the live row. */
+export async function readRunPauseSteps(runId: string, orgId: string): Promise<RunPauseSteps> {
+  const [bound] = await db.select({ policy: agentRunOutwardActionPolicies.policy })
+    .from(agentRunOutwardActionPolicies).where(and(eq(agentRunOutwardActionPolicies.runId, runId),
+      eq(agentRunOutwardActionPolicies.orgId, orgId)));
+  const record = bound?.policy && typeof bound.policy === "object"
+    ? Object.getOwnPropertyDescriptor(bound.policy, RUN_PAUSE_STEPS_KEY)?.value as Record<string, unknown> | undefined : undefined;
+  if (!record || typeof record !== "object" || record.version !== 1 || record.settled !== true ||
+      !Object.prototype.hasOwnProperty.call(record, "approvalPolicy") ||
+      !(record.packageVersion === null || typeof record.packageVersion === "string")) {
+    throw new Error(`no settled pause steps are bound to run ${runId}`);
+  }
+  return { packageVersion: record.packageVersion as string | null, approvalPolicy: record.approvalPolicy };
+}
 /** First bind, or the SAME graph moved to the run's current attempt. A run that dispatches again under a fresh
  * attempt (the failed-run retry: reset, then run) re-selects; the binding moves to that attempt only when the fresh
  * selection is the bound policy byte for byte. A restart or retry can never replace the selected graph. */
 export async function bindRunStepToolPolicy(input: {
   orgId: string; runId: string; executionAttemptId: string;
   policy: RunStepToolPolicy; authority: OrgWriteAuthority;
+  /** cinatra#3089: the run's template row (version and steps) as the dispatch read it BEFORE it selected the source. */
+  dispatchTemplateRead?: DispatchTemplateRead;
 }): Promise<void> {
   const policy = parseRunStepToolPolicy(input.policy);
   await withRunActionPolicyTransaction(input, async (tx) => {
@@ -869,8 +905,12 @@ export async function bindRunStepToolPolicy(input: {
         run.executionAttemptId !== input.executionAttemptId || run.a2aContextId !== policy.contextId) {
       throw new RunStepToolPolicyRefusal("step_tool_dispatch_binding_mismatch");
     }
+    const pauseSteps = input.dispatchTemplateRead === undefined ? undefined
+      : await readSettledPauseSteps(tx, run.templateId, input.dispatchTemplateRead);
+    // The first bind's row stays (a retry may only re-bind the same source), and with it the steps bound beside it.
     await tx.insert(agentRunOutwardActionPolicies).values({ runId: input.runId, orgId: input.orgId,
-      executionAttemptId: input.executionAttemptId, policy }).onConflictDoNothing();
+      executionAttemptId: input.executionAttemptId,
+      policy: pauseSteps === undefined ? policy : { ...policy, [RUN_PAUSE_STEPS_KEY]: pauseSteps } }).onConflictDoNothing();
     const [bound] = await tx.select().from(agentRunOutwardActionPolicies)
       .where(eq(agentRunOutwardActionPolicies.runId, input.runId)).for("update");
     if (!bound || bound.orgId !== input.orgId ||

@@ -1957,6 +1957,53 @@ function gateConversationDepth(g: ReachableGate): number {
   return depth;
 }
 
+// cinatra#3089: how often a run of the whole flow reaches the gate `gateId`: the paths from the root's start through
+// every node that embeds a flow, by the two keys a node embeds one with: `subflow` (FlowNode, and a map node or any
+// other kind that names one flow) and `subflows` (ParallelFlowNode). One component reached through two embeddings
+// pauses twice, so this counts embedding paths, not definitions (capped at 2). `repeating`: a path to the gate passes
+// a node that may run its flow more than once (any embedding kind other than FlowNode and ParallelFlowNode, such as a
+// map node, or a node on a control loop), or an embedding cycle.
+function reviewGateEmbeddings(root: Record<string, unknown>, gateId: string): { count: number; repeating: boolean } {
+  type Reach = { count: number; repeating: boolean };
+  const memo = new Map<Record<string, unknown>, Reach>();
+  const active = new Set<Record<string, unknown>>();
+  const visit = (flow: Record<string, unknown>, outer: Record<string, unknown>): Reach => {
+    const known = memo.get(flow);
+    if (known) return known;
+    if (active.has(flow)) return { count: 2, repeating: true };
+    active.add(flow);
+    const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
+    const scope = { ...outer, ...refs };
+    let count = 0;
+    let repeating = false;
+    for (const id of readFlowControlTopology(flow).reachable) {
+      const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
+      if (!isRecord(comp)) continue;
+      const looped = nodeOnControlCycle(flow, id);
+      if (comp["component_type"] === "InputMessageNode") {
+        if (comp["id"] === gateId) {
+          count += 1;
+          repeating ||= looped;
+        }
+        continue;
+      }
+      const once = typeof comp["component_type"] === "string" && SINGLE_RUN_CONTAINERS.has(comp["component_type"]) && !looped;
+      for (const value of [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])]) {
+        const child = resolveSubflowValue(value, refs, outer);
+        if (!child) continue;
+        const inner = visit(child, scope);
+        count += inner.count;
+        repeating ||= inner.repeating || (inner.count > 0 && !once);
+      }
+    }
+    active.delete(flow);
+    const reach = { count: Math.min(count, 2), repeating };
+    memo.set(flow, reach);
+    return reach;
+  };
+  return visit(root, {});
+}
+
 function readEmbeddedArtifactReviewGate(
   flowNodeId: string,
   flowNode: { subflow?: unknown; metadata?: { cinatra?: { gateSteps?: unknown } } },
@@ -2098,6 +2145,17 @@ function readEmbeddedArtifactReviewGate(
       error:
         `ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
         `whose id must be a non-empty id that no other component of the flow carries`,
+    };
+  }
+  // And one component may still be reached through more than one embedding, or inside a node that repeats it.
+  const reach = isRecord(rootDoc) ? reviewGateEmbeddings(rootDoc, gateId) : { count: 0, repeating: true };
+  if (reach.count !== 1 || reach.repeating) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `which the flow reaches through more than one embedding or inside a node that may run it more than once; ` +
+        `the gate's id must name one pause of the flow`,
     };
   }
   // Skippable at any level from the gate up to the root: also when a path of
@@ -2680,21 +2738,6 @@ export async function compileOasAgentJson(opts: {
     const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles, dataFlowEdges, parsed);
     if (!read.ok) return { ok: false, error: read.error };
     if (read.found) embeddedReviewGates.set(id, read.found);
-  }
-  // Two FlowNodes may embed ONE referenced subflow: the id then names one component but two pauses, and the host,
-  // which tells the step by the pause's verified node, would give both pauses the first step.
-  const embeddingOfGate = new Map<string, string>();
-  for (const [flowNodeId, found] of embeddedReviewGates) {
-    const first = embeddingOfGate.get(found.gateId);
-    if (first !== undefined) {
-      return {
-        ok: false,
-        error:
-          `ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE: FlowNode ${quoteNodeId(flowNodeId)} wraps the artifact-review gate ${quoteNodeId(found.gateId)}, ` +
-          `which FlowNode ${quoteNodeId(first)} also wraps; the gate's id must name one pause of the flow`,
-      };
-    }
-    embeddingOfGate.set(found.gateId, flowNodeId);
   }
 
   const agentSteps: CompiledAgentOasStep[] = expandedEntries.map(({ id, gateStep }, idx) => {

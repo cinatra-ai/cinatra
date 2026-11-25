@@ -49,6 +49,11 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
+    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+  }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),

@@ -1006,7 +1006,41 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
   it("refuses two FlowNodes that embed the one subflow holding a marked gate: the gate's id would name two pauses", async () => {
     const error = await compileError({ senderSubflowRef: "drafts-subflow", senderGateSteps: [DRAFTS_STEP] });
     expect(error).toContain("ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE");
-    expect(error).toContain('FlowNode "sender_flow"');
-    expect(error).toContain('FlowNode "drafts_flow"');
+    expect(error).toContain("more than one embedding");
+  });
+
+  // Every node kind that embeds a child flow, beside the FlowNode that carries the step: by `subflow` (FlowNode, a map
+  // node, any other kind naming one flow) or `subflows` (ParallelFlowNode), directly or nested in another embedding.
+  // The extra node runs after the FlowNode (drafts_flow -> extra -> sender_flow, beside the direct edge).
+  const viaWrapper = (inner: Record<string, unknown>) => ({
+    "extra-wrapper": {
+      agentspec_version: "26.1.0", component_type: "Flow", id: "extra-wrapper", name: "extra-wrapper", inputs: [], outputs: [],
+      start_node: { $component_ref: "extra-inner" }, nodes: [{ $component_ref: "extra-inner" }], control_flow_connections: [],
+      $referenced_components: { "extra-inner": inner },
+    },
+  });
+  const EMBEDDINGS: Array<[string, Record<string, unknown>, Record<string, unknown>]> = [
+    ["a second FlowNode", { component_type: "FlowNode", id: "extra", name: "extra", subflow: { $component_ref: "drafts-subflow" } }, {}],
+    ["a ParallelFlowNode", { component_type: "ParallelFlowNode", id: "extra", name: "extra", subflows: [{ $component_ref: "drafts-subflow" }] }, {}],
+    ["a map node", { component_type: "MapNode", id: "extra", name: "extra", subflow: { $component_ref: "drafts-subflow" } }, {}],
+    ["a FlowNode nested in a ParallelFlowNode branch", { component_type: "ParallelFlowNode", id: "extra", name: "extra", subflows: [{ $component_ref: "extra-wrapper" }] },
+      viaWrapper({ component_type: "FlowNode", id: "extra-inner", name: "extra-inner", subflow: { $component_ref: "drafts-subflow" } })],
+  ];
+  for (const [kind, extra, more] of EMBEDDINGS) {
+    it(`refuses a marked child flow that ${kind} also embeds: the gate would pause twice`, async () => {
+      const error = await compileError({
+        extraRefs: { extra, ...more },
+        parentControl: [["drafts_flow", "extra"], ["extra", "sender_flow"]],
+      });
+      expect(error).toContain("ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE");
+    });
+  }
+
+  it("the same extra node embedding another, unmarked child flow does not refuse the marked gate", async () => {
+    const steps = await compileSteps({
+      extraRefs: { extra: { component_type: "ParallelFlowNode", id: "extra", name: "extra", subflows: [{ $component_ref: "recipients-subflow" }] } },
+      parentControl: [["drafts_flow", "extra"], ["extra", "sender_flow"]],
+    });
+    expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
   });
 });

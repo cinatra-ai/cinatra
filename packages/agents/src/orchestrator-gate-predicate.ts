@@ -82,19 +82,22 @@ export class PausePolicyVersionMismatchError extends Error {
 }
 /** cinatra#3089: one text per policy CONTENT, whatever order its object keys were written in: keys sorted at every
  *  level, arrays kept in their order (a policy's step order is its step numbering; any other array compared in order can
- *  only stop a run, never match two different policies). Absent and `undefined` members are one (as JSON drops them). */
+ *  only stop a run, never match two different policies). Absent and `undefined` members are one (as JSON drops them).
+ *  The text is written from the own keys directly, never by assigning them to an object, so an own key such as
+ *  `__proto__` is a member like any other. */
 export function canonicalPolicyText(value: unknown): string {
-  const walk = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map((x) => (x === undefined ? null : walk(x)));
-    if (v === null || typeof v !== "object") return v;
-    const out: Record<string, unknown> = {};
-    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-      const x = (v as Record<string, unknown>)[k];
-      if (x !== undefined) out[k] = walk(x);
+  const skip = (x: unknown) => x === undefined || typeof x === "function" || typeof x === "symbol";
+  const emit = (v: unknown): string => {
+    if (Array.isArray(v)) return `[${v.map((x) => (skip(x) ? "null" : emit(x))).join(",")}]`;
+    if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
+    const members: string[] = [];
+    for (const k of Object.keys(v).sort()) {
+      const x = Object.getOwnPropertyDescriptor(v, k)?.value;
+      if (!skip(x)) members.push(`${JSON.stringify(k)}:${emit(x)}`);
     }
-    return out;
+    return `{${members.join(",")}}`;
   };
-  return JSON.stringify(walk(value ?? null));
+  return emit(value ?? null);
 }
 /** cinatra#3089: the waits between the attempts of a pause's template read. Nothing re-drives a pause report the
  *  handler drops (the dispatch's blocking send returns it once), so a fault is retried here, briefly, before a stop. */

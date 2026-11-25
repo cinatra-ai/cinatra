@@ -7,6 +7,7 @@ import {
   bindRunStepToolPolicy,
   CINATRA_EXPECTED_SOURCE_MESSAGE_KEY,
   readAgentTemplateById,
+  readRunPauseSteps,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
   readAgentTemplateVersionById,
@@ -374,34 +375,33 @@ export async function resolvePinnedRunSnapshot(
 }
 
 /**
- * cinatra#3089: the template a pause is classified by: the policy of the version
- * whose flow ran. The dispatch runs the INSTALLED package (resolveWayflowUrl by
- * package name), whose version is the live row's packageVersion. A run served a
- * pinned snapshot is classified by the snapshot's policy when the pinned version
- * is the installed one, or when the installed version's policy is the same; else
- * the installed flow may have produced the pause under another policy, and
- * PausePolicyVersionMismatchError is thrown (no retry; the run stops). A
- * required pin that cannot be served, a snapshot read that throws, a served
- * snapshot with no approval policy, or a served snapshot with no live row throws:
- * the caller retries, then stops; it never falls back to the live policy and
- * never to no policy. No served snapshot: the live template (or null).
+ * cinatra#3089: the steps a pause is classified by: those of the version whose
+ * flow ran. The dispatch runs the INSTALLED package (resolveWayflowUrl by package
+ * name) and binds, beside the source it selected, the installed version and steps
+ * it read (readRunPauseSteps; never the mutable template row, which a later
+ * install or recompile rewrites while a task runs). A run served a pinned
+ * snapshot is classified by the snapshot's steps when the pinned version is the
+ * bound one, or when the bound steps are the same; else the bound flow may have
+ * produced the pause under other steps, and PausePolicyVersionMismatchError is
+ * thrown (no retry; the run stops). No bound steps, a required pin that cannot be
+ * served, a snapshot read that throws, or a served snapshot with no approval
+ * policy throws: the caller retries, then stops; it never falls back to the live
+ * row and never to no policy.
  */
 export async function readPausePolicyTemplate(
-  run: { templateId: string; packageVersion: string | null; versionId: string | null },
-): Promise<Awaited<ReturnType<typeof readAgentTemplateById>>> {
-  const live = await readAgentTemplateById(run.templateId);
+  run: { id: string; orgId: string; templateId: string; packageVersion: string | null; versionId: string | null },
+): Promise<Pick<AgentTemplateRecord, "approvalPolicy">> {
+  const bound = await readRunPauseSteps(run.id, run.orgId);
   const pinned = await resolvePinnedRunSnapshot(run, { readAgentTemplateVersionById, readAgentTemplateVersionBySemver });
-  if (!pinned) return live;
-  // No live row (removed after the dispatch, which needs one): which version ran is not known.
-  if (!live) throw new Error(`the template row of ${run.templateId} is gone, so the version that ran is not known`);
+  if (!pinned) return { approvalPolicy: bound.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
   if (pinned.approvalPolicy === undefined) {
     throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
   }
-  // Another version installed: the two policies must be the same, else it is not known which produced the pause.
-  if (live.packageVersion !== run.packageVersion && canonicalPolicyText(live.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
-    throw new PausePolicyVersionMismatchError(run.packageVersion, live.packageVersion ?? null);
+  // Another version ran: the two policies must be the same, else it is not known which produced the pause.
+  if (bound.packageVersion !== run.packageVersion && canonicalPolicyText(bound.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
+    throw new PausePolicyVersionMismatchError(run.packageVersion, bound.packageVersion);
   }
-  return { ...live, approvalPolicy: pinned.approvalPolicy as typeof live.approvalPolicy };
+  return { approvalPolicy: pinned.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
 }
 
 // ---------------------------------------------------------------------------
@@ -5319,8 +5319,11 @@ async function runAgentBuilderExecutionJobInner(
         executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
       const currentDispatchRun = await readAgentRunById(runId);
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      // cinatra#3089: the row as this dispatch read it before the selection; the bind reads it again after the
+      // selection and binds the steps beside the source only when the two reads agree.
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,
-        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority,
+        dispatchTemplateRead: { packageVersion: template.packageVersion ?? null, approvalPolicy: template.approvalPolicy } });
       // cinatra#3745: the task's message names the attempt just bound (metadata, never
       // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
       // earlier attempt of this run cannot sign for this one.

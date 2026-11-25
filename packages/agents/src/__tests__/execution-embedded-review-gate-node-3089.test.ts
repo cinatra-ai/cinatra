@@ -19,7 +19,7 @@ import { createHmac } from "node:crypto";
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { GATE_KEYS_NOT_FROM_RUN_INPUTS } from "../gate-keys-not-from-run-inputs";
-import { PAUSE_POLICY_READ_WAITS_MS } from "../orchestrator-gate-predicate";
+import { PAUSE_POLICY_READ_WAITS_MS, canonicalPolicyText } from "../orchestrator-gate-predicate";
 
 const { enrichSpy, onInterruptSpy, gateIndexSpy } = vi.hoisted(() => {
   const enrichSpy = vi.fn(async (schema: unknown) => ({ ...(schema as object) }));
@@ -60,6 +60,11 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
+    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+  }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -281,6 +286,11 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     readGateSpy.mockResolvedValue(null);
     listGatesSpy.mockResolvedValue([]);
     decideSpy.mockImplementation(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "review the declared work" }));
+    // The steps bound at the dispatch are those of the template row, unless a test binds others.
+    storeMock.readRunPauseSteps.mockImplementation(async () => {
+      const t = (await storeMock.readAgentTemplateById("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+      return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+    });
     bindSeam();
   });
   afterEach(() => {
@@ -406,9 +416,15 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   const UNMARKED = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
   const v1Row = (steps: Array<Record<string, unknown>>) => ({ templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps } } });
   const V1_ROW = v1Row(OUTREACH);
-  async function pinnedPause(row: unknown, installed: { version: string | null; steps: Array<Record<string, unknown>> } | null = { version: null, steps: UNMARKED }) {
+  type Installed = { version: string | null; steps: Array<Record<string, unknown>> };
+  // `installed`: what the dispatch bound beside the source it selected. `liveNow`: the template row at the pause
+  // (default: unchanged since the dispatch). `null` bound: no steps were bound to the run.
+  async function pinnedPause(row: unknown, installed: Installed | null = { version: null, steps: UNMARKED }, liveNow: Installed | null = installed) {
     storeMock.readAgentTemplateById.mockReset();
-    storeMock.readAgentTemplateById.mockResolvedValue(installed === null ? null : makeTemplate(installed.steps, installed.version));
+    storeMock.readAgentTemplateById.mockResolvedValue(liveNow === null ? null : makeTemplate(liveNow.steps, liveNow.version));
+    storeMock.readRunPauseSteps.mockReset();
+    if (installed === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps are bound"));
+    else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: installed.version, approvalPolicy: { steps: installed.steps } });
     storeMock.readAgentTemplateVersionById.mockReset();
     if (row instanceof Error) storeMock.readAgentTemplateVersionById.mockRejectedValue(row);
     else storeMock.readAgentTemplateVersionById.mockResolvedValue(row as never);
@@ -468,12 +484,29 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     stoppedWith("PAUSE_POLICY_VERSION_MISMATCH");
   });
 
-  it("a pinned run whose template row is gone: which version ran is not known, so the run stops after the retries; no step-less approval", async () => {
-    await pinnedPause(V1_ROW, null);
+  it("a pinned run with no steps bound to it (dispatched before they were bound, or its template row gone): the run stops after the retries; no step-less approval", async () => {
+    await pinnedPause(V1_ROW, null, null);
     expect(onInterruptSpy).not.toHaveBeenCalled();
     expect(emitSpy).not.toHaveBeenCalled();
     stoppedWith("PAUSE_POLICY_UNREAD");
-    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
+    expect(storeMock.readRunPauseSteps).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
+  });
+
+  it("version 2 installed while a pinned version 1 task runs: the pause is classified by the version 1 steps bound at its dispatch, not stopped", async () => {
+    await pinnedPause(V1_ROW, { version: "1.0.0", steps: OUTREACH }, { version: "2.0.0", steps: UNMARKED });
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
+  });
+
+  it("version 2 installed while an unpinned version 1 task runs: the version 1 review marker bound at its dispatch still applies", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(UNMARKED, "2.0.0"));
+    storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: "1.0.0", approvalPolicy: { steps: OUTREACH } });
+    gateIndexSpy.mockResolvedValue(1);
+    const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
   });
 
   it("a pinned run whose snapshot is missing, unreadable or carries no policy stops after the retries; the live policy is never used", async () => {
@@ -495,5 +528,23 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(emitSpy).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
     stoppedWith("ARTIFACT_REVIEW_GATE_UNVERIFIED");
+  });
+});
+
+// cinatra#3089: the policy comparison reads every own key, also one an object would otherwise take as its prototype
+// or inherit (`__proto__`, `constructor`, `toString`), at any depth; key order never counts, array order always does.
+describe("cinatra#3089 — two policies compare by content", () => {
+  const policyWith = (key: string, value: string) =>
+    JSON.parse(`{"steps":[{"stepNumber":1,"inputMessageSchema":{"properties":{"${key}":{"type":"${value}"}}}}]}`) as unknown;
+  for (const key of ["__proto__", "constructor", "toString"]) {
+    it(`an own "${key}" key, nested, counts: two policies that differ only under it differ`, () => {
+      expect(canonicalPolicyText(policyWith(key, "string"))).not.toBe(canonicalPolicyText(policyWith(key, "number")));
+      expect(canonicalPolicyText(policyWith(key, "string"))).toBe(canonicalPolicyText(policyWith(key, "string")));
+    });
+  }
+  it("the same content with keys in another order is equal; steps in another order are not", () => {
+    expect(canonicalPolicyText({ steps: [{ a: 1, b: { c: 2, d: 3 } }, { e: 4 }] }))
+      .toBe(canonicalPolicyText({ steps: [{ b: { d: 3, c: 2 }, a: 1 }, { e: 4 }] }));
+    expect(canonicalPolicyText({ steps: [{ e: 4 }, { a: 1 }] })).not.toBe(canonicalPolicyText({ steps: [{ a: 1 }, { e: 4 }] }));
   });
 });

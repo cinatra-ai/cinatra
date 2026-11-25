@@ -18,6 +18,11 @@ const storeMock = vi.hoisted(() => ({
   readAgentRunByTaskId: vi.fn(),
   setAgentRunTokenHash: vi.fn(async () => {}),
   readAgentTemplateById: vi.fn(),
+  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
+    const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
+    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+  }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -359,6 +364,14 @@ describe("cinatra#3089 - a pause is classified by the steps of the version that 
     await dispatchPinnedToV1({ version: "2.0.0", marked: true }, false);
     expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(true);
     expect(parked()).toBe(false);
+  });
+
+  it("the dispatch hands the bind the template row it read before the selection, so the steps are bound beside the source", async () => {
+    await dispatchPinnedToV1({ version: "2.0.0", marked: true }, false);
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
+      dispatchTemplateRead: { packageVersion: "2.0.0", approvalPolicy: { steps: [drafts(true)] } },
+    }));
+    expect(storeMock.bindRunStepToolPolicy.mock.invocationCallOrder[0]!).toBeGreaterThan(storeMock.selectWayflowRunStepToolPolicy.mock.invocationCallOrder[0]!);
   });
 
   it("the requested version is the installed one: the pause is classified as before, no version stop", async () => {
