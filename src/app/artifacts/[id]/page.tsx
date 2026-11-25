@@ -440,6 +440,9 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
       <PageContent
         className="flex flex-col gap-6 pb-8"
         data-render-dispatch={mount.dispatch}
+        // §III's typed-renderer case (app-artifacts): only the region a type's
+        // own renderer answers for carries it, never the MIME viewer or floor.
+        data-conformance-id={mount.dispatch === "semantic" ? "artifact-render-typed" : undefined}
       >
         {/* §III activation barrier: pin / add-to-context is replaced by a
             muted "Preparing" label until the claim's binding lands. */}

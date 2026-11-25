@@ -37,6 +37,13 @@ import "server-only";
 // road (neither is bound to an install id), and reads the anchor again just
 // before the import. A load without a binding is unchanged.
 //
+// A PROVEN DEVELOPMENT SOURCE: a development installation has no install to
+// bind, so a caller that proved a source tree hands over what it proved — the
+// root at its real path and its own re-check. The load reads only that root,
+// refuses when the name-and-version road now answers another real root, and
+// runs the re-check just before the import. It never takes a fresh root of its
+// own in place of the proven one.
+//
 // Nothing here names a package, a table, a type or a state.
 
 import path from "node:path";
@@ -90,6 +97,50 @@ export type ExactInstallBinding = {
   /** The binding's own re-check just before the import; anything but `true` refuses. */
   stillBound?: () => Promise<boolean>;
 };
+
+/**
+ * A source tree a caller proved on a development installation, which has no
+ * install row to bind: the load reads exactly this root and nothing else.
+ */
+export type DevelopmentSourceBinding = {
+  /** The origin road that proved it. */
+  origin: "development-child";
+  packageName: string;
+  packageVersion: string;
+  /** The proven package root, at its real path (no link on the way to it). */
+  realRoot: string;
+  /** What the lifecycle check read: the one live install row, or null when the store held none. */
+  installRecord: { rowId: string; status: string; version: string | null } | null;
+  /** The caller's own re-check just before the import; anything but `true` refuses. */
+  stillBound: () => Promise<boolean>;
+};
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === "string" && v.trim() !== "";
+
+/** A binding of the declared shape, for exactly this name and version. */
+function isDevelopmentSourceFor(
+  source: unknown,
+  input: { packageName: string; packageVersion: string },
+): source is DevelopmentSourceBinding {
+  if (typeof source !== "object" || source === null) return false;
+  const s = source as Record<string, unknown>;
+  const record = s.installRecord;
+  const recordOk =
+    record === null ||
+    (typeof record === "object" &&
+      isNonEmptyString((record as Record<string, unknown>).rowId) &&
+      isNonEmptyString((record as Record<string, unknown>).status));
+  return (
+    s.origin === "development-child" &&
+    s.packageName === input.packageName &&
+    s.packageVersion === input.packageVersion &&
+    isNonEmptyString(s.realRoot) &&
+    path.isAbsolute(s.realRoot) &&
+    path.resolve(s.realRoot) === s.realRoot &&
+    recordOk &&
+    typeof s.stillBound === "function"
+  );
+}
 
 export type ExtensionToolModuleLoaderDeps = {
   resolvePackageRoot?: PinnedPackageRootResolver;
@@ -345,11 +396,27 @@ export async function loadDeclaredToolModule(
     modulePath: string;
     /** The exact installation to load from (cinatra#4154); absent = the name-and-version road. */
     install?: ExactInstallBinding;
+    /**
+     * A proven development source. The key being present at all binds the load to it: a missing or
+     * malformed value is refused, never read as the plain name-and-version road.
+     */
+    developmentSource?: DevelopmentSourceBinding;
   },
   deps: ExtensionToolModuleLoaderDeps = {},
 ): Promise<unknown> {
   const resolveRoot = deps.resolvePackageRoot ?? resolvePinnedPackageRoot;
   const { install } = input;
+  const sourceBound = Object.hasOwn(input, "developmentSource");
+  const source = input.developmentSource;
+  const sourceChanged = () =>
+    new ExtensionToolModuleRefusal(
+      `extension_tool: the source proven for \`${input.toolName}\` changed before its module was loaded`,
+    );
+  if (sourceBound && (install !== undefined || !isDevelopmentSourceFor(source, input))) {
+    throw new ExtensionToolModuleRefusal(
+      `extension_tool: the source bound for \`${input.toolName}\` is not a usable binding — refusing to load it`,
+    );
+  }
   const where = { packageName: input.packageName, packageVersion: input.packageVersion, orgId: input.orgId };
   let resolved: string | CheckedRealPackageRoot | null;
   try {
@@ -357,9 +424,9 @@ export async function loadDeclaredToolModule(
       install ? { ...where, installId: install.installId, installDigest: install.digest } : where,
     );
   } catch (e) {
-    // On the exact-install road a throw is the stated refusal below, and its
-    // text (a store path, an install id) never reaches the caller.
-    if (install === undefined) throw e;
+    // On the exact-install and proven-source roads a throw is the stated refusal
+    // below, and its text (a store path, an install id) never reaches the caller.
+    if (install === undefined && !sourceBound) throw e;
     resolved = null;
   }
   if (resolved === null) {
@@ -367,6 +434,24 @@ export async function loadDeclaredToolModule(
       `extension_tool: the calling extension is not materialized at the pinned version, so the ` +
         `module it declares for \`${input.toolName}\` cannot be loaded`,
     );
+  }
+  if (sourceBound) {
+    // The road's own answer must be the proven root, and the proven path must still be its own real
+    // path; the load then reads the proven root only, never the fresh answer.
+    const proven = (source as DevelopmentSourceBinding).realRoot;
+    const fresh = resolved;
+    let ownReal: string;
+    let provenReal: string;
+    try {
+      [ownReal, provenReal] = await Promise.all([
+        typeof fresh === "string" ? realpath(fresh) : fresh.realRoot,
+        realpath(proven),
+      ]);
+    } catch {
+      throw sourceChanged();
+    }
+    if (ownReal !== proven || provenReal !== proven) throw sourceChanged();
+    resolved = { realRoot: proven };
   }
   // A root the resolver already checked as a REAL path is used as it is and is
   // never resolved again, so a link put in its place after the check cannot
@@ -404,6 +489,11 @@ export async function loadDeclaredToolModule(
         `was loaded`,
     );
   }
+  // A PROVEN SOURCE IS CHECKED AGAIN NOW, after every gate: an install row archived or replaced, or
+  // the root moved, since the proof is refused.
+  if (sourceBound && !(await stillTheProvenSource(source as DevelopmentSourceBinding))) {
+    throw sourceChanged();
+  }
   // THE IMPORT ITSELF GOES THROUGH THE ONE SANCTIONED RUNTIME-STORE SEAM
   // (`runtime-package-loader`), the same seam a bundled serverEntry is reached
   // by: the variable-URL `import()` ratchet allows that file and no other, and
@@ -437,5 +527,14 @@ async function stillTheBoundInstall(
     return install.stillBound === undefined || (await install.stillBound()) === true;
   } catch {
     return false; // a read that throws is a change
+  }
+}
+
+/** The proven source's own re-check holds; a throw is a change. */
+async function stillTheProvenSource(source: DevelopmentSourceBinding): Promise<boolean> {
+  try {
+    return (await source.stillBound()) === true;
+  } catch {
+    return false;
   }
 }

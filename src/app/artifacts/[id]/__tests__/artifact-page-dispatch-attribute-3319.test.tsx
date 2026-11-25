@@ -322,3 +322,27 @@ describe("the content region carries the rung that answered (cinatra#3319)", () 
     });
   }
 });
+
+// `specs/app-artifacts.html` §III marks only the typed-renderer case with
+// `artifact-render-typed` (cinatra#3033). The MIME viewer and the floors are
+// other cases, so the region carries the anchor on the semantic rung alone.
+describe("the content region carries artifact-render-typed on the typed rung only", () => {
+  for (const rung of enumerateDispatchRungs()) {
+    const typed = rung === "semantic";
+    it(`${typed ? "writes" : "does not write"} the anchor for the "${rung}" rung`, async () => {
+      mocks.resolveArtifactDisplayMount.mockResolvedValue(MOUNT_FOR_RUNG[rung]);
+
+      const html = await renderPage();
+      const tag = contentRegionTag(html) ?? "";
+      const count = (html.match(/data-conformance-id="artifact-render-typed"/g) ?? []).length;
+
+      if (typed) {
+        // red-first-expect: to contain 'data-conformance-id="artifact-render-
+        expect(tag).toContain('data-conformance-id="artifact-render-typed"');
+        expect(count).toBe(1);
+      } else {
+        expect(count).toBe(0);
+      }
+    });
+  }
+});
