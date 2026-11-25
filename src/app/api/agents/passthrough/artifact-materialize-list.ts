@@ -5,20 +5,27 @@
 //
 // THE PARTIAL-FAILURE RULE. The members are filed one after the other, each
 // through the single call and its idempotency ledger (run, node, extension,
-// content hash). Everything that can be known before a write is asked of EVERY
-// member first (`refuseListBeforeFiling`: the write authorization of each
-// member, so a member that is refused for its extension, form, size or declared
-// type files nothing at all); what can still fail after the first write is only
-// what the write itself finds (the detected MIME, a typed field the type's
-// schema rejects) or a storage fault.
-// When member k fails then, the members before it are already filed and stay
-// filed, and the answer is a typed refusal that carries no artifacts and no
-// review targets — so no gate downstream can receive a partial set, and the
-// calling node fails — and that names what is stored (`filed`), so a retry or an
-// operator can find it. A retry of the same call is safe: each member filed
-// before hits its finalized ledger row and comes back with the same ids
-// (nothing is filed twice), the filing resumes at member k, and the gate then
-// receives every member.
+// content hash). A list filing stores every member or leaves no member the
+// default policy treats as needing no review:
+//   1. Everything that is a pure function of the bytes and the declaration is
+//      asked of EVERY member before the first is filed (`refuseListBeforeFiling`:
+//      the write authorization, the detected MIME, the type's accepts and the
+//      type's payload schema over the member's typed data), so a deterministic
+//      failure stores nothing, not even the members before it. What can still
+//      fail afterwards needs the store or the database: a storage fault, the
+//      organization's byte quota, the persisted MIME of an existing
+//      same-substance resource.
+//   2. When member k fails then, the members before it are already stored. The
+//      answer is a typed refusal that carries no artifacts and no review targets
+//      (so no gate receives a partial set, and the calling node fails), names
+//      what is stored (`filed`), and every member stored is put under a review
+//      of its own (`reviewStoredMembers`): a member of a marked node was written
+//      as its gate's write (`live_generator`, skipped by the default policy,
+//      because the gate is its review), and that gate will not open with it.
+//   3. A retry of the same call is safe: each member filed before hits its
+//      finalized ledger row and comes back with the same ids (nothing is filed
+//      twice), the filing resumes at member k, and the gate then receives every
+//      member.
 
 import type { ShapedArtifactMaterializeMember } from "./artifact-materialize-shaper";
 
@@ -84,6 +91,27 @@ export async function refuseListBeforeFiling(
     }
   }
   return null;
+}
+
+/**
+ * Puts each member stored before a failure under a review of its own, through
+ * `open` (the review store's own emit), and counts how many are. Never throws: a
+ * review that cannot be opened (a refusal, a fault, no store) counts as not
+ * opened, and the caller says so.
+ */
+export async function reviewStoredMembers(
+  filed: readonly MaterializeListFiled[],
+  open: (member: MaterializeListFiled) => Promise<boolean>,
+): Promise<{ underReview: number }> {
+  let underReview = 0;
+  for (const member of filed) {
+    try {
+      if (await open(member)) underReview += 1;
+    } catch {
+      // counted as not opened
+    }
+  }
+  return { underReview };
 }
 
 export async function materializeArtifactList(

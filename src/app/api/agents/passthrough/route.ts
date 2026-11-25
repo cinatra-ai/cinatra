@@ -37,6 +37,7 @@ import {
   isRegenerateRepairRun,
   materializeArtifactList,
   refuseListBeforeFiling,
+  reviewStoredMembers,
   MATERIALIZE_LIST_INPUT_TOO_LARGE,
   materializeListInputTooLargeError,
   MATERIALIZE_LIST_IN_REGENERATE_RUN,
@@ -696,12 +697,24 @@ export async function POST(req: Request): Promise<Response> {
             { status: 400 },
           );
         }
-        // The write authorization of EVERY member is asked before the first is
-        // filed, so a member refused for its extension, form, size or declared
-        // type stores nothing, not even the members before it.
-        const { authorizeToolMaterializeWrite } = await import("@/lib/artifacts/run-artifact-materializer");
-        const refused = await refuseListBeforeFiling(shaped.members, async (member) => {
-          const authorized = await authorizeToolMaterializeWrite({
+        // What a member will store: its typed data and the id of THIS run under the
+        // field the call names for it (the run the binding proved, never a value
+        // the call carries). Asked of the write check below and handed to the filing.
+        const typedDataOf = (member: (typeof shaped.members & object)[number]) =>
+          member.data !== undefined || shaped.runIdField !== undefined
+            ? {
+                ...member.data,
+                ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}),
+              }
+            : undefined;
+        // EVERY member is asked, before the first is filed, all that does not need
+        // the store: the write authorization (extension, form, size, declared
+        // type) and the creation path's own check (detected MIME, accepts, the
+        // type's schema over the typed data). A refused member stores nothing,
+        // not even the members before it.
+        const { precheckToolMaterializeWrite } = await import("@/lib/artifacts/run-artifact-materializer");
+        const refused = await refuseListBeforeFiling(shaped.members, (member) =>
+          precheckToolMaterializeWrite({
             orgId: run.orgId,
             templateId: run.templateId,
             packageVersion: run.packageVersion,
@@ -710,9 +723,10 @@ export async function POST(req: Request): Promise<Response> {
             mime: shaped.declaredMime,
             content: member.content,
             ...(verifiedStepId !== undefined && verifiedStepId === shaped.nodeId ? { nodeId: shaped.nodeId } : {}),
-          });
-          return authorized.ok ? { ok: true } : { ok: false, error: authorized.error };
-        });
+            title: member.title,
+            typedData: typedDataOf(member),
+          }),
+        );
         if (refused !== null) {
           return NextResponse.json(refused, { status: 400 });
         }
@@ -730,24 +744,37 @@ export async function POST(req: Request): Promise<Response> {
             title: member.title,
             mime: shaped.declaredMime,
             content: member.content,
-            // The member's typed data, and the id of THIS run under the field the
-            // call names for it: the run is the one the binding proved, never a
-            // value the call carries.
-            ...(member.data !== undefined || shaped.runIdField !== undefined
-              ? {
-                  typedData: {
-                    ...member.data,
-                    ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}),
-                  },
-                }
-              : {}),
+            ...(typedDataOf(member) !== undefined ? { typedData: typedDataOf(member) } : {}),
           }),
         );
         if (!listed.ok) {
+          // The members stored before the failure were written as their gate's write and
+          // that gate will not open with them: each is put under a review of its own,
+          // through the same review store the declared gate uses, with the id the
+          // produced-review path derives for it (so a later sweep finds the same gate).
+          const { producedEventId } = await import("@/lib/lifecycle/lifecycle-produced-event");
+          const { autoReviewTaskId } = await import("@/lib/lifecycle/lifecycle-orchestration");
+          const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { emit(input: {
+            runId: string; orgId: string; reviewTaskId: string; targets: unknown;
+          }): Promise<{ ok: boolean }> } }).__cinatraArtifactReviewGateSeam;
+          const { underReview } = await reviewStoredMembers(listed.filed, async (member) => {
+            if (!seam) return false;
+            const emitted = await seam.emit({
+              runId: run.id,
+              orgId: run.orgId,
+              reviewTaskId: autoReviewTaskId(producedEventId(member.artifactId, member.representationRevisionId)),
+              targets: [member],
+            });
+            return emitted.ok;
+          });
+          const notReviewed = listed.filed.length - underReview;
           return NextResponse.json(
-            { error: listed.error, code: listed.code,
+            { error: notReviewed === 0
+                ? listed.error
+                : `${listed.error} — ${notReviewed} stored member(s) could not be put under review`,
+              code: listed.code,
               failedMember: listed.failedMember, filedCount: listed.filedCount,
-              filedArtifacts: listed.filed },
+              filedArtifacts: listed.filed, underReview },
             { status: 400 },
           );
         }

@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
@@ -21,7 +21,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 /** The registry definition shape (or null) — a local alias so this module needs
  *  no type-only barrel import (avoids the heavy objects barrel graph). */
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
-import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
@@ -318,6 +318,73 @@ function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolea
   return def.isArtifact != null || def.dispositions?.projection === "artifact-safe";
 }
 
+/** What the blob store derives from the bytes of a write: the MIME its sniffer reads from the first 512 bytes
+ *  and the declared MIME, the sha256 and the size. A pure function of the bytes and the declaration, so a
+ *  refusal that depends on them can be found before the bytes are stored. */
+export function artifactWriteFactsOfContent(
+  content: string,
+  declaredMime: string,
+): { mimeDetected: string; sha256: string; sizeBytes: number } {
+  const bytes = new TextEncoder().encode(content);
+  return {
+    mimeDetected: sniffMime(bytes.subarray(0, 512), declaredMime),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sizeBytes: bytes.byteLength,
+  };
+}
+
+/**
+ * The refusal of a write that needs no storage to be known (epic #1785, wave A3), or null: the type is a
+ * writable artifact type, the detected MIME is one it accepts, and the caller's typed data under the writer's
+ * own envelope satisfies the type's payload schema. The creation path asks it after it has stored the bytes
+ * (`facts` from the store); a list filing asks it of every member before the first is stored
+ * (`artifactWriteFactsOfContent`). What it cannot see, because it needs the store or the database: the
+ * organization's byte quota, the persisted MIME of an existing same-substance resource, and storage faults.
+ */
+export function artifactWriteRefusal(
+  input: {
+    objectType: string;
+    expectedAcceptMimes?: readonly string[];
+    typedData?: Record<string, unknown>;
+    title?: string;
+    originKind: ArtifactOriginKind;
+    representationRevisionId: string;
+  },
+  facts: { mimeDetected: string; sha256: string; sizeBytes: number },
+): string | null {
+  const preDef = objectTypeRegistry.resolve(input.objectType);
+  if (!preDef || !isArtifactWritableType(preDef)) {
+    return `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`;
+  }
+  const declaredAccepts = preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
+  if (
+    Array.isArray(declaredAccepts) &&
+    declaredAccepts.length > 0 &&
+    !mimeAcceptedByAccepts(declaredAccepts, facts.mimeDetected)
+  ) {
+    return `detected MIME "${facts.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`;
+  }
+  // The caller's typed data UNDER the envelope (item 0.28): the writer's own
+  // facts always win, so the payload the schema sees carries the type's
+  // declared fields and an unforgeable envelope.
+  const previewEnvelope = {
+    ...(input.typedData ?? {}),
+    artifactType: "file",
+    latestRepresentationRevisionId: input.representationRevisionId,
+    latestDigest: facts.sha256,
+    mime: facts.mimeDetected,
+    size: facts.sizeBytes,
+    originKind: input.originKind,
+    viewerHint: "mime",
+    title: input.title,
+  } as ArtifactObjectData;
+  const parsed = preDef.schema.safeParse(previewEnvelope);
+  if (!parsed.success) {
+    return `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`;
+  }
+  return null;
+}
+
 /**
  * Validate a REQUIRED object type at the write boundary BEFORE any blob IO
  * (epic #1785, wave A3). Refuses via {@link ObjectsTypeNotRegisteredError} when
@@ -437,46 +504,20 @@ export async function createSemanticArtifact(
   // second accepts check AFTER Tx1 resolves `authoritative.mime`.)
   // -------------------------------------------------------------------
   try {
-    const preDef = objectTypeRegistry.resolve(input.objectType);
-    if (!preDef || !isArtifactWritableType(preDef)) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
-      );
-    }
-    const declaredAccepts =
-      preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
-    if (
-      Array.isArray(declaredAccepts) &&
-      declaredAccepts.length > 0 &&
-      !mimeAcceptedByAccepts(declaredAccepts, newBlob.mimeDetected)
-    ) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
-      );
-    }
-    // The caller's typed data UNDER the envelope (item 0.28): the writer's own
-    // facts always win, so the payload the schema sees carries the type's
-    // declared fields and an unforgeable envelope.
-    const previewEnvelope = {
-      ...(input.typedData ?? {}),
-      artifactType: "file",
-      latestRepresentationRevisionId: representationRevisionId,
-      latestDigest: newBlob.sha256,
-      mime: newBlob.mimeDetected,
-      size: newBlob.sizeBytes,
-      originKind,
-      viewerHint: "mime",
-      title: input.title,
-    } as ArtifactObjectData;
-    const parsed = preDef.schema.safeParse(previewEnvelope);
-    if (!parsed.success) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
-      );
-    }
+    // ONE function decides it, and the list filing asks it of every member before
+    // it stores the first (`artifactWriteRefusal`): nothing here needs the store.
+    const refusal = artifactWriteRefusal(
+      {
+        objectType: input.objectType,
+        expectedAcceptMimes: input.expectedAcceptMimes,
+        typedData: input.typedData,
+        title: input.title,
+        originKind,
+        representationRevisionId,
+      },
+      { mimeDetected: newBlob.mimeDetected, sha256: newBlob.sha256, sizeBytes: newBlob.sizeBytes },
+    );
+    if (refusal !== null) throw new ObjectsTypeNotRegisteredError(input.objectType, refusal);
   } catch (err) {
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })

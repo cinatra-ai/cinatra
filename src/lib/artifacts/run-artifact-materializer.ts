@@ -26,7 +26,7 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { createSemanticArtifact } from "./artifact-creation";
+import { artifactWriteFactsOfContent, artifactWriteRefusal, createSemanticArtifact } from "./artifact-creation";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
   TEXT_AUTHORING_COMPATIBLE_MIMES,
@@ -1628,6 +1628,63 @@ export async function authorizeToolMaterializeWrite(input: {
   };
 }
 
+/**
+ * Everything that is known about ONE write of the tool before any byte of it is
+ * stored (cinatra#3089): the write authorization (`authorizeToolMaterializeWrite`)
+ * and then the creation path's own check, which is a pure function of the bytes
+ * and the declaration (the detected MIME, the type's accepts, the type's payload
+ * schema over the typed data under the writer's own envelope). A list filing asks
+ * it of EVERY member before it files the first, so that a failure the same bytes
+ * would repeat on every retry stores nothing. The origin is the one the write will
+ * carry (the gate's write when the node's gate reviews it, else a plain agent
+ * write). What it cannot see needs the store or the database: a storage fault, the
+ * organization's byte quota, the persisted MIME of an existing same-substance
+ * resource. Never throws: a refusal is a returned error.
+ */
+export async function precheckToolMaterializeWrite(input: {
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  extension: string;
+  objectTypeId?: string;
+  mime: string;
+  content: string;
+  /** The writing node, read for the review only when it is the verified calling step (as `materializeToolArtifact`). */
+  nodeId?: string;
+  title: string;
+  typedData?: Record<string, unknown>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const title = input.title.trim();
+    if (title.length === 0) return { ok: false, error: "title must be a non-empty string" };
+    const authorized = await authorizeToolMaterializeWrite({
+      orgId: input.orgId,
+      templateId: input.templateId,
+      packageVersion: input.packageVersion,
+      extension: input.extension,
+      objectTypeId: input.objectTypeId,
+      mime: input.mime,
+      content: input.content,
+      ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
+    });
+    if (!authorized.ok) return { ok: false, error: authorized.error };
+    const refusal = artifactWriteRefusal(
+      {
+        objectType: authorized.target.objectTypeId,
+        expectedAcceptMimes: authorized.target.acceptedFileMimeTypes,
+        typedData: input.typedData,
+        title,
+        originKind: authorized.reviewed ? "live_generator" : "agent_generated",
+        representationRevisionId: "pending",
+      },
+      artifactWriteFactsOfContent(input.content, input.mime),
+    );
+    return refusal === null ? { ok: true } : { ok: false, error: refusal };
+  } catch (err) {
+    return { ok: false, error: `write check failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
 export async function materializeToolArtifact(input: {
   runId: string;
   orgId: string;
@@ -1717,28 +1774,30 @@ export async function materializeToolArtifact(input: {
 
 export const FANOUT_REUSE_TYPED_DATA_CODE = "fanout_reuse_typed_data_mismatch";
 
-/** The keys of `mustCarry` (those `typedData` holds) that the live object `artifactId` of the organization
- *  does not carry equal. A body that is not there, or is deleted, lacks every one. Values are never named. */
-async function reuseLackingKeys(input: {
+/** What of a pre-filed body differs from what the writer would have stored: the object type, the title (the
+ *  subject, compared without surrounding whitespace, as it is stored) and the keys of `mustCarry` (those
+ *  `typedData` holds) the live object does not carry equal. Read with the canonical, organization-scoped object
+ *  read. A body that is not there, or is deleted, differs in all of them. Values are never named. */
+async function reuseDifferences(input: {
   orgId: string;
   artifactId: string;
+  objectTypeId: string;
+  title: string;
   typedData: Record<string, unknown>;
   mustCarry: readonly string[];
-}): Promise<string[]> {
+}): Promise<{ objectType: boolean; title: boolean; keys: string[] }> {
   const keys = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
-  if (keys.length === 0) return [];
-  ensurePostgresSchema();
-  const s = postgresSchema.replaceAll('"', '""');
-  const res = await pool().query(
-    `SELECT data FROM "${s}"."objects" WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL LIMIT 1`,
-    [input.artifactId, input.orgId],
-  );
-  const row = res.rows[0] as { data?: unknown } | undefined;
-  const stored =
+  const { getObjectById } = await import("@/lib/objects-store");
+  const row = getObjectById(input.artifactId, { orgId: input.orgId });
+  const data =
     row && row.data !== null && typeof row.data === "object" && !Array.isArray(row.data)
       ? (row.data as Record<string, unknown>)
       : null;
-  return keys.filter((k) => stored === null || stored[k] !== input.typedData[k]);
+  return {
+    objectType: row === null || row.type !== input.objectTypeId,
+    title: data === null || typeof data.title !== "string" || data.title.trim() !== input.title.trim(),
+    keys: keys.filter((k) => data === null || data[k] !== input.typedData[k]),
+  };
 }
 
 /**
@@ -1758,8 +1817,9 @@ async function reuseLackingKeys(input: {
  * itself (the fan-out carries no template id). Never throws: a refusal is a
  * returned error the send boundary makes a visible failure of the send.
  *
- * A body reused from the drafting step is admitted only when it already carries
- * what this write would have stored (`reuseMustCarry`); otherwise the reuse is
+ * A body reused from the drafting step is admitted only when it is of this
+ * write's object type and title and already carries what this write would have
+ * stored (`reuseMustCarry`); otherwise the reuse is
  * refused with `FANOUT_REUSE_TYPED_DATA_CODE` and nothing is bound or written.
  */
 export async function materializeFanoutMessageRevision(input: {
@@ -1841,24 +1901,32 @@ export async function materializeFanoutMessageRevision(input: {
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
-      // A reuse is admitted only when the pre-filed body already carries what this
-      // write would have stored (read from its live object, scoped to the
-      // organization): nothing is written to it, so a missing or different key
-      // would stay missing or different while the send reported success.
-      const lacking = await reuseLackingKeys({
+      // A reuse is admitted only for a body of exactly this write's object type and
+      // title that already carries what this write would have stored (read from its
+      // live object, scoped to the organization): nothing is written to it, so a
+      // missing or different key, title or type would stay so while the send
+      // reported success.
+      const differs = await reuseDifferences({
         orgId: input.orgId,
         artifactId: prefiled.artifactId,
+        objectTypeId: input.objectTypeId,
+        title: input.title,
         typedData: input.typedData,
         mustCarry: input.reuseMustCarry ?? Object.keys(input.typedData),
       });
-      if (lacking.length > 0) {
+      if (differs.objectType || differs.title || differs.keys.length > 0) {
+        const what = [
+          ...(differs.objectType ? ["objectType"] : []),
+          ...(differs.title ? ["title"] : []),
+          ...(differs.keys.length > 0 ? [`keys: ${differs.keys.join(", ")}`] : []),
+        ].join("; ");
         return {
           ok: false,
           code: FANOUT_REUSE_TYPED_DATA_CODE,
           error:
-            `${FANOUT_REUSE_TYPED_DATA_CODE}: the body already filed for this message does not carry the typed fields ` +
-            `the send stores (keys: ${lacking.join(", ")}); declare them on the filing ` +
-            "(memberDataFields / memberData / memberRunIdField); the body was not reused",
+            `${FANOUT_REUSE_TYPED_DATA_CODE}: the body already filed for this message is not the one the send would write ` +
+            `(differs: ${what}); declare the fields on the filing (memberDataFields / memberData / memberRunIdField) ` +
+            "and file it under the object type and the title the send uses; the body was not reused",
         };
       }
       await recordFanoutReuseMaterialization({

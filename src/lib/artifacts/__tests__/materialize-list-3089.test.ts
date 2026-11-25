@@ -79,7 +79,18 @@ vi.mock("@/lib/verdaccio-config", () => ({
 }));
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: registerAllObjectTypesMock }));
 vi.mock("../resolve-bound-artifact-type", () => ({ resolveBoundArtifactTarget: resolveBoundArtifactTargetMock }));
-vi.mock("../artifact-creation", () => ({ createSemanticArtifact: createSemanticArtifactMock }));
+vi.mock("../artifact-creation", async () => ({
+  ...(await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation")),
+  createSemanticArtifact: createSemanticArtifactMock,
+}));
+// The canonical object read the fan-out's reuse asks (the stored rows are those the creation mock "wrote").
+vi.mock("@/lib/objects-store", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/objects-store")>("@/lib/objects-store")),
+  getObjectById: (id: string) => {
+    const row = storedObjects.get(id);
+    return row ? { id, type: row.type, data: row.data } : null;
+  },
+}));
 vi.mock("../materialization-ledger", () => ({
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
@@ -103,6 +114,7 @@ vi.mock("../artifact-authoring", () => ({
 import {
   materializeFanoutMessageRevision,
   materializeToolArtifact,
+  precheckToolMaterializeWrite,
   __resetRunPackageBindingsCacheForTests,
 } from "../run-artifact-materializer";
 import {
@@ -149,7 +161,7 @@ let ledger: LedgerRow[];
 /** Bodies whose create fails once, as a rolled-back Tx2 does. */
 let failOnce: Set<string>;
 /** The stored `objects` rows (data) of what the creation path wrote, by artifact id. */
-let storedObjects: Map<string, Record<string, unknown>>;
+let storedObjects: Map<string, { type: string; data: Record<string, unknown> }>;
 
 /** The list filing through the real tool materializer, as the route wires it. */
 async function fileList(verifiedStepId?: string) {
@@ -192,11 +204,7 @@ beforeEach(() => {
   failOnce = new Set();
   storedObjects = new Map();
   getAgentPackageMock.mockResolvedValue(withPayload(null));
-  poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
-    if (text.includes('"objects"')) {
-      const data = storedObjects.get(String(values?.[0]));
-      return { rows: data ? [{ data }] : [] };
-    }
+  poolQueryMock.mockImplementation(async (text: string) => {
     if (text.includes("SELECT package_name")) return { rows: [{ package_name: "@test/agent" }] };
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
@@ -239,6 +247,7 @@ beforeEach(() => {
   createSemanticArtifactMock.mockImplementation(
     async (input: {
       stream: AsyncIterable<Uint8Array>;
+      objectType: string;
       title: string;
       typedData?: Record<string, unknown>;
       additionalTx2Queries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ values: unknown[] }>;
@@ -249,7 +258,7 @@ beforeEach(() => {
       if (failOnce.delete(body)) throw new Error("tx2 rolled back");
       artifactSeq += 1;
       const ids = { artifactId: `art-${artifactSeq}`, representationRevisionId: `rep-${artifactSeq}` };
-      storedObjects.set(ids.artifactId, { ...(input.typedData ?? {}), title: input.title });
+      storedObjects.set(ids.artifactId, { type: input.objectType, data: { ...(input.typedData ?? {}), title: input.title } });
       // The Tx2 commits: the finalize lands on the claimed row.
       for (const q of input.additionalTx2Queries(ids)) {
         const f = q.values[0] as { ledgerId: string };
@@ -512,6 +521,125 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
 
     expect(fromList).toEqual(fromSingle);
     expect(fromList).not.toHaveProperty("typedData");
+  });
+});
+
+describe("cinatra#3089 — the creation path's pre-storage check, asked of every member before the first is stored", () => {
+  const BODY = "@x/mail:body";
+  const registryDef = {
+    dispositions: { projection: "artifact-safe" },
+    schema: { safeParse: (v: Record<string, unknown>) =>
+      typeof v.contactId === "string" && v.contactId.length > 0
+        ? { success: true }
+        : { success: false, error: { message: "contactId: Required" } } },
+  };
+  const ask = async (over: { typedData?: Record<string, unknown>; content?: string; def?: unknown }) => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    vi.spyOn(objectTypeRegistry, "resolve").mockReturnValue((over.def === undefined ? registryDef : over.def) as never);
+    const content = over.content ?? "# Hi";
+    return creation.artifactWriteRefusal(
+      {
+        objectType: BODY, expectedAcceptMimes: ["text/markdown", "text/plain"],
+        typedData: over.typedData ?? { contactId: "c-1" }, title: "Hello", originKind: "live_generator",
+        representationRevisionId: "rev-1",
+      },
+      creation.artifactWriteFactsOfContent(content, "text/markdown"),
+    );
+  };
+
+  // red-first-expect: artifactWriteFactsOfContent is not a function
+  it("admits a write whose bytes, type and typed data are valid", async () => {
+    expect(await ask({})).toBeNull();
+  });
+
+  // red-first-expect: artifactWriteFactsOfContent is not a function
+  it("refuses typed data the type's schema rejects, with the schema's own message", async () => {
+    expect(await ask({ typedData: { campaignId: "k" } })).toBe(
+      `object payload does not satisfy the declared schema for "${BODY}": contactId: Required`,
+    );
+  });
+
+  // red-first-expect: artifactWriteFactsOfContent is not a function
+  it("refuses bytes whose detected MIME the type does not accept: the sniff reads the bytes, not the declaration", async () => {
+    // A member whose text begins with a PDF header reads as a PDF, whatever the call declared.
+    const refusal = await ask({ content: "%PDF-1.4\nnot a markdown body" });
+    expect(refusal).toBe(
+      `detected MIME "application/pdf" is not accepted by "${BODY}" (accepts [text/markdown, text/plain])`,
+    );
+  });
+
+  // red-first-expect: artifactWriteFactsOfContent is not a function
+  it("refuses a type that is not a writable artifact type", async () => {
+    expect(await ask({ def: null })).toContain("is no longer a writable artifact type");
+  });
+
+  // red-first-expect: artifactWriteFactsOfContent is not a function
+  it("derives the facts of the bytes the store derives: UTF-8 size, sha256 of the bytes, the sniffed MIME", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const facts = creation.artifactWriteFactsOfContent("é", "text/markdown");
+    expect(facts).toEqual({
+      mimeDetected: "text/markdown",
+      sha256: createHash("sha256").update(Buffer.from("é", "utf8")).digest("hex"),
+      sizeBytes: 2,
+    });
+  });
+});
+
+describe("cinatra#3089 — the tool's write check before storage (precheckToolMaterializeWrite)", () => {
+  const seen: Array<Record<string, unknown>> = [];
+  const registryDef = {
+    dispositions: { projection: "artifact-safe" },
+    schema: { safeParse: (v: Record<string, unknown>) => {
+      seen.push(v);
+      return typeof v.contactId === "string" && v.contactId.length > 0
+        ? { success: true }
+        : { success: false, error: { message: "contactId: Required" } };
+    } },
+  };
+  const check = (typedData: Record<string, unknown>, content = "# Hi") =>
+    precheckToolMaterializeWrite({
+      orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", extension: EXT, objectTypeId: BODY_TYPE,
+      mime: "text/markdown", content, nodeId: NODE, title: " Hello ", typedData,
+    });
+  const useDef = async () => {
+    seen.length = 0;
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    vi.spyOn(objectTypeRegistry, "resolve").mockReturnValue(registryDef as never);
+  };
+
+  // red-first-expect: precheckToolMaterializeWrite is not a function
+  it("refuses typed data the schema rejects, with the origin of the gate's write when the node's gate reviews it", async () => {
+    await useDef();
+    getAgentPackageMock.mockResolvedValue(markedListFlow(LIST_NODE_DATA));
+    const refused = await check({ campaignId: "k" });
+    expect(refused).toEqual({
+      ok: false,
+      error: `object payload does not satisfy the declared schema for "${BODY_TYPE}": contactId: Required`,
+    });
+    expect(seen[0]).toMatchObject({ originKind: "live_generator", title: "Hello", mime: "text/markdown" });
+  });
+
+  // red-first-expect: precheckToolMaterializeWrite is not a function
+  it("reads the plain agent origin for a node no gate reviews, and admits valid typed data", async () => {
+    await useDef();
+    expect(await check({ contactId: "c-1" })).toEqual({ ok: true });
+    expect(seen[0]).toMatchObject({ originKind: "agent_generated", contactId: "c-1" });
+  });
+
+  // red-first-expect: precheckToolMaterializeWrite is not a function
+  it("refuses a member whose text reads as another MIME, and a blank title, without throwing", async () => {
+    await useDef();
+    expect(await check({ contactId: "c-1" }, "%PDF-1.4\nnot markdown")).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('detected MIME "application/pdf" is not accepted'),
+    });
+    expect(
+      await precheckToolMaterializeWrite({
+        orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", extension: EXT, mime: "text/markdown",
+        content: "# Hi", title: "  ",
+      }),
+    ).toEqual({ ok: false, error: "title must be a non-empty string" });
   });
 });
 

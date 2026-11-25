@@ -26,7 +26,8 @@ const h = vi.hoisted(() => ({
   mintRunWriteAuthorityForMcp: vi.fn(),
   collectAllPrimitiveHandlers: vi.fn(async () => ({})),
   materializeToolArtifact: vi.fn(),
-  authorizeToolMaterializeWrite: vi.fn(),
+  precheckToolMaterializeWrite: vi.fn(),
+  gateEmit: vi.fn(),
   frames: [] as unknown[],
 }));
 
@@ -81,11 +82,12 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", async () => {
       h.frames.push(mcpRequestContextStorage.getStore());
       return h.materializeToolArtifact(...args);
     },
-    authorizeToolMaterializeWrite: (...args: unknown[]) => h.authorizeToolMaterializeWrite(...args),
+    precheckToolMaterializeWrite: (...args: unknown[]) => h.precheckToolMaterializeWrite(...args),
   };
 });
 
 import { POST } from "../app/api/agents/passthrough/route";
+import { producedEventId } from "../lib/lifecycle/lifecycle-produced-event";
 import { shapeArtifactMaterializeInput } from "../app/api/agents/passthrough/artifact-materialize-shaper";
 import {
   ARTIFACT_MATERIALIZE_TOOL,
@@ -171,8 +173,11 @@ beforeEach(() => {
   h.verifyRunExecutedSource.mockResolvedValue(VERIFIED_SOURCE);
   h.assertRunStepToolAllowed.mockReturnValue({ kind: "undeclared" });
   h.mintRunWriteAuthorityForMcp.mockResolvedValue(AUTHORITY);
-  h.authorizeToolMaterializeWrite.mockReset();
-  h.authorizeToolMaterializeWrite.mockResolvedValue({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true });
+  h.precheckToolMaterializeWrite.mockReset();
+  h.precheckToolMaterializeWrite.mockResolvedValue({ ok: true });
+  h.gateEmit.mockReset();
+  h.gateEmit.mockResolvedValue({ ok: true });
+  (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = { emit: h.gateEmit };
   // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
   h.materializeToolArtifact.mockReset();
   let n = 0;
@@ -183,6 +188,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam;
   if (ATTEST_BEFORE === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_BEFORE;
 });
@@ -250,6 +256,15 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       filedArtifacts: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
     });
     expect(body.error).toContain("materialization failed: db down");
+    // The stored member is put under a review of its own, the one a plain agent write gets.
+    expect(body.underReview).toBe(1);
+    expect(h.gateEmit).toHaveBeenCalledTimes(1);
+    expect(h.gateEmit).toHaveBeenCalledWith({
+      runId: "run-1",
+      orgId: "org-a",
+      reviewTaskId: `lifecycle-review:${producedEventId("art-1", "rep-1")}`,
+      targets: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
+    });
     expect(body).not.toHaveProperty("artifacts");
     expect(body).not.toHaveProperty("reviewTargets");
     // The third member is never tried: the run cannot go on with a partial set.
@@ -257,10 +272,10 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
   });
 
   // red-first-expect: expected undefined to be 'materialize_list_member_refused'
-  it("asks the write authorization of EVERY member before the first one is filed, and refuses the whole call when one is refused", async () => {
-    h.authorizeToolMaterializeWrite
-      .mockResolvedValueOnce({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true })
-      .mockResolvedValueOnce({ ok: true, target: { objectTypeId: "@x/y:z" }, reviewed: true })
+  it("asks the write check of EVERY member before the first one is filed, and refuses the whole call when one is refused", async () => {
+    h.precheckToolMaterializeWrite
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: true })
       .mockResolvedValueOnce({ ok: false, error: "content (99 bytes) exceeds the 10-byte cap" });
     const res = await POST(post(listBody()));
     const body = await res.json();
@@ -272,9 +287,92 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       failedMember: 3,
       filedCount: 0,
     });
-    expect(h.authorizeToolMaterializeWrite).toHaveBeenCalledTimes(3);
+    expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(3);
     // Nothing was stored: not even the members before the refused one.
     expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+  });
+
+  describe("a list filing stores every member or leaves none unreviewed (cinatra#3089)", () => {
+    // red-first-expect: expected undefined to be 'materialize_list_member_refused'
+    it.each([
+      ["typed data the type's schema rejects", `object payload does not satisfy the declared schema for "@x/y:z": contactId required`],
+      ["bytes whose detected MIME the type does not accept", `detected MIME "image/png" is not accepted by "@x/y:z" (accepts [text/markdown])`],
+    ])("refuses the whole call before any write when member 2 has %s", async (_n, refusal) => {
+      h.precheckToolMaterializeWrite.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: refusal });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_member_refused");
+      expect(res.status).toBe(400);
+      expect(body).toMatchObject({ failedMember: 2, filedCount: 0 });
+      expect(body.error).toContain(refusal);
+      // Every member was asked, in order, before the first was filed; nothing was stored or put under review.
+      expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(2);
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.gateEmit).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected 400 to be 200
+    it("asks the write check with what the filing will store: the member's typed data and the run's id, its trimmed title, its own bytes", async () => {
+      const res = await POST(
+        post(listBody({ content: JSON.stringify([{ subject: " Hello Ada ", body: "Dear Ada", recipientId: "c-1" }]), memberDataFields: ["recipientId"], memberRunIdField: "runId" })),
+      );
+      expect(res.status).toBe(200);
+      expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(1);
+      expect(h.precheckToolMaterializeWrite.mock.calls[0]![0]).toMatchObject({
+        orgId: "org-a",
+        extension: EXT,
+        mime: "text/markdown",
+        content: "Dear Ada",
+        title: "Hello Ada",
+        typedData: { recipientId: "c-1", runId: "run-1" },
+        nodeId: NODE,
+      });
+    });
+
+    // red-first-expect: expected { Object (error) } to match object
+    it("opens a review for each member stored before a storage fault, and the call still fails", async () => {
+      h.materializeToolArtifact
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-2", representationRevisionId: "rep-2", deduped: false })
+        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body).toMatchObject({ code: "materialize_list_partial", failedMember: 3, filedCount: 2, underReview: 2 });
+      expect(body).not.toHaveProperty("reviewTargets");
+      expect(h.gateEmit.mock.calls.map((c) => (c[0] as { targets: unknown }).targets)).toEqual([
+        [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
+        [{ artifactId: "art-2", representationRevisionId: "rep-2" }],
+      ]);
+    });
+
+    // red-first-expect: expected { Object (error) } to match object
+    it.each([
+      ["a review that cannot be opened", () => h.gateEmit.mockResolvedValue({ ok: false, code: "pin-conflict", message: "x" })],
+      ["a review store that throws", () => h.gateEmit.mockRejectedValue(new Error("db down"))],
+      ["no review store bound", () => { delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam; }],
+    ])("says so, and never claims a review, when %s", async (_n, arrange) => {
+      arrange();
+      h.materializeToolArtifact
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
+        .mockResolvedValueOnce({ ok: false, error: "materialization failed: db down" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body).toMatchObject({ code: "materialize_list_partial", filedCount: 1, underReview: 0 });
+      expect(body.error).toContain("1 stored member(s) could not be put under review");
+      expect(body.filedArtifacts).toEqual([{ artifactId: "art-1", representationRevisionId: "rep-1" }]);
+    });
+
+    // red-first-expect: expected undefined to be 'materialize_list_partial'
+    it("opens no review when no member was stored", async () => {
+      h.materializeToolArtifact.mockResolvedValueOnce({ ok: false, error: "materialization failed: db down" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_partial");
+      expect(body).toMatchObject({ filedCount: 0, underReview: 0 });
+      expect(h.gateEmit).not.toHaveBeenCalled();
+    });
   });
 
   // red-first-expect: to contain 'same content bytes'

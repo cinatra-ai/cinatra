@@ -63,6 +63,7 @@ const {
   readArtifactTypeClaimsForOrgMock: vi.fn(),
 }));
 
+vi.mock("@/lib/objects-store", () => ({ getObjectById: (...args: unknown[]) => objectReadMock(...args) }));
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
   getPooledDb: () => ({ query: poolQueryMock }),
@@ -146,14 +147,27 @@ function bodyInput(m: (typeof MESSAGES)[number]) {
   };
 }
 
-/** The stored `objects` rows the reuse reads back, by artifact id: `null` = no live row. */
-let storedObjects: Map<string, Record<string, unknown> | null>;
+/** The stored `objects` rows the reuse reads back (the canonical read), by artifact id: no entry = no live row. */
+let storedObjects: Map<string, { type: string; data: Record<string, unknown> } | null>;
+const objectReadMock = vi.hoisted(() => vi.fn());
+/** A pre-filed body row: of the body type, titled as the message is, carrying `data`. */
+const stored = (data: Record<string, unknown>, over?: { type?: string; title?: string }) => ({
+  type: over?.type ?? "@cinatra-ai/email:body",
+  data: { ...data, title: over?.title ?? "Hello One" },
+});
 /** What a body the fan-out would have written carries (the message's own typed data). */
 const fullData = (m: (typeof MESSAGES)[number]) => bodyInput(m).typedData;
 
 beforeEach(() => {
   vi.clearAllMocks();
   storedObjects = new Map();
+  objectReadMock.mockReset();
+  objectReadMock.mockImplementation((id: string, scope: { orgId: string | null }) => {
+    // The canonical read: scoped to the organization, never an unscoped lookup.
+    expect(scope).toEqual({ orgId: "org-a" });
+    const row = storedObjects.get(id);
+    return row ? { id, type: row.type, data: row.data } : null;
+  });
   // The pack that declares the body type holds the winning platform claim.
   readArtifactTypeClaimsForOrgMock.mockReturnValue([
     {
@@ -170,15 +184,7 @@ beforeEach(() => {
       updatedAt: null,
     },
   ]);
-  poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
-    if (text.includes('"objects"')) {
-      // The reuse's read: the live row's data, scoped to the organization.
-      expect(text).toContain("org_id = $2");
-      expect(text).toContain("deleted_at IS NULL");
-      expect(values?.[1]).toBe("org-a");
-      const data = storedObjects.get(String(values?.[0])) ?? null;
-      return { rows: data ? [{ data }] : [] };
-    }
+  poolQueryMock.mockImplementation(async (text: string) => {
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
     if (text.includes("project_id")) return { rows: [{ project_id: null }] };
@@ -332,7 +338,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
   });
 
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {
-    storedObjects.set("prefiled-1", { ...fullData(MESSAGES[0]), title: "Hello One" });
+    storedObjects.set("prefiled-1", stored(fullData(MESSAGES[0])));
     findFinalizedMidRunMaterializationMock.mockResolvedValue({
       artifactId: "prefiled-1",
       representationRevisionId: "prefiled-rep-1",
@@ -372,7 +378,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
   });
 
   it("B2 two messages with the same bytes over one pre-filed body keep one body each", async () => {
-    storedObjects.set("prefiled-1", fullData(MESSAGES[0]));
+    storedObjects.set("prefiled-1", stored(fullData(MESSAGES[0])));
     // The mid-run read never hands out an artifact already bound to a message
     // of the run (the NOT EXISTS clause L1 pins).
     findFinalizedMidRunMaterializationMock.mockImplementation(async () =>
@@ -397,8 +403,8 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
   describe("a pre-filed body is reused only when it carries what the send would store (cinatra#3089)", () => {
     const CODE = "fanout_reuse_typed_data_mismatch";
     const CORRELATION = ["runId", "campaignId"];
-    const prefile = (data: Record<string, unknown> | null) => {
-      storedObjects.set("prefiled-1", data);
+    const prefile = (row: { type: string; data: Record<string, unknown> } | null) => {
+      storedObjects.set("prefiled-1", row);
       findFinalizedMidRunMaterializationMock.mockResolvedValue({
         artifactId: "prefiled-1",
         representationRevisionId: "prefiled-rep-1",
@@ -412,12 +418,12 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
 
     // red-first-expect: expected true to be false
     it.each([
-      ["a list-filed body with no typed data", { title: "Hello One" }, ["runId", "campaignId"]],
-      ["a body with the run but not the campaign", { runId: "run-1" }, ["campaignId"]],
-      ["a body of another campaign", { runId: "run-1", campaignId: "camp-OTHER" }, ["campaignId"]],
-      ["a body of another run", { runId: "run-OTHER", campaignId: "camp-1" }, ["runId"]],
-    ])("B4 refuses %s, naming the keys and never the values, and binds and writes nothing", async (_n, stored, keys) => {
-      prefile(stored);
+      ["a list-filed body with no typed data", stored({}), ["runId", "campaignId"]],
+      ["a body with the run but not the campaign", stored({ runId: "run-1" }), ["campaignId"]],
+      ["a body of another campaign", stored({ runId: "run-1", campaignId: "camp-OTHER" }), ["campaignId"]],
+      ["a body of another run", stored({ runId: "run-OTHER", campaignId: "camp-1" }), ["runId"]],
+    ])("B4 refuses %s, naming the keys and never the values, and binds and writes nothing", async (_n, row, keys) => {
+      prefile(row);
       const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
       expect(outcome.ok).toBe(false);
       if (outcome.ok) throw new Error("expected a refusal");
@@ -430,7 +436,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
 
     // red-first-expect: to match object { ok: false
     it("B4 requires the contact when the writer has one, and a body that is gone or deleted is refused", async () => {
-      prefile({ runId: "run-1", campaignId: "camp-1" });
+      prefile(stored({ runId: "run-1", campaignId: "camp-1" }));
       const withContact = {
         ...bodyInput(MESSAGES[0]),
         typedData: { ...bodyInput(MESSAGES[0]).typedData, contactId: "c-1" },
@@ -448,15 +454,37 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
 
     // red-first-expect: to match object { ok: false
     it("B4 compares every key the writer would store when the caller names none", async () => {
-      prefile({ runId: "run-1", campaignId: "camp-1" });
+      prefile(stored({ runId: "run-1", campaignId: "camp-1" }));
       const outcome = await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
       expect(outcome).toMatchObject({ ok: false, code: CODE });
       expect((outcome as { error: string }).error).toContain("keys: subject, bodyMarkdown");
       nothingWritten();
     });
 
+    // red-first-expect: to match object { ok: false
+    it.each([
+      ["a different title (the subject)", stored({ runId: "run-1", campaignId: "camp-1" }, { title: "Another subject" }), "differs: title"],
+      ["another claimed type under the same extension", stored({ runId: "run-1", campaignId: "camp-1" }, { type: "@cinatra-ai/email:other" }), "differs: objectType"],
+      ["another type, another title and another campaign", stored({ runId: "run-1", campaignId: "camp-OTHER" }, { type: "@cinatra-ai/email:other", title: "Another subject" }), "differs: objectType; title; keys: campaignId"],
+    ])("B7 refuses a pre-filed body with identical bytes and its correlation keys but %s, naming what differs and never the values", async (_n, row, differs) => {
+      prefile(row);
+      const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(outcome).toMatchObject({ ok: false, code: CODE });
+      expect((outcome as { error: string }).error).toContain(differs);
+      for (const value of ["Another subject", "Hello One", "@cinatra-ai/email:other", "camp-OTHER", "camp-1"]) {
+        expect((outcome as { error: string }).error).not.toContain(value);
+      }
+      nothingWritten();
+    });
+
+    it("B7 compares the title without its surrounding whitespace, as the title is stored", async () => {
+      prefile(stored({ runId: "run-1", campaignId: "camp-1" }, { title: "  Hello One " }));
+      const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(outcome).toMatchObject({ ok: true, deduped: true });
+    });
+
     it("B5 reuses a body that carries the correlation keys, and binds it to the message", async () => {
-      prefile({ runId: "run-1", campaignId: "camp-1", extra: "kept" });
+      prefile(stored({ runId: "run-1", campaignId: "camp-1", extra: "kept" }));
       const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
       expect(outcome).toEqual({ ok: true, artifactId: "prefiled-1", representationRevisionId: "prefiled-rep-1", deduped: true });
       expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
@@ -467,7 +495,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
       expect(outcome).toMatchObject({ ok: true, deduped: false });
       expect(createSemanticArtifactMock.mock.calls[0]![0].typedData).toEqual(fullData(MESSAGES[0]));
-      expect(poolQueryMock.mock.calls.some(([t]) => String(t).includes('"objects"'))).toBe(false);
+      expect(objectReadMock).not.toHaveBeenCalled();
     });
   });
 
