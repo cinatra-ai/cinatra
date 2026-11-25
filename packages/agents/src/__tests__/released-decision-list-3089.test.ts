@@ -160,7 +160,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     expect(notAnEntryField.ok).toBe(false);
   });
 
-  it("L11 the bodies count only when an artifacts row of the card draws the same surfaced list", () => {
+  it("L11 the bodies count only when the decision declares an artifacts row over the same surfaced list (not a proof of what the screen drew)", () => {
     const list = entries(2);
     const NO_BODIES = { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
     const noArtifactsRow = { ...decision(list), declaredRows: decision(list).declaredRows.filter((r) => r.kind !== "artifacts") };

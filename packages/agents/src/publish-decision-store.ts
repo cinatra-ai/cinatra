@@ -652,16 +652,20 @@ export function releasedDecisionList(input: {
   if (!shownOnRow) {
     return { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
   }
-  // The bodies themselves were drawn: an artifacts row reads the same surfaced value, and the card draws an artifacts
-  // row only over a list (never JSON text) whose every record names an artifact and a revision, each a non-empty id
-  // with no space (the review-target reading of the card's island).
+  // The card carried the bodies: an artifacts row of the decision reads the same surfaced value, and the card draws an
+  // artifacts row only over a list (never JSON text) whose every record names an artifact and a revision, each a
+  // non-empty id with no space (the review-target reading of the card's island). WHAT THIS DOES NOT PROVE: that the
+  // panel finished drawing on the releaser's screen. The server does not see the screen. The card keeps Allow disabled
+  // until every items row has drawn its pinned revisions (design XV.1, "Allow waits for the items"); what the server
+  // holds is the release itself (released, by a person, of this decision), and the send then reads each named revision
+  // again (current-decided-revision-read.ts) before it mails it.
   const raw = surfaced[listKey];
   const targetId = (v: unknown) => typeof v === "string" && v.length > 0 && !v.includes(" ");
-  const bodiesDrawn =
+  const bodiesOnCard =
     Array.isArray(raw) &&
     raw.every((e) => isPlainObject(e) && targetId(e.artifactId) && targetId(e.representationRevisionId)) &&
     (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "artifacts" && row.input === listKey);
-  if (!bodiesDrawn) {
+  if (!bodiesOnCard) {
     return { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
   }
   return { ok: true, list };

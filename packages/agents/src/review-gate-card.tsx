@@ -531,7 +531,7 @@ function islandCredentialsOf(
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
+export type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -2291,6 +2291,7 @@ function ReviewTargetIsland({
   onRetryResolve,
   inPanel = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
@@ -2311,6 +2312,8 @@ function ReviewTargetIsland({
   /** See `ReviewTargetFrame`: the host draws the island's empty document as
    *  an empty panel, and is told when the island settles that way. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** See `ReviewTargetFrame`: told the island's state each time it changes. */
+  onLoadState?: (state: IslandLoadState) => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -2533,7 +2536,14 @@ function ReviewTargetIsland({
   // Read after every hook of this component, so the hook order is the same
   // on every render.
   const cookieSession = useCookieSessionSurface();
-  if (!credentialed && !cookieSession && !refused && !awaiting) {
+  const unframedRegion = !credentialed && !cookieSession && !refused && !awaiting;
+  // THE STATE THE HOST IS TOLD (cinatra#3089): the region above draws nothing, so
+  // it reads as empty. The publish card's Allow waits until this is `loaded`.
+  const toldState: IslandLoadState = unframedRegion ? "empty" : state;
+  useEffect(() => {
+    onLoadState?.(toldState);
+  }, [onLoadState, toldState]);
+  if (unframedRegion) {
     return (
       <div
         data-conformance-id="review-target-island"
@@ -2760,9 +2770,6 @@ function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement 
           <CircleX aria-hidden="true" className="size-[18px]" />
         </div>
         <p className="font-sans text-sm font-semibold text-foreground">The preview did not load</p>
-        <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
-          This does not block your decision below — try again, or continue without it.
-        </p>
         <Button
           type="button"
           variant="link"
@@ -2942,6 +2949,7 @@ export function ReviewTargetFrame({
   awaiting = false,
   paired = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
   islandSrc: string;
@@ -2953,6 +2961,11 @@ export function ReviewTargetFrame({
    *  island currently stands settled empty. Absent (the review gate), that
    *  document stays a preview that did not arrive, as it always was. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** Told the island's state (loading, loaded, timed-out, empty) each time it
+   *  changes (cinatra#3089): the publish card keeps Allow disabled until its
+   *  items panel is `loaded` (design XV.1, "Allow waits for the items"). An
+   *  island that frames nothing on a host with no cookie session reads empty. */
+  onLoadState?: (state: IslandLoadState) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
@@ -2996,6 +3009,7 @@ export function ReviewTargetFrame({
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
         onSettledEmpty={onSettledEmpty}
+        onLoadState={onLoadState}
       />
     </div>
   );
