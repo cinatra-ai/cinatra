@@ -2433,10 +2433,29 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // cannot be told whether this pause is such a review: the run is stopped
     // failed, the pause offered as no approval. (No compiled step names a node
     // yet; the compiler that writes such steps follows.) A read that throws is retried
-    // briefly first (nothing re-drives a dropped report); only then the stop.
-    const stopUnplacedPause = (error: string) =>
-      transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)
-        .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
+    // briefly first (nothing re-drives a dropped report); only then the stop. The
+    // stop takes this handler's failure path: a run with produced output that awaits
+    // review holds at that review, and the edge carries the claimed resume leg.
+    const stopUnplacedPause = async (error: string) => {
+      if (
+        await producedReviewHoldsRun({
+          runId,
+          orgId: run.orgId,
+          fromStatus,
+          stepResults: [],
+          withheld: { status: "failed", error },
+          authority,
+          resumeLeg: legFence?.resumeLeg,
+          where: "unplaced pause",
+        })
+      ) {
+        return;
+      }
+      await transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date(), ...legFence }, authority).catch((e) => {
+        if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+        throw e;
+      });
+    };
     const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
     if (!pauseRead.ok) {
       await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);

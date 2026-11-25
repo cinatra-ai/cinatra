@@ -87,6 +87,10 @@ function bindTemplate(t: unknown): void {
   else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
 }
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
+// The produced-output review question every failure edge asks first, and the claimed resume leg's bind.
+const holdMock = vi.hoisted(() => ({ holdRunForProducedReview: vi.fn(async (): Promise<{ held: boolean; reason: string }> => ({ held: false, reason: "no-produced-output" })) }));
+vi.mock("../run-produced-review-hold", () => holdMock);
+vi.mock("../run-transition", async (orig) => ({ ...(await orig<Record<string, unknown>>()), bindResumeLegToTask: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
 }));
@@ -476,5 +480,30 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(emitSpy).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
     stoppedWith("ARTIFACT_REVIEW_GATE_UNVERIFIED");
+  });
+
+  it("steps that cannot be read on a run whose produced output awaits review: the run holds at that review, it is not failed", async () => {
+    holdMock.holdRunForProducedReview.mockResolvedValueOnce({ held: true, reason: "parked" });
+    await pauseBound(null, OUTREACH);
+    expect(holdMock.holdRunForProducedReview).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run-rev-1", withheld: expect.objectContaining({ status: "failed", error: expect.stringMatching(/^PAUSE_POLICY_UNREAD: /) }) }),
+      TEST_AUTHORITY,
+    );
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith("run-rev-1", "running", "failed", expect.anything(), expect.anything());
+  });
+
+  it("an unverified node on a claimed resume leg: the stop carries the leg, so a stale leg cannot fail a newer attempt", async () => {
+    bindTemplate(makeTemplate(OUTREACH));
+    gateIndexSpy.mockResolvedValue(1);
+    const run = makeRun({ ...RUN_INPUTS });
+    await handleWayflowTaskState({
+      authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(null),
+      claimedGate: { a2aTaskId: "task-gate-0", executionAttemptId: "attempt-1" },
+    });
+    expect(storeMock.transitionRunStatus).toHaveBeenCalledWith(
+      "run-rev-1", "running", "failed",
+      expect.objectContaining({ error: expect.stringMatching(/^ARTIFACT_REVIEW_GATE_UNVERIFIED: /), resumeLeg: { a2aTaskId: "task-rev-1", executionAttemptId: "attempt-1" } }),
+      TEST_AUTHORITY,
+    );
   });
 });
