@@ -214,11 +214,6 @@ export type PinnedRunSnapshotFields = {
    * environment is bound at the seam, not on the template object).
    */
   executionEnvironment?: unknown;
-  /** cinatra#3089: the approval policy captured in this snapshot. The worker's
-   *  dispatch overlay ignores it; a pause of the run is classified by it. */
-  approvalPolicy?: unknown;
-  /** cinatra#3089: the package version the snapshot records (not the snapshot's own number); named in a refusal only. */
-  snapshotPackageVersion?: string | null;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -325,8 +320,6 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
-      approvalPolicy?: unknown;
-      packageVersion?: unknown;
     };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
@@ -344,8 +337,6 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec ?? null,
       executionEnvironment: s.executionEnvironment ?? null,
-      approvalPolicy: s.approvalPolicy,
-      snapshotPackageVersion: typeof s.packageVersion === "string" ? s.packageVersion : undefined,
     };
   }
 
@@ -360,8 +351,6 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
-      approvalPolicy?: unknown;
-      packageVersion?: unknown;
     };
     // A RESOLVED best-effort snapshot is authoritative for this run exactly as
     // it is for compiledPlan/taskSpec above — the environment does not fall back
@@ -371,8 +360,6 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec,
       executionEnvironment: s.executionEnvironment ?? null,
-      approvalPolicy: s.approvalPolicy,
-      snapshotPackageVersion: typeof s.packageVersion === "string" ? s.packageVersion : undefined,
     };
   }
 
@@ -381,32 +368,29 @@ export async function resolvePinnedRunSnapshot(
 }
 
 /**
- * cinatra#3089: the steps a pause is classified by: those of the flow that ran.
- * The dispatch runs the INSTALLED package (resolveWayflowUrl by package name) and
- * binds, beside the source it selected, the installed steps it read
- * (readRunPauseSteps; never the mutable template row, which a later install or
- * recompile rewrites while a task runs). A run served a pinned snapshot is
- * classified by the snapshot's steps only when they ARE the bound steps (by
- * content: canonicalPolicyText); no version string decides it (a snapshot's
- * number is not its package version). Else PausePolicyVersionMismatchError is
- * thrown (no retry; the run stops). No bound steps, a required pin that cannot be
- * served, a snapshot read that throws, or a served snapshot with no approval
- * policy throws: the caller retries, then stops; it never falls back to the live
- * row and never to no policy.
+ * cinatra#3089: the steps a pause is classified by. A dispatch binds, with the source the loader mounted and selected,
+ * the steps compiled from that source (compileMountedPauseSteps): what classifies a pause is the flow that runs, in an
+ * install's gap between its files and its row and after a failed reload too. A binding without them (written before
+ * they were bound: the rolling-upgrade rule) is classified as before, by the live template row (null when it cannot be
+ * read). Bound steps that cannot be read throw: the caller retries, then stops; it never reads the row for them.
  */
 export async function readPausePolicyTemplate(
-  run: { id: string; orgId: string; templateId: string; packageVersion: string | null; versionId: string | null },
-): Promise<Pick<AgentTemplateRecord, "approvalPolicy">> {
+  run: { id: string; orgId: string; templateId: string },
+): Promise<Pick<AgentTemplateRecord, "approvalPolicy"> | null> {
   const bound = await readRunPauseSteps(run.id, run.orgId);
-  const pinned = await resolvePinnedRunSnapshot(run, { readAgentTemplateVersionById, readAgentTemplateVersionBySemver });
-  if (!pinned) return { approvalPolicy: bound.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
-  if (pinned.approvalPolicy === undefined) {
-    throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
-  }
-  if (canonicalPolicyText(bound.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
-    throw new PausePolicyVersionMismatchError(pinned.snapshotPackageVersion ?? null, bound.packageVersion);
-  }
-  return { approvalPolicy: pinned.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
+  if (bound) return { approvalPolicy: bound.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
+  return readAgentTemplateById(run.templateId).catch(() => null);
+}
+
+/** cinatra#3089: the installer's own compile applied to the source the loader mounted (its bytes, digest-checked by
+ *  selectWayflowRunStepToolPolicy). The path names no directory (nothing exists under /dev/null), so no sibling
+ *  manifest is read from the install directory, which a reinstall may already have rewritten; the steps are compiled
+ *  before any sibling read. Null when the loader sent no source or it does not compile: the run's pauses then stop. */
+async function compileMountedPauseSteps(source: string | undefined, packageName: string | null | undefined): Promise<{ approvalPolicy: unknown } | null> {
+  if (source === undefined) return null;
+  const { compileOasAgentJson } = await import("./oas-compiler");
+  const compiled = await compileOasAgentJson({ packageName, oasSource: Buffer.from(source, "utf8"), oasSourcePath: "/dev/null/cinatra/oas.json" });
+  return compiled.ok ? { approvalPolicy: compiled.value.approvalPolicy } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +540,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, PAUSE_POLICY_VERSION_MISMATCH_TEXT, PausePolicyVersionMismatchError, canonicalPolicyText, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -2438,10 +2422,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
-    // cinatra#3089: ONE read of the template for this pause, used for every
-    // decision below (the renderer's too), with the policy of the version that
-    // ran (a pin to another version than the installed one stops the run:
-    // PAUSE_POLICY_VERSION_MISMATCH). A step that names its gate's node is the step of a pause
+    // cinatra#3089: ONE read of the steps for this pause (readPausePolicyTemplate:
+    // those bound from the source that runs), used for every decision below (the
+    // renderer's too). A step that names its gate's node is the step of a pause
     // by the pause's verified node, never by position. Without a verified node it
     // cannot be told whether this pause is such a review: the run is stopped
     // failed, the pause offered as no approval. The compiler accepts a flow with
@@ -2454,7 +2437,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
     const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
     if (!pauseRead.ok) {
-      await stopUnplacedPause(pauseRead.versionMismatch ? PAUSE_POLICY_VERSION_MISMATCH_TEXT : PAUSE_POLICY_UNREAD_TEXT);
+      await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
       return;
     }
     const pauseTemplate = pauseRead.value;
@@ -5327,11 +5310,10 @@ async function runAgentBuilderExecutionJobInner(
         executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
       const currentDispatchRun = await readAgentRunById(runId);
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
-      // cinatra#3089: the row as this dispatch read it before the selection; the bind reads it again after the
-      // selection and binds the steps beside the source only when the two reads agree.
+      // cinatra#3089: the steps that classify this run's pauses, compiled from the mounted source and bound with it.
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,
         executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority,
-        dispatchTemplateRead: { packageVersion: template.packageVersion ?? null, approvalPolicy: template.approvalPolicy } });
+        pauseSteps: await compileMountedPauseSteps(policy.mountedSource, template.packageName) });
       // cinatra#3745: the task's message names the attempt just bound (metadata, never
       // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
       // earlier attempt of this run cannot sign for this one.

@@ -49,8 +49,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
+  // cinatra#3089: a pause reads the steps its dispatch compiled from the mounted source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no pause steps were compiled from the source bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -67,13 +67,13 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
-// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
-// never a later template read; a template with no policy binds none, and the reader refuses.
+// cinatra#3089: the steps the dispatch compiled from the mounted source and bound with it: here the template's policy as
+// it was when the test bound it (a copy), never a later template read; with no policy, none compiled (the reader refuses).
 function bindTemplate(t: unknown): void {
   storeMock.readAgentTemplateById.mockResolvedValue(t as never);
-  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
-  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+  const read = t as { approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps were compiled from the source bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
 }
 vi.mock("../run-produced-review-hold", () => ({
   holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-produced-output" })),

@@ -62,62 +62,21 @@ export const PAUSE_POLICY_UNREAD = "PAUSE_POLICY_UNREAD";
 export const PAUSE_POLICY_UNREAD_TEXT =
   `${PAUSE_POLICY_UNREAD}: the steps of this flow could not be read for this pause in any of its read attempts, so it cannot be ` +
   "told whether this pause is an artifact review; the pause was not offered as an approval and the run was stopped";
-// cinatra#3089: the flow that runs is the INSTALLED package (one unversioned
-// directory per package name); its steps are bound with its source at dispatch.
-// A run pinned to a snapshot whose steps are not those bound steps ran another
-// flow than the snapshot's: the pause is classified by neither (never degraded
-// to an ordinary approval), and the run stops.
-export const PAUSE_POLICY_VERSION_MISMATCH = "PAUSE_POLICY_VERSION_MISMATCH";
-export const PAUSE_POLICY_VERSION_MISMATCH_TEXT =
-  `${PAUSE_POLICY_VERSION_MISMATCH}: the steps of the version this run is pinned to are not the steps of the installed flow ` +
-  "that ran, so it cannot be told which steps this pause belongs to; the pause was not offered as an approval and the run " +
-  "was stopped";
-export class PausePolicyVersionMismatchError extends Error {
-  readonly code = PAUSE_POLICY_VERSION_MISMATCH;
-  constructor(readonly pinnedVersion: string | null, readonly installedVersion: string | null) {
-    super(`${PAUSE_POLICY_VERSION_MISMATCH}: pinned snapshot of package ${String(pinnedVersion)}, installed ${String(installedVersion)}`);
-    this.name = "PausePolicyVersionMismatchError";
-  }
-}
-/** cinatra#3089: one text per policy CONTENT, whatever order its object keys were written in: keys sorted at every
- *  level, arrays kept in their order (a policy's step order is its step numbering; any other array compared in order can
- *  only stop a run, never match two different policies). Absent and `undefined` members are one (as JSON drops them).
- *  The text is written from the own keys directly, never by assigning them to an object, so an own key such as
- *  `__proto__` is a member like any other. */
-export function canonicalPolicyText(value: unknown): string {
-  const skip = (x: unknown) => x === undefined || typeof x === "function" || typeof x === "symbol";
-  const emit = (v: unknown): string => {
-    if (Array.isArray(v)) return `[${v.map((x) => (skip(x) ? "null" : emit(x))).join(",")}]`;
-    if (v === null || typeof v !== "object") return JSON.stringify(v) ?? "null";
-    const members: string[] = [];
-    for (const k of Object.keys(v).sort()) {
-      const x = Object.getOwnPropertyDescriptor(v, k)?.value;
-      if (!skip(x)) members.push(`${JSON.stringify(k)}:${emit(x)}`);
-    }
-    return `{${members.join(",")}}`;
-  };
-  return emit(value ?? null);
-}
 /** cinatra#3089: the waits between the attempts of a pause's template read. Nothing re-drives a pause report the
  *  handler drops (the dispatch's blocking send returns it once), so a fault is retried here, briefly, before a stop. */
 export const PAUSE_POLICY_READ_WAITS_MS: readonly number[] = [250, 1000];
-/** Reads with the waits above between attempts. `ok: false` when every attempt threw, or at once (`versionMismatch`)
- *  on a version mismatch, which a retry cannot change; a value (also `null`) is returned. */
+/** Reads with the waits above between attempts. `ok: false` when every attempt threw; a value (also `null`) is returned. */
 export async function readPausePolicyWithRetry<T>(
   read: () => Promise<T>,
   label: string,
   waitsMs: readonly number[] = PAUSE_POLICY_READ_WAITS_MS,
-): Promise<{ ok: true; value: T } | { ok: false; versionMismatch: boolean }> {
+): Promise<{ ok: true; value: T } | { ok: false }> {
   for (let attempt = 0; ; attempt += 1) {
     try {
       return { ok: true, value: await read() };
     } catch (err) {
-      if (err instanceof PausePolicyVersionMismatchError) {
-        console.warn(`[pause-policy] ${label} ${err.message}`);
-        return { ok: false, versionMismatch: true };
-      }
-      console.warn(`[pause-policy] ${label} template read attempt ${attempt + 1}/${waitsMs.length + 1} failed: ${err instanceof Error ? err.message : String(err)}`);
-      if (attempt >= waitsMs.length) return { ok: false, versionMismatch: false };
+      console.warn(`[pause-policy] ${label} read attempt ${attempt + 1}/${waitsMs.length + 1} failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (attempt >= waitsMs.length) return { ok: false };
       await new Promise((resolve) => setTimeout(resolve, waitsMs[attempt]));
     }
   }

@@ -4926,6 +4926,9 @@ def _mount_one_sync(
             f"{actual_sha256[:12]}… (refusing to mount)"
         )
     raw_text = raw_bytes.decode("utf-8")
+    # cinatra#3089: the mounted file's own text (sha256 = fingerprint), sent to
+    # the host with the binding: it compiles the run's pause steps from it.
+    mounted_text = raw_text
 
     # cinatra#1194 — loader-owned context-subflow injection. Runs on the
     # parsed PRE-substitution document (the template carries {{ENV}}
@@ -5037,6 +5040,7 @@ def _mount_one_sync(
         "executedSourceSha256": hashlib.sha256(substituted.encode("utf-8")).hexdigest(),
         "declarationSourceSha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
         "declarationSource": raw_text,
+        "mountedSource": mounted_text,
     })
     # Frozen host-only selection snapshot; a failed attachment
     # refuses the mount rather than minting step-only authority.

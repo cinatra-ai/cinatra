@@ -1,5 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createHmac } from "node:crypto";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 
 /**
  * cinatra#3745 - the canonical first WayFlow dispatch selects the loader's
@@ -18,8 +17,8 @@ const storeMock = vi.hoisted(() => ({
   readAgentRunByTaskId: vi.fn(),
   setAgentRunTokenHash: vi.fn(async () => {}),
   readAgentTemplateById: vi.fn(),
-  // cinatra#3089: a pause reads the steps its dispatch bound beside the source; none until the test binds them.
-  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no settled pause steps are bound to the run"); }),
+  // cinatra#3089: a pause reads the steps its dispatch compiled from the mounted source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no pause steps were compiled from the source bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -39,13 +38,13 @@ const storeMock = vi.hoisted(() => ({
   CINATRA_EXPECTED_SOURCE_MESSAGE_KEY: "__cinatra_expected_source__",
 }));
 vi.mock("../store", () => storeMock);
-// cinatra#3089: what the dispatch bound for a pause: the template's policy as it was when the test bound it (a copy),
-// never a later template read; a template with no policy binds none, and the reader refuses.
+// cinatra#3089: the steps the dispatch compiled from the mounted source and bound with it: here the template's policy as
+// it was when the test bound it (a copy), never a later template read; with no policy, none compiled (the reader refuses).
 function bindTemplate(t: unknown): void {
   storeMock.readAgentTemplateById.mockResolvedValue(t as never);
-  const read = t as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no settled pause steps are bound to the run"));
-  else storeMock.readRunPauseSteps.mockResolvedValue({ packageVersion: read.packageVersion ?? null, approvalPolicy: structuredClone(read.approvalPolicy) });
+  const read = t as { approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps were compiled from the source bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
 }
 
 vi.mock("../run-produced-review-hold", () => ({
@@ -310,83 +309,81 @@ describe("cinatra#4150 - the dispatch records the publish rows of the plan it ru
   });
 });
 
-// cinatra#3089: the dispatch runs the INSTALLED package (routed by its name), not the pinned
-// snapshot. Version 2 is installed over version 1 and a run requests version 1: the runtime double answers the send
-// with the pause the installed flow raised, and the real handler classifies it. The policy of a version that did not
-// produce the pause never classifies it.
-describe("cinatra#3089 - a pause is classified by the steps of the version that ran it", () => {
-  const KEY = "test-gate-node-key-3089-dispatch";
-  const savedKey = process.env.CINATRA_CONTEXT_ATTEST_KEY;
-  const drafts = (marked: boolean) => ({
-    stepNumber: 1, nodeType: "agent", requiresApproval: true, hitlOwnedBy: "self", gateCount: 1, xRenderer: "@test/drafting:review",
-    inputMessageSchema: { type: "object", properties: { userResponse: { type: "string" } } }, surfaceGateInputKeys: ["reviewTargets"],
-    ...(marked ? { artifactReviewTargetsInput: "reviewTargets", artifactReviewGateNode: "drafts-approval_gate" } : {}),
+// cinatra#3089: the steps that classify a run's pauses are compiled at dispatch from the source the loader mounted and
+// selected (its own file text, sent with the binding), by the installer's compile, and bound with that source. The
+// template row may already show another version: an install writes the runtime files before the row and reloads the
+// runtime only afterwards, best effort, and a reload can fail.
+describe("cinatra#3089 - the dispatch binds the steps of the source the loader mounted", () => {
+  const gate = (marked: boolean) => ({
+    component_type: "InputMessageNode", id: "approval_gate", name: "approval_gate",
+    metadata: { cinatra: { requiresApproval: true, ...(marked ? { artifactReview: { targetsInput: "reviewTargets" } } : {}) } },
+    outputs: [{ title: "approval_gate_out", type: "string" }],
   });
-  const pausedByInstalledFlow = () => {
-    const sig = createHmac("sha256", KEY).update("g1\nctx-3089\ntask-3089\ndrafts-approval_gate").digest("hex");
-    return {
-      id: "task-3089", contextId: "ctx-3089",
-      status: { state: "input-required", message: { parts: [] } },
-      metadata: { pendingApproval: { type: "object", properties: { userResponse: { type: "string" } } } },
-      history: [{ role: "agent", parts: [{ kind: "text", text: "Ready." }], metadata: { cinatra_gate_node: { node: "drafts-approval_gate", attestation: `g1:${sig}` } } }],
-    };
+  // A flow with one gate, marked for the per-artifact review or not (the shape of oas-compiler-artifact-review-marker).
+  const oas = (marked: boolean) => JSON.stringify({
+    agentspec_version: "26.1.0", component_type: "Flow", id: "review-flow", name: "Review Flow",
+    metadata: { cinatra: { type: "flow" } }, inputs: [{ title: "reviewTargets", type: "array" }], outputs: [],
+    start_node: { $component_ref: "startNode" },
+    nodes: [{ $component_ref: "startNode" }, { $component_ref: "approval_gate" }, { $component_ref: "endNode" }],
+    control_flow_connections: [
+      { component_type: "ControlFlowEdge", name: "e1", from_node: { $component_ref: "startNode" }, to_node: { $component_ref: "approval_gate" } },
+      { component_type: "ControlFlowEdge", name: "e2", from_node: { $component_ref: "approval_gate" }, to_node: { $component_ref: "endNode" } },
+    ],
+    $referenced_components: {
+      startNode: { component_type: "StartNode", id: "startNode", name: "Setup", inputs: [{ title: "reviewTargets", type: "array" }],
+        metadata: { cinatra: { required: [], hidden: ["reviewTargets"] } } },
+      approval_gate: gate(marked),
+      endNode: { component_type: "EndNode", id: "endNode", name: "End", outputs: [] },
+    },
+  });
+  const rowSteps = (marked: boolean) => [{ stepNumber: 1, nodeType: "input_message", requiresApproval: true,
+    ...(marked ? { artifactReviewTargetsInput: "reviewTargets" } : {}) }];
+  const mounted = (source: string | undefined) => storeMock.selectWayflowRunStepToolPolicy.mockImplementation(
+    async (input: { contextId: string }) => ({ version: 1, contextId: input.contextId, source: "{}",
+      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
+      ...(source === undefined ? {} : { mountedSource: source }) }));
+  const boundMarker = (call = 0) => {
+    const [{ pauseSteps }] = storeMock.bindRunStepToolPolicy.mock.calls[call]! as unknown as [{ pauseSteps: { approvalPolicy: { steps: Array<Record<string, unknown>> } } | null }];
+    return pauseSteps?.approvalPolicy.steps.find((st) => st.nodeType === "input_message")?.artifactReviewTargetsInput;
   };
-  async function dispatchPinnedToV1(installed: { version: string; marked: boolean }, v1Marked: boolean) {
-    storeMock.readAgentRunById.mockResolvedValue(makeRun({ versionId: "ver-1", packageVersion: "1.0.0", a2aContextId: "ctx-3089" }));
-    bindTemplate({ ...makeTemplate(), packageVersion: installed.version, approvalPolicy: { steps: [drafts(installed.marked)] } });
-    storeMock.readAgentTemplateVersionById.mockResolvedValue({ templateId: "tmpl-3745", semver: "1.0.0",
-      snapshot: { name: "test-template", description: null, sourceNl: "", compiledPlan: [], inputSchema: { type: "object", properties: {} },
-        outputSchema: null, approvalPolicy: { steps: [drafts(v1Marked)] }, type: "leaf", taskSpec: null, packageVersion: "1.0.0",
-        lgGraphCode: null, lgGraphId: null } } as never);
-    sendTask.mockImplementationOnce(async () => pausedByInstalledFlow() as never);
-    await run();
-  }
-  const failedWith = (code: string) => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string }]>)
-    .some(([id, from, to, patch]) => id === RUN_ID && from === "running" && to === "failed" && typeof patch?.error === "string" && patch.error.startsWith(`${code}: `));
-  const parked = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string]>)
-    .some(([, , to]) => to === "pending_approval");
 
   beforeEach(() => {
     vi.clearAllMocks();
-    process.env.CINATRA_CONTEXT_ATTEST_KEY = KEY;
-    storeMock.selectWayflowRunStepToolPolicy.mockImplementation(async (input: { contextId: string }) => ({
-      version: 1, contextId: input.contextId, source: "{}",
-      sourceSha256: "a".repeat(64), executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64),
-    }));
+    storeMock.readAgentRunById.mockResolvedValue(makeRun());
     storeMock.bindRunStepToolPolicy.mockResolvedValue(undefined);
   });
-  afterEach(() => {
-    if (savedKey === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
-    else process.env.CINATRA_CONTEXT_ATTEST_KEY = savedKey;
-  });
 
-  it("version 2 installed over version 1, a run requesting version 1: version 1's review marker does not classify the pause; the run stops", async () => {
-    await dispatchPinnedToV1({ version: "2.0.0", marked: false }, true);
+  it("the row shows version 2 with the marker removed, the loader mounted version 1 with it: the marker is bound", async () => {
+    bindTemplate({ ...makeTemplate(), packageVersion: "2.0.0", approvalPolicy: { steps: rowSteps(false) } });
+    mounted(oas(true));
+    await run();
+    // red-first-expect: expected undefined to be 'reviewTargets'
+    expect(boundMarker()).toBe("reviewTargets");
     expect(sendTask).toHaveBeenCalledTimes(1);
-    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(true);
-    expect(parked()).toBe(false);
   });
 
-  it("a review marker only the installed version 2 carries is never degraded to an ordinary approval of version 1", async () => {
-    await dispatchPinnedToV1({ version: "2.0.0", marked: true }, false);
-    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(true);
-    expect(parked()).toBe(false);
+  it("the row shows version 1 with the marker, the loader mounted version 2 without it: no marker is bound", async () => {
+    bindTemplate({ ...makeTemplate(), packageVersion: "1.0.0", approvalPolicy: { steps: rowSteps(true) } });
+    mounted(oas(false));
+    await run();
+    const [{ pauseSteps }] = storeMock.bindRunStepToolPolicy.mock.calls[0]! as unknown as [{ pauseSteps: unknown }];
+    expect(pauseSteps).not.toBeNull();
+    expect(boundMarker()).toBeUndefined();
   });
 
-  it("the dispatch hands the bind the template row it read before the selection, so the steps are bound beside the source", async () => {
-    await dispatchPinnedToV1({ version: "2.0.0", marked: true }, false);
-    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({
-      dispatchTemplateRead: { packageVersion: "2.0.0", approvalPolicy: { steps: [drafts(true)] } },
-    }));
-    expect(storeMock.bindRunStepToolPolicy.mock.invocationCallOrder[0]!).toBeGreaterThan(storeMock.selectWayflowRunStepToolPolicy.mock.invocationCallOrder[0]!);
+  it("a failed reload keeps version 1 mounted after the row moved to version 2: every later dispatch binds version 1's steps", async () => {
+    bindTemplate({ ...makeTemplate(), packageVersion: "2.0.0", approvalPolicy: { steps: rowSteps(false) } });
+    mounted(oas(true));
+    await run();
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledTimes(2);
+    expect([boundMarker(0), boundMarker(1)]).toEqual(["reviewTargets", "reviewTargets"]);
   });
 
-  it("the requested version is the installed one: the pause is classified as before, no version stop", async () => {
-    await dispatchPinnedToV1({ version: "1.0.0", marked: false }, false);
-    expect(sendTask).toHaveBeenCalledTimes(1);
-    // Read twice: by the dispatch's overlay, then by the pause's classification.
-    expect(storeMock.readAgentTemplateVersionById.mock.calls).toEqual([["ver-1"], ["ver-1"]]);
-    expect(failedWith("PAUSE_POLICY_VERSION_MISMATCH")).toBe(false);
-    expect(failedWith("PAUSE_POLICY_UNREAD")).toBe(false);
+  it("a loader that sends no mounted source: the bind records that no steps could be compiled, never the row's", async () => {
+    bindTemplate({ ...makeTemplate(), approvalPolicy: { steps: rowSteps(true) } });
+    mounted(undefined);
+    await run();
+    expect(storeMock.bindRunStepToolPolicy).toHaveBeenCalledWith(expect.objectContaining({ pauseSteps: null }));
   });
 });
