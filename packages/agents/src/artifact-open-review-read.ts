@@ -21,7 +21,7 @@ import "server-only";
 import { and, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "./db";
-import { isHumanDecisionFingerprint } from "./declared-review-pause";
+import { personApproved } from "./declared-review-pause";
 import { artifactReviewGates } from "./schema";
 
 /**
@@ -58,8 +58,9 @@ export async function isArtifactUnderOpenReview(args: {
  * `none`: no gate of this organization pins this revision. `open`: one does and
  * is still pending (an open review outranks an earlier settled one of the same
  * revision). `settled`: every gate that pins it is decided; the latest decision
- * names its disposition, and `decidedAt` only where a person decided to approve
- * (the decision-fact rule of `readGatePinnedTargets`), else null.
+ * names its disposition, and `decidedAt` only where a person approved it (the
+ * publish gate's own rule, `personApproved`: a person's fingerprint AND a person
+ * as decider of record), else null.
  *
  * A read that fails throws: only the caller knows what its surface draws when it
  * cannot tell.
@@ -83,6 +84,7 @@ export async function readArtifactRevisionReview(args: {
       status: artifactReviewGates.status,
       disposition: artifactReviewGates.disposition,
       fingerprint: artifactReviewGates.fingerprint,
+      resolvedBy: artifactReviewGates.resolvedBy,
       resolvedAt: artifactReviewGates.resolvedAt,
     })
     .from(artifactReviewGates)
@@ -102,8 +104,7 @@ export async function readArtifactRevisionReview(args: {
   if (!latest) return { status: "none" };
   const time = latest.resolvedAt;
   const decidedAt =
-    latest.disposition === "approve" &&
-    isHumanDecisionFingerprint(latest.fingerprint) &&
+    personApproved(latest) &&
     time instanceof Date &&
     Number.isFinite(time.getTime())
       ? time.toISOString()
