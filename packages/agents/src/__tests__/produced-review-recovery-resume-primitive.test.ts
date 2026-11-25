@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
@@ -473,4 +473,22 @@ describe("cinatra#3745 — agent_run_resume claims the gate before it records or
     expect(edges).toEqual([["pending_approval", "running"]]);
     expect(storeMock.updateAgentRunA2ATaskId).not.toHaveBeenCalled();
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
 });

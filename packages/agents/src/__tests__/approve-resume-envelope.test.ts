@@ -659,19 +659,24 @@ describe("the generic answer and the paused step's durable record", () => {
     runKeys.runOfTask.mockReset().mockResolvedValue(null);
   });
 
-  // red-first-expect: promise resolved "undefined" instead of rejecting
-  it("a pause on the display-only artifact-review redirect is refused and not consumed", async () => {
-    continueMock.readDurableHitlGateForContinue.mockResolvedValue(
-      gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
-    );
-    await expect(
-      approveReviewTaskInternal(TASK, "actor-1", { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" }),
-    ).rejects.toMatchObject({
-      name: "HitlStepNotAnswerableError",
-      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is an artifact review; it goes on only when that review is decided",
+  // A RUN PARKED AT AN ARTIFACT REVIEW, AS PRODUCTION RECORDS IT: the review's
+  // gate in the review store, the pause's task as the run's latest, and NO
+  // durable step row (the review park writes none).
+  for (const status of ["pending", "resolved"] as const) {
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    it(`a run parked at an artifact review (no durable row, review ${status}) is refused and not consumed`, async () => {
+      reviewStore.gates = [{ reviewTaskId: TASK, status }];
+      runKeys.latest.mockResolvedValue("task-r1");
+      continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(null);
+      await expect(
+        approveReviewTaskInternal(TASK, "actor-1", { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" }),
+      ).rejects.toMatchObject({
+        name: "HitlStepNotAnswerableError",
+        message: "WayFlow approval rejected: gate task-r1 on run run-r1 is an artifact review; it goes on only when that review is decided",
+      });
+      nothingMoved();
     });
-    nothingMoved();
-  });
+  }
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
   it("a durable record that cannot be read refuses with a fixed text; nothing is claimed or sent", async () => {
@@ -951,4 +956,22 @@ describe("a one-value answer without a resume text reaches the run", () => {
     await approveReviewTaskInternal(TASK, "actor-1", { approvalNote: " Looks good. " });
     expect(wayflowText()).toBe("Looks good.");
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
 });

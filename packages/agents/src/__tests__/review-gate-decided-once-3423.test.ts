@@ -22,7 +22,7 @@
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/review-gate-decided-once-3423.test.ts
  */
-import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
@@ -256,4 +256,22 @@ describe("approveReviewTaskInternal — two concurrent decisions on one gate", (
     // Nothing was dispatched, so the gate is put back the way it was found.
     expect(row.status).toBe("pending_approval");
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
 });

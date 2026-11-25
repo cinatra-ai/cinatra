@@ -31,6 +31,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import { currentHitlGateRefusal, failPreSendStep, readLatestGateTaskId, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
@@ -971,10 +972,10 @@ export async function approveReviewTaskInternal(
         message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
       });
     }
-    if (parkedStep && parked.refusal === "display-only") {
+    if (parked.refusal === "display-only") {
       throw new HitlStepNotAnswerableError({
         runId: run.id,
-        xRenderer: parkedStep.xRenderer,
+        xRenderer: parkedStep?.xRenderer ?? ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
         message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`,
       });
     }

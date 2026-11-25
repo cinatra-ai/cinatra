@@ -233,3 +233,21 @@ describe("the existing-table receipt is an additive fresh/upgrade schema change"
     expect(buildCreateStoreSchemaQueries("app").filter(q=>q.text.includes("dispatch_receipt"))).toEqual(queries);
   });
 });
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+});

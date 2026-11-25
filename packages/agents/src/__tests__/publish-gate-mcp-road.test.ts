@@ -4,7 +4,9 @@
 // Since cinatra#4245 the road takes the pause claim before its fence; the hold is read
 // before the claim and, on a publishing template or for a run with a decision, again
 // under the claim and before the fence.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 import * as midRun from "../orchestrator-mid-run-hitl";
 
@@ -620,12 +622,76 @@ describe("agent_run_resume and the paused step's durable record", () => {
     nothingMoved();
   });
 
-  // red-first-expect: to not be called at all, but actually been called 1 times
-  it("a pause on the display-only artifact-review redirect is refused and not consumed", async () => {
-    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+  // A RUN PARKED AT AN ARTIFACT REVIEW, AS PRODUCTION RECORDS IT: the review
+  // park opens the review's gate in the review store, keys the pause's task as
+  // the run's latest and parks the run under it, and writes NO durable step row.
+  const REVIEW_REFUSAL = "Run run-1 is paused at an artifact review; it goes on only when that review is decided.";
+  const parkAtReview = (status: "pending" | "resolved" = "pending") => {
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status }];
+    latestKey.mockResolvedValue("task-1");
+    durableGate.read.mockResolvedValue(null);
+    durableGate.current.mockResolvedValue(null);
+  };
+
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a run parked at an artifact review (no durable row) is refused and nothing is dispatched", async () => {
+    parkAtReview();
     const answer = (await resume()) as { error?: string };
-    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
-    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a review of several artifacts (a gate per artifact) refuses the same way", async () => {
+    parkAtReview();
+    reviewStore.gates = [
+      { reviewTaskId: "wayflow-task-1", status: "resolved" },
+      { reviewTaskId: "wayflow-task-1#2", status: "pending" },
+    ];
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  // AFTER THE DECISION: the review's resume delivery alone moves the run on.
+  // Until it has, a late resume is refused, so the pause is never resumed twice.
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a late resume after the review is decided, before its delivery moved the run, is refused", async () => {
+    parkAtReview("resolved");
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  it("once the delivery moved the run to its next pause, a resume answers that pause, not the review", async () => {
+    parkAtReview("resolved");
+    storeMock.readAgentRunById.mockResolvedValue({ ...pausedRun(), a2aTaskId: "task-2" });
+    latestKey.mockResolvedValue("task-2");
+    await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the review's own decision road does not take this refusal: its delivery is the one road that continues the run", () => {
+    const delivery = readFileSync(join(__dirname, "../artifact-review-resume-delivery.ts"), "utf8");
+    expect(delivery).not.toMatch(/currentHitlGateRefusal/);
+    expect(delivery).toMatch(/claimPause\(/);
+  });
+
+  it("a review gate of an earlier pause does not refuse the step the run waits at now", async () => {
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-0", status: "resolved" }];
+    latestKey.mockResolvedValue("task-1");
+    await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: to be 'Run run-1 cannot be resumed: its paus
+  it("an unreadable review store refuses with the fixed text; nothing is claimed or sent", async () => {
+    const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> }).__cinatraArtifactReviewGateSeam!;
+    seam.listGates = async () => { throw new Error("permission denied for table artifact_review_gates"); };
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe("Run run-1 cannot be resumed: its paused step could not be read.");
     nothingMoved();
   });
 
@@ -638,7 +704,7 @@ describe("agent_run_resume and the paused step's durable record", () => {
     nothingMoved();
   });
 
-  it("no durable record (a real null) is resumed as before", async () => {
+  it("no durable record (a real null) and no review gate is resumed as before", async () => {
     await resume();
     expect(durableGate.read).toHaveBeenCalledWith("run-1", "wayflow-task-1");
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
@@ -722,4 +788,22 @@ describe("agent_run_resume and the paused step's durable record", () => {
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
 });

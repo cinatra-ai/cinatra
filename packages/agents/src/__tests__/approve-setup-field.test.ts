@@ -17,7 +17,7 @@
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/approve-setup-field.test.ts
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // The WayFlow answer reads the paused step's durable record and refuses when that
 // read fails. These cases are about other questions: the run has no such record.
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
@@ -1279,4 +1279,22 @@ describe("approveReviewTaskInternal — wayflow-* sourceType guard", () => {
       })(),
     ).rejects.not.toThrow(/WayFlow path requires internal template/);
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates through the bound seam). `reviewStore.gates`:
+// the gates the store holds for the run, none by default.
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
 });
