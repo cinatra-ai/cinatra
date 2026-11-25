@@ -598,6 +598,8 @@ describe("agent_run_resume and the paused step's durable record", () => {
 
   // red-first-expect: to be called with arguments: [ 'run-1' ]
   it("a display-only row under the run's stale task does not refuse an answerable current gate", async () => {
+    // The run's latest-task key names the newer task: the task column (task-1) is stale.
+    latestKey.mockResolvedValue("task-2");
     durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
     durableGate.current.mockResolvedValue({
       ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
@@ -627,7 +629,7 @@ describe("agent_run_resume and the paused step's durable record", () => {
   // the run's latest and parks the run under it, and writes NO durable step row.
   const REVIEW_REFUSAL = "Run run-1 is paused at an artifact review; it goes on only when that review is decided.";
   const parkAtReview = (status: "pending" | "resolved" = "pending") => {
-    reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status }];
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status, orgId: "org-1" }];
     latestKey.mockResolvedValue("task-1");
     durableGate.read.mockResolvedValue(null);
     durableGate.current.mockResolvedValue(null);
@@ -645,8 +647,8 @@ describe("agent_run_resume and the paused step's durable record", () => {
   it("a review of several artifacts (a gate per artifact) refuses the same way", async () => {
     parkAtReview();
     reviewStore.gates = [
-      { reviewTaskId: "wayflow-task-1", status: "resolved" },
-      { reviewTaskId: "wayflow-task-1#2", status: "pending" },
+      { reviewTaskId: "wayflow-task-1", status: "resolved", orgId: "org-1" },
+      { reviewTaskId: "wayflow-task-1#2", status: "pending", orgId: "org-1" },
     ];
     const answer = (await resume()) as { error?: string };
     expect(answer.error).toBe(REVIEW_REFUSAL);
@@ -678,8 +680,27 @@ describe("agent_run_resume and the paused step's durable record", () => {
     expect(delivery).toMatch(/claimPause\(/);
   });
 
+  // THE EXECUTOR'S FALLBACK: a review gate that does not hold the pause (decided
+  // earlier, or another organization's) makes the executor park the pause as an
+  // ordinary step, with that step's durable row. It is resumed, once.
+  for (const review of [
+    { why: "resolved earlier", status: "resolved", orgId: "org-1" },
+    { why: "another organization's", status: "pending", orgId: "org-other" },
+  ]) {
+    it(`the fallback's ordinary step beside a review gate ${review.why} is resumed once`, async () => {
+      reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status: review.status, orgId: review.orgId }];
+      latestKey.mockResolvedValue("task-1");
+      durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+      durableGate.current.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+      const answer = (await resume()) as { error?: string };
+      expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
+      expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    });
+  }
+
   it("a review gate of an earlier pause does not refuse the step the run waits at now", async () => {
-    reviewStore.gates = [{ reviewTaskId: "wayflow-task-0", status: "resolved" }];
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-0", status: "resolved", orgId: "org-1" }];
     latestKey.mockResolvedValue("task-1");
     await resume();
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
@@ -793,7 +814,7 @@ describe("agent_run_resume and the paused step's durable record", () => {
 // THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
 // the run's artifact review gates through the bound seam). `reviewStore.gates`:
 // the gates the store holds for the run, none by default.
-const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }> };
 const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
 let seamBeforeTest: Record<string, unknown> | undefined;
 beforeEach(() => {

@@ -565,6 +565,7 @@ import {
   normalizeReviewTargets,
   planPerArtifactReviewGates,
   resolveDeclaredReviewTargets,
+  reviewGateHoldsPause,
 } from "@/lib/artifacts/artifact-review-target";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
@@ -2831,7 +2832,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
                 `(fail-closed against a dual path)`,
             );
             routeToReviewSurface = true;
-          } else if (reread && reread.orgId === run.orgId && reread.status === "pending") {
+          } else if (reread && reviewGateHoldsPause(reread, run.orgId)) {
             const actualPins = normalizeReviewTargets(reread.targets);
             pinnedTargets = actualPins.ok ? actualPins.targets : null;
             console.warn(

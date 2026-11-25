@@ -203,6 +203,7 @@ function setupRun(): void {
     templateId: "tpl-int",
     status: "pending_approval",
     a2aContextId: "ctx-r1",
+    orgId: "org-r1",
   });
   storeMock.readAgentTemplateById.mockResolvedValue({
     id: "tpl-int",
@@ -661,11 +662,12 @@ describe("the generic answer and the paused step's durable record", () => {
 
   // A RUN PARKED AT AN ARTIFACT REVIEW, AS PRODUCTION RECORDS IT: the review's
   // gate in the review store, the pause's task as the run's latest, and NO
-  // durable step row (the review park writes none).
+  // durable step row (the review park writes none). Pending: the review holds
+  // the pause; resolved: it was decided and its delivery has not yet moved the run.
   for (const status of ["pending", "resolved"] as const) {
     // red-first-expect: promise resolved "undefined" instead of rejecting
     it(`a run parked at an artifact review (no durable row, review ${status}) is refused and not consumed`, async () => {
-      reviewStore.gates = [{ reviewTaskId: TASK, status }];
+      reviewStore.gates = [{ reviewTaskId: TASK, status, orgId: "org-r1" }];
       runKeys.latest.mockResolvedValue("task-r1");
       continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(null);
       await expect(
@@ -675,6 +677,24 @@ describe("the generic answer and the paused step's durable record", () => {
         message: "WayFlow approval rejected: gate task-r1 on run run-r1 is an artifact review; it goes on only when that review is decided",
       });
       nothingMoved();
+    });
+  }
+
+  // THE EXECUTOR'S FALLBACK: a review gate that does not hold the pause (decided
+  // earlier, or another organization's) makes the executor park the pause as an
+  // ordinary step, with that step's durable row. It is answered, once.
+  for (const review of [
+    { why: "resolved earlier", status: "resolved", orgId: "org-r1" },
+    { why: "another organization's", status: "pending", orgId: "org-other" },
+  ]) {
+    it(`the fallback's ordinary step beside a review gate ${review.why} is answered once`, async () => {
+      reviewStore.gates = [{ reviewTaskId: TASK, status: review.status, orgId: review.orgId }];
+      runKeys.latest.mockResolvedValue("task-r1");
+      continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+      continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+      await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     });
   }
 
@@ -961,7 +981,7 @@ describe("a one-value answer without a resume text reaches the run", () => {
 // THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
 // the run's artifact review gates through the bound seam). `reviewStore.gates`:
 // the gates the store holds for the run, none by default.
-const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string }> };
+const reviewStore = { gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }> };
 const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
 let seamBeforeTest: Record<string, unknown> | undefined;
 beforeEach(() => {

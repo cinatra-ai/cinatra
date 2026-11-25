@@ -69,7 +69,7 @@ export type ArtifactReviewGateSeam = {
    *  the per-artifact routing needs: a review that opens one gate per artifact
    *  sends the person to the first artifact still waiting to be read, and only
    *  the run's own gate list can say which that is. */
-  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
+  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string; orgId: string }>>;
   /** cinatra#4762 — every review this run owns, projected to what the publish gate needs to see that an approved review
    *  came before it in the attempt that reached it: the gate's id, the status, the settled disposition, when the review
    *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
@@ -126,7 +126,7 @@ export function bindArtifactReviewGateSeam(): void {
     },
     async listGates(runId) {
       const gates = await listReviewGatesForRun(runId);
-      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
+      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status, orgId: gate.orgId }));
     },
     async listReviews(runId, executor) {
       const gates = executor === undefined

@@ -31,7 +31,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
 import { AGENT_BUILDER_ID_SCOPE, ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import { hitlStepIsRetired } from "./orchestrator-mid-run-hitl";
-import { baseReviewTaskId } from "@/lib/artifacts/artifact-review-target";
+import { baseReviewTaskId, reviewGateHoldsPause } from "@/lib/artifacts/artifact-review-target";
 import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
@@ -77,12 +77,13 @@ async function packageScreenIsDeclared(xRenderer: string): Promise<boolean> {
 }
 
 /**
- * The run's artifact review gates (their task ids), read through the review
+ * The run's artifact review gates (task id, status, organization), read through the review
  * store's seam as the run executor reaches it (execution.ts): the store is never
  * imported here, so no route's graph grows. An unbound seam is a read error.
  */
-async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<{ reviewTaskId: string }>> {
-  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listGates?: (runId: string) => Promise<Array<{ reviewTaskId: string }>> } })
+type ReviewGateOfRun = { reviewTaskId: string; status: string; orgId: string };
+async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<ReviewGateOfRun>> {
+  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { listGates?: (runId: string) => Promise<ReviewGateOfRun[]> } })
     .__cinatraArtifactReviewGateSeam;
   if (typeof seam?.listGates !== "function") throw new Error("the review store is not bound");
   return seam.listGates(runId);
@@ -117,21 +118,29 @@ async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<{ reviewTa
  *     only its own decision consumes it.
  * Every other recorded renderer id is left to the road, as before.
  *
- * AN ARTIFACT REVIEW IS READ FROM THE REVIEW STORE, NOT FROM A DURABLE ROW: the
- * review park (execution.ts) opens its gate in the review store and parks the
- * run, and writes no durable step row. So before any row is read: a run whose
+ * AN ARTIFACT REVIEW IS DECIDED AS THE EXECUTOR DECIDED IT WHEN IT PARKED. The
+ * executor routes a marked gate's pause to the display-only review when a gate
+ * of the review store holds it (`reviewGateHoldsPause`: pending, this run, this
+ * organization) and parks the run with no durable step row; on any other gate
+ * (resolved, another organization's) it falls back to an ordinary step and
+ * writes that step's durable row. So, for a review gate whose task is the
  * current pause (`gateTaskIsCurrentPause`, by the same run row and latest-task
- * key) is the WayFlow task of one of its review gates, pending or decided, is
- * refused as `display-only` (`gate: null`). Only the review's own decision
- * continues it, through the review's resume delivery; a decided review whose
- * delivery has not yet moved the run is refused too, so nothing resumes it twice.
+ * key):
+ *   - a durable ordinary row of that task is the fallback's step: it is
+ *     answered as any step, whatever review gates exist;
+ *   - with no such row, a gate that holds the pause refuses as `display-only`
+ *     (`gate: null`), and so does this organization's gate once decided: its
+ *     review's resume delivery alone moves the run on, and until it has, a late
+ *     answer is refused, so nothing resumes the pause twice. The fallback has
+ *     its durable row; the decided review's window has none;
+ *   - another organization's gate refuses nothing.
  *
  * A row or a gate that cannot be read throws; each road refuses with its own
  * fixed text. `latestTaskId`: the key as the road read it; left out, it is read
  * here when a row or a gate needs it.
  */
 export async function currentHitlGateRefusal(input: {
-  readonly run: { readonly id: string; readonly status: string; readonly a2aTaskId?: string | null };
+  readonly run: { readonly id: string; readonly orgId: string; readonly status: string; readonly a2aTaskId?: string | null };
   readonly namedReviewTaskId?: string;
   readonly latestTaskId?: string | null;
 }): Promise<{ gate: DurableHitlGateArtifact | null; refusal: "stale" | "retired" | "display-only" | null }> {
@@ -142,16 +151,20 @@ export async function currentHitlGateRefusal(input: {
     (latestRead ??= input.latestTaskId !== undefined ? Promise.resolve(input.latestTaskId) : readLatestGateTaskId(run.id));
   const flowTask = (reviewTaskId: string): string =>
     reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX) ? reviewTaskId.slice(FLOW_GATE_TASK_PREFIX.length) : "";
+  const gate = await readCurrentDurableHitlGate(run.id);
   if (run.status === "pending_approval") {
     const reviews = await reviewGatesOfRun(run.id);
-    if (reviews.length > 0) {
-      const latest = await latestKey();
-      if (reviews.some((review) => gateTaskIsCurrentPause(pause, flowTask(baseReviewTaskId(review.reviewTaskId)), latest))) {
-        return { gate: null, refusal: "display-only" };
-      }
-    }
+    const latest = reviews.length > 0 ? await latestKey() : null;
+    const heldAtReview = reviews.some((review) => {
+      const task = flowTask(baseReviewTaskId(review.reviewTaskId));
+      if (!gateTaskIsCurrentPause(pause, task, latest)) return false;
+      const fallbackStep = gate !== null && gate.reviewTaskId === `${FLOW_GATE_TASK_PREFIX}${task}`
+        && gate.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID;
+      if (fallbackStep) return false;
+      return reviewGateHoldsPause(review, run.orgId) || (review.orgId === run.orgId && review.status === "resolved");
+    });
+    if (heldAtReview) return { gate: null, refusal: "display-only" };
   }
-  const gate = await readCurrentDurableHitlGate(run.id);
   if (!gate) return { gate: null, refusal: null };
   if (namedReviewTaskId === undefined || gate.reviewTaskId !== namedReviewTaskId) {
     const rowTask = flowTask(gate.reviewTaskId);

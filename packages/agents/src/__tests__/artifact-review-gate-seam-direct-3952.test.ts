@@ -95,8 +95,8 @@ describe("the actual artifact-review gate seam", () => {
     const seam = boundSeam();
     expect(seam.listGates).toBeTypeOf("function");
     expect(await seam.listGates(runId)).toEqual([
-      { reviewTaskId, status },
-      { reviewTaskId: "gate-next", status: "pending" },
+      { reviewTaskId, status, orgId },
+      { reviewTaskId: "gate-next", status: "pending", orgId },
     ]);
     expect(store.listReviewGatesForRun).toHaveBeenCalledExactlyOnceWith(runId);
   });
