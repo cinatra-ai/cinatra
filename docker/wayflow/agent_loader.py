@@ -128,6 +128,15 @@ _WAYFLOW_EXECUTION_ATTEMPT: contextvars.ContextVar[str] = contextvars.ContextVar
     "_WAYFLOW_EXECUTION_ATTEMPT", default=""
 )
 
+#: cinatra#3745: the publish decision the current task's own A2A message named
+#: (message metadata CINATRA_PUBLISH_DECISION_MESSAGE_KEY): a publish release
+#: names the decision it released. Set per task in the patched run_task and
+#: signed (`s3`) beside the step pair, so a call of this visit of a publishing
+#: step can be told from a call of an earlier visit. "" when the message names none.
+_WAYFLOW_PUBLISH_DECISION: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_WAYFLOW_PUBLISH_DECISION", default=""
+)
+
 #: Stores the fasta2a context_id for the task currently executing in this
 #: asyncio task / coroutine chain. Reset to "" between tasks.
 _WAYFLOW_CONTEXT_ID: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -163,6 +172,11 @@ CINATRA_RUN_TOKEN_MESSAGE_KEY = "__cinatra_run_token__"
 #: equal CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY in src/lib/agent-run-token.ts.
 CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY = "__cinatra_execution_attempt__"
 
+#: cinatra#3745: the reserved message-metadata key under which a publish
+#: release names its decision. MUST equal CINATRA_PUBLISH_DECISION_MESSAGE_KEY
+#: in src/lib/agent-run-token.ts (a cross-language ABI with no shared import).
+CINATRA_PUBLISH_DECISION_MESSAGE_KEY = "__cinatra_publish_decision__"
+
 #: cinatra#3745: the longest context id, step id or attempt the runtime signs in
 #: an ``s2`` pair. MUST equal RUN_SOURCE_PROOF_FIELD_MAX_CHARS in
 #: src/lib/agent-run-token.ts: the application refuses a longer value, so the
@@ -193,6 +207,29 @@ def _execution_attempt_from_message(message: Any) -> str:
     ):
         return ""
     return attempt
+
+def _publish_decision_from_message(message: Any) -> str:
+    """The publish decision a task's A2A message names in its metadata, or "".
+
+    Read only from ``message["metadata"]`` (the gate's answer text is never
+    read), with the attempt's rules: a string of 1 to 512 characters without a
+    line break. Any other shape names no decision.
+    """
+    if not isinstance(message, dict):
+        return ""
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    decision = metadata.get(CINATRA_PUBLISH_DECISION_MESSAGE_KEY)
+    if (
+        not isinstance(decision, str)
+        or not decision
+        or len(decision) > _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+        or "\n" in decision
+        or "\r" in decision
+    ):
+        return ""
+    return decision
 
 #: Default HTTP timeout (in seconds) applied to any ApiNode call that does
 #: not declare its own. 24 hours — matches the OpenAI batch API SLA upper
@@ -1236,6 +1273,8 @@ def _patch_api_call_step_bridge_token() -> None:
                         "x-cinatra-declaration-source",
                         "x-cinatra-raw-source",
                         "x-cinatra-execution-attempt",
+                        "x-cinatra-publish-decision",
+                        "x-cinatra-publish-decision-attestation",
                     ):
                         del request["headers"][_hname]
                 _step_id = getattr(self, "id", "") or ""
@@ -1272,6 +1311,28 @@ def _patch_api_call_step_bridge_token() -> None:
                     request["headers"]["X-Cinatra-Step-Attestation"] = (
                         f"s2:{_step_expiry}:{_step_sig}"
                     )
+                    # cinatra#3745: the publish decision of this task's visit,
+                    # signed over the same values plus the decision id and this
+                    # call's s2 signature (`s3`), with the s2 expiry, in headers
+                    # of its own so the s2 pair stays unchanged.
+                    _decision = _WAYFLOW_PUBLISH_DECISION.get()
+                    if (
+                        _decision
+                        and "\n" not in _decision
+                        and "\r" not in _decision
+                        and len(_decision) <= _RUN_SOURCE_PROOF_FIELD_MAX_CHARS
+                    ):
+                        _decision_sig = hmac.new(
+                            attest_key.encode("utf-8"),
+                            f"s3\n{_ctx_id}\n{_step_id}\n{_attempt}\n{_loaded['sourceSha256']}\n{_loaded['executedSourceSha256']}\n{_loaded['declarationSourceSha256']}\n{_decision}\n{_step_sig}\n{_step_expiry}".encode(
+                                "utf-8"
+                            ),
+                            hashlib.sha256,
+                        ).hexdigest()
+                        request["headers"]["X-Cinatra-Publish-Decision"] = _decision
+                        request["headers"]["X-Cinatra-Publish-Decision-Attestation"] = (
+                            f"s3:{_step_expiry}:{_decision_sig}"
+                        )
         # ApiNode timeout policy — aligned for batch LLM workloads.
         #
         # Default httpx timeout is 5 s. Real-world ApiNode calls span:
@@ -1639,6 +1700,7 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
         _snap_token = None
         _source_token = None
         _attempt_token = None
+        _decision_token = None
 
         try:
             task = await self.storage.load_task(params["id"])
@@ -1687,6 +1749,10 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # cinatra#3745: the execution attempt THIS task's own message named.
             _attempt_token = _WAYFLOW_EXECUTION_ATTEMPT.set(
                 _execution_attempt_from_message(params.get("message"))
+            )
+            # cinatra#3745: the publish decision THIS task's own message named.
+            _decision_token = _WAYFLOW_PUBLISH_DECISION.set(
+                _publish_decision_from_message(params.get("message"))
             )
 
             # cinatra#1194 — template-version-per-run: what executes is no
@@ -1967,6 +2033,8 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
             # capture never performed. Reset the run token first (LIFO wrt set).
             if _snap_token is not None:
                 _STEP_SNAPSHOT_RECORDER.reset(_snap_token)
+            if _decision_token is not None:
+                _WAYFLOW_PUBLISH_DECISION.reset(_decision_token)
             if _attempt_token is not None:
                 _WAYFLOW_EXECUTION_ATTEMPT.reset(_attempt_token)
             if _source_token is not None:

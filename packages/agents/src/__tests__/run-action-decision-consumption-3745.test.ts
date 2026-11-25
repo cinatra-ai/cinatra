@@ -204,7 +204,6 @@ function tableName(table: unknown): string {
 
 // The module is new with cinatra#3745. It is loaded inside each test, not at the top of the file: before the change
 // the file still loads and each test fails on the missing module.
-// red-first-expect: Cannot find module '/src/run-action-decision-consumption'
 const loadModule = () => import("../run-action-decision-consumption");
 async function consume(input: unknown) {
   const { consumeRunActionDecision } = await loadModule();
@@ -291,25 +290,25 @@ describe("the person's affirmative decision for the run's action, used once", ()
     let park: Promise<unknown> | null = null;
     // The new decision arrives right after the consumption chose the released one, and is given time to commit.
     h.afterDecisionRead = async () => { park = newPark(); await pause(); };
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     await park;
     expect(result).toMatchObject({ decisionId: "decision-1" });
     // Serialized: the consumption committed first, so the released decision was still the newest when it was used.
     expect(h.commits).toEqual(["consumption", "decision"]);
-    // The new open decision now holds the step.
-    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
+    // The step now has two decisions: a call that names none cannot be told apart, and the used one stays used.
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    await expect(consume(input({ publishDecisionId: "decision-1" })))
+      .rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
     expect(consumptions()).toHaveLength(1);
   });
 
-  it("a consumption waits for a new decision of the step that is being written, then refuses the older released one", async () => {
+  it("a consumption waits for a new decision of the step that is being written, then sees two decisions and refuses", async () => {
     await loadModule();
     h.lockRuns = true;
     let release!: () => void;
     h.parkHold = new Promise<void>((resolve) => { release = resolve; });
     const park = newPark();
     await pause();
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const consumption = consume(input()).catch((e: unknown) => e);
     await pause();
     // The consumption waits at the run row: it has not read the binding yet.
@@ -317,7 +316,7 @@ describe("the person's affirmative decision for the run's action, used once", ()
     expect(h.calls).not.toContain("lock:binding:update");
     release();
     await park;
-    expect(await consumption).toMatchObject({ code: "action_person_decision_open" });
+    expect(await consumption).toMatchObject({ code: "action_decision_binding_missing" });
     expect(h.commits).toEqual(["decision"]);
     expect(consumptions()).toEqual([]);
   });
@@ -345,12 +344,28 @@ describe("the person's affirmative decision for the run's action, used once", ()
     expect(consumptions()).toEqual([]);
   });
 
-  it("judges the newest decision of the step: a newer open decision holds an older released one", async () => {
+  it("with no binding, refuses two decisions of the step whatever the newest one's status is", async () => {
     await loadModule();
-    h.tables.set(agentRunPublishDecisions, [decision(),
-      decision({ id: "decision-2", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
-        createdAt: new Date("2026-11-24T11:00:00Z") })]);
-    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
+    const newer = (over: Row) => decision({ id: "decision-2", gateTaskId: "gate-task-2",
+      createdAt: new Date("2026-11-24T11:00:00Z"), ...over });
+    const cases: Array<[string, Row]> = [
+      ["parked", { status: "parked", decidedBy: null, decidedAt: null }],
+      ["declined", { status: "declined" }],
+      ["expired", { status: "expired", decidedBy: null }],
+      ["released", {}],
+    ];
+    for (const [name, over] of cases) {
+      h.tables.set(agentRunPublishDecisions, [decision(), newer(over)]);
+      await expect(consume(input()), name).rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    }
+    // The newest one released and already used: still not told apart, so the same refusal and no new use.
+    h.tables.set(agentRunPublishDecisions, [decision(), newer({})]);
+    await consume(input({ publishDecisionId: "decision-2" }));
+    await expect(consume(input()), "consumed").rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    // The older one released and the newest one open: the older one is not served either.
+    h.tables.set(agentRunPublishDecisions, [decision(), newer({ status: "parked", decidedBy: null, decidedAt: null })]);
+    await expect(consume(input()), "older released").rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-2"]);
   });
 
   it("refuses a decision for another step", async () => {
@@ -394,7 +409,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
   it("consumes once a released decision with no generation: a row of an older node is current until a reset", async () => {
     await loadModule();
     h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: null })]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
     const result = await consume(input());
     expect(result).toMatchObject({ consumptionKey: "publish_decision:decision-1", decidedBy: "user-7" });
     await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
@@ -405,10 +419,10 @@ describe("the person's affirmative decision for the run's action, used once", ()
     for (const where of h.decisionWhere) expect(holdsChunk(where, CURRENT_ATTEMPT)).toBe(true);
   });
 
-  it("picks the database's newest of two decisions inside one millisecond, never a re-sort at millisecond precision", async () => {
+  it("refuses two decisions inside one millisecond with no binding, and reads them in the store's order", async () => {
     await loadModule();
     // The same millisecond for JavaScript; the database holds the open one 400 microseconds later. Its id sorts below the
-    // older released one, so a millisecond re-sort with an id tiebreak would wrongly pick the released decision.
+    // older released one. With no binding neither is picked, whatever their order.
     const ms = new Date("2026-11-24T11:00:00.123Z");
     const base = ms.getTime() * 1000; // microseconds, within the safe integer range
     h.tables.set(agentRunPublishDecisions, [
@@ -416,10 +430,9 @@ describe("the person's affirmative decision for the run's action, used once", ()
       decision({ id: "decision-a", gateTaskId: "gate-task-2", status: "parked", decidedBy: null, decidedAt: null,
         createdAt: ms, createdAtMicros: base + 500 }),
     ]);
-    // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
-    await expect(consume(input())).rejects.toMatchObject({ code: "action_person_decision_open" });
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_decision_binding_missing" });
     expect(consumptions()).toEqual([]);
-    // The read orders as the store does (created_at, then id, newest first) and takes one row.
+    // The read orders as the store does (created_at, then id, newest first).
     const { PgDialect } = await import("drizzle-orm/pg-core");
     const { sql } = await import("drizzle-orm");
     const order = h.decisionOrder.at(-1) ?? [];
@@ -442,7 +455,6 @@ describe("the person's affirmative decision for the run's action, used once", ()
       { declaredRows: "[{" }, { declaredRows: JSON.stringify([{ label: "Subject" }]) }];
     for (const over of malformed) {
       h.tables.set(agentRunPublishDecisions, [decision(over)]);
-      // red-first-expect: Cannot find module '/src/run-action-decision-consumption'
       const refused = await consume(input()).catch((e: unknown) => e as Error & { code?: string });
       expect(refused).toMatchObject({ code: "action_person_decision_invalid" });
       expect(String((refused as Error).message)).not.toMatch(/not json|Subject/);
@@ -490,5 +502,114 @@ describe("the person's affirmative decision for the run's action, used once", ()
     expect(org).toMatchObject({ code: "action_person_decision_unavailable" });
     expect(String((org as Error).message)).not.toContain("org-7");
     expect(consumptions()).toEqual([]);
+  });
+});
+
+// A step entered twice in one attempt signs the same source-bound proof on both visits, and each visit has its own
+// decision. The call names the decision of its own visit (the binding the runtime signed beside the proof); the
+// consumption uses exactly that decision.
+describe("the decision of the call's own visit (cinatra#3745)", () => {
+  // The second visit: a newer released decision of the same run and step, with its own gate task.
+  const secondVisit = (over: Row = {}) => decision({ id: "decision-2", gateTaskId: "gate-task-2",
+    decidedAt: new Date("2026-11-24T11:30:00Z"), createdAt: new Date("2026-11-24T11:00:00Z"), ...over });
+  const bound = (publishDecisionId: unknown, over: Record<string, unknown> = {}) => input({ publishDecisionId, ...over });
+
+  it("a delayed call of the first visit, after the second release, never uses the second visit's decision", async () => {
+    await loadModule();
+    await consume(bound("decision-1"));
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    await expect(consume(bound("decision-1"))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1"]);
+    // The second visit's own call is served once.
+    expect(await consume(bound("decision-2"))).toMatchObject({ decisionId: "decision-2",
+      consumptionKey: "publish_decision:decision-2" });
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1", "publish_decision:decision-2"]);
+  });
+
+  it("a call bound to its own older visit uses that decision, not the newest one", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    expect(await consume(bound("decision-1"))).toMatchObject({ decisionId: "decision-1" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1"]);
+  });
+
+  it("refuses a binding that names another run's or another step's decision, or no decision of this step", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(
+      decision({ id: "decision-other-run", runId: "run-2" }),
+      decision({ id: "decision-other-step", nodeId: OTHER_STEP, gateTaskId: "gate-task-9" }));
+    for (const id of ["decision-other-run", "decision-other-step", "decision-unknown"]) {
+      await expect(consume(bound(id)), id).rejects.toMatchObject({ code: "action_decision_binding_mismatch" });
+    }
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a binding to a decision that is not released", async () => {
+    await loadModule();
+    h.tables.set(agentRunPublishDecisions, [decision(),
+      secondVisit({ status: "parked", decidedBy: null, decidedAt: null })]);
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_open" });
+    h.tables.set(agentRunPublishDecisions, [decision(), secondVisit({ status: "declined" })]);
+    await expect(consume(bound("decision-2"))).rejects.toMatchObject({ code: "action_person_decision_not_affirmative" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("a bound call answers the status of the decision it names", async () => {
+    await loadModule();
+    const cases: Array<[string, Row, string]> = [
+      ["parked", { status: "parked", decidedBy: null, decidedAt: null }, "action_person_decision_open"],
+      ["declined", { status: "declined" }, "action_person_decision_not_affirmative"],
+      ["expired", { status: "expired", decidedBy: null }, "action_person_decision_not_affirmative"],
+      ["run_ended", { status: "run_ended", decidedBy: null }, "action_person_decision_not_affirmative"],
+      ["no person", { decidedBy: null }, "action_person_decision_invalid"],
+      ["another organization", { orgId: "org-2" }, "action_person_decision_invalid"],
+    ];
+    for (const [name, over, code] of cases) {
+      // The named decision is the older one; a newer released one of the step is never used in its place.
+      h.tables.set(agentRunPublishDecisions, [decision(over), secondVisit()]);
+      await expect(consume(bound("decision-1")), name).rejects.toMatchObject({ code });
+    }
+    expect(consumptions()).toEqual([]);
+    h.tables.set(agentRunPublishDecisions, [decision(), secondVisit()]);
+    expect(await consume(bound("decision-1"))).toMatchObject({ decisionId: "decision-1" });
+    await expect(consume(bound("decision-1")), "consumed")
+      .rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+    expect(consumptions().map((c) => c.gateId)).toEqual(["publish_decision:decision-1"]);
+  });
+
+  it("refuses a binding to a decision of another attempt, or when the step has no decision, as a mismatch", async () => {
+    await loadModule();
+    for (const over of [{ runGeneration: 1 }, { runGeneration: -1 }]) {
+      h.tables.set(agentRunPublishDecisions, [decision(over), secondVisit()]);
+      await expect(consume(bound("decision-1")), JSON.stringify(over))
+        .rejects.toMatchObject({ code: "action_decision_binding_mismatch" });
+    }
+    h.tables.set(agentRunPublishDecisions, [decision({ runGeneration: 1 })]);
+    await expect(consume(bound("decision-1")), "only row in another attempt")
+      .rejects.toMatchObject({ code: "action_decision_binding_mismatch" });
+    h.tables.set(agentRunPublishDecisions, []);
+    await expect(consume(bound("decision-1")), "no decision").rejects.toMatchObject({ code: "action_decision_binding_mismatch" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("a call with no binding is served when the step has exactly one decision in the attempt", async () => {
+    await loadModule();
+    expect(await consume(input())).toMatchObject({ decisionId: "decision-1" });
+  });
+
+  it("refuses a call with no binding when the step has more than one decision in the attempt", async () => {
+    await loadModule();
+    h.tables.get(agentRunPublishDecisions)!.push(secondVisit());
+    await expect(consume(input())).rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    expect(consumptions()).toEqual([]);
+  });
+
+  it("refuses a malformed binding before any transaction", async () => {
+    await loadModule();
+    for (const id of ["", "d\nx", "d".repeat(513), 7, null]) {
+      await expect(consume(bound(id)), String(id)).rejects.toMatchObject({ code: "action_decision_input_invalid" });
+    }
+    expect(h.calls).toEqual([]);
   });
 });

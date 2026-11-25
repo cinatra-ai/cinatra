@@ -616,6 +616,8 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
   });
   let agentUrl: string;
   let contextId: string;
+  // cinatra#3745: the decision this Publish releases or resumes, named in the resume message.
+  let releasedDecisionId: string;
   let claim: Extract<Awaited<ReturnType<typeof claimPause>>, { kind: "claimed" }>;
   const giveBack = () => releasePauseClaim({ runId: run.id, orgId: run.orgId, token: claim.token }, authority).catch(() =>
     moveRun(run.id, "pending_approval", "failed", { error: `${PUBLISH_RESUME_FAILED}: the run could not be put back`, completedAt: new Date() }, authority));
@@ -629,6 +631,7 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
     if (!target || (!open && target.status !== "released")) return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: target?.status ?? null };
     // An answer that names its row is never applied to another gate: a newer open decision, or another released one.
     if (input.decisionId !== undefined && target.id !== input.decisionId) return { ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: null };
+    releasedDecisionId = target.id;
     // claimPause refuses a generation that cannot be read.
     // The claim is bound to the decision's own gate task as well as to a generation: it lands only while the run waits
     // at that task, in one statement, so this resume never holds a pause the run took at another task. A released
@@ -716,7 +719,8 @@ async function approveWith(enforce: DecisionAccess, input: DecideInput): Promise
   });
   try {
     const { prepareWayflowResume, sendWayflowResume } = await import("./review-task-actions");
-    const prepared = await prepareWayflowResume(run.id, agentUrl);
+    // cinatra#3745: the resume names the decision this Publish released, for the calls of this visit.
+    const prepared = await prepareWayflowResume(run.id, agentUrl, { publishDecisionId: releasedDecisionId });
     try {
       await transitionRunStatus(run.id, "pending_approval", "running", { pauseFence: { token: claim.token, generation: claim.generation } }, authority);
     } catch (err) {
