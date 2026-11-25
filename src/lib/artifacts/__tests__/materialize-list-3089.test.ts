@@ -25,6 +25,9 @@
  *   npx vitest run src/lib/artifacts/__tests__/materialize-list-3089.test.ts
  */
 import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -1009,10 +1012,8 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
   let committed: Statement[][];
   /** A 0-based statement index of the batch's transaction at which the database fails. */
   let faultAtStatement: number | null;
-  /** The guarded removals of fresh blob rows that were run: their values (resource, org, row version, blob). */
-  let removals: unknown[][];
-  /** How many rows each removal finds still removable (0: another writer has taken the row, or a representation refers to it). */
-  let removedAnswer: number;
+  /** The resource rows committed so far, by substance key: the unique key (org, kind, substance key) the real upsert resolves on. */
+  let resourcesBySubstance: Map<string, { resource_id: string; blob_id: string; storage_key: string; size: number }>;
 
   async function* stream(text: string): AsyncGenerator<Uint8Array> {
     yield new TextEncoder().encode(text);
@@ -1042,13 +1043,10 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
   beforeEach(() => {
     committed = [];
     faultAtStatement = null;
-    removals = [];
-    removedAnswer = 1;
     blobDeleteMock.mockClear();
     let resources = 0;
     let blobs = 0;
-    /** The resource rows committed so far, by substance key: the unique key (org, kind, substance key) the real upsert resolves on. */
-    const resourcesBySubstance = new Map<string, { resource_id: string; blob_id: string; storage_key: string }>();
+    resourcesBySubstance = new Map();
     blobPutMock.mockImplementation(async (input: { stream: AsyncIterable<Uint8Array> }) => {
       const body = await readBody(input.stream);
       const digest = sha256(body);
@@ -1057,21 +1055,17 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     });
     pgSyncMock.mockImplementation((input: { transaction?: boolean; queries: Array<{ text: string }> }) => {
       const texts = input.queries.map((q) => q.text);
-      if (texts[1]?.includes("WITH gone AS")) {
-        removals.push((input.queries[1] as unknown as { values: unknown[] }).values);
-        return [{ rows: [], rowCount: 0 }, { rows: [{ removed: removedAnswer }], rowCount: 1 }];
-      }
       if (texts[0]!.includes("WITH resource_op")) {
         // The resource row of ONE blob: its own transaction, committed before the artifact rows. The upsert
         // answers the existing row (`is_new` false) for a substance key it already holds.
         const query = input.queries[0] as unknown as { values: string[] };
         const substanceKey = query.values[2]!;
         const existing = resourcesBySubstance.get(substanceKey);
-        if (existing) return [{ rows: [{ ...existing, mime: "text/markdown", size_bytes: 6, is_new: false, row_version: "ver-touched" }], rowCount: 1 }];
+        if (existing) return [{ rows: [{ ...existing, mime: "text/markdown", size_bytes: existing.size, is_new: false }], rowCount: 1 }];
         resources += 1;
-        const row = { resource_id: `res-${resources}`, blob_id: query.values[6]!, storage_key: query.values[7]! };
+        const row = { resource_id: `res-${resources}`, blob_id: query.values[6]!, storage_key: query.values[7]!, size: Number((input.queries[0] as unknown as { values: unknown[] }).values[4]) };
         resourcesBySubstance.set(substanceKey, row);
-        return [{ rows: [{ ...row, mime: "text/markdown", size_bytes: 6, is_new: true, row_version: `ver-${resources}` }], rowCount: 1 }];
+        return [{ rows: [{ ...row, mime: "text/markdown", size_bytes: row.size, is_new: true }], rowCount: 1 }];
       }
       if (texts[0]!.includes("artifact_blobs")) return [{ rows: [{ "?column?": 1 }], rowCount: 1 }];
       if (faultAtStatement !== null && faultAtStatement < texts.length) throw new Error("statement failed");
@@ -1134,21 +1128,56 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
   });
 
   // red-first-expect: createSemanticArtifacts is not a function
-  it("C1 a rolled-back batch of same-bytes artifacts deletes the shared blob file once, as the release of the row that owned it, never as a loser's cleanup", async () => {
+  it("C1 a rolled-back batch of same-bytes artifacts deletes no shared blob file either", async () => {
     const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
     faultAtStatement = 3;
     const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
     await expect(creation.createSemanticArtifacts([twin(0), twin(1)])).rejects.toThrow("statement failed");
     expect(committed).toEqual([]);
-    expect(blobDeleteMock).toHaveBeenCalledTimes(1);
-    expect(removals).toHaveLength(1);
+    expect(blobPutMock).toHaveBeenCalledTimes(1);
+    expect(blobDeleteMock).not.toHaveBeenCalled();
   });
 
   const resourceStatements = () => pgSyncMock.mock.calls.filter(([i]) => String((i as { queries: Array<{ text: string }> }).queries[0]!.text).includes("WITH resource_op")).length;
+  const deletes = () => pgSyncMock.mock.calls.filter(([i]) => (i as { queries: Array<{ text: string }> }).queries.some((q) => /DELETE FROM/.test(q.text))).length;
   const quotaRefusal = async () => new (await import("../local-disk-blob-store")).ArtifactQuotaExceededError("org-quota", 100, 140);
 
   // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a quota refusal of a later member releases the resource and blob rows the earlier members created, and their files", async () => {
+  it("Q2 members with the same bytes are stored ONCE: one store call, one resource row, three artifacts", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
+    const results = await creation.createSemanticArtifacts([twin(0), twin(1), twin(2)]);
+    expect(blobPutMock).toHaveBeenCalledTimes(1);
+    expect(resourceStatements()).toBe(1);
+    expect(results.map((r) => r.resourceId)).toEqual(["res-1", "res-1", "res-1"]);
+    expect(new Set(results.map((r) => r.artifactId)).size).toBe(3);
+    expect(count(committed[0]!, 'INSERT INTO "public"."representation"')).toBe(3);
+    // Distinct contents are each stored once.
+    blobPutMock.mockClear();
+    await creation.createSemanticArtifacts([0, 1, 2].map(creationInput));
+    expect(blobPutMock).toHaveBeenCalledTimes(3);
+  });
+
+  // red-first-expect: createSemanticArtifacts is not a function
+  it("Q2 a member over the size limit is refused as the store refuses it, before anything is stored for it", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const { BlobTooLargeError } = await import("@cinatra-ai/artifacts");
+    await expect(creation.createSemanticArtifacts([{ ...creationInput(0), maxBytes: 4 }])).rejects.toBeInstanceOf(BlobTooLargeError);
+    expect(blobPutMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: createSemanticArtifacts is not a function
+  it("Q2 a failed batch keeps the rows and the files it stored TOGETHER: nothing is deleted, rows or files", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    faultAtStatement = 3;
+    await expect(creation.createSemanticArtifacts([0, 1, 2].map(creationInput))).rejects.toThrow("statement failed");
+    expect(resourcesBySubstance.size).toBe(3);
+    expect(deletes()).toBe(0);
+    expect(blobDeleteMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: createSemanticArtifacts is not a function
+  it("Q2 a quota refusal of a later member keeps what the earlier members stored, rows and files together", async () => {
     const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
     const put = blobPutMock.getMockImplementation()!;
     let puts = 0;
@@ -1158,93 +1187,22 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
       return put(input);
     });
     await expect(creation.createSemanticArtifacts([0, 1, 2].map(creationInput))).rejects.toThrow("artifact org-quota exceeded");
-    // Member 1 created its rows fresh (resource res-1, blob blob-1, the row version its upsert left); the refused member stored nothing.
-    expect(removals).toEqual([["res-1", "org-a", "ver-1", "blob-1"]]);
-    expect(blobDeleteMock).toHaveBeenCalledWith({ orgId: "org-a", storageKey: `key-${sha256("Body 1")}` });
+    expect(resourcesBySubstance.size).toBe(1);
+    expect(deletes()).toBe(0);
+    expect(blobDeleteMock).not.toHaveBeenCalled();
     expect(committed).toEqual([]);
   });
 
   // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a transaction that fails after the rows of all members were created releases every fresh row and file", async () => {
+  it("Q2 a batch that fails still deletes no shared blob, and its retry reuses the rows (no second row for the same bytes)", async () => {
     const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    faultAtStatement = 3;
-    await expect(creation.createSemanticArtifacts([0, 1, 2].map(creationInput))).rejects.toThrow("statement failed");
-    expect(removals).toEqual([
-      ["res-1", "org-a", "ver-1", "blob-1"], ["res-2", "org-a", "ver-2", "blob-2"], ["res-3", "org-a", "ver-3", "blob-3"],
-    ]);
-    expect((blobDeleteMock.mock.calls as unknown as Array<[{ storageKey: string }]>).map(([a]) => a.storageKey)).toEqual(
-      ["Body 1", "Body 2", "Body 3"].map((b) => `key-${sha256(b)}`),
-    );
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 members with the same bytes resolve their resource row ONCE, so a failed batch removes it once and no row of it is touched by a sibling", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    faultAtStatement = 3;
-    const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
-    await expect(creation.createSemanticArtifacts([twin(0), twin(1), twin(2)])).rejects.toThrow("statement failed");
-    expect(resourceStatements()).toBe(1);
-    expect(removals).toEqual([["res-1", "org-a", "ver-1", "blob-1"]]);
-    expect(blobDeleteMock).toHaveBeenCalledTimes(1);
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a resource the call did not create (same bytes already filed) is not removed", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    await creation.createSemanticArtifact({ ...creationInput(0), stream: stream("Body 1") });
-    committed = [];
     faultAtStatement = 3;
     await expect(creation.createSemanticArtifacts([0, 1].map(creationInput))).rejects.toThrow("statement failed");
-    expect(removals).toEqual([["res-2", "org-a", "ver-2", "blob-3"]]);
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a row another writer of the same bytes has taken, or that a representation refers to, is kept with its file", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    removedAnswer = 0;
-    faultAtStatement = 3;
-    await expect(creation.createSemanticArtifacts([0, 1].map(creationInput))).rejects.toThrow("statement failed");
-    expect(removals).toHaveLength(2);
-    expect(blobDeleteMock).not.toHaveBeenCalled();
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 the removal is ONE statement under the resource's advisory lock that deletes only the version this call inserted, referenced by no representation", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    faultAtStatement = 3;
-    await expect(creation.createSemanticArtifacts([creationInput(0)])).rejects.toThrow("statement failed");
-    const call = pgSyncMock.mock.calls.map(([i]) => i as { transaction?: boolean; queries: Array<{ text: string }> }).find((i) => i.queries[1]?.text.includes("WITH gone AS"))!;
-    expect(call.transaction).toBe(true);
-    expect(call.queries).toHaveLength(2);
-    const [lock, del] = call.queries.map((q) => q.text.replace(/\s+/g, " ").replaceAll('"cinatra"', '"public"'));
-    expect(lock).toBe("SELECT pg_advisory_xact_lock(hashtext($1))");
-    expect(del).toContain('DELETE FROM "public"."resource" r WHERE r.id = $1 AND r.org_id = $2 AND r.kind = \'blob\' AND r.xmin::text = $3');
-    expect(del).toContain('NOT EXISTS ( SELECT 1 FROM "public"."representation" rep WHERE rep.resource_id = r.id AND rep.org_id = r.org_id )');
-    expect(del).toContain('DELETE FROM "public"."artifact_blobs" b USING gone WHERE b.id = $4 AND b.org_id = $2');
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a failure of the removal itself keeps the rows and the file and never replaces the call's own error", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    const impl = pgSyncMock.getMockImplementation()!;
-    pgSyncMock.mockImplementation((input: { queries: Array<{ text: string }> }) => {
-      if (input.queries[1]?.text.includes("WITH gone AS")) throw new Error("connection lost");
-      return impl(input);
-    });
-    faultAtStatement = 3;
-    await expect(creation.createSemanticArtifacts([creationInput(0)])).rejects.toThrow("statement failed");
-    expect(blobDeleteMock).not.toHaveBeenCalled();
-  });
-
-  // red-first-expect: createSemanticArtifacts is not a function
-  it("Q2 a batch that commits removes nothing, and a failed SINGLE write keeps its fresh rows as it always has", async () => {
-    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
-    await creation.createSemanticArtifacts([0, 1].map(creationInput));
-    expect(removals).toEqual([]);
-    faultAtStatement = 3;
-    await expect(creation.createSemanticArtifact({ ...creationInput(2), stream: stream("Another body") })).rejects.toThrow("statement failed");
-    expect(removals).toEqual([]);
-    expect(blobDeleteMock).not.toHaveBeenCalled();
+    faultAtStatement = null;
+    const retried = await creation.createSemanticArtifacts([0, 1].map(creationInput));
+    expect(retried).toHaveLength(2);
+    expect(resourcesBySubstance.size).toBe(2);
+    expect(new Set(retried.map((r) => r.resourceId))).toEqual(new Set(["res-1", "res-2"]));
   });
 
   it("C1 a single artifact is still ONE transaction with the same row writers", async () => {
@@ -1257,6 +1215,113 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     expect(count(batch, "artifact_audit")).toBe(1);
     expect(count(batch, "UPDATE finalize")).toBe(1);
     expect(count(batch, "artifact_produced_outbox")).toBe(1);
+  });
+
+  describe("over the REAL local-disk store (a temporary data root)", () => {
+    type RealStore = ReturnType<typeof import("../local-disk-blob-store")["createLocalDiskBlobStore"]>;
+    let root: string;
+    let real: RealStore;
+    const envKeys = ["CINATRA_ARTIFACT_DATA_ROOT", "CINATRA_ARTIFACT_ORG_QUOTA_BYTES", "CINATRA_ARTIFACT_QUOTA_MODE"] as const;
+    let savedEnv: Array<string | undefined>;
+    const usedBytes = () => [...resourcesBySubstance.values()].reduce((sum, r) => sum + r.size, 0);
+    const onDisk = (storageKey: string) => existsSync(path.join(root, storageKey));
+    const filesOnDisk = () => {
+      const out: string[] = [];
+      const walk = (dir: string) => {
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (e.name === ".staging") continue;
+          if (e.isDirectory()) walk(path.join(dir, e.name));
+          else out.push(path.join(dir, e.name));
+        }
+      };
+      if (existsSync(root)) walk(root);
+      return out;
+    };
+
+    beforeEach(async () => {
+      savedEnv = envKeys.map((k) => process.env[k]);
+      root = mkdtempSync(path.join(tmpdir(), "list-3089-blobs-"));
+      process.env.CINATRA_ARTIFACT_DATA_ROOT = root;
+      delete process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES;
+      delete process.env.CINATRA_ARTIFACT_QUOTA_MODE;
+      const actual = await vi.importActual<typeof import("../local-disk-blob-store")>("../local-disk-blob-store");
+      real = actual.createLocalDiskBlobStore({
+        getOrgUsageBytes: () => usedBytes(),
+        isStorageKeyReferenced: (_org, key) => [...resourcesBySubstance.values()].some((r) => r.storage_key === key),
+      });
+      blobPutMock.mockImplementation((input: Parameters<RealStore["put"]>[0]) => real.put(input));
+      blobDeleteMock.mockImplementation(((args: Parameters<RealStore["deleteByStorageKey"]>[0]) => real.deleteByStorageKey(args)) as never);
+    });
+    afterEach(() => {
+      envKeys.forEach((k, i) => {
+        if (savedEnv[i] === undefined) delete process.env[k];
+        else process.env[k] = savedEnv[i];
+      });
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    const enforce = (bytes: number) => {
+      process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES = String(bytes);
+      process.env.CINATRA_ARTIFACT_QUOTA_MODE = "enforce";
+    };
+    const twin = (i: number) => ({ ...creationInput(i), stream: stream("Same bytes") });
+
+    // red-first-expect: createSemanticArtifacts is not a function
+    it("R1 two identical members under a quota with room for exactly one blob are both filed, from one stored blob", async () => {
+      const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+      enforce(Buffer.byteLength("Same bytes"));
+      const results = await creation.createSemanticArtifacts([twin(0), twin(1)]);
+      expect(results).toHaveLength(2);
+      expect(results[0]!.resourceId).toBe(results[1]!.resourceId);
+      expect(filesOnDisk()).toHaveLength(1);
+      expect(usedBytes()).toBe(Buffer.byteLength("Same bytes"));
+    });
+
+    // red-first-expect: createSemanticArtifacts is not a function
+    it("R2 a failed batch leaves every row WITH its file, never rows without a file or a file without rows", async () => {
+      const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+      faultAtStatement = 3;
+      await expect(creation.createSemanticArtifacts([0, 1, 2].map(creationInput))).rejects.toThrow("statement failed");
+      const rows = [...resourcesBySubstance.values()];
+      expect(rows).toHaveLength(3);
+      for (const row of rows) expect(onDisk(row.storage_key)).toBe(true);
+      expect(filesOnDisk()).toHaveLength(3);
+    });
+
+    // red-first-expect: createSemanticArtifacts is not a function
+    it("R3 the retry of a failed batch is filed when the quota is exactly full of its own held bytes", async () => {
+      const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+      faultAtStatement = 3;
+      await expect(creation.createSemanticArtifacts([0, 1].map(creationInput))).rejects.toThrow("statement failed");
+      faultAtStatement = null;
+      enforce(usedBytes());
+      const retried = await creation.createSemanticArtifacts([0, 1].map(creationInput));
+      expect(retried).toHaveLength(2);
+      expect(resourcesBySubstance.size).toBe(2);
+      // Bytes the organization does not hold are still refused at the full quota, and leave no file.
+      const { ArtifactQuotaExceededError } = await import("../local-disk-blob-store");
+      const before = filesOnDisk().length;
+      await expect(creation.createSemanticArtifacts([{ ...creationInput(2), stream: stream("New bytes") }])).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+      expect(filesOnDisk()).toHaveLength(before);
+    });
+
+    // red-first-expect: createSemanticArtifacts is not a function
+    it("R4 a concurrent writer of the same bytes that stored its file before the batch failed keeps readable content", async () => {
+      const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+      // The other writer has stored its file and not yet committed its row when this batch stores and fails.
+      const other = await real.put({ orgId: "org-a", artifactId: "other", representationRevisionId: "r", stream: stream("Same bytes"), maxBytes: 1024 });
+      faultAtStatement = 3;
+      await expect(creation.createSemanticArtifacts([twin(0), { ...creationInput(1) }])).rejects.toThrow("statement failed");
+      // The other writer commits its row now: it resolves onto the row the failed batch kept, and the file is there.
+      faultAtStatement = null;
+      const filed = await creation.createSemanticArtifact(twin(2));
+      expect(filed.resourceId).toBe("res-1");
+      expect(onDisk(other.storageKey)).toBe(true);
+      const handle = await real.openByStorageKey({ orgId: "org-a", storageKey: other.storageKey });
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of handle.stream) chunks.push(chunk);
+      expect(Buffer.concat(chunks).toString("utf8")).toBe("Same bytes");
+    });
   });
 });
 

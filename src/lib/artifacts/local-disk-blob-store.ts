@@ -104,7 +104,8 @@ function quotaMode(): "warn" | "enforce" {
     : "warn";
 }
 
-function deleteGraceMs(): number {
+/** How long a content-addressed file, or a resource no representation refers to, is protected from removal. */
+export function deleteGraceMs(): number {
   const n = envBytes(ARTIFACT_DELETE_GRACE_MS_ENV);
   return n > 0 ? n : DEFAULT_ARTIFACT_DELETE_GRACE_MS;
 }
@@ -557,12 +558,24 @@ export function createLocalDiskBlobStore(
       // quota also bounds the INCOMING stream: the pre-check alone would let
       // an org just under quota land an arbitrarily large blob, so the
       // remaining headroom is enforced during streaming like maxBytes.
+      //
+      // The quota refuses NEW bytes only. Whether these bytes are new is known once they are hashed, so an
+      // over-quota verdict is held until the stream has been read (hashing continues, nothing more is
+      // staged) and is then lifted for content the organization already holds: a live artifact_blobs row of
+      // the same content-addressed key AND its file on disk. Dedupe adds no bytes, so a write of held bytes
+      // is never refused for a quota the held bytes already count against.
       let enforcedRemainingBytes = Infinity;
+      let overQuota: ArtifactQuotaExceededError | null = null;
       const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
       if (orgQuota > 0) {
         const used = await orgUsageBytes(input.orgId);
         if (typeof used === "number") {
-          applyQuotaVerdict("org-quota", used, orgQuota);
+          try {
+            applyQuotaVerdict("org-quota", used, orgQuota);
+          } catch (err) {
+            if (!(err instanceof ArtifactQuotaExceededError)) throw err;
+            overQuota = err;
+          }
           if (quotaMode() === "enforce") {
             enforcedRemainingBytes = Math.max(0, orgQuota - used);
           }
@@ -588,8 +601,8 @@ export function createLocalDiskBlobStore(
           if (size > input.maxBytes) {
             throw new BlobTooLargeError(input.maxBytes);
           }
-          if (size > enforcedRemainingBytes) {
-            throw new ArtifactQuotaExceededError(
+          if (size > enforcedRemainingBytes && overQuota === null) {
+            overQuota = new ArtifactQuotaExceededError(
               "org-quota",
               orgQuota,
               orgQuota - enforcedRemainingBytes + size,
@@ -605,7 +618,8 @@ export function createLocalDiskBlobStore(
             merged.set(slice, head.length);
             head = merged;
           }
-          await fh.write(chunk);
+          // Over the quota nothing more is staged: the bytes are published only if they turn out to be held.
+          if (overQuota === null) await fh.write(chunk);
         }
         // Durability: fsync the staged bytes BEFORE the rename publishes
         // them under the content-addressed key.
@@ -637,6 +651,26 @@ export function createLocalDiskBlobStore(
         // the storageKeyLocks header): entering second means observing the
         // delete's outcome, never losing the caller's bytes.
         return await withStorageKeyLock(storageKey, async () => {
+          if (overQuota !== null) {
+            // Held bytes only: the file is on disk and a live row of this organization owns it. Refresh its
+            // mtime (a writer that has not committed its row yet is protected by the grace window, as in
+            // the reuse below) and confirm it is still there; anything else is a refusal.
+            let held = false;
+            try {
+              await fsStat(finalPath);
+              held = await isReferenced(input.orgId, storageKey);
+              if (held) {
+                const now = new Date();
+                await utimes(finalPath, now, now);
+                await fsStat(finalPath);
+              }
+            } catch {
+              held = false;
+            }
+            await rm(stagedPath, { force: true }).catch(() => {});
+            if (!held) throw overQuota;
+            return record;
+          }
           await mkdir(path.dirname(finalPath), { recursive: true });
           let alreadyExists = false;
           try {

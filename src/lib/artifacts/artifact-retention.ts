@@ -10,7 +10,7 @@ import {
   buildSoftDeleteObjectQuery,
   readSoftDeleteChangeSetId,
 } from "@/lib/objects-store";
-import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { createLocalDiskBlobStore, deleteGraceMs } from "./local-disk-blob-store";
 import { countArtifactRefs } from "./artifact-refs-store";
 
 // Semantic-aware retention, tombstone, and GC.
@@ -203,6 +203,18 @@ export async function runResourceBlobGc(opts?: {
   const schema = postgresSchema.replaceAll('"', '""');
   const limit = Math.min(Math.max(opts?.limit ?? 100, 1), 1000);
   const orgFilter = opts?.orgId ? "AND r.org_id = $1" : "";
+  // A resource NO representation refers to, past the blob grace period. A write that stored its blob and
+  // committed its resource row but whose artifact transaction did not commit (a failed single write or batch)
+  // leaves exactly this: rows and file together, counted by the quota. The grace period is the store's own
+  // (`deleteGraceMs`): it covers a writer that has resolved onto the row and not yet committed its
+  // representation. The physical delete below is the store's reachability-guarded one.
+  const NEVER_REFERENCED = `OR (
+      NOT EXISTS (
+        SELECT 1 FROM "${schema}"."representation" rep
+        WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+      )
+      AND r.created_at < now() - interval '${Math.max(1, Math.floor(deleteGraceMs()))} milliseconds'
+    )`;
 
   // ELIGIBILITY predicate (kept inline in both the candidate SELECT
   // below and the under-lock CTE recheck further down). Keep the
@@ -216,24 +228,29 @@ export async function runResourceBlobGc(opts?: {
 FROM "${schema}"."resource" r
 WHERE r.kind = 'blob'
   ${orgFilter}
-  AND EXISTS (
-    SELECT 1 FROM "${schema}"."representation" rep
-    WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM "${schema}"."representation" rep
-    JOIN "${schema}"."objects" o
-      ON o.id = rep.artifact_id AND o.org_id = rep.org_id
-    WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
-      AND o.deleted_at IS NULL
-  )
-  AND NOT EXISTS (
-    SELECT 1 FROM "${schema}"."artifact_refs" ar
-    JOIN "${schema}"."representation" rep
-      ON rep.artifact_id = ar.artifact_id
-       AND rep.id = ar.representation_revision_id
-       AND rep.org_id = ar.org_id
-    WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+  AND (
+    (
+      EXISTS (
+        SELECT 1 FROM "${schema}"."representation" rep
+        WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "${schema}"."representation" rep
+        JOIN "${schema}"."objects" o
+          ON o.id = rep.artifact_id AND o.org_id = rep.org_id
+        WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+          AND o.deleted_at IS NULL
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM "${schema}"."artifact_refs" ar
+        JOIN "${schema}"."representation" rep
+          ON rep.artifact_id = ar.artifact_id
+           AND rep.id = ar.representation_revision_id
+           AND rep.org_id = ar.org_id
+        WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+      )
+    )
+    ${NEVER_REFERENCED}
   )
   AND (
     r.metadata->>'retain_until' IS NULL
@@ -280,24 +297,29 @@ LIMIT ${limit}`,
          r.metadata->>'blobId' AS blob_id
   FROM "${schema}"."resource" r
   WHERE r.id = $1 AND r.org_id = $2 AND r.kind = 'blob'
-    AND EXISTS (
-      SELECT 1 FROM "${schema}"."representation" rep
-      WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM "${schema}"."representation" rep
-      JOIN "${schema}"."objects" o
-        ON o.id = rep.artifact_id AND o.org_id = rep.org_id
-      WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
-        AND o.deleted_at IS NULL
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM "${schema}"."artifact_refs" ar
-      JOIN "${schema}"."representation" rep
-        ON rep.artifact_id = ar.artifact_id
-         AND rep.id = ar.representation_revision_id
-         AND rep.org_id = ar.org_id
-      WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+    AND (
+      (
+        EXISTS (
+          SELECT 1 FROM "${schema}"."representation" rep
+          WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "${schema}"."representation" rep
+          JOIN "${schema}"."objects" o
+            ON o.id = rep.artifact_id AND o.org_id = rep.org_id
+          WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+            AND o.deleted_at IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM "${schema}"."artifact_refs" ar
+          JOIN "${schema}"."representation" rep
+            ON rep.artifact_id = ar.artifact_id
+             AND rep.id = ar.representation_revision_id
+             AND rep.org_id = ar.org_id
+          WHERE rep.resource_id = r.id AND rep.org_id = r.org_id
+        )
+      )
+      ${NEVER_REFERENCED}
     )
     AND (
       r.metadata->>'retain_until' IS NULL

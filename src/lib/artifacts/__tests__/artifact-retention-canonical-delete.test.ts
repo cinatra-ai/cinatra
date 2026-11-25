@@ -54,6 +54,18 @@ describe("artifact tombstone rides the canonical object soft-delete (cinatra#142
     expect(calls.length).toBe(1);
   });
 
+  // red-first-expect: expected false to be true
+  it("resource GC also reclaims a resource NO representation refers to, past the blob grace period, in the candidate pick and in the under-lock recheck", () => {
+    const gc = RETENTION.slice(RETENTION.indexOf("export async function runResourceBlobGc("), RETENTION.indexOf("export const runOrphanBlobGc"));
+    const never = gc.includes("r.created_at < now() - interval") && gc.includes("deleteGraceMs()");
+    expect(never).toBe(true);
+    // The branch is spliced into BOTH predicates (the candidate SELECT and the eligibility CTE), so the recheck cannot drift.
+    expect(gc.split("${NEVER_REFERENCED}").length - 1).toBe(2);
+    // It never widens the representation-backed predicate: that still needs the tombstone, pin and retention checks.
+    expect(gc).toMatch(/o\.deleted_at IS NULL/);
+    expect(gc).toMatch(/artifact_refs/);
+  });
+
   it("surfaces the change_set id for Undo (parity with objects_delete)", () => {
     expect(RETENTION).toMatch(/readSoftDeleteChangeSetId\(/);
     expect(RETENTION).toMatch(/changeSetId: readSoftDeleteChangeSetId\(softDeleteResult\)/);

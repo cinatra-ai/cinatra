@@ -374,6 +374,49 @@ describe("createLocalDiskBlobStore", () => {
       expect(rec.sizeBytes).toBe(3);
     });
 
+    describe("bytes the organization already holds are never refused for the quota they already count against", () => {
+      const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+      const heldKey = async () => {
+        const rec = await createLocalDiskBlobStore().put({ ...scope, stream: bytes("held bytes of the org"), maxBytes: 1024 });
+        return rec.storageKey;
+      };
+
+      // red-first-expect: artifact org-quota exceeded: 10 bytes used, limit 10
+      it("a put of held bytes is admitted over a full quota, and over a stream longer than the remaining headroom", async () => {
+        const key = await heldKey();
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10, isStorageKeyReferenced: (_o, k) => k === key });
+        const rec = await store.put({ ...scope, stream: bytes("held bytes ", "of the org"), maxBytes: 1024 });
+        expect(rec.storageKey).toBe(key);
+        const handle = await store.openByStorageKey({ orgId: "org1", storageKey: key });
+        const chunks: Uint8Array[] = [];
+        for await (const c of handle.stream) chunks.push(c);
+        expect(Buffer.concat(chunks).toString("utf8")).toBe("held bytes of the org");
+        expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+      });
+
+      it("the same bytes with NO live row of the organization, or other bytes, are refused and leave no file or staging residue", async () => {
+        const key = await heldKey();
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        const unreferenced = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10, isStorageKeyReferenced: () => false });
+        await expect(unreferenced.put({ ...scope, stream: bytes("held bytes of the org"), maxBytes: 1024 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        const referenced = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10, isStorageKeyReferenced: () => true });
+        await expect(referenced.put({ ...scope, stream: bytes("other bytes"), maxBytes: 1024 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+        expect(existsSync(path.join(dataRoot(), key))).toBe(true);
+        expect(readdirSync(path.join(dataRoot(), "orgs", "org1", "blobs", "sha256", key.split("/")[4]!))).toHaveLength(1);
+      });
+
+      it("the size limit still bounds a stream of held bytes", async () => {
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        const store = createLocalDiskBlobStore({ getOrgUsageBytes: () => 10, isStorageKeyReferenced: () => true });
+        await expect(store.put({ ...scope, stream: bytes("x".repeat(40)), maxBytes: 8 })).rejects.toBeInstanceOf(BlobTooLargeError);
+      });
+    });
+
     it("staging-dir residency cap in enforce mode rejects the put", async () => {
       process.env[ARTIFACT_STAGING_CAP_BYTES_ENV] = "4";
       process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
