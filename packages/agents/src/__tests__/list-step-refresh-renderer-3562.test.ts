@@ -263,7 +263,9 @@ const RUN = {
   pauseGeneration: 1,
   sourceType: "agent_builder",
 };
-const liveRun = () => ({ ...RUN, status: row.status, a2aTaskId: row.a2aTaskId });
+/** The run's version pin (cinatra#1040): unpinned unless a test pins it. */
+const runPin = { packageVersion: null as string | null, versionId: null as string | null };
+const liveRun = () => ({ ...RUN, ...runPin, status: row.status, a2aTaskId: row.a2aTaskId });
 const TEST_AUTHORITY = { orgId: "org-1", can: () => true };
 
 const TEMPLATE = {
@@ -328,6 +330,8 @@ async function firstPause(taskId: string): Promise<void> {
 function arrange() {
   row.status = "running";
   row.a2aTaskId = null;
+  runPin.packageVersion = null;
+  runPin.versionId = null;
   redis.store.clear();
   redis.lists.clear();
   redis.hashes.clear();
@@ -446,6 +450,32 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     expect(row.status).toBe("pending_approval");
   });
 
+  it("two list steps share one renderer and the list is live: each Try again keeps its own step's place, through the real action for both", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(LIST_STEP_ID));
+    await atListStep();
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+    // The second list step (place 1) is refreshed: its task holds that place in the run's list.
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID]);
+    await pick("task-list-2", "task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("two list steps share one renderer and the list is live: the first list step's Try again works too, and the second's after it", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(LIST_STEP_ID));
+    await firstPause("task-a-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-a-1", "task-a-2");
+    await pick("task-a-2", "task-b-1");
+    await refresh("task-b-1", "task-b-2");
+    await pick("task-b-2", "task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(sendTask).toHaveBeenCalledTimes(4);
+    expect(row.status).toBe("pending_approval");
+  });
+
   it("the list is gone and the flow has two steps with the list step's renderer: the refresh is refused, nothing is sent, and the step can be tried and answered again", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue(threeSteps(LIST_STEP_ID));
     await atListStep();
@@ -457,7 +487,7 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     await refresh("task-list-1", "task-list-2").catch((error: unknown) => {
       refusal = error;
     });
-    expect(String((refusal as Error | null)?.message)).toContain("its step is not among the flow's steps");
+    expect(String((refusal as Error | null)?.message)).toContain("its place in the run's steps is not known");
     // What the run panel's submit is given: a thrown error that is neither a
     // gate that moved on nor one already answered, so it shows its error toast
     // and draws the step again, with Try again (see the run panel's test).
@@ -476,7 +506,7 @@ describe("cinatra#3562 — a refreshed list step keeps its place when the run's 
     expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
 
     // Another try reaches the same check (no claim is left behind), and a pick is sent.
-    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its step is not among the flow's steps");
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
     await pick("task-list-1", "task-second-1");
     expect(sendTask).toHaveBeenCalledTimes(2);
     expect(row.status).toBe("pending_approval");
@@ -796,7 +826,7 @@ describe("cinatra#3562 — the places of a run's renderer gates are bounded", ()
     const evalCalls = vi.spyOn(redis.FakeRedis.prototype, "eval");
 
     // red-first-expect: buildListStepRefreshPayload is not a function
-    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its step is not among the flow's steps");
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("its place in the run's steps is not known");
     expect(sendTask).not.toHaveBeenCalled();
     expect(redis.store.has(REPEAT_KEY)).toBe(false);
     expect(redis.lists.has(RENDERER_GATES_KEY)).toBe(false);
@@ -884,7 +914,43 @@ describe("cinatra#3562 — a step that cannot be told is never refreshed and nev
     await refreshRefused();
   });
 
-  it("a step is put before the list step while the run waits at it: the list step's place differs from the run's, so Try again is refused", async () => {
+  /** The run is pinned to version 1.0.0, whose snapshot holds the policy the run was started with. */
+  function pinRunToSnapshot(approvalPolicy: unknown): void {
+    runPin.packageVersion = "1.0.0";
+    const bySemver = async (templateId: string, semver: string) =>
+      templateId === RUN.templateId && semver === "1.0.0"
+        ? ({ templateId, semver, snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy } } as never)
+        : null;
+    (storeMock.readAgentTemplateVersionBySemver as unknown as { mockImplementation: (f: typeof bySemver) => void }).mockImplementation(bySemver);
+  }
+  const reordered = () => ({
+    ...TEMPLATE,
+    approvalPolicy: { steps: [{ ...listStep, xRenderer: "@cinatra-ai/email-outreach-agent:account-scope" }, secondStep, listStep] },
+  });
+
+  it("the agent is edited while a pinned run waits at the list step: Try again uses the run's own steps, keeps the list step, and a pick reaches the second step", async () => {
+    pinRunToSnapshot(TEMPLATE.approvalPolicy);
+    await firstPause("task-list-1");
+    // The live template now orders its steps differently; the running graph does not.
+    storeMock.readAgentTemplateById.mockResolvedValue(reordered());
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-list-1", "task-list-2");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+    await pick("task-list-2", "task-second-1");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, SECOND_STEP_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("a pinned run whose required snapshot cannot be served: the pause is not shown", async () => {
+    runPin.packageVersion = "1.0.0";
+    runPin.versionId = "snapshot-gone";
+    storeMock.readAgentTemplateVersionById.mockResolvedValue(null);
+    // red-first-expect: expected [ Array(1) ] to deeply equal []
+    await nextPauseNotShown();
+  });
+
+  it("an unpinned run reads the live template: a step put before the list step while it waits makes its place differ, so Try again is refused and the step waits as before", async () => {
     await firstPause("task-list-1");
     const firstStep = { ...listStep, xRenderer: "@cinatra-ai/email-outreach-agent:account-scope" };
     storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [firstStep, listStep, secondStep] } });

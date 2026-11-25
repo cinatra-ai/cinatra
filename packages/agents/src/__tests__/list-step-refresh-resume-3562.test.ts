@@ -163,7 +163,11 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
   };
 });
 const handleWayflowTaskState = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../execution", () => ({ handleWayflowTaskState }));
+// An unpinned run reads its steps from the live template (`readRunApprovalPolicySteps`).
+vi.mock("../execution", () => ({
+  handleWayflowTaskState,
+  readRunApprovalPolicySteps: async (_run: unknown, template: { approvalPolicy?: { steps?: unknown } } | null) => template?.approvalPolicy?.steps,
+}));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { buildSubmissionMapByStepIndex } from "../run-actions";

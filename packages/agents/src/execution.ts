@@ -213,6 +213,12 @@ export type PinnedRunSnapshotFields = {
    * environment is bound at the seam, not on the template object).
    */
   executionEnvironment?: unknown;
+  /**
+   * The approval policy captured in THIS snapshot (cinatra#3562): its steps say
+   * which step each pause of the pinned run is, so an edit of the live template
+   * while the run waits does not move them. Not overlaid onto the template.
+   */
+  approvalPolicy?: unknown;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -319,6 +325,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
@@ -336,6 +343,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec ?? null,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
@@ -350,6 +358,7 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan?: unknown;
       taskSpec?: string | null;
       executionEnvironment?: unknown;
+      approvalPolicy?: unknown;
     };
     // A RESOLVED best-effort snapshot is authoritative for this run exactly as
     // it is for compiledPlan/taskSpec above — the environment does not fall back
@@ -359,11 +368,35 @@ export async function resolvePinnedRunSnapshot(
       compiledPlan: s.compiledPlan,
       taskSpec: s.taskSpec,
       executionEnvironment: s.executionEnvironment ?? null,
+      approvalPolicy: s.approvalPolicy,
     };
   }
 
   // `versionId`-only (inert pin) or neither → live template.
   return null;
+}
+
+/**
+ * cinatra#3562: the approval policy steps that tell which step each pause of
+ * `run` is. A run pinned to a version snapshot (`resolvePinnedRunSnapshot`, the
+ * reader the worker executes such a run against) takes the snapshot's steps,
+ * so an edit of the live template while the run waits changes nothing for it.
+ * Any other run (a `versionId`-only pin, which the worker has never honored,
+ * or no pin) was dispatched with the live template, so the live template's
+ * steps are read, as before. A required pin whose snapshot cannot be served
+ * throws (`PinnedRunSnapshotUnreachableError`): the caller treats the steps
+ * as unreadable. The value is returned unchecked (`rendererGateStepsOf`).
+ */
+export async function readRunApprovalPolicySteps(
+  run: { templateId: string; packageVersion?: string | null; versionId?: string | null },
+  liveTemplate: { approvalPolicy?: unknown } | null,
+): Promise<unknown> {
+  const pinned = await resolvePinnedRunSnapshot(
+    { templateId: run.templateId, packageVersion: run.packageVersion ?? null, versionId: run.versionId ?? null },
+    { readAgentTemplateVersionById, readAgentTemplateVersionBySemver },
+  );
+  const policy = pinned ? pinned.approvalPolicy : liveTemplate?.approvalPolicy;
+  return (policy as { steps?: unknown } | null | undefined)?.steps;
 }
 
 // ---------------------------------------------------------------------------
@@ -2602,7 +2635,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         await rememberWayflowGateTask(runId, task.id);
       } else {
         const tmpl = await readAgentTemplateById(run.templateId);
-        const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps;
+        // cinatra#3562: the steps the run was started with (its pinned snapshot's, else the live template's).
+        const rawPolicySteps: unknown = tmpl ? await readRunApprovalPolicySteps(run, tmpl) : undefined;
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
         templateGateKeys = tmpl ? readTemplateGateKeys(rawPolicySteps ?? []) : null;
