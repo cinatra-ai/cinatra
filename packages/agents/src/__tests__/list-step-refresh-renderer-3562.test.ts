@@ -744,6 +744,18 @@ describe("cinatra#3562 — a pause whose step cannot be established after a refr
 describe("cinatra#3562 — the places of a run's renderer gates are bounded", () => {
   const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
 
+  it("a stored policy whose steps are no list, or hold entries that are no objects, gives no step and never throws", async () => {
+    const { rendererGateStepsOf, rendererGateIndexOfRenderer, stepFiresRendererGate } = await import("../orchestrator-gate-predicate");
+    // red-first-expect: rendererGateStepsOf is not a function
+    expect(rendererGateStepsOf("steps")).toEqual([]);
+    expect(rendererGateStepsOf(undefined)).toEqual([]);
+    expect(rendererGateStepsOf({ 0: { xRenderer: "a" } })).toEqual([]);
+    const mixed = rendererGateStepsOf([null, 7, "x", [], { xRenderer: "a" }, { xRenderer: "list" }]);
+    expect(mixed).toEqual([{ xRenderer: "a" }, { xRenderer: "list" }]);
+    expect(mixed.filter(stepFiresRendererGate).length).toBe(2);
+    expect(rendererGateIndexOfRenderer(mixed, "list")).toBe(1);
+  });
+
   it("the place from the steps refuses a gate count or a place past its limit", async () => {
     const { rendererGateIndexOfRenderer, RENDERER_GATE_STEP_GATE_COUNT_LIMIT, RENDERER_GATE_INDEX_LIMIT } = await import("../orchestrator-gate-predicate");
     const s = (xRenderer: string, extra: Record<string, unknown> = {}) => ({ xRenderer, ...extra });

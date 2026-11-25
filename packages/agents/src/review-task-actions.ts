@@ -39,7 +39,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
-import { stepFiresRendererGate, rendererGateIndexOfRenderer, type RendererGateStepShape } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, rendererGateIndexOfRenderer, rendererGateStepsOf } from "./orchestrator-gate-predicate";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -1229,7 +1229,7 @@ export async function approveReviewTaskInternal(
       // task (left by a refresh of it that was not sent): the answer moves the run
       // on, so the next pause is a new step. A failure is handled the same way.
       const answerHasPayload = typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0;
-      const rendererGatePolicySteps = (template.approvalPolicy?.steps ?? []) as RendererGateStepShape[];
+      const rendererGatePolicySteps = rendererGateStepsOf((template.approvalPolicy as { steps?: unknown } | null | undefined)?.steps);
       const mapsPausesByPlace = rendererGatePolicySteps.filter(stepFiresRendererGate).length > 1;
       if (listStepRefreshAsk !== undefined || answerHasPayload || mapsPausesByPlace) {
         try {

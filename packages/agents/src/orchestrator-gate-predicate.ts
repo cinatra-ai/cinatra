@@ -27,6 +27,16 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 }
 
 /**
+ * cinatra#3562: a stored policy's `steps` as a list of step objects. A policy
+ * can be saved with `steps` that is no list, or with entries that are no
+ * objects; those give no step here, so a reader never throws on them.
+ */
+export function rendererGateStepsOf(steps: unknown): Array<RendererGateStepShape & { gateCount?: unknown }> {
+  if (!Array.isArray(steps)) return [];
+  return steps.filter((step): step is RendererGateStepShape & { gateCount?: unknown } => step !== null && typeof step === "object" && !Array.isArray(step));
+}
+
+/**
  * cinatra#3562: the largest `gateCount` a step can carry for the walk below. A
  * step's `gateCount` is the number of pauses that one compiled step produces:
  * 1 for an input step, and a split child gate is its own step of 1. The
