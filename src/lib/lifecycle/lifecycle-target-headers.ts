@@ -72,6 +72,7 @@ import {
   type ArtifactSummary,
 } from "@/lib/artifacts/artifact-service";
 import { artifactKindLabelFor } from "@/lib/artifacts/artifact-kind-label";
+import { ARTIFACT_RENDERER_PROPS_API_VERSION } from "@/lib/artifacts/artifact-renderer-props";
 import { reviewTargetRowFacts } from "@/lib/artifacts/review-target-row-facts";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { readOwnerDisplayName } from "@/lib/owner-display-names";
@@ -330,7 +331,10 @@ export async function readReviewTargetHeadersReading(
  *
  * DYNAMIC on purpose, the resolve route's `readReviewGateRecordedPrompt`
  * posture: the binder module carries the display resolution, and this leaf
- * keeps it off the static graph of every route that reaches the header.
+ * keeps it off the static graph of every route that reaches the header. The
+ * props version is a NAMED static import, never a dynamic one: a dynamic import
+ * of the props module would hand this file every export of it, the artifact
+ * page's edit grant among them (w4-edit-capability-repo-wide.test.ts).
  */
 async function readPinnedRevisionDisplay(
   orgId: string,
@@ -342,7 +346,6 @@ async function readPinnedRevisionDisplay(
   try {
     const { bindArtifactReviewPorts } = await import("@/app/artifacts/[id]/review-target-prepare");
     const { artifactDisplayFamily } = await import("@/app/artifacts/[id]/renderer-resolution");
-    const { ARTIFACT_RENDERER_PROPS_API_VERSION } = await import("@/lib/artifacts/artifact-renderer-props");
     const ports = bindArtifactReviewPorts({ orgId, actor });
     const member =
       settled && typeof ports.revisionMemberHistorical === "function"
