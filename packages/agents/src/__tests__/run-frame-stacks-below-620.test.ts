@@ -42,10 +42,6 @@ const FRAMES: Array<{ name: string; file: string; marker: string; count: number 
 
 describe("every two-column run frame stacks its detail beneath the rail at 620 px and below", () => {
   for (const { name, file, marker, count } of FRAMES) {
-    // The run page and the review page drew the rail beside the detail at every width:
-    // red-first-expect: to contain 'max-[620px]:flex-col'
-    // The orchestrator frame carried no anchor of its own:
-    // red-first-expect: to have a length of 1
     it(name, () => {
       const tags = openingTags(read(file), marker);
       expect(tags).toHaveLength(count);

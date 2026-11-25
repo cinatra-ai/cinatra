@@ -262,7 +262,6 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
       );
     const TOO_LONG = /^PUBLISH_ROWS_MALFORMED: node "publish" metadata\.cinatra\.publishRows\[0\]\.input of an artifacts row must name an input of at most 128 characters \(128 bytes\)$/;
 
-    // red-first-expect: expected { ok: false, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
     it("a 129-character input is refused at compile time, with the codec's own bound", () => {
       const name = "p".repeat(129);
       expect(withInput(name, { ...ARTIFACTS, input: name })).toEqual({ ok: false, error: expect.stringMatching(TOO_LONG) });
@@ -304,7 +303,6 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
       expect(PUBLISH_ROW_INPUT_MAX).toBe(256);
     });
 
-    // red-first-expect: expected { ok: true, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
     it("a text row over a 257-character input is refused", () => {
       expect(withInput(long, { label: "Long", input: long })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
     });
@@ -313,7 +311,6 @@ describe("cinatra#4150 W4 — four rows, the text kind and the list row", () => 
       expect(withInput(long, { ...LIST, input: long })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
     });
 
-    // red-first-expect: expected { ok: true, …(1) } to deeply equal { ok: false, error: StringMatching{…} }
     it("a text or list row over an input with an empty title is refused", () => {
       expect(withInput("", { label: "Empty", input: "" })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
       expect(withInput("", { ...LIST, input: "" })).toEqual({ ok: false, error: expect.stringMatching(PAST_STORE) });
