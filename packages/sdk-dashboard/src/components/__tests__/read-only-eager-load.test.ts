@@ -27,6 +27,11 @@ const CONFIG = {
   grid: { cols: 12, rowHeight: 50, minW: 3, minH: 4 },
 };
 
+/** What the library must receive: the dashboard AND every portlet eager. */
+function eager<T extends { portlets: object[] }>(config: T) {
+  return { ...config, eagerLoad: true, portlets: config.portlets.map((p) => ({ ...p, eagerLoad: true })) };
+}
+
 beforeEach(() => {
   seen.length = 0;
 });
@@ -42,7 +47,7 @@ describe("the read-only compositions hand drizzle-cube an eager configuration", 
     );
     expect(seen).toHaveLength(2);
     for (const call of seen) {
-      expect(call.config).toEqual({ ...CONFIG, eagerLoad: true });
+      expect(call.config).toEqual(eager(CONFIG));
       expect(call.editable).toBe(false);
     }
   });
@@ -52,13 +57,29 @@ describe("the read-only compositions hand drizzle-cube an eager configuration", 
       createElement(ReadOnlySinglePortlet, { config: CONFIG as never, portletId: "runs-by-agent" }),
     );
     expect(seen).toHaveLength(1);
-    expect(seen[0].config).toEqual({ ...CONFIG, portlets: [CONFIG.portlets[0]], eagerLoad: true });
+    expect(seen[0].config).toEqual(eager({ ...CONFIG, portlets: [CONFIG.portlets[0]] }));
   });
 
   it("overrides an explicit eagerLoad: false and leaves the caller's configuration unchanged", () => {
     const given = { ...CONFIG, eagerLoad: false };
     renderToStaticMarkup(createElement(ReadOnlyComposedDashboard, { config: given as never }));
-    expect(seen[0].config).toEqual({ ...CONFIG, eagerLoad: true });
+    expect(seen[0].config).toEqual(eager(CONFIG));
     expect(given.eagerLoad).toBe(false);
+  });
+
+  it("makes a portlet that carries its own eagerLoad: false eager, without changing the caller's portlets", () => {
+    // drizzle-cube reads the portlet's own flag before the dashboard's.
+    const lazyPortlet = { ...CONFIG.portlets[0], eagerLoad: false };
+    const given = { ...CONFIG, portlets: [lazyPortlet, CONFIG.portlets[1]] };
+    renderToStaticMarkup(createElement(ReadOnlyComposedDashboard, { config: given as never }));
+    renderToStaticMarkup(
+      createElement(ReadOnlySinglePortlet, { config: given as never, portletId: "runs-by-agent" }),
+    );
+    const [dashboard, single] = seen.map((c) => c.config as { portlets: Array<{ eagerLoad?: unknown }> });
+    expect(dashboard.portlets.map((p) => p.eagerLoad)).toEqual([true, true]);
+    expect(single.portlets.map((p) => p.eagerLoad)).toEqual([true]);
+    expect(lazyPortlet.eagerLoad).toBe(false);
+    expect(given.portlets[0]).toBe(lazyPortlet);
+    expect(CONFIG.portlets[1]).not.toHaveProperty("eagerLoad");
   });
 });
