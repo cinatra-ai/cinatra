@@ -241,6 +241,28 @@ async function pairTwin(tx: TwinTx, ctx: DashboardTwinContext): Promise<void> {
   await dispatch(tx, ctx);
 }
 
+/**
+ * cinatra#4762 — take the producing run's row BEFORE the writer's first
+ * dashboards write, through the seam's globalThis port (the `pairTwin` pattern
+ * above). The twin's own lock runs only after the dashboards row and its audit
+ * row are written; a Publish's locked review-fence read could otherwise run
+ * between those writes and the twin's event. Called right after the advisory
+ * lock (the twin's own order: advisory lock, then the run row), before any
+ * insert or update. No run: no call. Seam never loaded: fail closed, as
+ * `pairTwin` does.
+ */
+async function lockProducerRunFirst(tx: TwinTx, runId: string | undefined): Promise<void> {
+  if (!runId) return;
+  const lock = globalThis.__cinatraDashboardArtifactTwinRunLock;
+  if (typeof lock !== "function") {
+    throw new Error(
+      "dashboards-artifact twin seam is not loaded — the producing-run lock " +
+        "cannot be taken before the first write (cinatra#4762, fail-closed).",
+    );
+  }
+  await lock(tx, runId);
+}
+
 /** Build the twin context from a just-written dashboards row + the acting
  *  principal. Pure — NOT a write. */
 function twinCtx(
@@ -755,6 +777,7 @@ export async function createDashboard(
       const tx = guardedTx as unknown as DashboardsDb;
       // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
       await acquireTwinLockFirst(tx as unknown as TwinTx, id);
+      await lockProducerRunFirst(tx as unknown as TwinTx, actor.runId);
       const insertRow: NewDashboardRow = {
         id,
         name,
@@ -815,6 +838,7 @@ export async function updateDashboard(
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
+    await lockProducerRunFirst(tx as unknown as TwinTx, actor.runId);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     assertRowTenancy(row, tenancy, "dashboards.update", id);
@@ -900,6 +924,7 @@ export async function publishDashboard(
     const tx = guardedTx as unknown as DashboardsDb;
     // Advisory-first (see acquireTwinLockFirst): uniform lock order across writers.
     await acquireTwinLockFirst(tx as unknown as TwinTx, id);
+    await lockProducerRunFirst(tx as unknown as TwinTx, actor.runId);
     const row = await selectForUpdate(tx, id);
     if (!row) throw new DashboardNotFoundError(id);
     // A workspace row (org-NULL, cinatra#2811) is written only through the

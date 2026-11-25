@@ -28,8 +28,6 @@
 
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-// Before the fix the review floor draws no Continue, so the query for it throws.
-// red-first-expect: Unable to find role="button" and name "Continue"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";

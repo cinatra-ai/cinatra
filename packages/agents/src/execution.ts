@@ -121,6 +121,8 @@ type ArtifactReviewGateSeam = {
     orgId: string;
     reviewTaskId: string;
     targets: unknown;
+    /** cinatra#4762: the reset generation of the attempt this handler serves (see the gate store). */
+    runGeneration: number | null;
   }): Promise<
     | { ok: true }
     | { ok: false; code: "invalid-targets" | "pin-conflict"; message: string }
@@ -2709,6 +2711,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           : [];
         type GateEmitResult = Awaited<ReturnType<typeof gateSeam.emit>>;
         let emitResult: GateEmitResult;
+        // cinatra#4762: the gate belongs to the attempt this handler serves, as the run record its caller read for the
+        // attempt names it (the publish gate reads the same value), never a later read of the run row.
+        const runGeneration = run.resetGeneration ?? 0;
         // A gate from before singleton minting keeps its complete original pins.
         // Read it BEFORE emitting any leg: a conflict on the first scalar must
         // never be followed by a new sibling overlapping that combined review.
@@ -2759,14 +2764,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           // pending/resolved gate and its decision/outbox untouched. Never mint
           // scalar legs or replace the caller's set with the stored set to make
           // a mismatched request pass. The route describes the actual old gate.
-          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           pinnedTargets = originalPins.targets;
         } else if (legs.length > 1) {
           // Freeze the whole original pause through the existing store transaction.
           // A later refusal leaves no newly-visible actionable partial family.
           // Older bundles without this binding fail before any singleton mint.
           if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+          emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           if (!emitResult.ok) {
             // An old combined review may commit after the preflight. The atomic
             // attempt inserted nothing; only the same complete original pins
@@ -2776,7 +2781,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             if (!racedPins?.ok || racedPins.targets.length < 2) {
               throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             }
-            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emit({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
             if (!emitResult.ok) throw new Error(`Declared review family could not be pinned: ${emitResult.message}`);
             pinnedTargets = racedPins.targets;
           } else {
@@ -2788,13 +2793,14 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           if (legs.length === 1) pinnedTargets = legs[0].targets;
           if (legs.length === 1 && !original) {
             if (!gateSeam.emitFamily) throw new TypeError("declared review atomic family seam unavailable");
-            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets });
+            emitResult = await gateSeam.emitFamily({ runId, orgId: run.orgId, reviewTaskId, targets: pinnedTargets, runGeneration });
           } else emitResult = coreDecision.review
             ? await gateSeam.emit({
                 runId,
                 orgId: run.orgId,
                 reviewTaskId,
                 targets: pinnedTargets,
+                runGeneration,
               })
             : ({
                 ok: false as const,
@@ -3811,9 +3817,12 @@ export async function runAgentBuilderExecutionJob(
     return;
   }
   const prev = mcpRequestContextStorage.getStore();
+  // cinatra#4762: the attempt this job executes, captured once here from the same read. Every produced event the
+  // run's writers record inside this frame carries it (producerAttemptForRun), never a later read of the run row.
   const next: McpRequestContext = {
     ...(prev ?? {}),
     projectContext: { projectId: probeRun.projectId ?? null },
+    runAttempt: { runId, resetGeneration: probeRun.resetGeneration ?? 0 },
   };
   return mcpRequestContextStorage.run(next, () =>
     runAgentBuilderExecutionJobInner(data, jobId),
@@ -3918,6 +3927,32 @@ async function runAgentBuilderExecutionJobInner(
     console.log(`[agent-builder] run ${runId} not found, skipping`);
     return;
   }
+  // cinatra#4762: this read decides what the job dispatches, so the frame's attempt must be the one it read. A retry's
+  // reset between the entry's read and this one raised the generation: the frame is refreshed to the generation read
+  // here and the job starts again under it, so its writers never stamp the new attempt's output with the old one. The
+  // dispatch's queued -> running compare-and-set lands only at that generation (attemptGeneration), so a reset after
+  // this read dispatches nothing under it; when that CAS is stale and the run is queued again at a newer generation,
+  // the job starts again here (supersededAttempt), since the newer attempt's enqueue may have found this job's id taken.
+  const frame = mcpRequestContextStorage.getStore();
+  if (frame?.runAttempt?.runId === runId && frame.runAttempt.resetGeneration !== (run.resetGeneration ?? 0)) {
+    return mcpRequestContextStorage.run(
+      { ...frame, runAttempt: { runId, resetGeneration: run.resetGeneration ?? 0 } },
+      () => runAgentBuilderExecutionJobInner(data, jobId),
+    );
+  }
+  // A read that FAILS is not a read that found the run unchanged: the newer attempt may be queued with no job of its
+  // own, so the job starts again and its entry read decides (it skips a run that is not queued, and throws when the
+  // run cannot be read at all). Starting again is harmless when nothing is queued; skipping would strand the attempt.
+  const supersededAttempt = async (): Promise<boolean> => {
+    let now: Awaited<ReturnType<typeof readAgentRunById>>;
+    try {
+      now = await readAgentRunById(runId);
+    } catch (err) {
+      console.warn(`[agent-builder] run ${runId} unreadable after a stale dispatch (${thrownClassName(err)}) — starting the job again`);
+      return true;
+    }
+    return now?.status === "queued" && (now.resetGeneration ?? 0) !== (run.resetGeneration ?? 0);
+  };
   // cinatra#1939 wave 2 (§2b): mint the SYSTEM dispatch authority ONCE at job
   // entry (scoped to this run's org) and thread it into every status transition
   // this worker drives — dispatch (run.execute) and terminal finalize
@@ -4883,9 +4918,12 @@ async function runAgentBuilderExecutionJobInner(
     try {
       await transitionRunStatus(runId, "queued", "running", {
         dispatch: { attemptId: randomUUID() },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[external-a2a] run ${runId} status no longer "queued" — skipping stale transition`);
         return;
       }
@@ -5089,9 +5127,12 @@ async function runAgentBuilderExecutionJobInner(
       await transitionRunStatus(runId, "queued", "running", {
         // cinatra#4150: the publish rows of the template object this dispatch runs (the pinned overlay included).
         dispatch: { attemptId: randomUUID(), publishRows: JSON.stringify(template.publishRows ?? {}) },
+        // cinatra#4762: only at the attempt this job's frame carries.
+        attemptGeneration: run.resetGeneration ?? 0,
       }, executionAuthority);
     } catch (err) {
       if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        if (await supersededAttempt()) return runAgentBuilderExecutionJobInner(data, jobId);
         console.log(`[wayflow] run ${runId} no longer queued — skipping stale transition`);
         return;
       }

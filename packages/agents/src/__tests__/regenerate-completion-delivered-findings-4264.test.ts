@@ -172,7 +172,6 @@ async function completeOne() {
 }
 
 describe("the completer reports applied only the findings a Regenerate delivered", () => {
-  // red-first-expect: expected [ { …(2) }, { …(2) } ] to deeply equal [ { …(3) }, { …(2) } ]
   it("a picture's Regenerate whose note differs from its prompt: the prompt is applied, the note is skipped", async () => {
     ports.readRepair.mockResolvedValue(
       repairRow([{ id: "prompt-window", message: NOTE }, { id: "picture-prompt", message: PROMPT }], "file_image"),
@@ -218,7 +217,6 @@ describe("the completer's outcomes follow the reviewed work, never the declared 
       lifecycleRepairRequest: { repairId: "repair-1", findings: [], regenerateInput: record },
     });
 
-  // red-first-expect: expected [ { …(2) }, { …(2) } ] to deeply equal [ { …(3) }, { …(2) } ]
   it("a picture step whose declared input is not named prompt: the prompt is applied, the note is skipped", async () => {
     const record = { artifactNode: "file_picture", step: "picture_flow", noteInput: "imagePrompt", startOutput: "pictureWords" };
     runRow = { status: "completed", templateId: "tmpl-1", inputParams: formFor(record, PROMPT) };
@@ -254,7 +252,6 @@ describe("the completer reads a Regenerate run against what its dispatch recorde
     { findingId: "picture-prompt", applied: true },
   ];
 
-  // red-first-expect: expected [ { …(2) }, { …(2) } ] to deeply equal [ { …(3) }, { …(2) } ]
   it("accepts a valid run after the template's declaration and the flow's start output changed", async () => {
     ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
     templateRow = {
@@ -319,7 +316,6 @@ describe("a Regenerate run that is not in the declared-input form is escalated, 
     }
   }
 
-  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
   it("an earlier-form run's completion is escalated, not applied", async () => {
     ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
     runRow = { status: "completed", templateId: "tmpl-1", inputParams: EARLIER_FORM };
@@ -332,7 +328,6 @@ describe("a Regenerate run that is not in the declared-input form is escalated, 
     expect(second).toMatchObject({ completed: 0, escalated: 0, unresolved: 0 });
   });
 
-  // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
   it("a dispatched earlier-form repair whose run the run start failed ends escalated, not unresolved", async () => {
     ports.readRepair.mockResolvedValue(repairRow(FINDINGS, "file_image"));
     runRow = { status: "failed", templateId: "tmpl-1", inputParams: EARLIER_FORM };
@@ -395,7 +390,6 @@ describe("the completer binds the run's signed receipt to the step its dispatch 
     }
   }
 
-  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
   it("a valid receipt for another step than the recorded one is escalated, not applied", async () => {
     const summary = await completeWithReceipt("draft_flow");
     expect(ports.submitRepairResponse).not.toHaveBeenCalled();

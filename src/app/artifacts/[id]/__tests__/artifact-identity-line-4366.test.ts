@@ -87,10 +87,6 @@ import {
 } from "../artifact-detail-header";
 import type * as DisplayIdentityModule from "../artifact-display-identity";
 import { ExtensionRendererSlot } from "../extension-renderer-slot";
-// The module the fix adds is loaded inside each test, not at the top of the
-// file: before the fix the file still loads and each test fails on the
-// missing module.
-// red-first-expect: Cannot find module '/src/app/artifacts/[id]/artifact-display-identity'
 let displayIdentityFromModule!: typeof DisplayIdentityModule.displayIdentityFromModule;
 let readArtifactDisplayIdentity!: typeof DisplayIdentityModule.readArtifactDisplayIdentity;
 async function loadDisplayIdentity(): Promise<void> {

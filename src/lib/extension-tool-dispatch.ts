@@ -38,6 +38,7 @@ import {
 } from "@/lib/artifacts/artifact-review-target";
 import {
   loadDeclaredToolModule,
+  type DevelopmentSourceBinding,
   type ExactInstallBinding,
   type ExtensionToolModuleLoaderDeps,
 } from "@/lib/extension-tool-module-loader";
@@ -296,6 +297,8 @@ export async function dispatchExtensionTool(input: {
    * the load road unchanged. Absent: the name-and-version road, as before.
    */
   install?: ExactInstallBinding;
+  /** A proven development source, handed to the load road unchanged; the key's presence binds the load. */
+  developmentSource?: DevelopmentSourceBinding;
   deps?: ExtensionToolModuleLoaderDeps;
 }): Promise<unknown> {
   const declared = declaredToolsOf(input.cinatra, input.packageName);
@@ -327,6 +330,7 @@ export async function dispatchExtensionTool(input: {
       toolName: tool.name,
       modulePath: tool.module,
       ...(input.install === undefined ? {} : { install: input.install }),
+      ...(Object.hasOwn(input, "developmentSource") ? { developmentSource: input.developmentSource } : {}),
     },
     input.deps ?? {},
   );

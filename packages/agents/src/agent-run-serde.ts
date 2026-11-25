@@ -804,6 +804,12 @@ export async function selectWayflowRunStepToolPolicy(input: {
       !text(b.declarationSource) || sha256(b.declarationSource) !== b.declarationSourceSha256) {
     throw new RunStepToolPolicyRefusal("step_tool_loader_binding_invalid");
   }
+  // cinatra#4762: a publishing step of the source this run will execute calls only the host routes that check the call.
+  // Read on the executed source at every first dispatch, so a template compiled before that check is refused here too;
+  // the error is the compiler's fixed text, which names node ids only.
+  const { checkExecutedPublishingCallRoutes } = await import("./oas-compiler");
+  const routes = checkExecutedPublishingCallRoutes(b.declarationSource as string);
+  if (!routes.ok) throw new RunStepToolPolicyRefusal(routes.error);
   return createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
     selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
 }

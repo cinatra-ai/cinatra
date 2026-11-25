@@ -204,8 +204,6 @@ describe("ensureBundledAgentTemplateRecord", () => {
   // seeded the row, image v2 reconciles new runtime bytes without that step).
   // The row is still never rewritten here; a stale list refuses, so the boot
   // reports the package instead of leaving it silently stale.
-  // Before the fix the seeder leaves an existing row alone, so it resolves with that outcome where these cases expect a refusal:
-  // red-first-expect: promise resolved "{ outcome: 'exists' }" instead of rejecting
   describe("cinatra#4264 A1b — an existing row's stored regenerate list is checked against the image's flow", () => {
     const KEPT = [{ artifactNode: "call_llm_bridge", step: "call_llm_bridge", noteInput: "user" }];
     const STALE = [{ artifactNode: "file_image", step: "image_flow", noteInput: "prompt" }];
