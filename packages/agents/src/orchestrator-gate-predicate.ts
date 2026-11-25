@@ -36,3 +36,43 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 export function isContextSelectorRendererId(renderer: string): boolean {
   return renderer === "context-selector" || renderer.endsWith(":context-selector");
 }
+
+// cinatra#3089: the review marker of a step that names its gate's node
+// (`artifactReviewGateNode`, the compiled step of an embedded marked gate) is
+// applied to a pause by the pause's VERIFIED node only, never by its position.
+// `reviewGateNodeSteps` reads those steps from a stored policy (any other shape
+// is no such step). `artifactReviewMarkerForPause` answers the marker a pause
+// takes: the marker of the node-named step whose node is the verified node;
+// else none when the step the position picked names a node (its marker belongs
+// to another pause); else the marker the position picked (a step that names
+// no node keeps today's reading).
+export type ReviewGateNodeStep = { node: string; targetsInput: string; stepNumber: number | null };
+export const ARTIFACT_REVIEW_GATE_UNVERIFIED = "ARTIFACT_REVIEW_GATE_UNVERIFIED";
+export const ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT =
+  `${ARTIFACT_REVIEW_GATE_UNVERIFIED}: this flow reviews artifacts at a named step, and the pause carries no verified step claim, ` +
+  "so it cannot be told whether this pause is that review; the pause was not offered as an approval and the run was stopped";
+export function reviewGateNodeSteps(steps: unknown): ReviewGateNodeStep[] {
+  if (!Array.isArray(steps)) return [];
+  const found: ReviewGateNodeStep[] = [];
+  for (const step of steps) {
+    if (step === null || typeof step !== "object" || Array.isArray(step)) continue;
+    // The node is read first: a step that names no node is not read further.
+    const node = (step as Record<string, unknown>)["artifactReviewGateNode"];
+    if (typeof node !== "string" || node.length === 0) continue;
+    const { artifactReviewTargetsInput: targetsInput, stepNumber } = step as Record<string, unknown>;
+    if (typeof targetsInput !== "string" || targetsInput.length === 0) continue;
+    found.push({ node, targetsInput, stepNumber: typeof stepNumber === "number" ? stepNumber : null });
+  }
+  return found;
+}
+export function artifactReviewMarkerForPause(input: {
+  nodeSteps: readonly ReviewGateNodeStep[];
+  verifiedNode: string;
+  positional: { targetsInput: string | null; stepNumber: number | null };
+}): string | null {
+  const own = input.nodeSteps.find((s) => s.node === input.verifiedNode);
+  if (own) return own.targetsInput;
+  const { stepNumber, targetsInput } = input.positional;
+  if (stepNumber !== null && input.nodeSteps.some((s) => s.stepNumber === stepNumber)) return null;
+  return targetsInput;
+}

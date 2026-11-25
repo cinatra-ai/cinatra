@@ -513,7 +513,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, artifactReviewMarkerForPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -527,7 +527,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY, verifyGateNodeClaim } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -2395,6 +2395,21 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
+    // cinatra#3089: a template whose marked review step names its gate's node
+    // takes that marker by the verified node of the pause, never by position.
+    // Without a verified node it cannot be told whether this pause is that
+    // review: the run is stopped failed, the pause offered as no approval.
+    let reviewNodeSteps: ReturnType<typeof reviewGateNodeSteps> = [];
+    try {
+      reviewNodeSteps = reviewGateNodeSteps((await readAgentTemplateById(run.templateId))?.approvalPolicy?.steps);
+    } catch { /* unreadable: the renderer resolution below meets the same fault */ }
+    const verifiedGateNode = reviewNodeSteps.length === 0 ? null
+      : verifyGateNodeClaim({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY, contextId: task.contextId ?? run.a2aContextId, taskId: task.id, claim: gateNodeClaim });
+    if (reviewNodeSteps.length > 0 && verifiedGateNode === null) {
+      await transitionRunStatus(runId, fromStatus, "failed", { error: ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, completedAt: new Date() }, authority)
+        .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
+      return;
+    }
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2571,6 +2586,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lists, or null (every run input) when the template was not read.
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
+    }
+    if (verifiedGateNode !== null) {
+      wayflowArtifactReviewTargetsInput = artifactReviewMarkerForPause({ nodeSteps: reviewNodeSteps, verifiedNode: verifiedGateNode,
+        positional: { targetsInput: wayflowArtifactReviewTargetsInput, stepNumber: wayflowStepNumber } });
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.

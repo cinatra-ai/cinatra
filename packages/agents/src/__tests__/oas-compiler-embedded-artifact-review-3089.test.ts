@@ -50,10 +50,27 @@ function markedGate(id = "drafts-approval_gate", extra: Record<string, unknown> 
 
 // The gates run one after the other (an edge joins each to the next). A gate in
 // `unreachable` is serialized in the subflow and listed in its nodes, but no
-// control edge leads to it, so it never executes.
+// control edge leads to it, so it never executes. When a reachable gate carries
+// a marker, the subflow starts with a filing step (`<id>-file`) whose output
+// feeds the input that marker names: the child produces its own targets.
+function targetsOf(g: Record<string, unknown>): string | undefined {
+  const t = (g.metadata as { cinatra?: { artifactReview?: { targetsInput?: unknown } } } | undefined)?.cinatra?.artifactReview?.targetsInput;
+  return typeof t === "string" && t.length > 0 ? t : undefined;
+}
 function subflow(id: string, gates: Array<Record<string, unknown>>, unreachable: Array<Record<string, unknown>> = []) {
+  const marked = gates.filter((g) => targetsOf(g) !== undefined);
+  const file = {
+    component_type: "ApiNode",
+    id: `${id}-file`,
+    name: `${id}-file`,
+    url: "http://localhost/file",
+    http_method: "POST",
+    inputs: [],
+    outputs: [...new Set(marked.map((g) => targetsOf(g)!))].map((title) => ({ title, type: "string" })),
+  };
+  const chain = marked.length > 0 ? [file, ...gates] : gates;
   const refs: Record<string, unknown> = {};
-  for (const g of [...gates, ...unreachable]) refs[g.id as string] = g;
+  for (const g of [...chain, ...unreachable]) refs[g.id as string] = g;
   return {
     agentspec_version: "26.1.0",
     component_type: "Flow",
@@ -62,13 +79,21 @@ function subflow(id: string, gates: Array<Record<string, unknown>>, unreachable:
     metadata: { cinatra: { type: "leaf" } },
     inputs: [],
     outputs: [],
-    start_node: { $component_ref: gates[0]!.id },
-    nodes: [...gates, ...unreachable].map((g) => ({ $component_ref: g.id })),
-    control_flow_connections: gates.slice(1).map((g, i) => ({
+    start_node: { $component_ref: chain[0]!.id },
+    nodes: [...chain, ...unreachable].map((g) => ({ $component_ref: g.id })),
+    control_flow_connections: chain.slice(1).map((g, i) => ({
       component_type: "ControlFlowEdge",
       name: `s${i}`,
-      from_node: { $component_ref: gates[i]!.id },
+      from_node: { $component_ref: chain[i]!.id },
       to_node: { $component_ref: g.id },
+    })),
+    data_flow_connections: marked.map((g) => ({
+      component_type: "DataFlowEdge",
+      name: `file_to_${g.id as string}`,
+      source_node: { $component_ref: file.id },
+      source_output: targetsOf(g),
+      destination_node: { $component_ref: g.id },
+      destination_input: targetsOf(g),
     })),
     $referenced_components: refs,
   };
@@ -695,11 +720,14 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
   });
 
-  it("refuses a marked gate whose unfed targets input is handed in by the embedding flow, but not one handed another input", async () => {
+  it("refuses a marked gate whose unfed targets input is handed in by the embedding flow, and one whose targets nothing in the child produces", async () => {
+    const unfed = flowDoc("drafts-subflow", "cs", [startNode("cs", ["campaignId"]), markedGate(), endNode("ce")], [ctl("cs", G), ctl(G, "ce")]);
     const handed = (input: string) => [dataEdge("startNode", "senderName", "drafts_flow", input)];
-    expect(await compileError({ parentEdges: handed("reviewTargets") })).toContain(CALLER);
-    const steps = await compileSteps({ parentEdges: handed("campaignId") });
-    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+    expect(await compileError({ draftsFlow: unfed, parentEdges: handed("reviewTargets") })).toContain(CALLER);
+    // Only an unrelated input is handed in: nothing feeds the targets at all.
+    const error = await compileError({ draftsFlow: unfed, parentEdges: handed("campaignId") });
+    // red-first-expect: expected true to be false
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_TARGETS_NOT_PRODUCED");
   });
 
   // ----- control flow: exactly one pause -----
@@ -719,7 +747,8 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
   });
 
   it("a loop after the marked gate that never returns to it does not refuse the gate", async () => {
-    const doc = flowDoc("drafts-subflow", G, [markedGate(), mintNode("n0"), mintNode("n1")], [ctl(G, "n0"), ctl("n0", "n1"), ctl("n1", "n0")]);
+    const doc = flowDoc("drafts-subflow", "file", [mintNode("file"), markedGate(), mintNode("n0"), mintNode("n1")],
+      [ctl("file", G), ctl(G, "n0"), ctl("n0", "n1"), ctl("n1", "n0")], [dataEdge("file", "reviewTargets", G, "reviewTargets")]);
     const steps = await compileSteps({ draftsFlow: doc });
     expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
   });
@@ -734,10 +763,10 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(await compileError({ draftsFlow: doc })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
   });
 
-  it("refuses a marked gate that a branch lets the run skip, and one inside a repeating node", async () => {
+  it("refuses a marked gate that a branch lets the run skip after the filing, and one inside a repeating node", async () => {
     const skip = flowDoc("drafts-subflow", "n0", [mintNode("n0"), markedGate(), endNode("ce")],
-      [ctl("n0", G, "yes"), ctl("n0", "ce", "no"), ctl(G, "ce")]);
-    expect(await compileError({ draftsFlow: skip })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+      [ctl("n0", G, "yes"), ctl("n0", "ce", "no"), ctl(G, "ce")], [dataEdge("n0", "reviewTargets", G, "reviewTargets")]);
+    expect(await compileError({ draftsFlow: skip })).toContain("ARTIFACT_REVIEW_GATE_UNREVIEWED_PATH");
     const each = flowDoc("drafts-subflow", "m", [
       { component_type: "MapNode", id: "m", name: "m", subflow: flowDoc("per-item", G, [markedGate()], []) },
     ], []);
@@ -746,7 +775,7 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
 
   it("a marked gate that every path crosses once, after a branch that rejoins, is carried", async () => {
     const doc = flowDoc("drafts-subflow", "n0", [mintNode("n0"), mintNode("a"), mintNode("b"), markedGate(), endNode("ce")],
-      [ctl("n0", "a", "x"), ctl("n0", "b", "y"), ctl("a", G), ctl("b", G), ctl(G, "ce")]);
+      [ctl("n0", "a", "x"), ctl("n0", "b", "y"), ctl("a", G), ctl("b", G), ctl(G, "ce")], [dataEdge("n0", "reviewTargets", G, "reviewTargets")]);
     const steps = await compileSteps({ draftsFlow: doc });
     expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
   });
@@ -828,6 +857,7 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     return sub;
   };
   const draftingParts = (extra: Partial<Parts> = {}): Parts => ({
+    draftsGates: [gate("drafts-unused_gate", {})],
     extraRefs: {
       drafts_flow: embeddedDrafting.flowNode,
       "email-drafting-subflow": draftingSubflow(),
@@ -899,15 +929,18 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(await compileError({ draftsFlow: readsFirst })).toContain(UNREVIEWED);
   });
 
-  it("a gate a run may skip must be the last reviewer step: a later reviewer pause is refused", async () => {
-    const error = await compileError(draftingParts({
-      senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }],
-    }));
-    expect(error).toContain("ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST");
-    // A gate every run crosses keeps its place before a later reviewer step.
-    const steps = await compileSteps({
-      senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }],
-    });
-    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  it("the step of a carried gate names the gate's node, also before a later reviewer step, whatever the paths", async () => {
+    const later = { senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }] };
+    for (const parts of [draftingParts(later), later]) {
+      const steps = await compileSteps(parts);
+      // red-first-expect: expected undefined to be 'drafts-approval_gate'
+      expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+      expect(byName(steps, "Confirm send").artifactReviewGateNode).toBeUndefined();
+    }
+  });
+
+  it("refuses a marked gate whose id another component of the flow also carries", async () => {
+    const error = await compileError({ extraRefs: { "other-subflow": subflow("other-subflow", [gate(G, {})]) } });
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE");
   });
 });

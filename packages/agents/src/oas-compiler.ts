@@ -58,7 +58,7 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
-import { isContextSelectorRendererId, stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { isContextSelectorRendererId } from "./orchestrator-gate-predicate";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
@@ -1254,6 +1254,12 @@ export type CompiledAgentOasStep = {
   // surface instead of the legacy reviewer envelope. Absent (the default) means
   // the gate is an ordinary HITL gate and every code path stays byte-identical.
   artifactReviewTargetsInput?: string;
+  // cinatra#3089: set ONLY on the step of an EMBEDDED marked gate (a FlowNode
+  // gateStep): the gate's own node id, which is the step id the runtime signs
+  // on a pause (`cinatra_gate_node`). The host applies the marker of this step
+  // to a pause when, and only when, the pause's verified node equals it; never
+  // by the pause's position.
+  artifactReviewGateNode?: string;
   // cinatra#4457: set ONLY on an InputMessageNode gate whose
   // `metadata.cinatra.surfaceGateInputs` is strictly `true`, and on a FlowNode
   // step (a gateStep or the plain step) whose INLINED subflow holds such a gate
@@ -1600,11 +1606,10 @@ function readReachableInputMessageNodes(
   return { gates, repeated, unreadableMarked };
 }
 
-// Control flow: does the run reach `nodeId` of `flow` exactly once on every
-// path? Not when a control edge leads back to it (a loop, a branch back, any
-// edge from a later node to an earlier one: all are edges of the adjacency, so
-// the gate is reached again from its own successors), and not when a path from
-// the start to an end avoids it (a branch can skip it).
+// Control flow: can the run reach `nodeId` of `flow` more than once? Yes when a
+// control edge leads back to it (a loop, a branch back, any edge from a later
+// node to an earlier one: all are edges of the adjacency, so the gate is
+// reached again from its own successors).
 function nodeOnControlCycle(flow: Record<string, unknown>, nodeId: string): boolean {
   const { adjacency } = readFlowControlTopology(flow);
   const visited = new Set<string>();
@@ -1615,29 +1620,6 @@ function nodeOnControlCycle(flow: Record<string, unknown>, nodeId: string): bool
     if (visited.has(id)) continue;
     visited.add(id);
     for (const n of adjacency.get(id) ?? []) stack.push(n);
-  }
-  return false;
-}
-function pathAvoidsNode(flow: Record<string, unknown>, outer: Record<string, unknown>, nodeId: string): boolean {
-  const { adjacency, reachable } = readFlowControlTopology(flow);
-  const start = reachable[0];
-  if (start === undefined || start === nodeId) return false;
-  const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
-  const isEnd = (id: string): boolean => {
-    const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
-    return (adjacency.get(id) ?? []).length === 0 || (isRecord(comp) && comp["component_type"] === "EndNode");
-  };
-  const visited = new Set<string>([start]);
-  const queue = [start];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (isEnd(id)) return true;
-    for (const n of adjacency.get(id) ?? []) {
-      if (n !== nodeId && !visited.has(n)) {
-        visited.add(n);
-        queue.push(n);
-      }
-    }
   }
   return false;
 }
@@ -1659,9 +1641,6 @@ function chainLevels(g: ReachableGate): ChainLevel[] {
   const levels: ChainLevel[] = [{ flow: g.flow, outer: g.outer, unit: g.id }];
   for (let link = g.up; link; link = link.parent) levels.push({ flow: link.flow, outer: link.outer, unit: link.nodeId });
   return levels;
-}
-function gateSkippable(g: ReachableGate): boolean {
-  return chainLevels(g).some((l) => pathAvoidsNode(l.flow, l.outer, l.unit));
 }
 
 // Provenance: is the value that reaches `input` of `nodeId` handed in by the
@@ -1803,8 +1782,9 @@ function traceTargetsInput(
 // level the targets were filed before the run entered the flow, so there the
 // unit must be crossed on every path, before any node that reads the value it
 // entered by; a parallel branch beside the one holding the gate must not read
-// it either. With no producer in the chain (an input nothing feeds), the gate
-// must be crossed on every path, as before.
+// it either. A gate with no producer in the chain (an input nothing in the
+// child feeds)
+// is refused: its targets would hold nothing the child filed.
 function dataReaders(flow: Record<string, unknown>, from: string, names: ReadonlySet<string> | null, unit: string): Set<string> {
   const edges = Array.isArray(flow["data_flow_connections"]) ? (flow["data_flow_connections"] as unknown[]) : [];
   const readers = new Set<string>();
@@ -1865,12 +1845,12 @@ function siblingBranchReads(holder: ChainLevel, branch: Record<string, unknown>,
   }
   return false;
 }
-function reviewCoversFiling(g: ReachableGate, trace: TargetsTrace): "ok" | "every-path" | "unreviewed" {
+function reviewCoversFiling(g: ReachableGate, trace: TargetsTrace): "ok" | "not-produced" | "unreviewed" {
   const levels = chainLevels(g);
   const chain = trace.producers
     .map((p) => ({ level: levels.findIndex((l) => l.flow === p.flow), nodeId: p.nodeId }))
     .filter((p) => p.level >= 0);
-  if (chain.length === 0) return gateSkippable(g) ? "every-path" : "ok";
+  if (chain.length === 0) return "not-produced";
   const top = Math.max(...chain.map((p) => p.level));
   for (let j = 0; j < top; j++) {
     const { flow, outer, unit } = levels[j]!;
@@ -1885,6 +1865,22 @@ function reviewCoversFiling(g: ReachableGate, trace: TargetsTrace): "ok" | "ever
     if (reachesPastUnit(flow, outer, p.nodeId, unit, dataReaders(flow, p.nodeId, null, unit))) return "unreviewed";
   }
   return "ok";
+}
+
+// How many components (objects with a component_type) anywhere in `doc` carry
+// `id`. Written as a loop over a work list, so no depth exhausts the stack.
+function countComponentsWithId(doc: unknown, id: string): number {
+  let count = 0;
+  const seen = new Set<object>();
+  const work: unknown[] = [doc];
+  while (work.length > 0) {
+    const value = work.pop();
+    if (value === null || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (!Array.isArray(value) && typeof (value as Record<string, unknown>)["component_type"] === "string" && (value as Record<string, unknown>)["id"] === id) count += 1;
+    for (const v of Object.values(value)) work.push(v);
+  }
+  return count;
 }
 
 // cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
@@ -1908,18 +1904,21 @@ function reviewCoversFiling(g: ReachableGate, trace: TargetsTrace): "ok" | "ever
 //   * the targets are produced by a node of the child (traceTargetsInput, also
 //     through FlowNode and ParallelFlowNode outputs), and a run that files them
 //     crosses the gate before the end and before any step that reads them
-//     (reviewCoversFiling); a run that never files may skip the gate. A gate a
-//     run may skip is the flow's last reviewer step (the host matches pauses to
-//     steps by their order), checked once the steps are built.
+//     (reviewCoversFiling); a run that never files may skip the gate, and a
+//     gate whose targets no node of the child produces is refused;
+//   * the gate's id names no other component of the flow: the step carries it
+//     (artifactReviewGateNode) and the host applies the marker only to a pause
+//     whose verified node is that id, never by the pause's position.
 // Returns null when the subflow holds no marked gate (the step is as before).
 // Error texts name node ids only.
-type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string; skippable: boolean };
+type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string };
 function readEmbeddedArtifactReviewGate(
   flowNodeId: string,
   flowNode: { subflow?: unknown; metadata?: { cinatra?: { gateSteps?: unknown } } },
   localRefs: Record<string, unknown>,
   parentRunInputTitles: ReadonlySet<string>,
   embeddingEdges: unknown,
+  rootDoc: unknown,
 ): { ok: true; found: EmbeddedArtifactReviewGate | null } | { ok: false; error: string } {
   const subflow = resolveSubflowValue(flowNode.subflow, localRefs);
   if (!subflow) return { ok: true, found: null };
@@ -2010,8 +2009,13 @@ function readEmbeddedArtifactReviewGate(
     };
   }
   const coverage = reviewCoversFiling(only!, trace);
-  if (coverage === "every-path") {
-    return { ok: false, error: ambiguous };
+  if (coverage === "not-produced") {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_TARGETS_NOT_PRODUCED: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `whose targets input no node of the child flow produces`,
+    };
   }
   if (coverage === "unreviewed") {
     return {
@@ -2021,7 +2025,17 @@ function readEmbeddedArtifactReviewGate(
         `a run that files its targets must cross the gate before the end and before any step that reads them`,
     };
   }
-  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId, skippable: gateSkippable(only!) } };
+  // The host tells this gate's pause by its node id: the id must name exactly
+  // one component of the whole flow, so no other pause can carry it.
+  if (gateId.length === 0 || countComponentsWithId(rootDoc, gateId) !== 1) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `whose id must be a non-empty id that no other component of the flow carries`,
+    };
+  }
+  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId } };
 }
 
 // cinatra#4150: the publishing-step declaration. A pack marks the node that
@@ -2595,7 +2609,7 @@ export async function compileOasAgentJson(opts: {
   for (const id of steppableNodeIds) {
     const comp = localRefs[id] as { component_type?: string } | undefined;
     if (comp?.component_type !== "FlowNode") continue;
-    const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles, dataFlowEdges);
+    const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles, dataFlowEdges, parsed);
     if (!read.ok) return { ok: false, error: read.error };
     if (read.found) embeddedReviewGates.set(id, read.found);
   }
@@ -2819,6 +2833,7 @@ export async function compileOasAgentJson(opts: {
         if (embeddedReview) {
           const view = readInputMessageGateView(embeddedReview.gate, embeddedReview.gateId);
           step.artifactReviewTargetsInput = embeddedReview.targetsInput;
+          step.artifactReviewGateNode = embeddedReview.gateId;
           // As the standalone gate's own step: a reviewer pause the flow owns,
           // whatever the gateStep says about approval or ownership.
           step.requiresApproval = true;
@@ -2897,23 +2912,6 @@ export async function compileOasAgentJson(opts: {
     const _exhaustive: never = handledCompType;
     throw new Error(`unreachable: unhandled component_type "${String(_exhaustive)}"`);
   });
-
-  // cinatra#3089: the host matches each reviewer pause to a step by its order
-  // (resolveWayflowXRenderer). A marked embedded gate that a run may skip (an
-  // early exit before the filing) is therefore the last step that pauses for a
-  // reviewer: a later pause would otherwise take its marker.
-  for (let i = 0; i < agentSteps.length; i++) {
-    const embedded = embeddedReviewGates.get(expandedEntries[i]!.id);
-    if (!embedded?.skippable) continue;
-    if (agentSteps.slice(i + 1).some(stepFiresRendererGate)) {
-      return {
-        ok: false,
-        error:
-          `ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST: FlowNode ${quoteNodeId(expandedEntries[i]!.id)} wraps the artifact-review gate ` +
-          `${quoteNodeId(embedded.gateId)}, which a run may skip; no later step may pause for a reviewer`,
-      };
-    }
-  }
 
   const steps: CompiledAgentOasStep[] = startNodeStep
     ? [startNodeStep, ...agentSteps]
