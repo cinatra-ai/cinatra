@@ -321,7 +321,6 @@ describe("resolveRegenerateSegment checks the run's inputs at its start", () => 
   const withFindings = () => deps({ readRepairForRun: vi.fn(async () => ({ ...intent(), findings: FINDINGS })) });
   const runWith = (inputParams: unknown) => ({ ...RUN_ROW, inputParams }) as typeof RUN_ROW;
 
-  // red-first-expect: expected 'segment' to be 'refused' // Object.is equality
   it("refuses a run that holds the earlier findings form", async () => {
     const earlier = {
       imagePrompt: "Apply these review findings:\n\n1. Make the sky brighter\n2. A lighthouse at dusk, wide angle",
@@ -758,7 +757,6 @@ describe("claimSegmentProduction", () => {
     expect(await claim({ readReceiptRow: vi.fn(async () => null) })).toBeNull();
   });
 
-  // red-first-expect: to be 'receipt-not-the-recorded-segment'
   it("refuses a valid receipt whose step or node is not the run's recorded declaration", async () => {
     expect(await claim({ readReceiptRow: vi.fn(async () => receiptRow("file_image", "draft_flow")) })).toBe(
       "receipt-not-the-recorded-segment",
@@ -768,7 +766,6 @@ describe("claimSegmentProduction", () => {
     );
   });
 
-  // red-first-expect: expected null to be 'receipt-not-the-recorded-segment'
   it("refuses a run whose one verified ledger row and valid receipt both name another node", async () => {
     expect(
       await claim({

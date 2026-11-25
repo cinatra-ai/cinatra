@@ -95,7 +95,6 @@ describe("cinatra#3862 leg 7 — the maintenance sweep completes repairs through
 
   // cinatra#4264: a Regenerate repair the completer escalated (its run was not
   // made in the declared-input form) is counted in the maintenance summary.
-  // red-first-expect: expected undefined to be 3 // Object.is equality
   it("carries the completer's escalations into the summary", async () => {
     const { sweepLifecycleGateMaintenance } = await import("../lifecycle-review-orchestration-store");
     const summary = await sweepLifecycleGateMaintenance();

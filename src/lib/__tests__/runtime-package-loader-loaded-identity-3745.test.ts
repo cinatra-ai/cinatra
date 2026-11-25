@@ -99,7 +99,6 @@ function driveWith(registered: boolean) {
   });
 }
 
-// red-first-expect: currentLoadedExtensionIdentity is not a function
 const current = () =>
   (registry as unknown as {
     currentLoadedExtensionIdentity: (p: string, v: string) => registry.LoadedExtensionIdentity | undefined;
@@ -149,7 +148,6 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     expect(registry.isLoadedExtensionIdentityCurrent(identity)).toBe(false);
   });
 
-  // red-first-expect: currentLoadedExtensionIdentity is not a function
   it.each([
     ["no install id", { installId: null }],
     ["no digest", { digest: null }],
@@ -165,7 +163,6 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     expect(registry.isLoadedExtensionIdentityCurrent(pinned)).toBe(false);
   });
 
-  // red-first-expect: currentLoadedExtensionIdentity is not a function
   it("a failed attempt keeps the identity a concurrent attempt stamped and registered", async () => {
     let releaseA!: () => void;
     const aStamped = new Promise<void>((resolveStamped) => {
