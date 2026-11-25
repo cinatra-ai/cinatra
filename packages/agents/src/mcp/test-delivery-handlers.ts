@@ -422,6 +422,16 @@ export async function handleEmailTestDeliveryRunSend(
         run, campaignId, submissionId, plan: pinnedPlan, planJson: pinnedPlanJson, preClaimFail,
       });
     }
+    // cinatra#4150: a call the passthrough road let through with a claimed publish decision comes from a step a
+    // publishing step governs. Such a step sends the pinned plan its card showed, never a selection made here that no
+    // one saw. The selection send runs only when the road took no claim (no publishing step governs the call).
+    if (mcpRequestContextStorage.getStore()?.publishCallClaim !== undefined) {
+      return preClaimFail({
+        ok: false,
+        reason: "plan_required",
+        message: "This test send must send the plan that was approved. Nothing was sent.",
+      });
+    }
 
     // Input validation — post-authz so a malformed envelope resolves to a
     // gateCycle-advancing failed row, never a stranded screen (F3).

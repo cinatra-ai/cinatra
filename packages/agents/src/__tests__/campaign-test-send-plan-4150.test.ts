@@ -539,13 +539,25 @@ describe("a pinned send under a publishing step mails what the claimed decision'
   });
 });
 
-describe("the selection send without a pinned plan stays exactly as it was", () => {
+describe("the selection send without a pinned plan: unchanged with no claim, refused with one", () => {
   it("plans through prepareSend and sends through performSend, never the pinned road or the decision", async () => {
-    const result = await send({ recipientEmail: "tester@example.com", selectionMode: "random_initial" }, "perform_test_send", "dec-1");
+    const result = await send({ recipientEmail: "tester@example.com", selectionMode: "random_initial" }, "perform_test_send");
     expect(result).toMatchObject({ ok: true, seq: 3 });
     expect(fakePort.prepareSend).toHaveBeenCalledTimes(1);
     expect(fakePort.performSend).toHaveBeenCalledTimes(1);
     expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
     expect(decisionMock.readDecisionOfRun).not.toHaveBeenCalled();
+  });
+
+  it("is refused with plan_required, sending nothing, when the road claimed a publish decision for the call", async () => {
+    const result = await send({ recipientEmail: "tester@example.com", selectionMode: "random_initial" }, "perform_test_send", "dec-1");
+    expect(result).toMatchObject({ ok: false, reason: "plan_required", seq: 7 });
+    expect(ledgerMock.recordPreClaimFailure).toHaveBeenCalledWith(expect.objectContaining({
+      result: expect.objectContaining({ reason: "plan_required" }),
+    }));
+    expect(fakePort.prepareSend).not.toHaveBeenCalled();
+    expect(fakePort.performSend).not.toHaveBeenCalled();
+    expect(fakePort.performPinnedSend).not.toHaveBeenCalled();
+    expect(ledgerMock.claimTestSend).not.toHaveBeenCalled();
   });
 });
