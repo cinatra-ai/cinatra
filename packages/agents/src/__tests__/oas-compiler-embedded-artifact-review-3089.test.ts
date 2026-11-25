@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { compileOasAgentJson, __resetRegistryCacheForTests, type CompiledAgentOasStep } from "../oas-compiler";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import embeddedDrafting from "./fixtures/email-drafting-embedded-3089.json";
 
 // cinatra#3089 — an artifact-review gate inside an EMBEDDED child flow.
 //
@@ -105,6 +106,7 @@ type Parts = {
   // Data edges of the whole (parent) flow.
   parentEdges?: Array<Record<string, unknown>>;
   draftsGateSteps?: unknown[] | undefined;
+  senderGateSteps?: unknown[];
   startInputs?: string[];
 };
 
@@ -154,7 +156,7 @@ function buildAgentJson(parts: Parts = {}): Record<string, unknown> {
       })(),
       ...(parts.draftsInline ? {} : { "drafts-subflow": draftsFlowDoc }),
       ...(parts.extraRefs ?? {}),
-      sender_flow: flowNode("sender_flow", "sender-subflow", "@test/delivery"),
+      sender_flow: flowNode("sender_flow", "sender-subflow", "@test/delivery", parts.senderGateSteps),
       "sender-subflow": subflow("sender-subflow", [
         gate("sender-approval_gate", { renderer: "@test/delivery:send-confirmation", surfaceGateInputs: true }, ["campaignId"]),
       ]),
@@ -774,5 +776,138 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
         expect(byName(steps, "Review drafts").firesRendererGate, JSON.stringify([inline, cinatra])).toBe(expected);
       }
     }
+  });
+
+  // ----- provenance through a parallel node's joined outputs -----
+
+  const parallelNode = (id: string, branches: Array<Record<string, unknown>>, inputs: string[], outputs: string[]) => ({
+    component_type: "ParallelFlowNode",
+    id,
+    name: id,
+    subflows: branches,
+    inputs: inputs.map((title) => ({ title, type: "string" })),
+    outputs: outputs.map((title) => ({ title, type: "string" })),
+  });
+
+  it("refuses a caller value that reaches the targets through a parallel branch and the joined output, but carries one a branch mints", async () => {
+    const branch = (minted: boolean) =>
+      flowDoc("branch", "bs", [startNode("bs", ["alias"]), mintNode("bmint"), endNode("be", ["joined"])],
+        [ctl("bs", "bmint"), ctl("bmint", "be")],
+        [minted ? dataEdge("bmint", "reviewTargets", "be", "joined") : dataEdge("bs", "alias", "be", "joined")]);
+    const doc = (minted: boolean) =>
+      flowDoc("drafts-subflow", "cs", [startNode("cs", ["picked"]), parallelNode("par", [branch(minted)], ["alias"], ["joined"]), markedGate(), endNode("ce")],
+        [ctl("cs", "par"), ctl("par", G), ctl(G, "ce")],
+        [dataEdge("cs", "picked", "par", "alias"), dataEdge("par", "joined", G, "reviewTargets")]);
+    // red-first-expect: expected true to be false
+    expect(await compileError({ draftsFlow: doc(false) })).toContain(CALLER);
+    const steps = await compileSteps({ draftsFlow: doc(true) });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("refuses a targets input that passes through a container of another kind", async () => {
+    const doc = flowDoc("drafts-subflow", "cs", [
+      startNode("cs", ["campaignId"]),
+      { component_type: "MapNode", id: "m", name: "m", subflow: flowDoc("per-item", "ms", [startNode("ms", ["x"]), endNode("me", ["reviewTargets"])], [ctl("ms", "me")]) },
+      markedGate(),
+      endNode("ce"),
+    ], [ctl("cs", "m"), ctl("m", G), ctl(G, "ce")], [dataEdge("m", "reviewTargets", G, "reviewTargets")]);
+    // red-first-expect: expected true to be false
+    expect(await compileError({ draftsFlow: doc })).toContain("ARTIFACT_REVIEW_GATE_INPUT_UNTRACEABLE");
+  });
+
+  // ----- early exits before the filing -----
+
+  const UNREVIEWED = "ARTIFACT_REVIEW_GATE_UNREVIEWED_PATH";
+  // The drafting pack's flow as the outreach flow embeds it (fixture source in
+  // its `_source`). Its filing step's list grammar (one artifact per member)
+  // comes with cinatra#4783, so the copy drops that step's request body; its
+  // control and data edges, which this rule reads, stay as they are.
+  const draftingSubflow = (): Record<string, unknown> => {
+    const sub = structuredClone(embeddedDrafting.subflow) as Record<string, unknown>;
+    delete ((sub.$referenced_components as Record<string, Record<string, unknown>>)["drafts-file_drafts"]!).data;
+    return sub;
+  };
+  const draftingParts = (extra: Partial<Parts> = {}): Parts => ({
+    extraRefs: {
+      drafts_flow: embeddedDrafting.flowNode,
+      "email-drafting-subflow": draftingSubflow(),
+    },
+    ...extra,
+  });
+  // An early exit (check -> ce) runs before the filing step (mint).
+  const earlyExit = (control: Array<Record<string, unknown>>, data: Array<Record<string, unknown>>, comps: Array<Record<string, unknown>> = []) =>
+    flowDoc("drafts-subflow", "cs", [startNode("cs", ["campaignId"]), mintNode("check"), mintNode("mint"), markedGate(), endNode("ce", ["bodies"]), ...comps],
+      [ctl("cs", "check"), ctl("check", "ce", "missing"), ctl("check", "mint", "ok"), ...control], data);
+  const TARGETS = dataEdge("mint", "reviewTargets", G, "reviewTargets");
+
+  it("the drafting pack's flow, embedded as the outreach flow embeds it, compiles with one review step", async () => {
+    const steps = await compileSteps(draftingParts());
+    const reviews = steps.filter((s) => s.artifactReviewTargetsInput !== undefined);
+    expect(reviews.map((s) => s.name)).toEqual(["Review drafts"]);
+    expect(reviews[0]!.artifactReviewTargetsInput).toBe("reviewTargets");
+    expect(reviews[0]!.gateCount).toBe(1);
+  });
+
+  it("an early exit before the filing may skip the gate; a branch after the filing that skips it is refused", async () => {
+    const steps = await compileSteps({ draftsFlow: earlyExit([ctl("mint", G), ctl(G, "ce")], [TARGETS]) });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+    const after = earlyExit([ctl("mint", G, "review"), ctl("mint", "ce", "skip"), ctl(G, "ce")], [TARGETS]);
+    expect(await compileError({ draftsFlow: after })).toContain(UNREVIEWED);
+  });
+
+  it("an early exit beside a loop that could cross the gate twice is still refused", async () => {
+    const loop = earlyExit([ctl("mint", G), ctl(G, "mint", "again"), ctl(G, "ce", "done")], [TARGETS]);
+    expect(await compileError({ draftsFlow: loop })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+  });
+
+  it("an early exit inside the parallel branch that files and reviews is carried; one in a branch handed filed targets is refused", async () => {
+    const own = flowDoc("branch", "bs", [startNode("bs", ["campaignId"]), mintNode("check"), mintNode("mint"), markedGate(), endNode("be")],
+      [ctl("bs", "check"), ctl("check", "be", "missing"), ctl("check", "mint", "ok"), ctl("mint", G), ctl(G, "be")], [TARGETS]);
+    const inParallel = (branch: Record<string, unknown>, before: Array<Record<string, unknown>>, data: Array<Record<string, unknown>>) =>
+      flowDoc("drafts-subflow", "cs", [startNode("cs", ["campaignId"]), mintNode("mint0"), parallelNode("par", [branch], ["filed"], []), endNode("ce")],
+        [...before, ctl("par", "ce")], data);
+    const steps = await compileSteps({ draftsFlow: inParallel(own, [ctl("cs", "par")], []) });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+    const handed = flowDoc("branch", "bs", [startNode("bs", ["filed"]), mintNode("check"), markedGate(), endNode("be")],
+      [ctl("bs", "check"), ctl("check", "be", "missing"), ctl("check", G, "ok"), ctl(G, "be")], [dataEdge("bs", "filed", G, "reviewTargets")]);
+    const error = await compileError({
+      draftsFlow: inParallel(handed, [ctl("cs", "mint0"), ctl("mint0", "par")], [dataEdge("mint0", "reviewTargets", "par", "filed")]),
+    });
+    expect(error).toContain(UNREVIEWED);
+  });
+
+  it("targets from two producers are carried when each is followed by the gate, refused when one is not", async () => {
+    const two = (skip: boolean) =>
+      flowDoc("drafts-subflow", "cs", [startNode("cs", ["campaignId"]), mintNode("check"), mintNode("p1"), mintNode("p2"), markedGate(), endNode("ce")],
+        [ctl("cs", "check"), ctl("check", "p1", "a"), ctl("check", "p2", "b"), ctl("p1", G), skip ? ctl("p2", "ce") : ctl("p2", G), ctl(G, "ce"), ...(skip ? [ctl("check", G, "c")] : [])],
+        [dataEdge("p1", "reviewTargets", G, "reviewTargets"), dataEdge("p2", "reviewTargets", G, "reviewTargets")]);
+    const steps = await compileSteps({ draftsFlow: two(false) });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+    expect(await compileError({ draftsFlow: two(true) })).toContain(UNREVIEWED);
+  });
+
+  it("an end output fed by the filing is empty on an early exit; a step that reads the filing before the gate is refused", async () => {
+    const steps = await compileSteps({
+      draftsFlow: earlyExit([ctl("mint", G), ctl(G, "ce")], [TARGETS, dataEdge("mint", "reviewTargets", "ce", "bodies")]),
+    });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+    const reader = {
+      component_type: "ApiNode", id: "send", name: "send", url: "http://localhost/send", http_method: "POST",
+      inputs: [{ title: "bodies", type: "string" }], outputs: [],
+    };
+    const readsFirst = earlyExit([ctl("mint", "send"), ctl("send", G), ctl(G, "ce")], [TARGETS, dataEdge("mint", "reviewTargets", "send", "bodies")], [reader]);
+    expect(await compileError({ draftsFlow: readsFirst })).toContain(UNREVIEWED);
+  });
+
+  it("a gate a run may skip must be the last reviewer step: a later reviewer pause is refused", async () => {
+    const error = await compileError(draftingParts({
+      senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }],
+    }));
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST");
+    // A gate every run crosses keeps its place before a later reviewer step.
+    const steps = await compileSteps({
+      senderGateSteps: [{ name: "Confirm send", renderer: "@test/delivery:send-confirmation", hitlOwnedBy: "self", gateCount: 1 }],
+    });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
   });
 });

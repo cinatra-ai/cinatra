@@ -58,7 +58,7 @@ import {
 } from "./artifact-binding";
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
-import { isContextSelectorRendererId } from "./orchestrator-gate-predicate";
+import { isContextSelectorRendererId, stepFiresRendererGate } from "./orchestrator-gate-predicate";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
@@ -1642,14 +1642,26 @@ function pathAvoidsNode(flow: Record<string, unknown>, outer: Record<string, unk
   return false;
 }
 // The gate, and each node that holds the flow it sits in (up to the embedded
-// root), must be crossed exactly once by every run of the child.
-function gatePausesOnce(g: ReachableGate): boolean {
-  if (g.iterated) return false;
-  if (nodeOnControlCycle(g.flow, g.id) || pathAvoidsNode(g.flow, g.outer, g.id)) return false;
+// root), is crossed at most once by every run of the child: no repeating
+// container holds it and none of them sits on a control-flow loop.
+function gateAtMostOnce(g: ReachableGate): boolean {
+  if (g.iterated || nodeOnControlCycle(g.flow, g.id)) return false;
   for (let link = g.up; link; link = link.parent) {
-    if (nodeOnControlCycle(link.flow, link.nodeId) || pathAvoidsNode(link.flow, link.outer, link.nodeId)) return false;
+    if (nodeOnControlCycle(link.flow, link.nodeId)) return false;
   }
   return true;
+}
+// The flows from the gate's own (level 0) up to the embedded root, each with
+// the node of it the run crosses to reach the gate (the gate itself, then the
+// node that holds the flow below).
+type ChainLevel = { flow: Record<string, unknown>; outer: Record<string, unknown>; unit: string };
+function chainLevels(g: ReachableGate): ChainLevel[] {
+  const levels: ChainLevel[] = [{ flow: g.flow, outer: g.outer, unit: g.id }];
+  for (let link = g.up; link; link = link.parent) levels.push({ flow: link.flow, outer: link.outer, unit: link.nodeId });
+  return levels;
+}
+function gateSkippable(g: ReachableGate): boolean {
+  return chainLevels(g).some((l) => pathAvoidsNode(l.flow, l.outer, l.unit));
 }
 
 // Provenance: is the value that reaches `input` of `nodeId` handed in by the
@@ -1657,9 +1669,17 @@ function gatePausesOnce(g: ReachableGate): boolean {
 // data edges into the input are followed back through the child: the child's
 // own start (the root child's start inputs are what the embedding flow hands
 // in), a nested flow's end (and, inside it, its own edges), and a nested flow's
-// start (its inputs are what the node holding it receives). A node of any
-// other kind produces its outputs itself. An input no edge feeds is an input of
-// its flow under that name. A source that cannot be read counts as handed in.
+// start (its inputs are what the node holding it receives). A nested flow is a
+// FlowNode's subflow or any branch of a ParallelFlowNode (its inputs reach
+// every branch's start by name, and each output is the output of that name of
+// a branch's end, as the loader bridges them). A node of any other kind that
+// holds no flow produces its outputs itself: it is a PRODUCER of the targets.
+// A node of another kind that holds a flow (a MapNode, any other container)
+// cannot be traced: `untraceable`. An input no edge feeds is an input of its
+// flow under that name. A source that cannot be read counts as handed in.
+// The trace also records each start output the value enters a flow by
+// (`entries`) and each producer, a FlowNode or ParallelFlowNode it passes
+// through included.
 function dataEdgesInto(flow: Record<string, unknown>, nodeId: string, input: string): Array<{ srcId: string | undefined; srcOutput: string | undefined }> {
   const edges = flow["data_flow_connections"];
   const found: Array<{ srcId: string | undefined; srcOutput: string | undefined }> = [];
@@ -1676,12 +1696,21 @@ function dataEdgesInto(flow: Record<string, unknown>, nodeId: string, input: str
   }
   return found;
 }
-function inputHandedInByEmbeddingFlow(
+type TargetsTrace = {
+  handedIn: boolean;
+  untraceable: boolean;
+  producers: Array<{ flow: Record<string, unknown>; nodeId: string }>;
+  entries: Array<{ flow: Record<string, unknown>; name: string }>;
+};
+function traceTargetsInput(
   g: ReachableGate,
   input: string,
   embeddingEdges: unknown,
   flowNodeId: string,
-): boolean {
+): TargetsTrace {
+  const producers: TargetsTrace["producers"] = [];
+  const entries: TargetsTrace["entries"] = [];
+  let untraceable = false;
   const seen = new Map<Record<string, unknown>, Set<string>>();
   const mark = (flow: Record<string, unknown>, key: string): boolean => {
     let set = seen.get(flow);
@@ -1707,21 +1736,36 @@ function inputHandedInByEmbeddingFlow(
     const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
     const comp = ownEntry(refs, src.srcId) ?? ownEntry(outer, src.srcId);
     if (!isRecord(comp)) return true;
-    if (comp["component_type"] === "StartNode") {
-      return up === null ? true : flowInput(up, src.srcOutput);
+    const kind = comp["component_type"];
+    if (kind === "StartNode") {
+      if (up === null) return true;
+      entries.push({ flow, name: src.srcOutput });
+      return flowInput(up, src.srcOutput);
     }
-    if (comp["component_type"] === "FlowNode") {
-      const sub = resolveSubflowValue(comp["subflow"], refs, outer);
-      if (!sub) return true;
-      const subRefs = isRecord(sub["$referenced_components"]) ? sub["$referenced_components"] : {};
+    if (kind === "FlowNode" || kind === "ParallelFlowNode") {
+      producers.push({ flow, nodeId: src.srcId });
+      const values =
+        kind === "FlowNode"
+          ? [comp["subflow"]]
+          : [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])].filter((v) => v !== undefined);
       const subScope = { ...outer, ...refs };
       const link: FlowLink = { flow, outer, nodeId: src.srcId, parent: up };
-      for (const [endId, end] of Object.entries(subRefs)) {
-        if (!isRecord(end) || end["component_type"] !== "EndNode") continue;
-        if (valueAt(sub, subScope, link, endId, src.srcOutput, false)) return true;
+      for (const value of values) {
+        const sub = resolveSubflowValue(value, refs, outer);
+        if (!sub) return true;
+        const subRefs = isRecord(sub["$referenced_components"]) ? sub["$referenced_components"] : {};
+        for (const [endId, end] of Object.entries(subRefs)) {
+          if (!isRecord(end) || end["component_type"] !== "EndNode") continue;
+          if (valueAt(sub, subScope, link, endId, src.srcOutput, false)) return true;
+        }
       }
       return false;
     }
+    if (comp["subflow"] !== undefined || comp["subflows"] !== undefined) {
+      untraceable = true;
+      return false;
+    }
+    producers.push({ flow, nodeId: src.srcId });
     return false;
   };
   function valueAt(
@@ -1734,10 +1778,113 @@ function inputHandedInByEmbeddingFlow(
   ): boolean {
     if (!mark(flow, `${nodeId}\u0000${name}`)) return false;
     const into = dataEdgesInto(flow, nodeId, name);
-    if (into.length === 0) return unfedIsFlowInput ? flowInput(up, name) : false;
+    if (into.length === 0) {
+      if (!unfedIsFlowInput) return false;
+      entries.push({ flow, name });
+      return flowInput(up, name);
+    }
     return into.some((e) => sourceHandedIn(flow, outer, up, e));
   }
-  return valueAt(g.flow, g.outer, g.up, g.id, input, true);
+  const handedIn = valueAt(g.flow, g.outer, g.up, g.id, input, true);
+  return { handedIn, untraceable, producers, entries };
+}
+
+// Coverage: what the review protects is that nothing filed for review reaches
+// the end of the child, or a step that reads it, without having passed the
+// review. The node(s) that produce the targets (traceTargetsInput) are the
+// filing; a path that never files may skip the gate (an early exit before the
+// filing). At the level of each producer (the chain flow holding it, or the
+// FlowNode or ParallelFlowNode holding it), a run that has crossed the producer
+// must cross that level's unit (the gate, or the node that holds the gate's
+// flow) before it reaches an end of that flow or a node that reads the
+// producer's outputs (along the data edges, transitively). A value of the
+// producer exists only once the producer has run, so an end or a step on a
+// path that never crosses it holds nothing filed. Below the highest producer
+// level the targets were filed before the run entered the flow, so there the
+// unit must be crossed on every path, before any node that reads the value it
+// entered by; a parallel branch beside the one holding the gate must not read
+// it either. With no producer in the chain (an input nothing feeds), the gate
+// must be crossed on every path, as before.
+function dataReaders(flow: Record<string, unknown>, from: string, names: ReadonlySet<string> | null, unit: string): Set<string> {
+  const edges = Array.isArray(flow["data_flow_connections"]) ? (flow["data_flow_connections"] as unknown[]) : [];
+  const readers = new Set<string>();
+  const done = new Set<string>([from]);
+  const queue = [from];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    for (const e of edges) {
+      if (!isRecord(e)) continue;
+      const src = isRecord(e["source_node"]) ? e["source_node"]["$component_ref"] : undefined;
+      if (src !== id) continue;
+      if (id === from && names && !(typeof e["source_output"] === "string" && names.has(e["source_output"]))) continue;
+      const dest = isRecord(e["destination_node"]) ? e["destination_node"]["$component_ref"] : undefined;
+      if (typeof dest !== "string" || dest === unit) continue;
+      readers.add(dest);
+      if (!done.has(dest)) {
+        done.add(dest);
+        queue.push(dest);
+      }
+    }
+  }
+  return readers;
+}
+// Does a run that has crossed `from` reach an end of `flow`, or a node of
+// `readers`, without crossing `unit`?
+function reachesPastUnit(flow: Record<string, unknown>, outer: Record<string, unknown>, from: string, unit: string, readers: ReadonlySet<string>): boolean {
+  if (from === unit) return true;
+  const { adjacency } = readFlowControlTopology(flow);
+  const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
+  const isEnd = (id: string): boolean => {
+    const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
+    return (adjacency.get(id) ?? []).length === 0 || (isRecord(comp) && comp["component_type"] === "EndNode");
+  };
+  if (isEnd(from)) return true;
+  const visited = new Set<string>();
+  const queue = [...(adjacency.get(from) ?? [])];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (id === unit || visited.has(id)) continue;
+    visited.add(id);
+    if (isEnd(id) || readers.has(id)) return true;
+    for (const n of adjacency.get(id) ?? []) queue.push(n);
+  }
+  return false;
+}
+// A branch of the ParallelFlowNode `holder.unit` other than `branch` that reads
+// one of `names` from its start runs beside the review, so it reads the value
+// before the review.
+function siblingBranchReads(holder: ChainLevel, branch: Record<string, unknown>, names: ReadonlySet<string>): boolean {
+  const refs = isRecord(holder.flow["$referenced_components"]) ? holder.flow["$referenced_components"] : {};
+  const comp = ownEntry(refs, holder.unit) ?? ownEntry(holder.outer, holder.unit);
+  if (!isRecord(comp) || comp["component_type"] !== "ParallelFlowNode") return false;
+  for (const value of [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])]) {
+    const sub = resolveSubflowValue(value, refs, holder.outer);
+    if (!sub || sub === branch) continue;
+    const start = isRecord(sub["start_node"]) ? sub["start_node"]["$component_ref"] : undefined;
+    if (typeof start === "string" && dataReaders(sub, start, names, "").size > 0) return true;
+  }
+  return false;
+}
+function reviewCoversFiling(g: ReachableGate, trace: TargetsTrace): "ok" | "every-path" | "unreviewed" {
+  const levels = chainLevels(g);
+  const chain = trace.producers
+    .map((p) => ({ level: levels.findIndex((l) => l.flow === p.flow), nodeId: p.nodeId }))
+    .filter((p) => p.level >= 0);
+  if (chain.length === 0) return gateSkippable(g) ? "every-path" : "ok";
+  const top = Math.max(...chain.map((p) => p.level));
+  for (let j = 0; j < top; j++) {
+    const { flow, outer, unit } = levels[j]!;
+    const names = new Set(trace.entries.filter((e) => e.flow === flow).map((e) => e.name));
+    const start = isRecord(flow["start_node"]) ? flow["start_node"]["$component_ref"] : undefined;
+    if (typeof start !== "string") return "unreviewed";
+    if (start !== unit && reachesPastUnit(flow, outer, start, unit, dataReaders(flow, start, names, unit))) return "unreviewed";
+    if (names.size > 0 && siblingBranchReads(levels[j + 1]!, flow, names)) return "unreviewed";
+  }
+  for (const p of chain) {
+    const { flow, outer, unit } = levels[p.level]!;
+    if (reachesPastUnit(flow, outer, p.nodeId, unit, dataReaders(flow, p.nodeId, null, unit))) return "unreviewed";
+  }
+  return "ok";
 }
 
 // cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
@@ -1757,10 +1904,16 @@ function inputHandedInByEmbeddingFlow(
 //     that title and it sets `surfaceGateInputs` strictly `true` (an embedded
 //     gate's inputs reach the host only as the gate's own message);
 //   * no run input of the parent flow has that title, so a value the caller
-//     supplies cannot stand in for the set the child filed.
+//     supplies cannot stand in for the set the child filed;
+//   * the targets are produced by a node of the child (traceTargetsInput, also
+//     through FlowNode and ParallelFlowNode outputs), and a run that files them
+//     crosses the gate before the end and before any step that reads them
+//     (reviewCoversFiling); a run that never files may skip the gate. A gate a
+//     run may skip is the flow's last reviewer step (the host matches pauses to
+//     steps by their order), checked once the steps are built.
 // Returns null when the subflow holds no marked gate (the step is as before).
 // Error texts name node ids only.
-type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string };
+type EmbeddedArtifactReviewGate = { targetsInput: string; gate: InputMessageGateComponent; gateId: string; skippable: boolean };
 function readEmbeddedArtifactReviewGate(
   flowNodeId: string,
   flowNode: { subflow?: unknown; metadata?: { cinatra?: { gateSteps?: unknown } } },
@@ -1788,23 +1941,21 @@ function readEmbeddedArtifactReviewGate(
   const gateStep = Array.isArray(gateSteps) ? gateSteps[0] : undefined;
   const gateStepIsObject = gateStep !== null && typeof gateStep === "object" && !Array.isArray(gateStep);
   const gateCount = gateStepIsObject ? (gateStep as { gateCount?: unknown }).gateCount : undefined;
+  const ambiguous =
+    `ARTIFACT_REVIEW_GATE_AMBIGUOUS: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}; ` +
+    `its subflow must hold no other InputMessageNode and the FlowNode must declare exactly one gateStep with one pause`;
   if (
     gates.length !== 1 ||
     reading.repeated ||
     reading.unreadableMarked ||
     !only ||
-    !gatePausesOnce(only) ||
+    !gateAtMostOnce(only) ||
     !Array.isArray(gateSteps) ||
     gateSteps.length !== 1 ||
     !gateStepIsObject ||
     (gateCount !== undefined && gateCount !== 1)
   ) {
-    return {
-      ok: false,
-      error:
-        `ARTIFACT_REVIEW_GATE_AMBIGUOUS: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}; ` +
-        `its subflow must hold no other InputMessageNode and the FlowNode must declare exactly one gateStep with one pause`,
-    };
+    return { ok: false, error: ambiguous };
   }
   // The one gate must be a reviewer pause the runtime resolves to this step,
   // judged by the renderer the compiled step carries, else the step is a
@@ -1841,7 +1992,8 @@ function readEmbeddedArtifactReviewGate(
         `and a run input of the flow has the name of the input its marker names`,
     };
   }
-  if (inputHandedInByEmbeddingFlow(only!, targetsInput, embeddingEdges, flowNodeId)) {
+  const trace = traceTargetsInput(only!, targetsInput, embeddingEdges, flowNodeId);
+  if (trace.handedIn) {
     return {
       ok: false,
       error:
@@ -1849,7 +2001,27 @@ function readEmbeddedArtifactReviewGate(
         `whose targets input must be produced by a node of the child flow and not handed in by the flow that embeds it`,
     };
   }
-  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId } };
+  if (trace.untraceable) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_INPUT_UNTRACEABLE: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `whose targets input passes through a node that runs a flow of a kind other than FlowNode or ParallelFlowNode`,
+    };
+  }
+  const coverage = reviewCoversFiling(only!, trace);
+  if (coverage === "every-path") {
+    return { ok: false, error: ambiguous };
+  }
+  if (coverage === "unreviewed") {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_UNREVIEWED_PATH: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}; ` +
+        `a run that files its targets must cross the gate before the end and before any step that reads them`,
+    };
+  }
+  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId, skippable: gateSkippable(only!) } };
 }
 
 // cinatra#4150: the publishing-step declaration. A pack marks the node that
@@ -2725,6 +2897,23 @@ export async function compileOasAgentJson(opts: {
     const _exhaustive: never = handledCompType;
     throw new Error(`unreachable: unhandled component_type "${String(_exhaustive)}"`);
   });
+
+  // cinatra#3089: the host matches each reviewer pause to a step by its order
+  // (resolveWayflowXRenderer). A marked embedded gate that a run may skip (an
+  // early exit before the filing) is therefore the last step that pauses for a
+  // reviewer: a later pause would otherwise take its marker.
+  for (let i = 0; i < agentSteps.length; i++) {
+    const embedded = embeddedReviewGates.get(expandedEntries[i]!.id);
+    if (!embedded?.skippable) continue;
+    if (agentSteps.slice(i + 1).some(stepFiresRendererGate)) {
+      return {
+        ok: false,
+        error:
+          `ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST: FlowNode ${quoteNodeId(expandedEntries[i]!.id)} wraps the artifact-review gate ` +
+          `${quoteNodeId(embedded.gateId)}, which a run may skip; no later step may pause for a reviewer`,
+      };
+    }
+  }
 
   const steps: CompiledAgentOasStep[] = startNodeStep
     ? [startNodeStep, ...agentSteps]
