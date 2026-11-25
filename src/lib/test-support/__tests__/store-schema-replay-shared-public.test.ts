@@ -13,6 +13,9 @@
  * own schema builder, statement by statement. It needs no database: the
  * selection is a pure function of the statement text.
  */
+import fs from "node:fs";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
@@ -372,5 +375,46 @@ describe("the replay itself — what reaches the client", () => {
     );
     await expect(replayStoreSchema(always, [LOCAL])).rejects.toThrow("deadlock detected");
     expect(always.calls).toHaveLength(2);
+  });
+});
+
+describe("no integration file replays the store schema with a copy of the loop", () => {
+  // Files that still iterate the builder's output with their own `admin.query`
+  // loop. Each is left on purpose: it replays the WHOLE list strictly (no head
+  // filter, no tolerated error) as a cold start does, or it already leaves the
+  // shared tables out another way, or it is a high-risk path moved by its own
+  // change. A new file must call `replayStoreSchema`, not join this list.
+  const OWN_LOOP = [
+    "packages/dashboards/src/__tests__/twin-backfill-substrate.integration.test.ts",
+    "packages/dashboards/src/__tests__/twin-writer-substrate.integration.test.ts",
+    "src/lib/__tests__/agent-run-created-at-immutable.integration.test.ts",
+    "src/lib/__tests__/agent-run-lifecycle-moment.integration.test.ts",
+    "src/lib/__tests__/integration/sent-email-object-write-authz.integration.test.ts",
+    "src/lib/__tests__/integration/widget-session-cascade.integration.test.ts",
+    "src/lib/__tests__/integration/widget-user-token-renewal.integration.test.ts",
+    "src/lib/__tests__/schedule-card-reaches-the-conversation.integration.test.ts",
+    "src/lib/artifacts/__tests__/extension-artifact-reads.integration.test.ts",
+    "src/lib/artifacts/__tests__/page-capture-facts-record.integration.test.ts",
+    "src/lib/artifacts/__tests__/typed-promotion-canonical-writer-4379.integration.test.ts",
+    "src/lib/lifecycle/__tests__/named-agent-start.integration.test.ts",
+    "src/lib/test-support/__tests__/lifecycle-seed-changeset.integration.test.ts",
+  ];
+
+  it("lists exactly the files that loop over buildCreateStoreSchemaQueries themselves", () => {
+    const root = path.resolve(__dirname, "..", "..", "..", "..");
+    const roots = ["src", ...fs.readdirSync(path.join(root, "packages")).map((p) => `packages/${p}/src`)];
+    const found: string[] = [];
+    for (const base of roots.filter((r) => fs.existsSync(path.join(root, r)))) {
+      for (const file of fs.readdirSync(path.join(root, base), { recursive: true }) as string[]) {
+        if (!/(\.integration\.test\.tsx?$|[\\/]integration[\\/].*\.test\.tsx?$)/.test(file)) continue;
+        const text = fs.readFileSync(path.join(root, base, file), "utf8");
+        const direct = /for\s*\(\s*const\s+\w+\s+of\s+buildCreateStoreSchemaQueries\(/.test(text);
+        const viaName = [...text.matchAll(/const\s+(\w+)\s*=\s*buildCreateStoreSchemaQueries\(/g)].some(([, v]) =>
+          new RegExp(`for\\s*\\(\\s*const\\s+\\w+\\s+of\\s+${v}\\b`).test(text),
+        );
+        if (direct || viaName) found.push(`${base}/${file}`.split(path.sep).join("/"));
+      }
+    }
+    expect(found.sort()).toEqual(OWN_LOOP);
   });
 });

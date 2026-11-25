@@ -163,7 +163,6 @@ describe("the run page's review step carries the reading its target draws", () =
   it("the post's review is the post's reading", async () => {
     mockResolve({ state: PENDING, headers: [POST.header], display: POST.display });
     const { container } = render(runPage());
-    // red-first-expect: expected { 'run-review-step-post': +0, …(2) } to deeply equal { 'run-review-step-post': 1
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-post")));
     // The anchor is drawn inside the card, not around it.
     const card = container.querySelector('[data-conformance-id="review-gate-card"]');
@@ -173,7 +172,6 @@ describe("the run page's review step carries the reading its target draws", () =
   it("the featured image's review, with the prompt that made it, is the picture's reading", async () => {
     mockResolve({ state: PENDING, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(runPage());
-    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
     // The same trait the drawing names: the note opens with the prompt.
     const note = container.querySelector<HTMLTextAreaElement>('textarea[data-testid="review-rationale"]');
@@ -183,7 +181,6 @@ describe("the run page's review step carries the reading its target draws", () =
   it("a restricted reader sees the same reading", async () => {
     mockResolve({ state: RESTRICTED, headers: [PICTURE.header], display: PICTURE.display, recordedPrompt: PROMPT });
     const { container } = render(runPage());
-    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() => expect(counts(container)).toEqual(only("run-review-step-picture")));
   });
 
@@ -261,7 +258,6 @@ describe("the reading's anchor holds the whole reading", () => {
     const { container } = render(runPage());
     await mountedFloor(container);
     const anchor = container.querySelector('[data-conformance-id="run-review-step-post"]');
-    // red-first-expect: expected null not to be null
     expect(anchor).not.toBeNull();
     expectWholeReading(anchor!);
     expect(anchor!.querySelector('[data-action="continue-review -> resolved"]')).not.toBeNull();
@@ -272,7 +268,6 @@ describe("the reading's anchor holds the whole reading", () => {
     const { container } = render(runPage());
     await mountedFloor(container);
     const anchor = container.querySelector('[data-conformance-id="run-review-step-picture"]');
-    // red-first-expect: expected null not to be null
     expect(anchor).not.toBeNull();
     expectWholeReading(anchor!);
     expect(anchor!.querySelector('[data-action="regenerate-review -> successor-gate-opened"]')).not.toBeNull();
@@ -287,7 +282,6 @@ describe("the reading's anchor holds the whole reading", () => {
     );
     await mountedFloor(container);
     const anchor = container.querySelector('[data-conformance-id="review-card-post-with-featured-image"]');
-    // red-first-expect: expected null not to be null
     expect(anchor).not.toBeNull();
     expectWholeReading(anchor!);
   });
@@ -305,7 +299,6 @@ describe("the reading's anchor holds the whole reading", () => {
     mockResolve({ state: { state: "loading" } as LifecycleCardState });
     const loading = render(runPage());
     await waitFor(() => expect(loading.container.querySelector('[data-lifecycle-card-state="loading"]')).not.toBeNull());
-    // red-first-expect: to have a length of 1 but got 2
     expect(holderOf(loading.container).className).toBe("contents");
     expect(holderOf(loading.container).hasAttribute("data-conformance-id")).toBe(false);
     cleanup();
@@ -342,7 +335,6 @@ describe("the reading's anchor holds the whole reading", () => {
     }) as unknown as typeof fetch;
     const { container } = render(runPage());
     await mountedFloor(container);
-    // red-first-expect: to have a length of 1 but got 3
     const holder = holderOf(container);
     expect(holder.getAttribute("data-conformance-id")).toBe("run-review-step-post");
     const frame = holder.querySelector("iframe");
@@ -366,7 +358,6 @@ describe("the chat thread carries the featured image's card", () => {
         <ReviewGateCard view={VIEW} />
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() =>
       expect(counts(container)).toEqual(only("review-card-post-with-featured-image")),
     );
@@ -381,7 +372,6 @@ describe("the chat thread carries the featured image's card", () => {
         </LifecycleCardSurfaceProvider>
       </LifecycleCardSurfaceProvider>,
     );
-    // red-first-expect: to deeply equal { 'run-review-step-post': +0, …(2) }
     await waitFor(() =>
       expect(counts(container)).toEqual(only("review-card-post-with-featured-image")),
     );
@@ -454,7 +444,6 @@ describe("a gate that settles keeps the preview it painted", () => {
     }) as unknown as typeof fetch;
     const { container } = render(runPage());
     await mountedFloor(container);
-    // red-first-expect: expected null not to be null
     expect(container.querySelector('[data-conformance-id="run-review-step-post"]')).not.toBeNull();
     const framePending = container.querySelector("iframe");
     expect(framePending).not.toBeNull();
@@ -482,7 +471,6 @@ describe("reviewStateAnchor — the rule", () => {
   const picture = { ...post, targetDisplay: "image" as const, recordedPrompt: PROMPT };
 
   it("decides each reading from the place and the display that draws the one target", () => {
-    // red-first-expect: reviewStateAnchor is not a function
     expect(reviewStateAnchor(post)).toBe("run-review-step-post");
     expect(reviewStateAnchor(picture)).toBe("run-review-step-picture");
     expect(reviewStateAnchor({ ...post, state: "restricted" })).toBe("run-review-step-post");
@@ -496,7 +484,6 @@ describe("reviewStateAnchor — the rule", () => {
   });
 
   it("claims nothing it cannot read off one known target", () => {
-    // red-first-expect: reviewStateAnchor is not a function
     // Several targets, or none named: no reading, whatever the rest says.
     for (const targetCount of [0, 2, 12]) {
       expect(reviewStateAnchor({ ...post, targetCount })).toBeNull();
@@ -517,7 +504,6 @@ describe("reviewStateAnchor — the rule", () => {
   });
 
   it("claims nothing outside the states whose answer can carry the target", () => {
-    // red-first-expect: reviewStateAnchor is not a function
     for (const state of ["loading", "settled", "advisory", "absent"] as const) {
       expect(reviewStateAnchor({ ...post, state })).toBeNull();
       expect(reviewStateAnchor({ ...picture, state })).toBeNull();

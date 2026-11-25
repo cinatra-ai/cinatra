@@ -175,7 +175,6 @@ describe("POST /api/agents/passthrough — artifact_materialize", () => {
     expect(body.error).toContain("cinatra.produces");
   });
 
-  // red-first-expect: expected 400 to be 409
   it("answers 409 with its reason when the create is refused while a publishing call of the run is in flight (cinatra#4762)", async () => {
     materializeToolArtifactMock.mockResolvedValue({
       ok: false,
@@ -233,7 +232,6 @@ describe("POST /api/agents/passthrough — a released publishing artifact_materi
     return () => seen;
   };
 
-  // red-first-expect: hold is not a function
   it("creates under the claim its call check took, so the create's event passes that claim's fence", async () => {
     callClaim.decisionId = "decision-1";
     const seen = await claimSeen();
@@ -242,7 +240,6 @@ describe("POST /api/agents/passthrough — a released publishing artifact_materi
     expect(seen()).toEqual({ read: "decision-1", bound: "decision-1" });
   });
 
-  // red-first-expect: expected 500 to be 200
   it("never takes a claim from the request: a call the check claimed nothing for writes under none", async () => {
     const seen = await claimSeen();
     const res = await POST(post({ ...materializeBody({ publishCallClaim: "decision-1" }), publishCallClaim: { runId: "run-1", decisionId: "decision-1" } }));

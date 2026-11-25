@@ -227,7 +227,6 @@ describe("cinatra#4223 — a refusal that comes from a throw is a fixed sentence
     expectLoggedWithoutText();
   });
 
-  // red-first-expect: expected 'write_refused' to be 'publish_call_in_flight'
   it("a first filing the in-flight fence refuses answers publish_call_in_flight, never a failed write (cinatra#4762)", async () => {
     // The fence's database abort, as the writer's transaction raises it.
     const fenceAbort = Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });

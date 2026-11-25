@@ -85,24 +85,8 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#926 content-addressed blob store (real DB
     // `ensurePostgresSchema()` short-circuits instead of re-running the
     // full bootstrap (which includes seed writes).
     const { buildCreateStoreSchemaQueries } = await import("@/lib/drizzle-store");
-    for (const q of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-      const head = q.text.trim().slice(0, 6).toUpperCase();
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") {
-        continue;
-      }
-      try {
-        await client.query(q.text, (q as { values?: unknown[] }).values as never[]);
-      } catch (err) {
-        // Same tolerance as `_fixture.ts` `createTestSchema`: a handful of
-        // statements reference seed/DO-block dependencies absent in a fresh
-        // empty schema. The artifact tables this suite exercises
-        // (artifact_blobs, resource, representation, objects,
-        // semantic_assertion, artifact_audit) use plain types and never hit
-        // this branch.
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("does not exist")) throw err;
-      }
-    }
+    const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
     // Register the fixture artifact type the writer requires (epic #1785 wave

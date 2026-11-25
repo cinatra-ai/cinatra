@@ -185,7 +185,6 @@ beforeEach(() => {
 });
 
 describe("materializeToolArtifact", () => {
-  // red-first-expect: expected { ok: false, …(1) } to deeply equal { ok: false, …(2) }
   it("answers a create the in-flight fence refuses with the retryable reason, never a failed write (cinatra#4762)", async () => {
     createSemanticArtifactMock.mockRejectedValueOnce(
       Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" }),

@@ -94,9 +94,18 @@ export function designPrimitivesContractMajorOf(version) {
   return Number(match[1]);
 }
 
+/** The `[major, minor, patch]` of a `X.Y.Z` contract version, or null. */
+function designPrimitivesContractPartsOf(version) {
+  if (typeof version !== "string") return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (match === null) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
 /** The load-time primitives-contract rule (mirror of the SDK's
- * `checkDesignPrimitivesContract`). Returns null when the host serves the major
- * the bundle was built against, else a fail-loud refusal reason. */
+ * `checkDesignPrimitivesContract`). Returns null when the host's served version
+ * satisfies `^<builtAgainst>` (same major, minor.patch at or above), else a
+ * fail-loud refusal reason. */
 export function checkDesignPrimitivesContract({ builtAgainst, hostServes }) {
   const served = hostServes ?? HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION;
   const builtMajor = designPrimitivesContractMajorOf(builtAgainst);
@@ -118,6 +127,19 @@ export function checkDesignPrimitivesContract({ builtAgainst, hostServes }) {
       `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract major ${builtMajor} ` +
       `(${builtAgainst}) but this host serves major ${servedMajor} (${served}) — ` +
       `rebuild the bundle against the host's contract`
+    );
+  }
+  const builtParts = designPrimitivesContractPartsOf(builtAgainst);
+  const servedParts = designPrimitivesContractPartsOf(served);
+  if (
+    servedParts[1] < builtParts[1] ||
+    (servedParts[1] === builtParts[1] && servedParts[2] < builtParts[2])
+  ) {
+    const built = builtAgainst.trim();
+    return (
+      `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract ${built} and ` +
+      `requires "^${built}", but this host serves ${served.trim()} — upgrade the host ` +
+      `or rebuild the bundle against the host's contract`
     );
   }
   return null;

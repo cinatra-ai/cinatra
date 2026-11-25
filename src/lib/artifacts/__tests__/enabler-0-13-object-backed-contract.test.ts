@@ -176,7 +176,6 @@ describe("0.13 — the mint-or-reuse road binds the minted revision into the rev
     });
   });
 
-  // red-first-expect: expected "vi.fn()" to be called with arguments: [ { orgId: 'org-3028', …(3) } ]
   it("a run that opens a review on an existing snapshot is named on its trigger (cinatra#4762)", async () => {
     const ensure = vi.fn(async () => {});
     await openObjectBackedReview(
@@ -200,7 +199,6 @@ describe("0.13 — the mint-or-reuse road binds the minted revision into the rev
     });
   });
 
-  // red-first-expect: expected null to be 'run-4762'
   it("the server binder's reused-snapshot event names the run and its attempt, and restamps an existing one (cinatra#4762)", async () => {
     const [{ serverObjectBackedReviewPorts }, { mcpRequestContextStorage }] = await Promise.all([
       import("@/lib/artifacts/object-backed-contract"),

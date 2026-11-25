@@ -145,8 +145,22 @@ describe("the load-time contract check fails closed", () => {
     expect(
       checkDesignPrimitivesContract({ builtAgainst: HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION }),
     ).toBeNull();
-    // A MINOR/PATCH ahead or behind inside the same major is still served.
-    expect(checkDesignPrimitivesContract({ builtAgainst: "1.4.2" })).toBeNull();
+    // An OLDER minor/patch inside the same major is served: a minor only adds
+    // exports, so a host at or above the built-against version has them all.
+    expect(checkDesignPrimitivesContract({ builtAgainst: "1.0.0" })).toBeNull();
+    expect(checkDesignPrimitivesContract({ builtAgainst: "1.0.0", hostServes: "1.4.2" })).toBeNull();
+  });
+
+  it("REFUSES a bundle built against a NEWER minor than the host serves", () => {
+    // red-first-expect: expected null to be 'bundle was built against
+    expect(checkDesignPrimitivesContract({ builtAgainst: "1.2.0", hostServes: "1.1.0" })).toBe(
+      'bundle was built against "@cinatra-ai/design-primitives" contract 1.2.0 and requires ' +
+        '"^1.2.0", but this host serves 1.1.0 — upgrade the host or rebuild the bundle ' +
+        "against the host's contract",
+    );
+    expect(checkDesignPrimitivesContract({ builtAgainst: "1.1.1", hostServes: "1.1.0" })).toMatch(
+      /requires "\^1\.1\.1", but this host serves 1\.1\.0/,
+    );
   });
 
   it("REFUSES a bundle built against a major the host does not serve", () => {

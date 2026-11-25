@@ -328,20 +328,17 @@ describe("cinatra#4762 - the attempt the job dispatches is the one its frame nam
     return seen;
   };
 
-  // red-first-expect: to deeply equal [ { frame: 1, cas: 1 } ]
   it("a reset between the entry's read and the job's own read: the job runs under the generation it read", async () => {
     // The entry read generation 0; a retry's reset raised it to 1 before the job read the run it dispatches.
     storeMock.readAgentRunById.mockResolvedValueOnce(makeRun({ resetGeneration: 0 })).mockResolvedValue(makeRun({ resetGeneration: 1 }));
     expect(await dispatchesOf()).toEqual([{ frame: 1, cas: 1 }]);
   });
 
-  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 } ]
   it("with no reset in between, the frame and the dispatch name the same generation", async () => {
     storeMock.readAgentRunById.mockResolvedValue(makeRun({ resetGeneration: 0 }));
     expect(await dispatchesOf()).toEqual([{ frame: 0, cas: 0 }]);
   });
 
-  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
   it("a dispatch lost to a reset after the job's read starts the job again when the run is queued at a newer generation", async () => {
     // The entry and the job read generation 0; the CAS finds the run reset and queued again at 1.
     storeMock.readAgentRunById
@@ -357,7 +354,6 @@ describe("cinatra#4762 - the attempt the job dispatches is the one its frame nam
     expect(await dispatchesOf(true)).toEqual([{ frame: 0, cas: 0 }]);
   });
 
-  // red-first-expect: to deeply equal [ { frame: +0, cas: +0 }, …(1) ]
   it("a read that fails after a lost dispatch starts the job again, so a queued newer attempt is never left without a job", async () => {
     // The CAS finds the run reset; the read that would show it queued at 1 fails once, the next one succeeds.
     storeMock.readAgentRunById
@@ -426,7 +422,6 @@ describe("cinatra#4762 - a stored template's publishing calls are checked at the
   const failedWith = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, { error?: string }]>)
     .filter(([, from, to]) => from === "running" && to === "failed").map(([, , , patch]) => patch?.error);
 
-  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
   it("a publishing ParallelFlowNode with a direct external call fails the run with the fixed text, and nothing is bound or sent", async () => {
     graph = executed("https://api.example.invalid/v2/posts");
     await run();
