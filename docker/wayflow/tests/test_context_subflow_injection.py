@@ -797,6 +797,11 @@ def test_3089_an_uncomposed_mount_sends_its_source_once(
     """cinatra#3089: a mount that composes nothing hands the loader the file's
     own text as the declaration source; the binding then says so instead of
     carrying the same text a second time."""
+    import agent_loader as al
+
+    # This leaf's work node would get a derived bridge output schema, which
+    # rewrites the text; with no derivation the mount composes nothing.
+    monkeypatch.setattr(al, "_derive_bridge_output_schemas", lambda doc, label: [])
     doc = _slim_spec([])
     raw, _fake_loader, mounted = _mount(monkeypatch, tmp_path, doc)
     binding = mounted.selected_source_binding

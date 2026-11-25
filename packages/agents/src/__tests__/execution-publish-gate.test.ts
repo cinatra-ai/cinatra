@@ -71,6 +71,9 @@ function bindTemplate(t: unknown): void {
   else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
 }
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
+// cinatra#3089: a pause that cannot be placed stops through the handler's failure path, which asks the
+// produced-output review question first; no run here produced output awaiting review.
+vi.mock("../run-produced-review-hold", () => ({ holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-produced-output" })) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
 }));
