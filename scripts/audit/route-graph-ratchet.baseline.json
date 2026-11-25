@@ -12,25 +12,25 @@
       "from": 1344,
       "to": 1345,
       "reason": "Issue 3745 part 10 (the guarded outward run action) exports the single-use consumption of a person's decision from the agents store subpath (packages/agents/src/store.ts), because its one caller, the host's guarded action in src/lib/extension-host-context.ts, runs it before an outward call on a run frame is admitted. That adds one core module to this route: packages/agents/src/run-action-decision-consumption.ts. The consumption is the admission's own step, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +1 over the main ceiling of 1344.",
-      "pr": 0
+      "pr": 4790
     },
     "/api/llm-bridge": {
       "from": 1354,
       "to": 1355,
       "reason": "Issue 3745 part 10 (the guarded outward run action) exports the single-use consumption of a person's decision from the agents store subpath (packages/agents/src/store.ts), because its one caller, the host's guarded action in src/lib/extension-host-context.ts, runs it before an outward call on a run frame is admitted. That adds one core module to this route: packages/agents/src/run-action-decision-consumption.ts. The consumption is the admission's own step, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +1 over the main ceiling of 1354.",
-      "pr": 0
+      "pr": 4790
     },
     "/api/mcp": {
       "from": 1336,
       "to": 1337,
       "reason": "Issue 3745 part 10 (the guarded outward run action) exports the single-use consumption of a person's decision from the agents store subpath (packages/agents/src/store.ts), because its one caller, the host's guarded action in src/lib/extension-host-context.ts, runs it before an outward call on a run frame is admitted. That adds one core module to this route: packages/agents/src/run-action-decision-consumption.ts. The consumption is the admission's own step, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +1 over the main ceiling of 1336.",
-      "pr": 0
+      "pr": 4790
     },
     "/chat": {
       "from": 1441,
       "to": 1442,
       "reason": "Issue 3745 part 10 (the guarded outward run action) exports the single-use consumption of a person's decision from the agents store subpath (packages/agents/src/store.ts), because its one caller, the host's guarded action in src/lib/extension-host-context.ts, runs it before an outward call on a run frame is admitted. That adds one core module to this route: packages/agents/src/run-action-decision-consumption.ts. The consumption is the admission's own step, so the growth is accepted; it is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +1 over the main ceiling of 1441.",
-      "pr": 0
+      "pr": 4790
     },
     "/sign-in": {
       "from": 164,
