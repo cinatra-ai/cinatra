@@ -320,7 +320,6 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-a", status: "stopped", a2aContextId: "ctx-1", error,
   });
 
-  // red-first-expect: expected { ok: true } to deeply equal { ok: false, …(1) }
   it("a run stopped for want of an approved review is refused, sent nothing, and put back to stopped", async () => {
     storeMock.readAgentRunById.mockResolvedValue(stoppedRun(NO_REVIEW));
     expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_review_not_approved" });
@@ -328,7 +327,6 @@ describe("the stopped-orchestrator resume and a publish decision", () => {
     expect(sendTask).not.toHaveBeenCalled();
   });
 
-  // red-first-expect: expected { ok: true } to deeply equal { ok: false, …(1) }
   it("the reason is read again under the claim: a record read before it, of an earlier stop, does not let the run pass", async () => {
     storeMock.readAgentRunById.mockResolvedValueOnce(stoppedRun("stopped by operator")).mockResolvedValue(stoppedRun(NO_REVIEW));
     expect(await resumeStoppedOrchestratorAction("run-1")).toEqual({ ok: false, error: "publish_review_not_approved" });

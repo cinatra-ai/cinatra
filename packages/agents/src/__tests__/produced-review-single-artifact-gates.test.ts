@@ -356,7 +356,6 @@ describe("a sealed production opens one gate per artifact revision", () => {
 describe("an automatic review carries the attempt that produced its revision (cinatra#4762)", () => {
   const stamped = () => emit.mock.calls.map(([input]) => input.runGeneration);
 
-  // red-first-expect: expected [ undefined ] to deeply equal [ +0 ]
   it("the drain stamps the event's own generation, so a drain after a retry's reset never credits the next attempt", async () => {
     // Attempt 0 wrote the revision and failed; a retry's reset moved the run to generation 1 before the drain ran.
     state.events = [{ ...event("post"), producerRunGeneration: 0 }];
@@ -369,7 +368,6 @@ describe("an automatic review carries the attempt that produced its revision (ci
     expect(stamped()).toEqual([2, 2]);
   });
 
-  // red-first-expect: to deeply equal [ 'unknown' ]
   it("an event written before the generation column, with none, raises a review of an unknown attempt, which holds every fence while open", async () => {
     state.events = [{ ...event("post"), producerRunGeneration: null }];
     await drain();

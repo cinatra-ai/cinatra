@@ -191,7 +191,6 @@ describe("cinatra#4223 POST /api/agents/passthrough — artifact_page_capture", 
     });
   });
 
-  // red-first-expect: expected 400 to be 409
   it("answers 409 with its reason while a publishing call of the run is in flight (cinatra#4762)", async () => {
     captureArtifactPageMock.mockResolvedValue({
       ok: false,

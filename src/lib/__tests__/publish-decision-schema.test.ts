@@ -88,7 +88,6 @@ describe("agent_run_publish_decisions — DDL parity", () => {
     });
   });
 
-  // red-first-expect: expected [ Array(16) ] to deeply equal [ Array(17) ]
   it("the Drizzle table matches the DDL's columns, nullability and indexes", async () => {
     const mod = await loadMigration();
     const config = getTableConfig(agentRunPublishDecisions);
@@ -155,7 +154,6 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
     return out;
   };
 
-  // red-first-expect: expected 'CREATE INDEX IF NOT EXISTS agent_run_…' to be 'ALTER TABLE
   it("the bootstrap leaf adds the column, idempotently, once, after the table and its indexes, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
     expect(leaf.at(-4)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
@@ -219,7 +217,6 @@ describe("agent_run_publish_decisions.run_generation, agent_runs.reset_generatio
   const load = async () =>
     (await import("../../../migrations/core/core__0133_publish-decision-declared-rows.mjs")) as unknown as Mod;
 
-  // red-first-expect: expected 'ALTER TABLE "we""ird"."agent_run_publ…' to be 'ALTER TABLE "we""ird"."agent_run_publ…' // Object.is equality
   it("the bootstrap adds each column, idempotently, exactly once, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
     expect(leaf.at(-3)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer');
@@ -276,7 +273,6 @@ describe("agent_run_publish_decisions.released_pause_generation — DDL parity (
     return out;
   };
 
-  // red-first-expect: expected 'ALTER TABLE "we""ird"."agent_run_publ…' to be 'ALTER TABLE "we""ird"."agent_run_publ…'
   it("the bootstrap leaf adds the column after run_generation, idempotently, exactly once, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
     // core__0135 (cinatra#4762) adds calls_in_flight after it.

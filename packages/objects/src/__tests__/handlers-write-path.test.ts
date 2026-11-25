@@ -174,7 +174,6 @@ describe("objects_update handler — Postgres-primary", () => {
   // what bumps the version and appends the history and outbox rows, and it is
   // never reached. The answer is the no-write answer, with no change-set.
   it("an empty patch writes no revision and answers that nothing changed", async () => {
-    // red-first-expect: to not be called at all, but actually been called 1 times
     const handlers = createObjectsPrimitiveHandlers();
     const res = await handlers.objects_update({
       primitiveName: "objects_update",
