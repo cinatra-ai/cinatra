@@ -987,8 +987,9 @@ function HitlApprovalCard({
   ) => {
     // Capture paperclip attachments into the panel ref so the gate Continue
     // (`handleContinue` below) can wrap the legacy `userResponse` text with the
-    // WayFlow envelope.
-    if (attachments && attachments.length > 0) {
+    // WayFlow envelope. A declared card takes no files (cinatra#3470): none are
+    // kept for its Continue.
+    if (attachments && attachments.length > 0 && stepCard === null) {
       pendingAttachmentsRef.current = [
         ...pendingAttachmentsRef.current,
         ...attachments,
@@ -1092,7 +1093,7 @@ function HitlApprovalCard({
     if (stepCard) {
       // A declared card (cinatra#3470): its staged answer is what is sent; no
       // lift, envelope rule or declared-schema copy below applies to it.
-      nextBuffered = declaredCardContinuePayload(bufferedHitlValue, pendingAttachmentsRef.current);
+      nextBuffered = declaredCardContinuePayload(bufferedHitlValue);
     } else {
       // Renderer-specific approvalNote lifts (list-picker / setup-form /
       // scrape-schema-review / final-list-review) — snapshot exactly what was

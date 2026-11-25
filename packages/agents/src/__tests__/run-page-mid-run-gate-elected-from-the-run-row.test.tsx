@@ -28,6 +28,11 @@
 
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+// The step's gate row read finds no row (a failed read refuses or fails the park, cinatra#3470).
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 import { cleanup, render } from "@testing-library/react";
 
 const { enrichSpy, onInterruptSpy } = vi.hoisted(() => {

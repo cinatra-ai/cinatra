@@ -39,8 +39,13 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
-import { declaredHitlCheckedAnswer, storedDeclaredCardOf, type DeclaredHitlCard } from "./hitl-gate-submit";
-import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import {
+  declaredHitlCheckedAnswer,
+  readStepGate,
+  storedDeclaredCardOf,
+  type DeclaredHitlCard,
+  type StepGateRead,
+} from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -75,25 +80,20 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
  * THE DECLARED CARD OF THE STEP AN ANSWER GOES TO (cinatra#3470): the card the
  * step PAUSED WITH, stored in its gate row's schema (`storedDeclaredCardOf`),
  * never the build's current bindings, so a build deployed while the run waits
- * cannot change or drop what the step asks for. A row that stored none is no
- * card, as before this was recorded. `"unknown"` (the answer is refused, fail
- * closed) when what is stored is not a card or its digest does not match, and
- * when the gate row could not be read and the run's agent declares a screen
- * on any of its bindings now: whether the open step has a card cannot be told.
+ * cannot change or drop what the step asks for. The row read's three outcomes
+ * (`StepGateRead`) stay apart: a row that stored no card, or no row at all, is
+ * no card, as before this was recorded; a read that FAILED is `"unknown"` and
+ * the answer is refused (fail closed), as is a stored value that is not a card
+ * or whose digest does not match.
  */
 export function declaredCardOfStep(
-  gate: { xRenderer: string; inputSchema?: Record<string, unknown> } | null,
-  packageName: string,
+  step: StepGateRead<{ xRenderer: string; inputSchema?: Record<string, unknown> }>,
 ): DeclaredHitlCard | "unknown" | null {
-  if (gate !== null) {
-    const stored = storedDeclaredCardOf(gate.inputSchema, gate.xRenderer);
-    if (stored === null) return null;
-    return stored === "invalid" || declaredScreenDigest(stored.card) !== stored.digest ? "unknown" : stored.card;
-  }
-  const declares = GENERATED_FIELD_RENDERER_BINDINGS.some(
-    (b) => b.screen !== undefined && (b.declaredBy === packageName || b.id.startsWith(`${packageName}:`)),
-  );
-  return declares ? "unknown" : null;
+  if (step.read === "failed") return "unknown";
+  if (step.read === "none") return null;
+  const stored = storedDeclaredCardOf(step.gate.inputSchema, step.gate.xRenderer);
+  if (stored === null) return null;
+  return stored === "invalid" || declaredScreenDigest(stored.card) !== stored.digest ? "unknown" : stored.card;
 }
 
 /** The refusal of an answer whose step's screen could not be read (cinatra#3470). */
@@ -1115,8 +1115,10 @@ export async function approveReviewTaskInternal(
     // the message, and re-opening the gate there is the double resume this whole
     // section exists to prevent.
     // Read only THIS pre-dispatch materialization, never the latest gate later.
-    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
+    // Its three outcomes stay apart (cinatra#3470): a failed read is not "no row".
+    const stepGate = await readStepGate(() => readDurableHitlGateForContinue(run.id, reviewTaskId));
+    // Missing durable evidence stays unconfirmed for the Continue receipt.
+    const gateSnapshot = stepGate.read === "row" ? stepGate.gate : null;
     let dispatchStarted = false;
     let fencedAt = 0;
     let settled = false;
@@ -1135,7 +1137,7 @@ export async function approveReviewTaskInternal(
       // declared card draws holds exactly the card's fields; it is rebuilt from the
       // step's stored values, and that one object is what is sent and recorded. A
       // refusal is thrown before the fence, so the claim is given back.
-      const declaredCard = declaredCardOfStep(gateSnapshot, template.packageName);
+      const declaredCard = declaredCardOfStep(stepGate);
       if (declaredCard === "unknown") throw new Error(DECLARED_CARD_STEP_UNREADABLE_REFUSAL);
       if (declaredCard !== null) {
         const checked = declaredHitlCheckedAnswer(declaredCard, gateSnapshot?.values ?? {}, values);

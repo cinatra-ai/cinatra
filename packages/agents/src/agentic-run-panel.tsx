@@ -2178,7 +2178,8 @@ export function AgenticRunPanel({
     // (`submitActiveGate`) can wrap its `userResponse` with the WayFlow envelope.
     attachments?: LlmAttachmentRef[],
   ) => {
-    if (attachments && attachments.length > 0) {
+    // A declared card takes no files (cinatra#3470): none are kept for its Continue.
+    if (attachments && attachments.length > 0 && stepCard === null) {
       pendingAttachmentsRef.current = [
         ...pendingAttachmentsRef.current,
         ...attachments,
@@ -2326,7 +2327,7 @@ export function AgenticRunPanel({
             await performGateSubmit({
               reviewTaskId: effectiveHitlContext.reviewTaskId,
               xRenderer: effectiveHitlContext.xRenderer,
-              payload: declaredCardContinuePayload(bufferedHitlValue, pendingAttachmentsRef.current),
+              payload: declaredCardContinuePayload(bufferedHitlValue),
               trackApproving: true,
               suppressGate: true,
               clearAttachmentsOnSuccess: true,

@@ -511,6 +511,7 @@ import {
 // unmaterializable gate lands the run `failed` with a named error instead of
 // stranding it in a phantom wait.
 import { parkRunOnHumanGate } from "./human-gate-park";
+import { readStepGate } from "./hitl-gate-submit";
 import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
@@ -3070,8 +3071,8 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // A MID-RUN step (cinatra#3470): the seam may stamp a declared card, once
       // per pause, and reads this pause's existing row to carry a stored one.
       midRunStep: {
-        readPausedRow: async (id) =>
-          (await import("./agent-run-hitl-prompts")).readDurableHitlGateForContinue(runId, id),
+        readPausedRow: (id) =>
+          readStepGate(async () => (await import("./agent-run-hitl-prompts")).readDurableHitlGateForContinue(runId, id)),
       },
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human

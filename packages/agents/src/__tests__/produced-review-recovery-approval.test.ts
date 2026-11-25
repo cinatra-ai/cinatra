@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// The step's gate row read finds no row (a failed read refuses or fails the park, cinatra#3470).
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.

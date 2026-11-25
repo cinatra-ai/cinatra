@@ -4,7 +4,7 @@
 // holds text, and sends the one answer the card staged.
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
 
@@ -35,6 +35,29 @@ vi.mock("../server-actions", () => ({
   getRuntimeFieldRendererBindingsAction: vi.fn(async () => []),
 }));
 vi.mock("../agent-ui-override-registry", () => ({ agentUIOverrideRegistry: { resolve: () => null } }));
+// The run window's registration, captured: its submit is how files reach a screen.
+const windowScreen = vi.hoisted(() => ({
+  current: null as null | { onSubmit: (p: string, a?: unknown[]) => Promise<void>; enableAttachments?: boolean },
+}));
+vi.mock("../run-window-screen-context", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  useRunWindowScreen: (screen: typeof windowScreen.current) => {
+    windowScreen.current = screen;
+  },
+}));
+vi.mock("../use-run-window-conversation", () => ({
+  useRunWindowConversation: () => ({ entries: [], pending: false, send: async () => ({ fill: null, acted: false }) }),
+}));
+/** A file the person attached in the run window. */
+const FILE = {
+  artifactId: "art-3470",
+  representationRevisionId: "rev-3470",
+  digest: "sha256:3470",
+  mime: "application/pdf",
+  originKind: "upload",
+  filename: "brief.pdf",
+  size: 10,
+};
 const stream = vi.hoisted(() => ({ current: null as unknown }));
 vi.mock("../use-ag-ui-run-stream", () => ({ useAgUiRunStream: () => stream.current }));
 
@@ -138,5 +161,28 @@ describe("a step that stored no card (paused before the card was recorded) is dr
     render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
     await waitFor(() => expect(continueButtons().length).toBeGreaterThan(0));
     expect(document.querySelector("[data-declared-hitl-screen]")).toBeNull();
+  });
+});
+
+describe("a declared card takes no files", () => {
+  it("the run panel: the window offers no attach control, a file sent while the card is open is not kept, and the card's answer is sent without it", async () => {
+    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+    stream.current = cardStream(CARD_ID);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
+    await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
+    expect(windowScreen.current?.enableAttachments).not.toBe(true);
+    await act(async () => {
+      await windowScreen.current!.onSubmit("Use the attached brief", [FILE]).catch(() => undefined);
+    });
+    const field = document.querySelector<HTMLElement>("[data-declared-hitl-screen] input, [data-declared-hitl-screen] textarea")!;
+    fireEvent.change(field, { target: { value: "Why runs need a record" } });
+    await waitFor(() => expect(continueButtons()[0]!.disabled).toBe(false));
+    fireEvent.click(continueButtons()[0]!);
+    await waitFor(() => expect(gateSend.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = gateSend.approveReviewTask.mock.calls[0]![1] as Record<string, unknown>;
+    const answer = { topic: "Audit trails for agent runs", angle: "Why runs need a record" };
+    expect(payload.userResponse).toBe(JSON.stringify(answer));
+    expect(JSON.stringify(payload)).not.toContain("art-3470");
   });
 });

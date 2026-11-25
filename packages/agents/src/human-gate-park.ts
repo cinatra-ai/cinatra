@@ -231,7 +231,7 @@ export async function parkRunOnHumanGate(
   }
   // The card a mid-run step pauses with is written with it (cinatra#3470).
   try {
-    artifact = await withDeclaredScreenOfStep(artifact, options.midRunStep?.readPausedRow);
+    artifact = await withDeclaredScreenOfStep(artifact, options.midRunStep?.readPausedRow, alreadyParked);
   } catch (err) {
     return fail(`the step's recorded card could not be read (${describe(err)})`);
   }

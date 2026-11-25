@@ -81,10 +81,8 @@ async function park({ xRenderer = ID, schema = { type: "object" }, row = null, f
       ? {}
       : {
           midRunStep: {
-            readPausedRow: async () => {
-              if (row === "throws") throw new Error("fixture gate store down");
-              return row;
-            },
+            readPausedRow: async () =>
+              row === "throws" ? { read: "failed" as const } : row === null ? { read: "none" as const } : { read: "row" as const, gate: row },
           },
         }),
     persistArtifact: async (a) => {
@@ -141,11 +139,25 @@ describe("the card is stamped once per pause", () => {
     expect(emitted).toEqual({ type: "object", ...stored(SCREEN_V2) });
   });
 
-  it("a row the read cannot reach, for a renderer that declares a card now, fails the park instead of re-stamping", async () => {
-    const { outcome, parkRun, failRun } = await park({ row: "throws" });
+  it.each([
+    ["the build still declares the card", SCREEN],
+    ["a later build removed the declaration", null],
+  ])("a row read that fails (%s) fails the park: no frame is emitted against the row", async (_n, now) => {
+    deploy(now);
+    const { outcome, emitted, parkRun, failRun } = await park({ alreadyParked: true, row: "throws" });
     expect(outcome.outcome).toBe("failed");
+    expect(emitted).toBeUndefined();
     expect(parkRun).not.toHaveBeenCalled();
     expect(failRun.mock.calls[0]![0]).toContain("recorded card could not be read");
+  });
+
+  it("a first park whose row read fails: a renderer with a card now fails the park; one with none is recorded as before", async () => {
+    const withCard = await park({ row: "throws" });
+    expect(withCard.outcome.outcome).toBe("failed");
+    expect(withCard.emitted).toBeUndefined();
+    const plain = await park({ xRenderer: PLAIN_ID, row: "throws" });
+    expect(plain.outcome.outcome).toBe("parked");
+    expect(plain.emitted).toEqual({ type: "object" });
   });
 
   it("the row writer keeps a stored card for the same pause whatever a later write brings", async () => {

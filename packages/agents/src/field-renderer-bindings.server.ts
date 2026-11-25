@@ -34,6 +34,7 @@ import type { FieldRendererBindingInput } from "./register-default-renderers";
 import {
   DECLARED_SCREEN_KEY,
   declaredHitlCardOfBinding,
+  type StepGateRead,
 } from "./hitl-gate-submit";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
@@ -206,10 +207,10 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
   };
 }
 
-/** How the park reads the gate row already written for a pause, if any. */
+/** How the park reads the gate row already written for a pause: its three outcomes (`StepGateRead`). */
 export type PausedRowReader = (
   reviewTaskId: string,
-) => Promise<{ xRenderer: string; inputSchema?: Record<string, unknown> | null } | null>;
+) => Promise<StepGateRead<{ xRenderer: string; inputSchema?: Record<string, unknown> | null }>>;
 
 /**
  * THE ONE WRITER OF THE CARD A STEP PAUSES WITH (cinatra#3470). Called when a
@@ -226,27 +227,27 @@ export type PausedRowReader = (
  *   stored nothing); only a NEW pause takes the card from the build's current
  *   bindings. The row writer keeps a stored card on its own as well
  *   (`writeDurableHitlGateArtifact`).
- * - When the row cannot be read and the current build declares a card for
- *   the renderer, this throws: the park fails rather than risk re-stamping.
- *   With no card declared now, the step is recorded as it always was.
+ * - When the row read FAILS on a re-emission (`reemission`), this throws,
+ *   whatever the current build declares: the park fails rather than emit a
+ *   frame that could contradict the row (re-stamp a card, or drop one the row
+ *   keeps). On a first park it throws when the build declares a card for the
+ *   renderer now; with none declared, the step is recorded as it always was.
  */
 export async function withDeclaredScreenOfStep<
   T extends { schema: Record<string, unknown>; xRenderer: string; reviewTaskId: string },
->(artifact: T, readPausedRow?: PausedRowReader): Promise<T> {
+>(artifact: T, readPausedRow?: PausedRowReader, reemission = false): Promise<T> {
   const { [DECLARED_SCREEN_KEY]: _incoming, ...schema } = artifact.schema ?? {};
   void _incoming;
   if (!readPausedRow) return { ...artifact, schema };
   const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === artifact.xRenderer);
   const card = binding?.screen !== undefined ? declaredHitlCardOfBinding(binding) : null;
-  let row: Awaited<ReturnType<PausedRowReader>>;
-  try {
-    row = await readPausedRow(artifact.reviewTaskId);
-  } catch (err) {
-    if (card === null) return { ...artifact, schema };
-    throw err;
+  const step = await readPausedRow(artifact.reviewTaskId);
+  if (step.read === "failed") {
+    if (reemission || card !== null) throw new Error("the step's gate row could not be read");
+    return { ...artifact, schema };
   }
-  if (row !== null && row.xRenderer === artifact.xRenderer) {
-    const stored = row.inputSchema ?? {};
+  if (step.read === "row" && step.gate.xRenderer === artifact.xRenderer) {
+    const stored = step.gate.inputSchema ?? {};
     return Object.hasOwn(stored, DECLARED_SCREEN_KEY)
       ? { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: stored[DECLARED_SCREEN_KEY] } }
       : { ...artifact, schema };

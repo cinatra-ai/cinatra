@@ -270,14 +270,21 @@ describe("an answer to a declared card's step is sent only as the card's whole a
     expectRefusedAndGivenBack();
   });
 
-  it.each([["missing" as const], ["throws" as const]])(
-    "refuses when the step's gate row is %s and the agent declares a card",
-    async (read) => {
-      gateRow.read = read;
-      expect(await answer(CARD_SEND)).toContain("screen could not be read");
-      expectRefusedAndGivenBack();
-    },
-  );
+  it.each([
+    ["the agent still declares the card", SCREEN],
+    ["a later build removed the declaration", null],
+  ])("refuses when the step's gate row read fails (%s), before the fence, and gives the pause back", async (_n, now) => {
+    deploy(now);
+    gateRow.read = "throws";
+    expect(await answer({ approved: true })).toContain("screen could not be read");
+    expectRefusedAndGivenBack();
+  });
+
+  it("a step with no gate row (the read found none) is answered with no card rule, as before", async () => {
+    gateRow.read = "missing";
+    expect(await answer({ approved: true, extra: "kept" })).toBe("sent");
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
 
   it("leaves a step with no declared card as it was", async () => {
     pause(PLAIN_ID);

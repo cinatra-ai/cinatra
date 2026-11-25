@@ -1,4 +1,9 @@
 import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+// The step's gate row read finds no row (a failed read refuses or fails the park, cinatra#3470).
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 
 // cinatra#3745 — when a run pauses for a review, the application records which
 // step of the flow paused it. The flow runtime signs the pausing step's id and

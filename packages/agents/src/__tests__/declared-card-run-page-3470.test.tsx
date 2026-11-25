@@ -4,7 +4,7 @@
 // holds text, and sends the one answer the card staged.
 import React from "react";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
 import { OrchestratorStepperPanel } from "../orchestrator-stepper-panel";
@@ -41,6 +41,29 @@ vi.mock("../run-recommendation-actions", () => ({
 vi.mock("../run-name-actions", () => ({ ensureOrCheckRunNameAction: vi.fn(async () => ({ ok: true, title: "Run 1" })) }));
 vi.mock("../hitl-actions", () => ({ approveReviewTask: (...args: unknown[]) => gateSend.approveReviewTask(...args) }));
 vi.mock("../use-runtime-field-renderer-bindings", () => ({ useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }) }));
+// The run window's registration, captured: its submit is how files reach a screen.
+const windowScreen = vi.hoisted(() => ({
+  current: null as null | { onSubmit: (p: string, a?: unknown[]) => Promise<void>; enableAttachments?: boolean },
+}));
+vi.mock("../run-window-screen-context", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  useRunWindowScreen: (screen: typeof windowScreen.current) => {
+    windowScreen.current = screen;
+  },
+}));
+vi.mock("../use-run-window-conversation", () => ({
+  useRunWindowConversation: () => ({ entries: [], pending: false, send: async () => ({ fill: null, acted: false }) }),
+}));
+/** A file the person attached in the run window. */
+const FILE = {
+  artifactId: "art-3470",
+  representationRevisionId: "rev-3470",
+  digest: "sha256:3470",
+  mime: "application/pdf",
+  originKind: "upload",
+  filename: "brief.pdf",
+  size: 10,
+};
 vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: (_runId: string, opts: { initialStatus?: string }) => ({
     status: opts?.initialStatus ?? "pending_approval", interruptContext: stream.interruptContext, messages: [],
@@ -152,5 +175,31 @@ describe("a step that stored no card (paused before the card was recorded) is dr
     render(<OrchestratorStepperPanel {...panelProps(CARD_ID)} />);
     await waitFor(() => expect(continueButtons().length).toBeGreaterThan(0));
     expect(document.querySelector("[data-declared-hitl-screen]")).toBeNull();
+  });
+});
+
+describe("a declared card takes no files", () => {
+  it("the run page: the window offers no attach control, a file sent while the card is open is not kept, and the card's answer is sent without it", async () => {
+    stream.interruptContext = {
+      xRenderer: CARD_ID,
+      schema: { type: "object", "x-renderer": CARD_ID, properties: { angle: { type: "string", title: "Angle" } }, ...STORED },
+      values: { stepNumber: 1, topic: "Audit trails for agent runs" },
+      reviewTaskId: "gate-card-3470",
+    };
+    render(<OrchestratorStepperPanel {...panelProps(CARD_ID)} />);
+    await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
+    expect(windowScreen.current?.enableAttachments).not.toBe(true);
+    await act(async () => {
+      await windowScreen.current!.onSubmit("Use the attached brief", [FILE]).catch(() => undefined);
+    });
+    const field = document.querySelector<HTMLElement>("[data-declared-hitl-screen] input, [data-declared-hitl-screen] textarea")!;
+    fireEvent.change(field, { target: { value: "Why runs need a record" } });
+    await waitFor(() => expect(continueButtons()[0]!.disabled).toBe(false));
+    fireEvent.click(continueButtons()[0]!);
+    await waitFor(() => expect(gateSend.approveReviewTask).toHaveBeenCalledTimes(1));
+    const payload = gateSend.approveReviewTask.mock.calls[0]![1] as Record<string, unknown>;
+    const answer = { topic: "Audit trails for agent runs", angle: "Why runs need a record" };
+    expect(payload.userResponse).toBe(JSON.stringify(answer));
+    expect(JSON.stringify(payload)).not.toContain("art-3470");
   });
 });

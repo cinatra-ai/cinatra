@@ -1266,6 +1266,30 @@ export function declaredHitlCardOfBinding(binding: {
 export const DECLARED_SCREEN_KEY = "x-declared-screen";
 
 /**
+ * A READ OF A STEP'S GATE ROW, as every road that acts on the step's card
+ * takes it (cinatra#3470): three outcomes, never merged. `row`: the read
+ * succeeded and found the row. `none`: the read succeeded and found no row
+ * for this step (the query returned nothing). `failed`: the read did not
+ * succeed, so whether the step has a card cannot be told; a road that would
+ * act on an answer refuses, and a park fails.
+ */
+export type StepGateRead<G> =
+  | { readonly read: "row"; readonly gate: G }
+  | { readonly read: "none" }
+  | { readonly read: "failed" };
+
+/** Run one gate-row read and tag its outcome (`StepGateRead`). */
+export async function readStepGate<G>(read: () => Promise<G | null>): Promise<StepGateRead<G>> {
+  let gate: G | null;
+  try {
+    gate = await read();
+  } catch {
+    return { read: "failed" };
+  }
+  return gate === null ? { read: "none" } : { read: "row", gate };
+}
+
+/**
  * The card a step paused with, read from its schema: null when the step
  * stored none (it paused before this was recorded, or its binding declared no
  * card: the step is drawn and answered as it always was), `"invalid"` when
@@ -1324,16 +1348,13 @@ const DECLARED_CARD_HOST_KEYS = new Set(["approved", "approvedAt", "stepNumber"]
 /**
  * WHAT A HOST'S CONTINUE SENDS FOR A DECLARED CARD: the answer the card staged,
  * with the host's approval and its time, and nothing else (no approval-note
- * lift, no list or context-selector rule, no declared-schema copy). Files
- * pending on the host are wrapped as on every other step, so the server refuses
- * them with its own sentence rather than the host dropping them unseen.
+ * lift, no list or context-selector rule, no declared-schema copy). A card
+ * takes no files (its declaration names every field): a host keeps none for a
+ * card's step, and no files ever ride with this answer; the server refuses an
+ * answer that carries any.
  */
-export function declaredCardContinuePayload(
-  staged: Record<string, unknown>,
-  pendingAttachments: ReadonlyArray<LlmAttachmentRef> = [],
-): Record<string, unknown> {
-  const payload = { ...staged, approved: true, approvedAt: new Date().toISOString() };
-  return pendingAttachments.length > 0 ? applyAttachmentEnvelopeUserResponseOnly(payload, pendingAttachments) : payload;
+export function declaredCardContinuePayload(staged: Record<string, unknown>): Record<string, unknown> {
+  return { ...staged, approved: true, approvedAt: new Date().toISOString() };
 }
 
 /** The refusal of a composer or tool answer to a step a declared card draws. */

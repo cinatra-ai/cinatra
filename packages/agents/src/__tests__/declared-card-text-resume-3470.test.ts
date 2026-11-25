@@ -295,16 +295,30 @@ describe("agent_run_resume and a declared card's step (cinatra#3470)", () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
   });
 
-  it.each([["row" as const], ["missing" as const], ["throws" as const]])(
-    "refuses a step a declared card draws (gate row: %s) and sends nothing",
-    async (read) => {
-      gateRow.read = read;
-      const answer = (await resume()) as { error?: string };
-      expect(answer.error).toMatch(/answered on its card/);
-      expect(sendTaskSpy).not.toHaveBeenCalled();
-      expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
-    },
-  );
+  it("refuses a step whose row stored a card and sends nothing", async () => {
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toMatch(/answered on its card/);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the agent still declares the card", "@acme/card-agent"],
+    ["a later build removed the declaration", "@acme/plain-agent"],
+  ])("refuses when the step's gate row read fails (%s) and sends nothing", async (_n, packageName) => {
+    gateRow.read = "throws";
+    storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", packageName, sourceType: "internal", agentAuthPolicy: null });
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toMatch(/screen could not be read/);
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+  });
+
+  it("a step with no gate row (the read found none) is resumed as before", async () => {
+    gateRow.read = "missing";
+    await resume().catch(() => undefined);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
 
   it("a row that stored no card (paused before the card was recorded) is resumed as before", async () => {
     gateRow.inputSchema = { type: "object" };
