@@ -2317,6 +2317,46 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     legFence = { resumeLeg: { a2aTaskId: task.id, executionAttemptId: claimedGate.executionAttemptId } };
   }
 
+  // The handler's failure path (the `failed` branch below, and a pause that cannot be
+  // placed). cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
+  // mid-flow and then failed has produced output a review may be open on, so the
+  // same question is asked here, BEFORE the terminal announcement: a run that parks
+  // announces no end, because it has not reached one.
+  const failWayflowRun = async (error: string, where: string): Promise<void> => {
+    if (
+      await producedReviewHoldsRun({
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: [],
+        withheld: { status: "failed", error },
+        authority,
+        resumeLeg: legFence?.resumeLeg,
+        where,
+      })
+    ) {
+      return;
+    }
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: error,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+    // Defense-in-depth same-status short-circuit (failed -> failed is also
+    // not in LEGAL_TRANSITIONS, though no real call path should hit this).
+    if (fromStatus === "failed") {
+      return;
+    }
+    await transitionRunStatus(runId, fromStatus, "failed", { error, ...legFence }, authority).catch((e) => {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+      throw e;
+    });
+  };
+
   // cinatra#4264 — the step snapshots this leg carries, verified against THIS
   // handler's own runId (never an id read from the response) and stored BEFORE
   // the resync below, so a response naming another run's task or context cannot
@@ -2433,29 +2473,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // cannot be told whether this pause is such a review: the run is stopped
     // failed, the pause offered as no approval. (No compiled step names a node
     // yet; the compiler that writes such steps follows.) A read that throws is retried
-    // briefly first (nothing re-drives a dropped report); only then the stop. The
-    // stop takes this handler's failure path: a run with produced output that awaits
-    // review holds at that review, and the edge carries the claimed resume leg.
-    const stopUnplacedPause = async (error: string) => {
-      if (
-        await producedReviewHoldsRun({
-          runId,
-          orgId: run.orgId,
-          fromStatus,
-          stepResults: [],
-          withheld: { status: "failed", error },
-          authority,
-          resumeLeg: legFence?.resumeLeg,
-          where: "unplaced pause",
-        })
-      ) {
-        return;
-      }
-      await transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date(), ...legFence }, authority).catch((e) => {
-        if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-        throw e;
-      });
-    };
+    // briefly first (nothing re-drives a dropped report); only then the stop,
+    // through this handler's failure path (failWayflowRun).
+    const stopUnplacedPause = (error: string) => failWayflowRun(error, "unplaced pause");
     const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
     if (!pauseRead.ok) {
       await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
@@ -3249,43 +3269,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
 
   if (taskState === "failed") {
     const firstFailPart = task.status?.message?.parts?.[0] as { text?: string } | undefined;
-    const errMsg = firstFailPart?.text ?? "WayFlow task failed";
-    // cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
-    // mid-flow and then failed has produced output a review may be open on, so
-    // the same question is asked here, BEFORE the terminal announcement: a run
-    // that parks announces no end, because it has not reached one.
-    if (
-      await producedReviewHoldsRun({
-        runId,
-        orgId: run.orgId,
-        fromStatus,
-        stepResults: [],
-        withheld: { status: "failed", error: errMsg },
-        authority,
-        resumeLeg: legFence?.resumeLeg,
-        where: "wayflow failed",
-      })
-    ) {
-      return;
-    }
-    await Promise.resolve(
-      publishAgUiEvent(runId, {
-        type: "RUN_ERROR",
-        threadId: runId,
-        runId,
-        message: errMsg,
-        timestamp: Date.now(),
-      } as never),
-    ).catch(() => undefined);
-    // Defense-in-depth same-status short-circuit (failed -> failed is also
-    // not in LEGAL_TRANSITIONS, though no real call path should hit this).
-    if (fromStatus === "failed") {
-      return;
-    }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg, ...legFence }, authority).catch((e) => {
-      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-      throw e;
-    });
+    await failWayflowRun(firstFailPart?.text ?? "WayFlow task failed", "wayflow failed");
     return;
   }
 

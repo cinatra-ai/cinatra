@@ -21,17 +21,19 @@ import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, SCHEMA_FIELD_FALLBACK_RENDERER_ID
 import { GATE_KEYS_NOT_FROM_RUN_INPUTS } from "../gate-keys-not-from-run-inputs";
 import { PAUSE_POLICY_READ_WAITS_MS } from "../orchestrator-gate-predicate";
 
-const { enrichSpy, onInterruptSpy, gateIndexSpy } = vi.hoisted(() => {
+const { enrichSpy, onInterruptSpy, gateIndexSpy, publishSpy } = vi.hoisted(() => {
   const enrichSpy = vi.fn(async (schema: unknown) => ({ ...(schema as object) }));
   const onInterruptSpy = vi.fn();
   const gateIndexSpy = vi.fn(async () => 0);
-  return { enrichSpy, onInterruptSpy, gateIndexSpy };
+  const publishSpy = vi.fn(async (..._args: unknown[]) => undefined);
+  return { enrichSpy, onInterruptSpy, gateIndexSpy, publishSpy };
 });
 
 vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
   const actual = (await orig()) as Record<string, unknown>;
   return {
     ...actual,
+    publishAgUiEvent: publishSpy,
     enrichSchemaWithResolvedData: enrichSpy,
     // The park seam reads the emitted gate back through this reader before a run
     // may enter `pending_approval`. Serve it from the adapter spy: the suite
@@ -490,6 +492,12 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
       TEST_AUTHORITY,
     );
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith("run-rev-1", "running", "failed", expect.anything(), expect.anything());
+  });
+
+  it("the unplaced-pause stop ends the durable AG-UI log: RUN_ERROR is published with the stop's text", async () => {
+    await pauseBound(null, OUTREACH);
+    expect(publishSpy).toHaveBeenCalledWith("run-rev-1", expect.objectContaining({ type: "RUN_ERROR", message: expect.stringMatching(/^PAUSE_POLICY_UNREAD: /) }));
+    stoppedWith("PAUSE_POLICY_UNREAD");
   });
 
   it("an unverified node on a claimed resume leg: the stop carries the leg, so a stale leg cannot fail a newer attempt", async () => {
