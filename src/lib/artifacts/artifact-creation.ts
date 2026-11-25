@@ -462,9 +462,38 @@ async function assertWritableArtifactType(
   return def;
 }
 
-export async function createSemanticArtifact(
+/** One statement of a transaction (the shape `runPostgresQueriesSync` takes). */
+type Tx2Query = { text: string; values?: unknown[] };
+
+/** Fixed leading-query count before the producer ops of ONE artifact's transaction:
+ *  lock(1) + objects/outbox(1) + representation(1) + audit(1) = 4. Each
+ *  `buildAssertSemanticTypeQueries` contributes exactly 2 ops (archive, insert-RETURNING) —
+ *  parseResult locates its insert-RETURNING relative to the spliced offset. */
+const PRODUCER_OPS_OFFSET = 4;
+
+/** Everything of ONE artifact's write that is decided before its transaction opens (the bytes
+ *  stored, the resource row committed, the producer plan resolved) and the queries of its
+ *  transaction. */
+type PreparedArtifactWrite = {
+  input: CreateSemanticArtifactInput;
+  artifactId: string;
+  representationRevisionId: string;
+  blobStore: ReturnType<typeof createLocalDiskBlobStore>;
+  newBlob: Awaited<ReturnType<ReturnType<typeof createLocalDiskBlobStore>["put"]>>;
+  authoritative: { resourceId: string; mime: string; sizeBytes: number; storageKey: string; blobId: string; isDedupe: boolean };
+  originKind: ArtifactOriginKind;
+  persistedRunId: string | null;
+  planProduces: string[];
+  producerSplice: ReturnType<typeof buildAssertSemanticTypeQueries>[];
+  tx2Queries: Tx2Query[];
+};
+
+
+async function prepareArtifactWrite(
   input: CreateSemanticArtifactInput,
-): Promise<CreateSemanticArtifactResult> {
+): Promise<PreparedArtifactWrite> {
+
+
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
 
@@ -947,7 +976,7 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   // `buildAssertSemanticTypeQueries` contributes exactly 2 ops
   // (archive, insert-RETURNING) — parseResult locates its
   // insert-RETURNING relative to the spliced offset.
-  const PRODUCER_OPS_OFFSET = 4;
+
   // ---------------------------------------------------------------------
   // Binding reconcile, IN Tx2 (cinatra#1868).
   //
@@ -1033,25 +1062,11 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     orgId: input.orgId,
     artifactId,
   });
-  // `tx2Results` is hoisted OUT of the try so producer-outcome parsing
-  // happens POST-COMMIT in a best-effort block. A parse/offset throw must
-  // NOT be conflated with a Tx2 failure, which would create a false
-  // failed-upload and duplicate on retry.
-  let tx2Results:
-    | ReturnType<typeof runPostgresQueriesSync>
-    | undefined;
-
-  try {
-    // ---------------------------------------------------------------
-    // Tx 2 — held-lock artifact creation. The advisory lock on
-    // hashtext(artifactId) keeps the floor-rebalance correct against
-    // the live state, mirroring the canonical pattern in
-    // `semantic-assertion-store.ts:runOneLockedTx`.
-    // ---------------------------------------------------------------
-    tx2Results = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: [
+  // The queries of ONE artifact's transaction, in this fixed order (lock, objects + outbox,
+  // representation, audit, producer ops, binding ops, authoring link, the caller's follow-ons, the
+  // produced event). `createSemanticArtifact` runs them as ONE transaction; `createSemanticArtifacts`
+  // concatenates N artifacts' lists into ONE transaction: the row writers are these, not copies.
+  const tx2Queries: Tx2Query[] = [
         {
           text: `SELECT pg_advisory_xact_lock(hashtext($1))`,
           values: [artifactId],
@@ -1201,31 +1216,44 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
           });
           return op ? [op] : [];
         })(),
-      ],
-    });
-  } catch (err) {
-    // Tx2 failed AFTER Tx1 committed.
-    //  - DEDUPE hit (isDedupe=true): the new blob bytes on disk were
-    //    NEVER bound to any DB row (no artifact_blobs INSERT happened;
-    //    the existing resource still owns the canonical bytes). The new
-    //    bytes are an unreferenced duplicate — delete.
-    //  - FRESH Tx1 (isDedupe=false): the new resource row AND the new
-    //    artifact_blobs row are committed and point at this storage_key.
-    //    Deleting the bytes would poison future dedupe hits (a same-
-    //    substance upload would dedupe to a resource whose canonical
-    //    bytes were deleted). DO NOT delete — the artifact_blobs row
-    //    owns the bytes for future dedupes; only the artifact rollup
-    //    (objects + representation + audit) failed and is rolled back.
-    if (authoritative.isDedupe && newBlob.storageKey !== authoritative.storageKey) {
-      await blobStore
-        .deleteByStorageKey({
-          orgId: input.orgId,
-          storageKey: newBlob.storageKey,
-        })
-        .catch(() => {});
-    }
-    throw err;
+  ];
+  return {
+    input,
+    artifactId,
+    representationRevisionId,
+    blobStore,
+    newBlob,
+    authoritative,
+    originKind,
+    persistedRunId,
+    planProduces,
+    producerSplice,
+    tx2Queries,
+  };
+}
+
+
+/** A write whose transaction did not commit (or never ran): the new bytes are an unreferenced
+ *  duplicate only on a DEDUPE hit, and only then are they deleted. A FRESH Tx1 committed the
+ *  resource row and the artifact_blobs row that own the bytes for future dedupes (deleting
+ *  them would poison a later same-substance write); only the artifact rollup rolled back. */
+async function abandonArtifactWrite(p: PreparedArtifactWrite): Promise<void> {
+  if (p.authoritative.isDedupe && p.newBlob.storageKey !== p.authoritative.storageKey) {
+    await p.blobStore
+      .deleteByStorageKey({ orgId: p.input.orgId, storageKey: p.newBlob.storageKey })
+      .catch(() => {});
   }
+}
+
+/** What follows a COMMITTED transaction of one artifact: the dedupe-duplicate blob cleanup, the
+ *  producer-outcome log, the matcher enqueue and the result. `queryBase` is where this artifact's
+ *  queries begin in the transaction's result list. Nothing here may fail the committed write. */
+async function finishArtifactWrite(
+  p: PreparedArtifactWrite,
+  tx2Results: ReturnType<typeof runPostgresQueriesSync> | undefined,
+  queryBase: number,
+): Promise<CreateSemanticArtifactResult> {
+  const { input, artifactId, representationRevisionId, blobStore, newBlob, authoritative, originKind, persistedRunId, planProduces, producerSplice } = p;
 
   // -------------------------------------------------------------------
   // Post-tx: if dedupe won, the new blob bytes on disk are an
@@ -1252,10 +1280,10 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
   // duplicate-artifact retry.
   if (tx2Results && producerSplice.length > 0) {
     try {
-      producerSplice.forEach((p, i) => {
-        const outcome: AssertSemanticTypeResult = p.parseResult(
+      producerSplice.forEach((splice, i) => {
+        const outcome: AssertSemanticTypeResult = splice.parseResult(
           tx2Results as ReturnType<typeof runPostgresQueriesSync>,
-          PRODUCER_OPS_OFFSET + i * 2,
+          queryBase + PRODUCER_OPS_OFFSET + i * 2,
         );
         const ext = planProduces[i];
         console.info(
@@ -1313,6 +1341,77 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     ref,
   };
 }
+
+
+/**
+ * Create ONE semantic artifact: its blob stored, then ONE held-lock transaction for its rows.
+ */
+export async function createSemanticArtifact(
+  input: CreateSemanticArtifactInput,
+): Promise<CreateSemanticArtifactResult> {
+  const prepared = await prepareArtifactWrite(input);
+  // `tx2Results` is kept out of the try so producer-outcome parsing happens POST-COMMIT in a
+  // best-effort block. A parse/offset throw must NOT be conflated with a Tx2 failure, which would
+  // create a false failed-upload and duplicate on retry.
+  let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
+  try {
+    tx2Results = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries: prepared.tx2Queries,
+    });
+  } catch (err) {
+    // Tx2 failed AFTER Tx1 committed (see abandonArtifactWrite for what is kept).
+    await abandonArtifactWrite(prepared);
+    throw err;
+  }
+  return finishArtifactWrite(prepared, tx2Results, 0);
+}
+
+/**
+ * Create N semantic artifacts in ONE transaction (cinatra#3089): every artifact is prepared as
+ * `createSemanticArtifact` prepares one (type and envelope checked, bytes stored, resource row
+ * committed, producer plan resolved) and then the queries of ALL of them run as ONE transaction,
+ * so either every artifact's rows (object + outbox, representation, audit, producer and binding
+ * ops, the caller's follow-ons such as the ledger finalize, the produced event) commit together
+ * or none does. The row writers are `prepareArtifactWrite`'s: the single and the batch path share
+ * them. Blobs stored before a rolled-back transaction are content-addressed and keep the
+ * resource rows that own them, exactly as after a failed single write.
+ *
+ * The statements of one artifact are ~10; the batch is bounded by its caller (50 members) and by
+ * the synchronous bridge's ceiling (`POSTGRES_SYNC_TIMEOUT_MS`, 30 s). Fresh artifact ids contend
+ * with nothing, so the per-artifact advisory locks cannot deadlock in any order.
+ */
+export async function createSemanticArtifacts(
+  inputs: readonly CreateSemanticArtifactInput[],
+): Promise<CreateSemanticArtifactResult[]> {
+  const prepared: PreparedArtifactWrite[] = [];
+  try {
+    for (const input of inputs) prepared.push(await prepareArtifactWrite(input));
+  } catch (err) {
+    for (const p of prepared) await abandonArtifactWrite(p);
+    throw err;
+  }
+  let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
+  try {
+    tx2Results = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries: prepared.flatMap((p) => p.tx2Queries),
+    });
+  } catch (err) {
+    for (const p of prepared) await abandonArtifactWrite(p);
+    throw err;
+  }
+  const results: CreateSemanticArtifactResult[] = [];
+  let base = 0;
+  for (const p of prepared) {
+    results.push(await finishArtifactWrite(p, tx2Results, base));
+    base += p.tx2Queries.length;
+  }
+  return results;
+}
+
 
 // Canonical default visibility per owner level (cinatra#1428). The owner axis
 // lives in owner_level + owner_id; visibility is the SHARE axis:

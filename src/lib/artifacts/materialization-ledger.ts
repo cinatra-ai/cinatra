@@ -550,43 +550,51 @@ export async function findFinalizedFanoutMessageMaterialization(input: {
   };
 }
 
+/** The member output id of a list filing: the node's id and the member's 1-based position, so the ledger's
+ *  own unique key (run, output id, extension, content hash) names the member's place in the set. */
+export function toolSetOutputId(nodeId: string, position: number): string {
+  return `${nodeId}#${position}`;
+}
+
+export type ToolSetRow = {
+  outputId: string;
+  contentHash: string;
+  phase: "claimed" | "finalized";
+  artifactId: string | null;
+  representationRevisionId: string | null;
+};
+
 /**
- * The finalized `materialize_tool` row of ONE filing of the tool (cinatra#3089): the calling node's id as the
- * output id + extension + content hash, or null. Read before a list filing stores its first member, so a
- * member that would only return the artifact an earlier call stored is compared with it, not discovered
- * half way through the list.
+ * Every ledger row of the set one node filed in a run (cinatra#3089): the `materialize_tool` rows of the node
+ * and extension whose output id is `<node>#<position>`. A set is written by ONE transaction that finalizes all
+ * its rows together, so after a commit every row is finalized and before it none is; an unfinalized row is a
+ * claim of a drive that did not commit.
  */
-export async function findFinalizedToolMaterialization(input: {
+export async function readToolSetRows(input: {
   orgId: string;
   runId: string;
-  outputId: string;
+  nodeId: string;
   extension: string;
-  contentHash: string;
-}): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+}): Promise<ToolSetRow[]> {
   ensurePostgresSchema();
   const s = schema();
+  const prefix = `${input.nodeId}#`;
   const res = await pool().query(
-    `SELECT artifact_id, representation_revision_id
+    `SELECT output_id, content_hash, phase, artifact_id, representation_revision_id
    FROM "${s}"."artifact_materializations"
-  WHERE run_id = $1 AND output_id = $2 AND extension = $3 AND content_hash = $4
-    AND org_id = $5 AND path = 'materialize_tool' AND phase = 'finalized'
-  LIMIT 1`,
-    [input.runId, input.outputId, input.extension, input.contentHash, input.orgId],
+  WHERE run_id = $1 AND org_id = $2 AND node_id = $3 AND extension = $4 AND path = 'materialize_tool'
+    AND left(output_id, length($5::text)) = $5::text`,
+    [input.runId, input.orgId, input.nodeId, input.extension, prefix],
   );
-  const row = res.rows[0] as
-    | { artifact_id: string | null; representation_revision_id: string | null }
-    | undefined;
-  if (
-    !row ||
-    typeof row.artifact_id !== "string" ||
-    typeof row.representation_revision_id !== "string"
-  ) {
-    return null;
-  }
-  return {
+  return (res.rows as Array<{
+    output_id: string; content_hash: string; phase: string; artifact_id: string | null; representation_revision_id: string | null;
+  }>).map((row) => ({
+    outputId: row.output_id,
+    contentHash: row.content_hash,
+    phase: row.phase === "finalized" ? "finalized" : "claimed",
     artifactId: row.artifact_id,
     representationRevisionId: row.representation_revision_id,
-  };
+  }));
 }
 
 /**

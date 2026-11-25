@@ -26,9 +26,7 @@ const h = vi.hoisted(() => ({
   mintRunWriteAuthorityForMcp: vi.fn(),
   collectAllPrimitiveHandlers: vi.fn(async () => ({})),
   materializeToolArtifact: vi.fn(),
-  precheckToolMaterializeWrite: vi.fn(),
-  gateEmit: vi.fn(),
-  gateDecide: vi.fn(),
+  materializeSet: vi.fn(),
   frames: [] as unknown[],
 }));
 
@@ -83,12 +81,14 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", async () => {
       h.frames.push(mcpRequestContextStorage.getStore());
       return h.materializeToolArtifact(...args);
     },
-    precheckToolMaterializeWrite: (...args: unknown[]) => h.precheckToolMaterializeWrite(...args),
+    materializeToolArtifactSet: (...args: unknown[]) => {
+      h.frames.push(mcpRequestContextStorage.getStore());
+      return h.materializeSet(...args);
+    },
   };
 });
 
 import { POST } from "../app/api/agents/passthrough/route";
-import { producedEventId } from "../lib/lifecycle/lifecycle-produced-event";
 import { shapeArtifactMaterializeInput } from "../app/api/agents/passthrough/artifact-materialize-shaper";
 import {
   ARTIFACT_MATERIALIZE_TOOL,
@@ -174,17 +174,6 @@ beforeEach(() => {
   h.verifyRunExecutedSource.mockResolvedValue(VERIFIED_SOURCE);
   h.assertRunStepToolAllowed.mockReturnValue({ kind: "undeclared" });
   h.mintRunWriteAuthorityForMcp.mockResolvedValue(AUTHORITY);
-  h.precheckToolMaterializeWrite.mockReset();
-  h.precheckToolMaterializeWrite.mockResolvedValue({ ok: true });
-  h.gateEmit.mockReset();
-  h.gateEmit.mockResolvedValue({ ok: true });
-  // The policy decision the declared gate itself asks: fire for every target unless a test says otherwise.
-  h.gateDecide.mockReset();
-  h.gateDecide.mockImplementation(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "default" }));
-  (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
-    emit: h.gateEmit,
-    decideDeclaredReview: h.gateDecide,
-  };
   // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
   h.materializeToolArtifact.mockReset();
   let n = 0;
@@ -192,10 +181,20 @@ beforeEach(() => {
     n += 1;
     return { ok: true, artifactId: `art-${n}`, representationRevisionId: `rep-${n}`, deduped: false };
   });
+  // The list is filed as ONE unit: the set function answers the whole set, in member order.
+  h.materializeSet.mockReset();
+  h.materializeSet.mockImplementation(async (input: { members: unknown[] }) => ({
+    ok: true,
+    deduped: false,
+    artifacts: input.members.map((_, i) => ({ artifactId: `art-${i + 1}`, representationRevisionId: `rep-${i + 1}` })),
+  }));
 });
 
+/** The members the route handed to the set function (call `call`). */
+const setMembers = (call = 0) =>
+  (h.materializeSet.mock.calls[call]![0] as { members: Array<{ title: string; content: string; typedData?: Record<string, unknown> }> }).members;
+
 afterEach(() => {
-  delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam;
   if (ATTEST_BEFORE === undefined) delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
   else process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_BEFORE;
 });
@@ -211,27 +210,24 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(h.assertRunStepToolAllowed).toHaveBeenCalledWith(
       expect.objectContaining({ stepId: NODE, toolName: "artifact_materialize" }),
     );
-    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
-    for (const [i, draft] of DRAFTS.entries()) {
-      expect(h.materializeToolArtifact.mock.calls[i]![0]).toStrictEqual({
-        runId: "run-1",
-        orgId: "org-a",
-        templateId: "tpl-1",
-        packageVersion: "1.2.3",
-        createdBy: "user-1",
-        nodeId: NODE,
-        verifiedStepId: NODE,
-        extension: EXT,
-        objectTypeId: undefined,
-        title: draft.subject,
-        mime: "text/markdown",
-        content: draft.body,
-        // A finalized hit is compared with what the call would store, for every member.
-        verifyFinalizedHit: true,
-      });
-      // Each member is filed inside the run's verified frame.
-      expect(h.frames[i]).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, orgWriteAuthority: AUTHORITY });
-    }
+    // ONE call files the set: the same node and verified step, the members in order.
+    expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(h.materializeSet.mock.calls[0]![0]).toStrictEqual({
+      runId: "run-1",
+      orgId: "org-a",
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      createdBy: "user-1",
+      nodeId: NODE,
+      verifiedStepId: NODE,
+      extension: EXT,
+      objectTypeId: undefined,
+      mime: "text/markdown",
+      members: DRAFTS.map((d) => ({ title: d.subject, content: d.body, typedData: undefined })),
+    });
+    // The set is filed inside the run's verified frame.
+    expect(h.frames[0]).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, orgWriteAuthority: AUTHORITY });
+    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
     expect(h.collectAllPrimitiveHandlers).not.toHaveBeenCalled();
   });
 
@@ -243,204 +239,29 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     }));
     const res = await POST(post(listBody({ content: JSON.stringify(big) })));
     expect(res.status).toBe(200);
-    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(4);
-    expect(h.materializeToolArtifact.mock.calls.map((c) => (c[0] as { content: string }).content)).toEqual(
+    expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(4);
+    expect(setMembers().map((m) => m.content)).toEqual(
       big.map((m) => m.body),
     );
   });
 
-  // red-first-expect: expected { Object (error) } to match object
-  it("ends the call with a typed refusal and no artifacts when a member fails, after the members before it", async () => {
-    h.materializeToolArtifact
-      .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-      .mockResolvedValueOnce({ ok: false, error: "materialization failed: db down" });
+  // red-first-expect: expected 400 to be 200
+  it.each([
+    ["member refused before the write", { ok: false, code: "materialize_list_member_refused", failedMember: 2, error: "artifact_materialize list member 2 of 3 was refused: x — nothing was filed" }],
+    ["a set that differs from the one this run filed", { ok: false, code: "materialize_list_set_differs", failedMember: 1, error: "materialize_list_set_differs: member 1: bytes" }],
+    ["a fault of the one transaction", { ok: false, code: "materialize_list_set_failed", error: "materialize_list_set_failed: the list was not filed and nothing of it was stored" }],
+  ])("answers ONE 400 with the set's own code for %s, and never a partial answer", async (_n, outcome) => {
+    h.materializeSet.mockResolvedValueOnce(outcome);
     const res = await POST(post(listBody()));
-    expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body).toMatchObject({
-      code: "materialize_list_partial",
-      failedMember: 2,
-      filedCount: 1,
-      // What is stored is named (so a retry, an operator or a tool can find it), under a name no gate input reads.
-      filedArtifacts: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
-    });
-    expect(body.error).toContain("materialization failed: db down");
-    // The stored member is put under a review of its own, when the policy the declared gate asks says fire.
-    expect(h.gateDecide).toHaveBeenCalledWith({
-      orgId: "org-a",
-      templateId: "tpl-1",
-      packageVersion: "1.2.3",
-      targets: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
-    });
-    expect(body.reviewPolicy).toEqual({ review: true });
-    expect(body.underReview).toBe(1);
-    expect(h.gateEmit).toHaveBeenCalledTimes(1);
-    expect(h.gateEmit).toHaveBeenCalledWith({
-      runId: "run-1",
-      orgId: "org-a",
-      reviewTaskId: `lifecycle-review:${producedEventId("art-1", "rep-1")}`,
-      targets: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
-    });
+    expect(res.status).toBe(400);
+    expect(body).toEqual({ error: outcome.error, code: outcome.code, ...("failedMember" in outcome ? { failedMember: outcome.failedMember } : {}) });
     expect(body).not.toHaveProperty("artifacts");
     expect(body).not.toHaveProperty("reviewTargets");
-    // The third member is never tried: the run cannot go on with a partial set.
-    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(2);
-  });
-
-  // red-first-expect: expected undefined to be 'materialize_list_member_refused'
-  it("asks the write check of EVERY member before the first one is filed, and refuses the whole call when one is refused", async () => {
-    h.precheckToolMaterializeWrite
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({ ok: false, error: "content (99 bytes) exceeds the 10-byte cap" });
-    const res = await POST(post(listBody()));
-    const body = await res.json();
-    expect(body.code).toBe("materialize_list_member_refused");
-    expect(res.status).toBe(400);
-    expect(body).toEqual({
-      error: expect.stringContaining("member 3 of 3 was refused: content (99 bytes) exceeds the 10-byte cap"),
-      code: "materialize_list_member_refused",
-      failedMember: 3,
-      filedCount: 0,
-    });
-    expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(3);
-    // Nothing was stored: not even the members before the refused one.
-    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
-  });
-
-  describe("a list filing stores every member or leaves none unreviewed (cinatra#3089)", () => {
-    // red-first-expect: expected undefined to be 'materialize_list_member_refused'
-    it.each([
-      ["typed data the type's schema rejects", `object payload does not satisfy the declared schema for "@x/y:z": contactId required`],
-      ["bytes whose detected MIME the type does not accept", `detected MIME "image/png" is not accepted by "@x/y:z" (accepts [text/markdown])`],
-    ])("refuses the whole call before any write when member 2 has %s", async (_n, refusal) => {
-      h.precheckToolMaterializeWrite.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: refusal });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(body.code).toBe("materialize_list_member_refused");
-      expect(res.status).toBe(400);
-      expect(body).toMatchObject({ failedMember: 2, filedCount: 0 });
-      expect(body.error).toContain(refusal);
-      // Every member was asked, in order, before the first was filed; nothing was stored or put under review.
-      expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(2);
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
-      expect(h.gateEmit).not.toHaveBeenCalled();
-    });
-
-    // red-first-expect: expected 400 to be 200
-    it("asks the write check with what the filing will store: the member's typed data and the run's id, its trimmed title, its own bytes", async () => {
-      const res = await POST(
-        post(listBody({ content: JSON.stringify([{ subject: " Hello Ada ", body: "Dear Ada", recipientId: "c-1" }]), memberDataFields: ["recipientId"], memberRunIdField: "runId" })),
-      );
-      expect(res.status).toBe(200);
-      expect(h.precheckToolMaterializeWrite).toHaveBeenCalledTimes(1);
-      expect(h.precheckToolMaterializeWrite.mock.calls[0]![0]).toMatchObject({
-        orgId: "org-a",
-        extension: EXT,
-        mime: "text/markdown",
-        content: "Dear Ada",
-        title: "Hello Ada",
-        typedData: { recipientId: "c-1", runId: "run-1" },
-        nodeId: NODE,
-        runId: "run-1",
-        outputId: NODE,
-        verifyFiledValues: true,
-      });
-      // The filing itself compares a finalized hit with what it would write.
-      expect(h.materializeToolArtifact.mock.calls[0]![0]).toMatchObject({ verifyFinalizedHit: true });
-    });
-
-    // red-first-expect: expected { Object (error) } to match object
-    it("opens a review for each member stored before a storage fault, and the call still fails", async () => {
-      h.materializeToolArtifact
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-2", representationRevisionId: "rep-2", deduped: false })
-        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body).toMatchObject({ code: "materialize_list_partial", failedMember: 3, filedCount: 2, underReview: 2 });
-      expect(body).not.toHaveProperty("reviewTargets");
-      expect(h.gateEmit.mock.calls.map((c) => (c[0] as { targets: unknown }).targets)).toEqual([
-        [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
-        [{ artifactId: "art-2", representationRevisionId: "rep-2" }],
-      ]);
-    });
-
-    // red-first-expect: expected { Object (error) } to match object
-    it.each([
-      ["a review that cannot be opened", () => h.gateEmit.mockResolvedValue({ ok: false, code: "pin-conflict", message: "x" })],
-      ["a review store that throws", () => h.gateEmit.mockRejectedValue(new Error("db down"))],
-      ["no review store bound", () => { delete (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam; }],
-    ])("says so, and never claims a review, when %s", async (_n, arrange) => {
-      arrange();
-      h.materializeToolArtifact
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-        .mockResolvedValueOnce({ ok: false, error: "materialization failed: db down" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body).toMatchObject({ code: "materialize_list_partial", filedCount: 1, underReview: 0 });
-      expect(body.error).toContain("1 stored member(s) could not be put under review");
-      expect(body.filedArtifacts).toEqual([{ artifactId: "art-1", representationRevisionId: "rep-1" }]);
-    });
-
-    // red-first-expect: expected { Object (error) } to match object
-    it.each([
-      ["forbids review for this class", { review: false, why: "org policy forbids review for this class" }, "org policy forbids review for this class"],
-      ["declines it", { review: false, why: "the review core declined" }, "the review core declined"],
-    ])("opens no review when the organization's policy %s, and says so truthfully", async (_n, decision, why) => {
-      h.gateDecide.mockResolvedValue(decision);
-      h.materializeToolArtifact
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(res.status).toBe(400);
-      expect(body).toMatchObject({ code: "materialize_list_partial", filedCount: 1, underReview: 0, reviewPolicy: { review: false, why } });
-      expect(body.error).toContain(`1 stored member(s) were not put under review (the organization's policy: ${why})`);
-      expect(body.filedArtifacts).toEqual([{ artifactId: "art-1", representationRevisionId: "rep-1" }]);
-      expect(h.gateEmit).not.toHaveBeenCalled();
-    });
-
-    // red-first-expect: expected { Object (error) } to match object
-    it("opens a review only for the members the policy fires for", async () => {
-      h.gateDecide.mockImplementation(async () => ({ review: true, targets: [{ artifactId: "art-2", representationRevisionId: "rep-2" }], reason: "x" }));
-      h.materializeToolArtifact
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-2", representationRevisionId: "rep-2", deduped: false })
-        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(body).toMatchObject({ filedCount: 2, underReview: 1 });
-      expect(h.gateEmit.mock.calls.map((c) => (c[0] as { targets: unknown }).targets)).toEqual([
-        [{ artifactId: "art-2", representationRevisionId: "rep-2" }],
-      ]);
-      expect(body.error).toContain("1 stored member(s) were not put under review");
-    });
-
-    // red-first-expect: expected { Object (error) } to match object
-    it("opens no review when the policy cannot be read, and says that, never a review it did not open", async () => {
-      h.gateDecide.mockRejectedValue(new Error("org rule read failed"));
-      h.materializeToolArtifact
-        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
-        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(body).toMatchObject({ underReview: 0, reviewPolicy: { review: null, why: "the review policy could not be read" } });
-      expect(body.error).toContain("1 stored member(s) could not be put under review");
-      expect(h.gateEmit).not.toHaveBeenCalled();
-    });
-
-    // red-first-expect: expected undefined to be 'materialize_list_partial'
-    it("opens no review when no member was stored", async () => {
-      h.materializeToolArtifact.mockResolvedValueOnce({ ok: false, error: "materialization failed: db down" });
-      const res = await POST(post(listBody()));
-      const body = await res.json();
-      expect(body.code).toBe("materialize_list_partial");
-      expect(body).toMatchObject({ filedCount: 0, underReview: 0 });
-      expect(h.gateEmit).not.toHaveBeenCalled();
-    });
+    expect(body).not.toHaveProperty("filedArtifacts");
+    expect(body).not.toHaveProperty("underReview");
+    expect(h.materializeSet).toHaveBeenCalledTimes(1);
   });
 
   // red-first-expect: to contain 'same content bytes'
@@ -453,7 +274,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toContain("same content bytes");
-    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    expect(h.materializeSet).not.toHaveBeenCalled();
   });
 
   // red-first-expect: expected 400 to be 200
@@ -467,13 +288,14 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(res.status).toBe(200);
     const body = await res.json();
     const artifacts = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
-    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
+    expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(3);
     // Byte for byte the text the caller sent, with every member field in it.
     expect(body.content).toBe(text);
     expect(JSON.parse(body.content)).toEqual(members);
     // The whole input as received, then the answer; the filing took the shaped members only.
     expect(body).toEqual({ ...call.input, artifacts, reviewTargets: JSON.stringify(artifacts) });
-    expect(h.materializeToolArtifact.mock.calls.map((c) => (c[0] as { content: string }).content)).toEqual(
+    expect(setMembers().map((m) => m.content)).toEqual(
       DRAFTS.map((d) => d.body),
     );
     // A list has no single id: no id field, and never a null one.
@@ -491,7 +313,8 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     const res = await POST(post({ ...listBody({ content: text }), result_input_passthrough: true }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(4);
+    expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(4);
     expect(body.content).toBe(text);
     expect(body.artifacts).toHaveLength(4);
     expect(JSON.parse(body.reviewTargets)).toEqual(body.artifacts);
@@ -538,7 +361,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
         });
         // The list text was never parsed into members, and nothing was filed or echoed.
         expect(parse.mock.calls.some(([text]) => text === input.content)).toBe(false);
-        expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+        expect(h.materializeSet).not.toHaveBeenCalled();
         expect(body).not.toHaveProperty("content");
       } finally {
         parse.mockRestore();
@@ -550,7 +373,8 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const input = listInputOfBytes(LIMIT);
       const res = await POST(post(callOf(input)));
       expect(res.status).toBe(200);
-      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(50);
+      expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(50);
       expect((await res.json()).content).toBe(input.content);
     });
   });
@@ -582,7 +406,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
           "a title that is the whole body is not a filing, name two fields; nothing was filed",
         code: "materialize_list_member_fields_equal",
       });
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     /** A 50-member list call with short member field names whose input as
@@ -615,7 +439,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       expect(body.code).toBe("materialize_list_input_too_large");
       expect(res.status).toBe(400);
       expect(body).toEqual(TOO_LARGE);
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: input.title must be a non-empty string
@@ -624,7 +448,8 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       expect(Buffer.byteLength(JSON.stringify(shapeArtifactMaterializeInput(input)))).toBeLessThanOrEqual(LIMIT);
       const res = await POST(post({ tool: "artifact_materialize", agent_run_id: "run-1", input, result_input_passthrough: true }));
       expect(res.status).toBe(200);
-      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(50);
+      expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(50);
     });
   });
 
@@ -636,7 +461,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     const DECLARATION_CODE = "materialize_list_data_declaration";
     const typedCall = (inputOverrides?: Record<string, unknown>) =>
       listBody({ content: JSON.stringify(TYPED), memberDataFields: ["recipientId"], ...inputOverrides });
-    const typedDataOf = (call: number) => (h.materializeToolArtifact.mock.calls[call]![0] as { typedData?: unknown }).typedData;
+    const typedDataOf = (call: number) => setMembers()[call]!.typedData;
 
     // red-first-expect: expected 400 to be 200
     it("hands each member's declared fields, the call-wide values and the run's own id to the filing as typed data", async () => {
@@ -644,19 +469,20 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
         post(typedCall({ memberData: { campaignId: "camp-1" }, memberRunIdField: "runId" })),
       );
       expect(res.status).toBe(200);
-      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(2);
+      expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(2);
       // The run id is the calling run's (the run the binding proved), stamped by the host.
       expect(typedDataOf(0)).toStrictEqual({ recipientId: "c-1", campaignId: "camp-1", runId: "run-1" });
       expect(typedDataOf(1)).toStrictEqual({ recipientId: "c-2", campaignId: "camp-1", runId: "run-1" });
       // Title and content are unchanged by the typed fields.
-      expect(h.materializeToolArtifact.mock.calls[1]![0]).toMatchObject({ title: "Hello Bob", content: "Dear Bob, ..." });
+      expect(setMembers()[1]).toMatchObject({ title: "Hello Bob", content: "Dear Bob, ..." });
     });
 
     // red-first-expect: expected 400 to be 200
     it("passes no typed data for a list call that declares none", async () => {
       const res = await POST(post(listBody()));
       expect(res.status).toBe(200);
-      expect(h.materializeToolArtifact.mock.calls[0]![0]).not.toHaveProperty("typedData");
+      expect(setMembers()[0]!.typedData).toBeUndefined();
     });
 
     // red-first-expect: expected undefined to be 'materialize_list_data_declaration'
@@ -672,7 +498,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       expect(body.code).toBe(DECLARATION_CODE);
       expect(res.status).toBe(400);
       expect(body.error).toContain("nothing was filed");
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: expected undefined to be 'materialize_list_data_declaration'
@@ -690,7 +516,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const body = await res.json();
       expect(body.code).toBe(DECLARATION_CODE);
       expect(res.status).toBe(400);
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: to contain 'member 1'
@@ -702,7 +528,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const res = await POST(post(typedCall({ content: JSON.stringify(members), ...extra })));
       expect(res.status).toBe(400);
       expect((await res.json()).error).toContain("member 1");
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: expected undefined to be 'materialize_list_input_too_large'
@@ -718,7 +544,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const body = await res.json();
       expect(body.code).toBe("materialize_list_input_too_large");
       expect(res.status).toBe(400);
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
   });
 
@@ -734,7 +560,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
         "remove result_id_field and read artifacts (or reviewTargets) from the answer",
       code: "materialize_list_result_id_field",
     });
-    expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    expect(h.materializeSet).not.toHaveBeenCalled();
   });
 
   it("keeps the single call with its inputs and its id field echoed as it was", async () => {
@@ -795,7 +621,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const body = await res.json();
       expect(body.code).toBe("materialize_list_in_regenerate_run");
       expect(body.error).toContain("a Regenerate run files exactly one artifact");
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: expected undefined to be 'materialize_list_in_regenerate_run'
@@ -804,7 +630,7 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       const res = await POST(post({ ...listBody(), agent_run_id: REPAIR_RUN }));
       expect(res.status).toBe(400);
       expect((await res.json()).code).toBe("materialize_list_in_regenerate_run");
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     });
 
     // red-first-expect: expected 400 to be 200
@@ -812,7 +638,8 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       useRun(segmentRun({ inputParams: { lifecycleRepairRequest: { findings: [{ note: "x" }] } } }));
       const res = await POST(post({ ...listBody(), agent_run_id: REPAIR_RUN }));
       expect(res.status).toBe(200);
-      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
+      expect(h.materializeSet).toHaveBeenCalledTimes(1);
+    expect(setMembers()).toHaveLength(3);
     });
 
     it("keeps the single call of a Regenerate run as it was", async () => {
@@ -913,11 +740,11 @@ describe("the compile check and the route agree on a list call's response fields
     const errors = compileRefusals(list, siblings, dataAsText);
     if (refusal === null) {
       expect(errors).toEqual([]);
-      expect(h.materializeToolArtifact).toHaveBeenCalled();
+      expect(list ? h.materializeSet : h.materializeToolArtifact).toHaveBeenCalled();
     } else {
       expect(refusal.code).toBe("materialize_list_result_id_field");
       expect(errors).toEqual([expect.stringContaining(refusal.error)]);
-      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+      expect(h.materializeSet).not.toHaveBeenCalled();
     }
   }
 

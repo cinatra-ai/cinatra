@@ -35,9 +35,7 @@ import {
 import {
   isMaterializeListInputTooLarge,
   isRegenerateRepairRun,
-  materializeArtifactList,
-  refuseListBeforeFiling,
-  reviewStoredMembers,
+  materializeListAnswer,
   MATERIALIZE_LIST_INPUT_TOO_LARGE,
   materializeListInputTooLargeError,
   MATERIALIZE_LIST_IN_REGENERATE_RUN,
@@ -685,140 +683,49 @@ export async function POST(req: Request): Promise<Response> {
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
 
-      // THE LIST MODE (cinatra#3089): one artifact per member, in order, each
-      // through the single create call below with the same node and verified
-      // step. A member that fails ends the call with a typed refusal and no
-      // artifacts; the ledger makes a retry reuse every member filed before.
+      // THE LIST MODE (cinatra#3089): the members are filed as ONE unit. Every member is
+      // checked, then all are written in one transaction with the ledger finalized for
+      // all; a refusal or a fault stores nothing and answers one refusal (see
+      // `materializeToolArtifactSet`). The answer is the set, in member order.
       if (shaped.members !== undefined) {
-        // A Regenerate run takes one production: a list is refused before any member is filed.
+        // A Regenerate run takes one production: a list is refused before anything is filed.
         if (isRegenerateRepairRun(run)) {
           return NextResponse.json(
             { error: MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR, code: MATERIALIZE_LIST_IN_REGENERATE_RUN },
             { status: 400 },
           );
         }
-        // What a member will store: its typed data and the id of THIS run under the
-        // field the call names for it (the run the binding proved, never a value
-        // the call carries). Asked of the write check below and handed to the filing.
-        const typedDataOf = (member: (typeof shaped.members & object)[number]) =>
-          member.data !== undefined || shaped.runIdField !== undefined
-            ? {
-                ...member.data,
-                ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}),
-              }
-            : undefined;
-        // EVERY member is asked, before the first is filed, all that does not need
-        // the store: the write authorization (extension, form, size, declared
-        // type) and the creation path's own check (detected MIME, accepts, the
-        // type's schema over the typed data). A refused member stores nothing,
-        // not even the members before it.
-        const { precheckToolMaterializeWrite } = await import("@/lib/artifacts/run-artifact-materializer");
-        const refused = await refuseListBeforeFiling(shaped.members, (member) =>
-          precheckToolMaterializeWrite({
-            orgId: run.orgId,
-            templateId: run.templateId,
-            packageVersion: run.packageVersion,
-            extension: shaped.extension,
-            objectTypeId: shaped.objectTypeId,
-            mime: shaped.declaredMime,
-            content: member.content,
-            ...(verifiedStepId !== undefined && verifiedStepId === shaped.nodeId ? { nodeId: shaped.nodeId } : {}),
+        const { materializeToolArtifactSet } = await import("@/lib/artifacts/run-artifact-materializer");
+        const filedSet = await materializeToolArtifactSet({
+          runId: run.id,
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          createdBy: run.runBy,
+          nodeId: shaped.nodeId,
+          ...(verifiedStepId ? { verifiedStepId } : {}),
+          extension: shaped.extension,
+          objectTypeId: shaped.objectTypeId,
+          mime: shaped.declaredMime,
+          members: shaped.members.map((member) => ({
             title: member.title,
-            typedData: typedDataOf(member),
-            // A member the run already filed under this node is compared with what is stored,
-            // before anything of this list is stored (the filing compares it again).
-            runId: run.id,
-            outputId: shaped.nodeId,
-            verifyFiledValues: true,
-          }),
-        );
-        if (refused !== null) {
-          return NextResponse.json(refused, { status: 400 });
-        }
-        const listed = await materializeArtifactList(shaped.members, (member) =>
-          materializeToolArtifact({
-            runId: run.id,
-            orgId: run.orgId,
-            templateId: run.templateId,
-            packageVersion: run.packageVersion,
-            createdBy: run.runBy,
-            nodeId: shaped.nodeId,
-            ...(verifiedStepId ? { verifiedStepId } : {}),
-            extension: shaped.extension,
-            objectTypeId: shaped.objectTypeId,
-            title: member.title,
-            mime: shaped.declaredMime,
             content: member.content,
-            ...(typedDataOf(member) !== undefined ? { typedData: typedDataOf(member) } : {}),
-            verifyFinalizedHit: true,
-          }),
-        );
-        if (!listed.ok) {
-          // The members stored before the failure were written as their gate's write and that
-          // gate will not open with them. They are put under review ONLY as the declared gate
-          // itself would have put them (execution.ts asks the same decision): the organization's
-          // policy decides, and a policy that forbids or declines review opens none. Each review
-          // opened takes the id the produced-review path derives (a later sweep finds the same gate).
-          const { producedEventId } = await import("@/lib/lifecycle/lifecycle-produced-event");
-          const { autoReviewTaskId } = await import("@/lib/lifecycle/lifecycle-orchestration");
-          type Pair = { artifactId: string; representationRevisionId: string };
-          const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: {
-            decideDeclaredReview(input: { orgId: string; templateId: string | null; packageVersion: string | null; targets: unknown }):
-              Promise<{ review: true; targets: readonly Pair[]; reason: string } | { review: false; why: string }>;
-            emit(input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }): Promise<{ ok: boolean }>;
-          } }).__cinatraArtifactReviewGateSeam;
-          let reviewPolicy: { review: boolean | null; why?: string };
-          let toOpen: readonly Pair[] = [];
-          if (!seam) {
-            reviewPolicy = { review: null, why: "no review store bound" };
-          } else {
-            try {
-              const decision = await seam.decideDeclaredReview({
-                orgId: run.orgId,
-                templateId: run.templateId,
-                packageVersion: run.packageVersion ?? null,
-                targets: listed.filed,
-              });
-              if (decision.review) {
-                toOpen = decision.targets;
-                reviewPolicy = { review: true };
-              } else {
-                reviewPolicy = { review: false, why: decision.why };
-              }
-            } catch {
-              reviewPolicy = { review: null, why: "the review policy could not be read" };
-            }
-          }
-          const { underReview } = await reviewStoredMembers(toOpen, async (member) => {
-            const emitted = await seam!.emit({
-              runId: run.id,
-              orgId: run.orgId,
-              reviewTaskId: autoReviewTaskId(producedEventId(member.artifactId, member.representationRevisionId)),
-              targets: [member],
-            });
-            return emitted.ok;
-          });
-          const notReviewed = listed.filed.length - underReview;
+            // The member's typed data and the id of THIS run under the field the call names for
+            // it: the run the binding proved, never a value the call carries.
+            typedData:
+              member.data !== undefined || shaped.runIdField !== undefined
+                ? { ...member.data, ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}) }
+                : undefined,
+          })),
+        });
+        if (!filedSet.ok) {
           return NextResponse.json(
-            { error: notReviewed === 0
-                ? listed.error
-                : `${listed.error} — ${[
-                    ...(listed.filed.length - toOpen.length > 0 && reviewPolicy.review !== null
-                      ? [`${listed.filed.length - toOpen.length} stored member(s) were not put under review (the organization's policy${reviewPolicy.why ? `: ${reviewPolicy.why}` : ""})`]
-                      : []),
-                    ...(reviewPolicy.review === null
-                      ? [`${notReviewed} stored member(s) could not be put under review`]
-                      : toOpen.length - underReview > 0
-                        ? [`${toOpen.length - underReview} stored member(s) could not be put under review`]
-                        : []),
-                  ].join("; ")}`,
-              code: listed.code,
-              failedMember: listed.failedMember, filedCount: listed.filedCount,
-              filedArtifacts: listed.filed, underReview, reviewPolicy },
+            { error: filedSet.error, code: filedSet.code,
+              ...(filedSet.failedMember !== undefined ? { failedMember: filedSet.failedMember } : {}) },
             { status: 400 },
           );
         }
-        result = { artifacts: listed.artifacts, reviewTargets: listed.reviewTargets };
+        result = materializeListAnswer(filedSet.artifacts);
 
       // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
       // an existing artifact AND the revision it read appends the next revision
