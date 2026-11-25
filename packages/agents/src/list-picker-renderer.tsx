@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDistanceToNow } from "date-fns";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -10,7 +12,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { toast } from "@/lib/cinatra-toast";
 import { fetchAvailableLists, type AvailableListSummary } from "./list-picker-actions";
 import type {
   FieldRendererProps,
@@ -60,6 +61,85 @@ function formatLastUpdated(iso: string | null): string {
 }
 
 // ---------------------------------------------------------------------------
+// The list step's readings (design specs/app-artifact-review.html I.1)
+// ---------------------------------------------------------------------------
+
+/** The host's one message for a failed list read (I.1, run-list-step-error). */
+const FAILED_READ_READING = "This list could not be read.";
+
+const TRY_AGAIN_WORDS = "Try again";
+
+/** Whether the step may change: `mode` absent or "edit", `disabled` absent or false. */
+function isWritable(props: Pick<FieldRendererProps, "mode" | "disabled">): boolean {
+  return (
+    (props.mode === undefined || props.mode === "edit") &&
+    (props.disabled === undefined || props.disabled === false)
+  );
+}
+
+/**
+ * The lists a new read offers, or null for a failed read. The host's
+ * `onRequestRefresh` resolves `{ lists: [{ id, name }], listsRead }`
+ * (hitl-gate-submit.ts `ListStepReadValue`); only `listsRead: "ok"` offers
+ * rows. The read asks for contact lists, as the first load does, so each row
+ * is a contact list; the read carries no count and no update time.
+ */
+function listsOfRead(answer: unknown): AvailableListSummary[] | null {
+  if (!answer || typeof answer !== "object") return null;
+  const { lists, listsRead } = answer as { lists?: unknown; listsRead?: unknown };
+  if (listsRead !== "ok" || !Array.isArray(lists)) return null;
+  const seen = new Set<string>();
+  const out: AvailableListSummary[] = [];
+  for (const entry of lists) {
+    if (!entry || typeof entry !== "object") continue;
+    const { id, name } = entry as { id?: unknown; name?: unknown };
+    if (typeof id !== "string" || id.trim() === "" || seen.has(id)) continue;
+    if (typeof name !== "string" || name.trim() === "") continue;
+    seen.add(id);
+    out.push({ id, name, memberCount: null, lastUpdated: null, memberType: "contact" });
+  }
+  return out;
+}
+
+/**
+ * One skeleton bar, drawn with the design system Skeleton's own treatment
+ * (src/components/ui/skeleton.tsx). The primitive is not imported: this
+ * renderer is reached from the server routes the route-graph ratchet locks,
+ * and the bar needs none of the primitive's code.
+ */
+function SkeletonBar({ className }: { className: string }) {
+  return (
+    <span
+      data-slot="skeleton"
+      className={`block animate-pulse rounded-[4px] bg-muted ${className}`}
+    />
+  );
+}
+
+/** The loading reading (I.1, run-list-step-loading): a skeleton in each row's place. */
+function LoadingRows() {
+  return (
+    <div
+      className="flex flex-col gap-2"
+      aria-busy="true"
+      data-testid="list-picker-loading"
+      data-conformance-id="run-list-step-loading"
+    >
+      {[0, 1, 2].map((key) => (
+        <Card key={key} className="border-line bg-surface">
+          <CardHeader>
+            <SkeletonBar className="h-4 w-[46%]" />
+          </CardHeader>
+          <CardContent>
+            <SkeletonBar className="h-3 w-[62%]" />
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Renderer
 // ---------------------------------------------------------------------------
 
@@ -74,9 +154,15 @@ export function ListPickerRenderer({
   context,
   mode,
   bindingParams,
+  onRequestRefresh,
 }: FieldRendererProps) {
   const [lists, setLists] = useState<AvailableListSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  // A read that fails is never drawn as an empty list (design I.1): the step
+  // keeps whether its last read failed and draws the failed-read alert for it.
+  const [readFailed, setReadFailed] = useState(false);
+  // True while a Try again read is pending: the step draws the loading reading.
+  const [reading, setReading] = useState(false);
   const [search, setSearch] = useState("");
   const current = toListPickerValue(value);
   const [selectedId, setSelectedId] = useState<string | null>(
@@ -90,6 +176,30 @@ export function ListPickerRenderer({
     onChangeRef.current = onChange;
   });
 
+  // The props and the pick as they are now, for code that runs after an await.
+  const latest = useRef({ mode, disabled, selectedId, valueListId: current.listId });
+  useEffect(() => {
+    latest.current = { mode, disabled, selectedId, valueListId: current.listId };
+  });
+  // The pick last written TO THIS HOST, so a new read writes only a pick that
+  // changed. It starts UNKNOWN (null), not as an empty pick: the step assumes
+  // nothing about what the host's buffer holds (the run panel and the stepper
+  // start theirs empty, the conversation's card can carry a non-empty one
+  // across a move). So the first successful read writes the reconciled pick
+  // once: the kept pick, or the empty pick when the pick the value names is no
+  // longer offered. The one exception is a read that names no pick for a
+  // value that names none either: there is nothing to replace, and writing an
+  // empty pick there would stage an empty answer on a setup gate.
+  const lastWritten = useRef<{ listId: string; listName: string } | null>(null);
+  const inFlight = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
   // The run whose step this renderer is drawing. `context.runId` is the shared
   // field-renderer contract's run identity
   // (packages/sdk-ui/src/field-renderer-props.ts). It is what authorizes the
@@ -98,28 +208,103 @@ export function ListPickerRenderer({
   // is no longer redirected to `/not-authorized` at this step.
   const runId = context?.runId;
 
+  // ONE RECONCILIATION FOR EVERY READ THAT SUCCEEDED (cinatra#3562), whether
+  // it is the first load, a load the run identity re-issued, or Try again: its
+  // lists replace the drawn ones, and, while the step may change, the pick is
+  // the chosen list if the read still offers it, with the name the read gives
+  // it, else no pick. The first such read writes it once (see `lastWritten`);
+  // after that, a pick that differs from the pick last written (the list
+  // dropped or renamed) is written once through the current `onChange`, and
+  // the same read again writes nothing. A failed, rejected or malformed read
+  // never comes here: it draws the failed reading and keeps the pick as it is.
+  function acceptRead(read: AvailableListSummary[]) {
+    setLists(read);
+    setReadFailed(false);
+    const now = latest.current;
+    if (!isWritable(now)) return;
+    const kept = read.find((list) => list.id === now.selectedId) ?? null;
+    if (kept === null && now.selectedId !== null) setSelectedId(null);
+    const pick = { listId: kept?.id ?? "", listName: kept?.name ?? "" };
+    const last = lastWritten.current;
+    if (last === null && pick.listId === "" && now.valueListId === "") {
+      lastWritten.current = pick;
+      return;
+    }
+    if (last === null || pick.listId !== last.listId || pick.listName !== last.listName) {
+      lastWritten.current = pick;
+      onChangeRef.current({
+        scope: "list",
+        listId: pick.listId,
+        listName: pick.listName,
+        memberCount: kept?.memberCount ?? 0,
+      });
+    }
+  }
+  const acceptReadRef = useRef(acceptRead);
+  useEffect(() => {
+    acceptReadRef.current = acceptRead;
+  });
+
   // Mount-once fetch, guarded with a cancellation flag so React Strict Mode's
   // double-mount in dev does not double-fetch. Keyed on the run identity so a
   // runId that only arrives after mount re-issues the (now authorized) load.
+  // A rejected load is the failed reading (design I.1), drawn in place as the
+  // step's alert rather than as an empty list; it keeps the pick.
   useEffect(() => {
     let cancelled = false;
     fetchAvailableLists(runId ?? "")
       .then((items) => {
         if (!cancelled) {
-          setLists(items);
+          acceptReadRef.current(items);
           setLoading(false);
         }
       })
       .catch(() => {
         if (!cancelled) {
+          setReadFailed(true);
           setLoading(false);
-          toast.error("Could not load lists.");
         }
       });
     return () => {
       cancelled = true;
     };
   }, [runId]);
+
+  const writes = isWritable({ mode, disabled });
+
+  // Try again (cinatra#3562): the host reads the lists again for the step the
+  // run waits at. The press answers nothing: it sends nothing to the gate and
+  // the run does not resume. A second press while a read is pending does
+  // nothing. A read that ends after the step is gone sets nothing; one that
+  // ends after the step was locked (disabled, or drawn read-only) is dropped.
+  // A read that succeeded takes the one reconciliation (`acceptRead`); a
+  // failed, rejected or malformed one draws the failed reading and changes
+  // nothing else.
+  async function refresh() {
+    if (!writes || typeof onRequestRefresh !== "function" || inFlight.current) return;
+    inFlight.current = true;
+    setReading(true);
+    let answer: unknown;
+    try {
+      answer = await onRequestRefresh();
+    } catch {
+      answer = null;
+    }
+    inFlight.current = false;
+    if (!mounted.current) return;
+    const now = latest.current;
+    if (!isWritable(now)) {
+      setReading(false);
+      return;
+    }
+    const read = listsOfRead(answer);
+    setReading(false);
+    if (read === null) {
+      setReadFailed(true);
+      return;
+    }
+    acceptRead(read);
+  }
 
   // v1: client-side search filter only. The crm_list_search facade accepts a
   // server-side query param, but the v1 dataset is small enough that
@@ -133,6 +318,7 @@ export function ListPickerRenderer({
 
   function handleSelect(list: AvailableListSummary) {
     setSelectedId(list.id);
+    lastWritten.current = { listId: list.id, listName: list.name };
     onChangeRef.current({
       scope: "list",
       listId: list.id,
@@ -201,7 +387,7 @@ export function ListPickerRenderer({
           placeholder="Search lists by name"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          disabled={disabled || loading}
+          disabled={disabled || loading || reading}
           className="sm:max-w-sm"
           aria-label="Search lists by name"
         />
@@ -213,8 +399,33 @@ export function ListPickerRenderer({
         */}
       </div>
 
-      {loading ? (
-        <p className="text-xs text-muted-foreground">Loading lists…</p>
+      {loading || reading ? (
+        <LoadingRows />
+      ) : readFailed ? (
+        <Alert
+          variant="destructive"
+          className="flex items-start gap-2.5 border-destructive bg-surface-strong text-foreground"
+          data-testid="list-picker-read-failed"
+          data-conformance-id="run-list-step-error"
+        >
+          <p className="m-0 min-w-0 flex-1 text-sm text-foreground">
+            {FAILED_READ_READING}
+          </p>
+          {writes && typeof onRequestRefresh === "function" ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="flex-none"
+              data-testid="list-picker-try-again"
+              onClick={() => {
+                void refresh();
+              }}
+            >
+              {TRY_AGAIN_WORDS}
+            </Button>
+          ) : null}
+        </Alert>
       ) : filteredLists.length === 0 ? (
         <Card className="border-line bg-surface">
           <CardContent className="py-6 text-center text-sm text-muted-foreground">

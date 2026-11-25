@@ -373,6 +373,79 @@ export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): b
   return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
 }
 
+/**
+ * What a list step holds and what its new read answers (cinatra#3562): the
+ * lists by id and name, and whether the read worked. The same shape as the
+ * server's `ListStepContent` (list-picker-actions.ts), restated here because
+ * this module imports no server file.
+ */
+export type ListStepReadValue = {
+  lists: Array<{ id: string; name: string }>;
+  listsRead: "ok" | "failed";
+};
+
+function failedListStepRead(): ListStepReadValue {
+  return { lists: [], listsRead: "failed" };
+}
+
+/**
+ * The answer of a new read as the step may draw it: an `ok` answer keeps only
+ * lists with a non-blank id and name, a repeated id once; anything else is the
+ * failed shape.
+ */
+function toListStepReadValue(answer: unknown): ListStepReadValue {
+  if (!answer || typeof answer !== "object") return failedListStepRead();
+  const { lists, listsRead } = answer as { lists?: unknown; listsRead?: unknown };
+  if (listsRead !== "ok" || !Array.isArray(lists)) return failedListStepRead();
+  const seen = new Set<string>();
+  const out: ListStepReadValue["lists"] = [];
+  for (const list of lists) {
+    if (!list || typeof list !== "object") continue;
+    const { id, name } = list as { id?: unknown; name?: unknown };
+    if (!isUsableListId(id) || typeof name !== "string" || name.trim() === "") continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name });
+  }
+  return { lists: out, listsRead: "ok" };
+}
+
+/**
+ * THE LIST STEP'S TRY AGAIN (cinatra#3562). The `onRequestRefresh` prop a run
+ * surface hands a list step's renderer, or `undefined` when the step offers no
+ * new read. It is handed only when ALL hold:
+ *   - the gate is a mid-run list step (`isMidRunListStepGate`: the renderer id
+ *     ends with `:list-picker` and it is not a setup gate; the server reads
+ *     again only for a flow gate the run waits at);
+ *   - the gate is the step the run waits at now (the surface says so);
+ *   - the renderer is drawn in edit mode;
+ *   - the step is not disabled.
+ * A call reads the lists again for this gate's review task through `readAgain`
+ * (the host passes the server read) and resolves with the step's shape. It
+ * never rejects: a refusal or a fault resolves with the failed shape. It sends
+ * no answer to the gate and does not resume the run.
+ */
+export function listStepRefreshFor(
+  gate: {
+    xRenderer: string;
+    reviewTaskId: string;
+    isCurrentWaitingStep: boolean;
+    mode?: "edit" | "view";
+    disabled?: boolean;
+  },
+  readAgain: (reviewTaskId: string) => Promise<unknown>,
+): (() => Promise<ListStepReadValue>) | undefined {
+  if (!isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId)) return undefined;
+  if (gate.isCurrentWaitingStep !== true) return undefined;
+  if ((gate.mode ?? "edit") !== "edit") return undefined;
+  if (gate.disabled === true) return undefined;
+  const reviewTaskId = gate.reviewTaskId;
+  return () =>
+    Promise.resolve()
+      .then(() => readAgain(reviewTaskId))
+      .then(toListStepReadValue, failedListStepRead);
+}
+
 /** A list id that names a pick: a string that is not blank (whitespace only). */
 function isUsableListId(id: unknown): id is string {
   return typeof id === "string" && id.trim().length > 0;

@@ -11,8 +11,8 @@
  *   - Clicking a card calls onChange with the canonical
  *     { scope: "list", listId, listName, memberCount } shape.
  *   - Empty results render the EmptyState copy, with no load error.
- *   - A rejected load shows the existing load-error toast exactly once and
- *     ends the loading state.
+ *   - A rejected load draws the step's one failed-read alert in place, never
+ *     an empty list, and ends the loading reading (cinatra#3562).
  *   - mixed-memberType lists render with the SAME affordances as
  *     contact-typed lists and produce the same onChange payload shape
  *     so the picker accepts both `contact` and `mixed` rows.
@@ -36,8 +36,8 @@ vi.mock("../list-picker-actions", () => ({
   fetchAvailableLists: vi.fn(),
 }));
 
-// The picker's existing load error is a toast; record it so a rejected load
-// can be told from an empty one.
+// A failed read is drawn in place as an alert (cinatra#3562), not as a toast;
+// record any toast so the test can show none is raised.
 const { toastErrorMock } = vi.hoisted(() => ({ toastErrorMock: vi.fn() }));
 vi.mock("@/lib/cinatra-toast", () => ({
   toast: { error: toastErrorMock, success: vi.fn(), info: vi.fn() },
@@ -201,19 +201,22 @@ describe("ListPickerRenderer", () => {
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("T8: shows the existing load error once when the loader rejects, then ends loading", async () => {
+  // red-first-expect: Unable to find role="alert"
+  it("T8: draws the failed-read alert in place when the loader rejects, never an empty list, then ends loading", async () => {
     vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(
       new Error("the CRM list search failed"),
     );
     render(<ListPickerRenderer {...makeProps()} />);
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByText(/no lists yet/i)).toBeTruthy(),
+      expect(screen.getByRole("alert").textContent).toContain(
+        "This list could not be read.",
+      ),
     );
-    expect(toastErrorMock).toHaveBeenCalledTimes(1);
-    expect(toastErrorMock).toHaveBeenCalledWith("Could not load lists.");
-    expect(screen.queryByText(/loading lists/i)).toBeNull();
+    expect(screen.queryByText(/no lists yet/i)).toBeNull();
+    expect(screen.queryByText(/the CRM list search failed/)).toBeNull();
+    expect(screen.queryByTestId("list-picker-loading")).toBeNull();
+    expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
   it("renders mixed-memberType lists with the same affordances and onChange payload shape as contact-typed lists", async () => {
