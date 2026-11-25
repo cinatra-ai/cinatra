@@ -87,11 +87,19 @@ export function materializeListInputTooLargeError(maxBytes: number): string {
 }
 
 /** Whether a list call's input, as received, is larger than `maxBytes`: its
- *  `content` text in UTF-8, or the whole input as JSON text. */
+ *  `content` text in UTF-8, or the whole input as JSON text. An input that
+ *  cannot be written as JSON text (nested too deep for the serializer, or a
+ *  value JSON does not hold) cannot be measured, so it counts as too large. */
 export function isMaterializeListInputTooLarge(rawInput: Record<string, unknown>, maxBytes: number): boolean {
   const content = rawInput.content;
   if (typeof content === "string" && Buffer.byteLength(content, "utf8") > maxBytes) return true;
-  return Buffer.byteLength(JSON.stringify(rawInput), "utf8") > maxBytes;
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(rawInput);
+  } catch {
+    return true;
+  }
+  return typeof text !== "string" || Buffer.byteLength(text, "utf8") > maxBytes;
 }
 
 // THE REGENERATE RUN (cinatra#3089). A Regenerate re-runs one filing node and

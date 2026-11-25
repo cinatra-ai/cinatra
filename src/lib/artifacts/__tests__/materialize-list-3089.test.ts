@@ -431,3 +431,18 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
     expect(fromList).not.toHaveProperty("typedData");
   });
 });
+
+describe("cinatra#3089 — the raw size check of a list call never throws", () => {
+  it("counts an input that cannot be written as JSON text as too large", async () => {
+    const { isMaterializeListInputTooLarge } = await listModule();
+    // A small input whose unused field is nested far deeper than the serializer's stack holds.
+    let deep: unknown = 1;
+    for (let k = 0; k < 200_000; k++) deep = [deep];
+    expect(isMaterializeListInputTooLarge({ title: "t", content: "[]", unused: deep }, 262_144)).toBe(true);
+    const loop: Record<string, unknown> = { content: "[]" };
+    loop.self = loop;
+    expect(isMaterializeListInputTooLarge(loop, 262_144)).toBe(true);
+    expect(isMaterializeListInputTooLarge({ content: "[]", n: BigInt(1) }, 262_144)).toBe(true);
+    expect(isMaterializeListInputTooLarge({ content: "[]", title: "t" }, 262_144)).toBe(false);
+  });
+});
