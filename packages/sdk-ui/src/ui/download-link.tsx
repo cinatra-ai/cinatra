@@ -24,7 +24,23 @@ import type { ReactElement, ReactNode } from "react";
  * no stylesheet defines draws a bare link at the body's size.
  */
 const DOWNLOAD_LINK_CLASSES =
-  "inline-flex items-center gap-[7px] rounded-[7px] border border-line-strong bg-surface px-3 py-[5px] text-xs font-medium text-foreground no-underline";
+  "inline-flex cursor-pointer items-center gap-[7px] rounded-[7px] border border-line-strong bg-surface px-3 py-[5px] text-xs font-medium text-foreground no-underline";
+
+/**
+ * The design draws this control as a real button (specs/app-lifecycle-cards.html,
+ * specs/app-artifact-review.html) so a keyboard reaches it and Enter or Space
+ * presses it; its action anchor is the design's exact string. The press starts
+ * the same download the anchor did: the same address, the same empty `download`
+ * file-name hint (the host's Content-Disposition names the file).
+ */
+const DOWNLOAD_ACTION = "download-artifact -> file-downloaded";
+
+function startDownload(href: string): void {
+  const anchor = document.createElement("a");
+  anchor.setAttribute("href", href);
+  anchor.setAttribute("download", "");
+  anchor.click();
+}
 
 export function DownloadLink({
   href,
@@ -34,7 +50,13 @@ export function DownloadLink({
   readonly children: ReactNode;
 }): ReactElement {
   return (
-    <a href={href} download className={DOWNLOAD_LINK_CLASSES}>
+    <button
+      type="button"
+      data-action={DOWNLOAD_ACTION}
+      data-href={href}
+      className={DOWNLOAD_LINK_CLASSES}
+      onClick={() => startDownload(href)}
+    >
       <svg
         data-icon="inline-start"
         aria-hidden="true"
@@ -52,6 +74,6 @@ export function DownloadLink({
         <line x1="12" y1="15" x2="12" y2="3" />
       </svg>
       {children}
-    </a>
+    </button>
   );
 }

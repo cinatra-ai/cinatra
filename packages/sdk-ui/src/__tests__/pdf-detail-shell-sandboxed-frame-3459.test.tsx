@@ -189,8 +189,8 @@ describe("what the page shows once it runs - the frame it is actually in decides
     const { container, recoverable } = await hydrate(renderToString(element), element);
     expect(recoverable).toEqual([]);
     expect(container.querySelector("embed")).toBeNull();
-    const link = container.querySelector("a[download]");
-    expect(link?.getAttribute("href")).toBe(DOWNLOAD);
+    const link = container.querySelector("button[data-action]");
+    expect(link?.getAttribute("data-href")).toBe(DOWNLOAD);
     expect(container.textContent).toContain("This PDF cannot be previewed here.");
   });
 
@@ -202,7 +202,7 @@ describe("what the page shows once it runs - the frame it is actually in decides
     const { container, recoverable } = await hydrate(served, element);
     expect(recoverable).toEqual([]);
     expect(container.querySelector("embed")).toBeNull();
-    expect(container.querySelector("a[download]")?.getAttribute("href")).toBe(DOWNLOAD);
+    expect(container.querySelector("button[data-action]")?.getAttribute("data-href")).toBe(DOWNLOAD);
   });
 
   it("keeps the embedded viewer on the artifact's own page, which no frame holds", async () => {
@@ -314,8 +314,8 @@ describe("the floor offers no download control where a download cannot work", ()
     const { before, container, recoverable } = await serveAndHydrate(inAppElement);
     expect(recoverable).toEqual([]);
     expect(container.innerHTML).toBe(before);
-    const link = container.querySelector("a[download]");
-    expect(link?.getAttribute("href")).toBe(DOWNLOAD);
+    const link = container.querySelector("button[data-action]");
+    expect(link?.getAttribute("data-href")).toBe(DOWNLOAD);
     expect(link?.textContent).toContain("Download PDF");
   });
 
@@ -425,8 +425,8 @@ describe("the floor's drawing", () => {
   });
 
   it("draws the download as the outline button, at the floor's 12px and padding", () => {
-    const link = drawnFloor().querySelector("a[download]");
-    expect(link?.getAttribute("href")).toBe(DOWNLOAD);
+    const link = drawnFloor().querySelector("button[data-action]");
+    expect(link?.getAttribute("data-href")).toBe(DOWNLOAD);
     const classes = classesOf(link);
     for (const token of [
       "inline-flex",
@@ -459,7 +459,7 @@ describe("the floor's drawing", () => {
         classes.some((token) => token.startsWith("rounded"))
       );
     });
-    expect(bordered.map((el) => el.tagName.toLowerCase())).toEqual(["a"]);
+    expect(bordered.map((el) => el.tagName.toLowerCase())).toEqual(["button"]);
   });
 
   it("says the no-download note in the same 12px muted sentence", () => {
