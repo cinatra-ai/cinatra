@@ -160,15 +160,9 @@ function describeSearchFailure(err: unknown): string {
 /**
  * @param runId - the `agent_run` this step belongs to, threaded by the
  *   renderer from `context.runId` (the shared field-renderer contract).
- * @param options - `missingCapability: "failed"` makes an absent CRM capability
- *   a rejected read, as `readListStepContent` answers it (the failed shape),
- *   instead of the default `[]`. The step's first load asks for it: an empty
- *   answer that only means "could not read" must not reach the pick's
- *   reconciliation (cinatra#3562).
  */
 export async function fetchAvailableLists(
   runId: string,
-  options?: { missingCapability?: "empty" | "failed" },
 ): Promise<AvailableListSummary[]> {
   // Run-access gate FIRST — no CRM capability is resolved or called before it.
   await requireRunReadAccess(runId);
@@ -179,12 +173,6 @@ export async function fetchAvailableLists(
   // lists, and one fixed line in the server log says why.
   const reader = resolveCrmListReader();
   if (!reader) {
-    if (options?.missingCapability === "failed") {
-      console.warn(
-        "[list-picker] no crm-list-reader capability is registered; the picker shows the load error",
-      );
-      throw new Error("the CRM list reader is missing");
-    }
     console.warn(
       "[list-picker] no crm-list-reader capability is registered; the picker offers no lists",
     );
