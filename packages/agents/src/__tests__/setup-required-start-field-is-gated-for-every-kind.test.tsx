@@ -615,40 +615,58 @@ describe("cinatra#3582 — approveReviewTaskInternal refuses a blank answer for 
     expect(dbWrites).toHaveLength(0);
   });
 
-  // red-first-expect: promise resolved "undefined" instead of rejecting
-  it("cinatra#3562: refuses a LIST ANSWER THAT NAMES NO LIST for a declared-required list field, naming that field", async () => {
-    armRun("run-blank-list1", { targetList: { type: "object" } }, ["targetList"]);
+  // A list field declared the way packs declare it: its `x-renderer` names the
+  // list picker (cinatra#3562). Only that declaration makes it a list field.
+  const LIST_FIELD = {
+    targetList: { type: "object", title: "Contact source", "x-renderer": "@cinatra-ai/email-outreach-agent:list-picker" },
+  };
 
-    await expect(
-      approveReviewTaskInternal(
-        "setup-run-blank-list1",
-        "actor-1",
-        { targetList: { scope: "list", listId: "", listName: "", memberCount: 0 } },
-        "targetList",
-      ),
-    ).rejects.toThrow(/targetList/);
-    await expect(
-      approveReviewTaskInternal(
-        "setup-run-blank-list1",
-        "actor-1",
-        { targetList: { scope: "list", listId: "  ", listIds: ["", " "] } },
-        "targetList",
-      ),
-    ).rejects.toThrow(/targetList/);
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("cinatra#3562: refuses an answer that names no list for a declared-required LIST field, tagged or not, naming that field", async () => {
+    armRun("run-blank-list1", LIST_FIELD, ["targetList"]);
+
+    for (const answer of [
+      { listId: "", listName: "" },
+      { scope: "list", listId: "", listName: "", memberCount: 0 },
+      { listId: "  ", listIds: ["", " "] },
+    ]) {
+      await expect(
+        approveReviewTaskInternal("setup-run-blank-list1", "actor-1", { targetList: answer }, "targetList"),
+      ).rejects.toThrow(/targetList/);
+    }
     expect(dbWrites).toHaveLength(0);
     expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 
-  it("cinatra#3562: a list answer that names a list is accepted", async () => {
-    armRun("run-blank-list2", { targetList: { type: "object" } }, ["targetList"]);
-
+  it("cinatra#3562: a list field's answer that names a list is accepted, tagged or not", async () => {
+    armRun("run-blank-list2", LIST_FIELD, ["targetList"]);
     await approveReviewTaskInternal(
       "setup-run-blank-list2",
       "actor-1",
-      { targetList: { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 3 } },
+      { targetList: { listId: "l-1", listName: "Q2 Targets" } },
       "targetList",
     );
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
 
+    dbWrites.length = 0;
+    armRun("run-blank-list3", LIST_FIELD, ["targetList"]);
+    await approveReviewTaskInternal(
+      "setup-run-blank-list3",
+      "actor-1",
+      { targetList: { scope: "list", listIds: ["", "l-2"] } },
+      "targetList",
+    );
+    expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+  });
+
+  it("cinatra#3562: a GENERIC object field is never judged as a list, whatever it carries", async () => {
+    armRun("run-blank-list4", { settings: { type: "object" } }, ["settings"]);
+    await approveReviewTaskInternal(
+      "setup-run-blank-list4",
+      "actor-1",
+      { settings: { scope: "list", listId: "" } },
+      "settings",
+    );
     expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
   });
 
@@ -704,6 +722,16 @@ describe("cinatra#3582 — approveReviewTaskInternal refuses a blank answer for 
     expect(dbWrites).toHaveLength(0);
   });
 
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("THE GROUPED ROAD: an untagged answer naming no list for a declared-required list field is refused there too", async () => {
+    armRun("run-grp-list", { ...LIST_FIELD, note: { type: "string" } }, ["targetList"]);
+
+    await expect(
+      approveReviewTaskInternal("setup-run-grp-list", "actor-1", { targetList: { listId: "", listName: "" }, note: "ok" }),
+    ).rejects.toThrow(/targetList/);
+    expect(dbWrites).toHaveLength(0);
+  });
+
   it("THE GROUPED ROAD: a value shorter than the declared minimum is refused there too", async () => {
     armRun("run-grp2", { brief: { type: "string", minLength: 20 } }, ["brief"]);
 
@@ -738,6 +766,22 @@ describe("cinatra#3582 — a pre-supplied blank value still asks", () => {
     expect(
       setupFieldIsAlreadyAnswered({ type: "string", default: "" }, { brief: "" }, "brief"),
     ).toBe(true);
+  });
+
+  // red-first-expect: expected true to be false
+  it("cinatra#3562: a LIST field the run carries with a value naming no list is still pending", async () => {
+    const { setupFieldIsAlreadyAnswered } = await import("../execution");
+    const listField = { type: "object", "x-renderer": "@cinatra-ai/email-outreach-agent:list-picker" };
+    expect(setupFieldIsAlreadyAnswered(listField, { targetList: { listId: "", listName: "" } }, "targetList")).toBe(false);
+    expect(setupFieldIsAlreadyAnswered(listField, { targetList: { listIds: [" "] } }, "targetList")).toBe(false);
+    expect(setupFieldIsAlreadyAnswered({ type: "object", "x-renderer": "list-picker" }, { targetList: { listId: "" } }, "targetList")).toBe(false);
+  });
+
+  it("cinatra#3562: a list field naming a list, and a generic object field, are answered as before", async () => {
+    const { setupFieldIsAlreadyAnswered } = await import("../execution");
+    const listField = { type: "object", "x-renderer": "@cinatra-ai/email-outreach-agent:list-picker" };
+    expect(setupFieldIsAlreadyAnswered(listField, { targetList: { listId: "l-1" } }, "targetList")).toBe(true);
+    expect(setupFieldIsAlreadyAnswered({ type: "object" }, { settings: { scope: "list", listId: "" } }, "settings")).toBe(true);
   });
 
   it("a required field the run does not carry at all is pending, exactly as it is today", async () => {

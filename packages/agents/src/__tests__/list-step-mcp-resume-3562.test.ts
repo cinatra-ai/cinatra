@@ -286,14 +286,20 @@ describe("agent_run_resume and a list step (cinatra#3562)", () => {
   }, 20_000);
 
   // red-first-expect: expected undefined to be 'LIST_STEP_ANSWER_NAMES_NO_LIST'
-  it("a list answer that names no list is refused, on any step", async () => {
-    expectRefused(await resume(note({ type: "list", listId: "", listName: "" })));
-    gateRow.xRenderer = null;
+  it("an answer naming no list is refused on a list step, tagged or not", async () => {
+    expectRefused(await resume(note({ listId: "", listName: "" })));
     expectRefused(await resume(note({ type: "list", listIds: [" "] })));
   });
 
-  it("a list answer that names a list resumes the step as before", async () => {
+  it("an answer naming a list resumes the step as before, tagged or not", async () => {
     await resume(note({ type: "list", listId: "l-1", listName: "Q2 Targets" })).catch(() => undefined);
+    await resume(note({ listId: "l-1", listName: "Q2 Targets" })).catch(() => undefined);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("a step of another kind is never judged as a list step, whatever its answer carries", async () => {
+    gateRow.xRenderer = null;
+    await resume(note({ type: "list", listId: "" })).catch(() => undefined);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
 

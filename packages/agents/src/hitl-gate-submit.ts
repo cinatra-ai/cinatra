@@ -370,7 +370,21 @@ export function withContextSelectorEnvelope(
  * field name.
  */
 export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
-  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+  return declaresListPicker(xRenderer) && !isSetupGateTaskId(reviewTaskId);
+}
+
+/**
+ * DOES THIS DECLARED `x-renderer` NAME THE LIST PICKER? (cinatra#3562.) The one
+ * reading of a list field's kind, for the hosts and the server alike. A pack
+ * binds the picker as a binding of kind `list-picker`, which registers under
+ * `<package>:list-picker` (`registerFieldRendererBindings`), and the shipped
+ * picker also answers its bare alias `list-picker`
+ * (register-default-renderers.ts): those are the ids a host resolves to the
+ * list picker. Only the field's DECLARED renderer decides; what an answer
+ * carries never does.
+ */
+export function declaresListPicker(xRenderer: unknown): boolean {
+  return typeof xRenderer === "string" && (xRenderer === "list-picker" || xRenderer.endsWith(":list-picker"));
 }
 
 /**
@@ -453,14 +467,28 @@ function isUsableListId(id: unknown): id is string {
 
 /**
  * Whether a list step's buffer holds a pick (cinatra#3562): a usable id in
- * `listIds`, or a usable `listId`. A buffer without one would resume the run
+ * `listIds`, or a usable `listId`, whatever else the value carries. It is also
+ * the server's reading of a list field's answer (`listFieldAnswerNamesNoList`). A buffer without one would resume the run
  * with an empty snapshot (`listId: ""`), so the run panel's Continue sends
  * nothing for it.
  */
 export function hasUsableListPick(buffered: Record<string, unknown> | null | undefined): boolean {
-  if (!buffered) return false;
+  if (!buffered || typeof buffered !== "object" || Array.isArray(buffered)) return false;
   const { listIds, listId } = buffered as { listIds?: unknown; listId?: unknown };
   return (Array.isArray(listIds) && listIds.some(isUsableListId)) || isUsableListId(listId);
+}
+
+/**
+ * cinatra#3562 — A LIST FIELD'S ANSWER THAT NAMES NO LIST. True only for a
+ * field whose declared `x-renderer` is the list picker (`declaresListPicker`)
+ * and whose value names no list (`hasUsableListPick`), tagged or not; a field
+ * of any other kind is never judged here, whatever its value contains. Shared
+ * by the setup approval road (review-task-actions.ts) and the setup loop's
+ * reading of an answered field (execution.ts).
+ */
+export function listFieldAnswerNamesNoList(declaredXRenderer: unknown, value: unknown): boolean {
+  if (!declaresListPicker(declaredXRenderer)) return false;
+  return !hasUsableListPick(value as Record<string, unknown> | null | undefined);
 }
 
 /**

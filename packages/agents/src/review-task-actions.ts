@@ -38,6 +38,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { listFieldAnswerNamesNoList } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -191,41 +192,40 @@ async function assertRunScopeOrDeny(
  * setup screen takes (`isBlankSubValue` in schema-field-renderer.tsx): absent,
  * null, a string that trims to empty, or an empty list. `0` and `false` are
  * ANSWERS, never blank.
- *
- * cinatra#3562 — and a list step's answer that names no list: the list
- * picker's value (`scope: "list"`) with no usable `listId` and no usable entry
- * in `listIds`. It is an object, but the person picked nothing, and a run
- * resumed with it would go on with no list. The host withholds its Continue
- * for it; this is the server's own refusal, for every door into the road.
  */
 function isBlankSetupValue(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (typeof value === "string") return value.trim() === "";
   if (Array.isArray(value)) return value.length === 0;
-  return isListAnswerNamingNoList(value);
-}
-
-function isListAnswerNamingNoList(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const answer = value as { scope?: unknown; listId?: unknown; listIds?: unknown };
-  return answer.scope === "list" && !listAnswerNamesAList(answer);
-}
-
-/** A usable `listId`, or a usable entry in `listIds` (a non-blank string). */
-function listAnswerNamesAList(answer: { listId?: unknown; listIds?: unknown }): boolean {
-  const names = (id: unknown) => typeof id === "string" && id.trim() !== "";
-  return names(answer.listId) || (Array.isArray(answer.listIds) && answer.listIds.some(names));
+  return false;
 }
 
 /**
- * cinatra#3562 — the list answer a mid-run answer carries, or null. A list
- * step's pick arrives lifted into the resume text (`liftRendererApprovalNote`:
- * `{type: "list", listId, …}`, or `{type: "list", listIds, …}` for several
- * picks), in `userResponse` when the host wrapped it with attachments
- * (`{text, attachments}`), else in `approvalNote`, the order the resume text
- * is taken in below.
+ * cinatra#3562 — A SETUP ANSWER THAT GIVES THE FIELD NOTHING: the blank
+ * reading above, or, for a field whose DECLARED `x-renderer` is the list picker,
+ * a value that names no list (`listFieldAnswerNamesNoList`, the reading the
+ * setup loop takes in execution.ts too). The field's kind comes only from the
+ * schema the server resolved; a field of another kind is never judged by what
+ * its value carries. An unresolved schema leaves only the blank reading, and
+ * the setup loop reads the stored value again before the run goes on.
  */
-function midRunListAnswerOf(values: unknown): { listId?: unknown; listIds?: unknown } | null {
+function isBlankSetupAnswer(
+  value: unknown,
+  declaredField: Record<string, unknown> | undefined,
+): boolean {
+  return isBlankSetupValue(value) || listFieldAnswerNamesNoList(declaredField?.["x-renderer"], value);
+}
+
+/**
+ * cinatra#3562 — the answer object a mid-run answer carries, or null. A list
+ * step's pick arrives lifted into the resume text (`liftRendererApprovalNote`:
+ * `{type: "list", listId, …}`, or `listIds` for several picks), in
+ * `userResponse` when the host wrapped it with attachments (`{text,
+ * attachments}`), else in `approvalNote`, the order the resume text is taken in
+ * below. No tag is read: whether the step is a list step is the durable gate
+ * row's to say.
+ */
+function midRunAnswerObjectOf(values: unknown): Record<string, unknown> | null {
   if (values === null || typeof values !== "object" || Array.isArray(values)) return null;
   const { userResponse, approvalNote } = values as { userResponse?: unknown; approvalNote?: unknown };
   const text =
@@ -241,20 +241,18 @@ function midRunListAnswerOf(values: unknown): { listId?: unknown; listIds?: unkn
       return null;
     }
   };
-  let parsed = parse(text);
+  const asObject = (v: unknown) =>
+    v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  const parsed = asObject(parse(text));
   if (
     parsed !== null &&
-    typeof parsed === "object" &&
-    !Array.isArray(parsed) &&
-    (parsed as { type?: unknown }).type === undefined &&
-    typeof (parsed as { text?: unknown }).text === "string"
+    typeof parsed.text === "string" &&
+    !Object.prototype.hasOwnProperty.call(parsed, "listId") &&
+    !Object.prototype.hasOwnProperty.call(parsed, "listIds")
   ) {
-    parsed = parse((parsed as { text: string }).text);
+    return asObject(parse(parsed.text));
   }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  return (parsed as { type?: unknown }).type === "list"
-    ? (parsed as { listId?: unknown; listIds?: unknown })
-    : null;
+  return parsed;
 }
 
 /** The stable code of the refusal of a list step answered without a list. */
@@ -262,18 +260,17 @@ export const LIST_STEP_ANSWER_NAMES_NO_LIST = "LIST_STEP_ANSWER_NAMES_NO_LIST";
 
 /**
  * cinatra#3562 — ONE RULE FOR EVERY MID-RUN ANSWER ROAD (the review page's
- * Continue and `agent_run_resume`): true when the answer must be refused. A
- * list answer that names no list is refused on any step; a step whose durable
- * gate row names a list renderer (`xRenderer` ending `:list-picker`) is refused
- * when its answer carries no list answer at all (a bare approve, a free text).
+ * Continue and `agent_run_resume`): true when the answer must be refused. Only
+ * a step whose durable gate row declares the list picker (`declaresListPicker`)
+ * is judged, and its answer must name a list (`listFieldAnswerNamesNoList`),
+ * tagged or not: an answer naming none, a bare approve and a free text are all
+ * refused. A step of any other kind is never judged, whatever its answer holds.
  */
 export function midRunAnswerLacksAList(
   gateXRenderer: string | null | undefined,
   values: unknown,
 ): boolean {
-  const listAnswer = midRunListAnswerOf(values);
-  if (listAnswer !== null) return !listAnswerNamesAList(listAnswer);
-  return typeof gateXRenderer === "string" && gateXRenderer.endsWith(":list-picker");
+  return listFieldAnswerNamesNoList(gateXRenderer, midRunAnswerObjectOf(values));
 }
 
 /**
@@ -549,6 +546,14 @@ export async function approveReviewTaskInternal(
         const submittedCarriesKey =
           submitted !== null &&
           Object.prototype.hasOwnProperty.call(submitted, fieldName);
+        // cinatra#3562 — the field's declared kind, from the resolved schema
+        // only (a list field's answer must name a list; see isBlankSetupAnswer).
+        const declaredSchemaForField = submittedCarriesKey ? await resolvedInputSchema() : null;
+        const declaredForBlankReading =
+          declaredSchemaForField &&
+          Object.prototype.hasOwnProperty.call(declaredSchemaForField.properties, fieldName)
+            ? declaredSchemaForField.properties[fieldName]
+            : undefined;
         const noValueGiven =
           submitted === null ||
           !submittedCarriesKey ||
@@ -559,8 +564,9 @@ export async function approveReviewTaskInternal(
           // declared readings below as an absent key: a declared default
           // answers it, a declared-optional field is settled, and a
           // declared-required field is refused by name. `0` and `false` are
-          // answers, never blank.
-          isBlankSetupValue(submitted[fieldName]);
+          // answers, never blank. A list field's answer naming no list is blank
+          // too (cinatra#3562).
+          isBlankSetupAnswer(submitted[fieldName], declaredForBlankReading);
         if (noValueGiven) {
           const schema = await resolvedInputSchema();
           // cinatra#3452 (convergence round) — an OWN declaration only. A bare
@@ -723,7 +729,7 @@ export async function approveReviewTaskInternal(
                 ? groupedSchema.properties[key]
                 : undefined;
               if (declaredGroupedField?.default !== undefined) continue;
-              if (isBlankSetupValue(submittedValue)) {
+              if (isBlankSetupAnswer(submittedValue, declaredGroupedField)) {
                 throw new Error(
                   `Setup approval rejected: fieldName "${key}" was submitted blank and the agent declares it required`,
                 );

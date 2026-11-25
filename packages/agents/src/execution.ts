@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Agent as UndiciAgent, fetch as undiciFetch } from "undici";
 import semver from "semver";
+import { listFieldAnswerNamesNoList } from "./hitl-gate-submit";
 import {
   readAgentRunById,
   selectWayflowRunStepToolPolicy,
@@ -3769,6 +3770,11 @@ export async function assertOrchestratorReady(
  * A field that declares a `default` IS answered, by that default: the run
  * carries it and the loop must not ask (the same ruling the approval road takes
  * in review-task-actions.ts, cinatra#3452).
+ *
+ * cinatra#3562 — a field whose declared `x-renderer` is the list picker is
+ * answered only by a value that names a list (`listFieldAnswerNamesNoList`, the
+ * reading the approval road takes): an object with keys but no list is not an
+ * answer, and the loop asks for the field again.
  */
 export function setupFieldIsAlreadyAnswered(
   fieldSchema: Record<string, unknown>,
@@ -3777,6 +3783,7 @@ export function setupFieldIsAlreadyAnswered(
 ): boolean {
   if (!Object.prototype.hasOwnProperty.call(inputParams, fieldName)) return false;
   if (Object.prototype.hasOwnProperty.call(fieldSchema, "default")) return true;
+  if (listFieldAnswerNamesNoList(fieldSchema["x-renderer"], inputParams[fieldName])) return false;
   return !isEmptyDeclaredValue(inputParams[fieldName]);
 }
 

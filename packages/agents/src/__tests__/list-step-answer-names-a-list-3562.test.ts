@@ -163,12 +163,20 @@ describe("cinatra#3562 — the answer road refuses a list step answered without 
   });
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
-  it("the several-list form with no usable id is refused, on a step of any renderer", async () => {
-    gate.xRenderer = null;
+  it("an untagged answer naming no list, and the several-list form with no usable id, are refused on a list step", async () => {
+    await expect(
+      approveReviewTaskInternal(TASK, RUN.runBy, note({ listId: "", listName: "" })),
+    ).rejects.toMatchObject({ code: "LIST_STEP_ANSWER_NAMES_NO_LIST" });
     await expect(
       approveReviewTaskInternal(TASK, RUN.runBy, note({ type: "list", listIds: ["", "  "], listNames: [] })),
     ).rejects.toMatchObject({ code: "LIST_STEP_ANSWER_NAMES_NO_LIST" });
     expectRefusedBeforeTheClaim();
+  });
+
+  it("a step of another kind is never judged as a list step, whatever its answer carries", async () => {
+    gate.xRenderer = null;
+    await approveReviewTaskInternal(TASK, RUN.runBy, note({ type: "list", listId: "" }));
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
@@ -195,6 +203,11 @@ describe("cinatra#3562 — the answer road refuses a list step answered without 
   it("a list answer that names a list goes on: claimed and sent once", async () => {
     await approveReviewTaskInternal(TASK, RUN.runBy, note({ type: "list", listId: "l-1", listName: "Q2 Targets" }));
     expect(claim.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("an untagged answer that names a list goes on", async () => {
+    await approveReviewTaskInternal(TASK, RUN.runBy, note({ listId: "l-1", listName: "Q2 Targets" }));
     expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
