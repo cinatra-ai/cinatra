@@ -134,6 +134,12 @@ export function publishDecisionSchemaQueries(schemaName: string): { text: string
       // backfill of existing rows is the operator-upgrade twin's, in migrations/core/core__0133.
       text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer`,
     },
+    {
+      // released_pause_generation: the run's pause_generation at which the Allow released the decision, written in the
+      // releasing UPDATE. NULLABLE, no default, no backfill: null = not released, or released by older code.
+      // Operator-upgrade twin in migrations/core/core__0134.
+      text: `ALTER TABLE "${q}"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS released_pause_generation bigint`,
+    },
   ];
 }
 

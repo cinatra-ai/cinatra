@@ -27,10 +27,6 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import type * as RunPageChromeModule from "@cinatra-ai/agents/run-page-chrome";
-// The package entry the fix adds is loaded inside the tests that use it, through a
-// specifier the transform does not resolve when it loads this file: before the
-// fix the file still loads and those tests fail on the missing module.
-// red-first-expect: "./run-page-chrome" is not exported
 const RUN_PAGE_CHROME_ENTRY = "@cinatra-ai/agents/run-page-chrome";
 
 /**

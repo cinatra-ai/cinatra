@@ -5,7 +5,8 @@
 // the INVENTORY of the page hosts and the column, by reading source: the two run panels (the agentic panel, and the
 // stepper panel the run page serves a flow or orchestrator run with) and the review page are large trees (the review page an async SERVER component with a session and stores), and standing them up would prove
 // more about a harness than about the mount. What must not rot silently is the SHAPE: each mount keyed by the run
-// alone, under a real host declaration, passing no decide door (so its controls stay disabled), and the run panel's
+// alone, under a real host declaration, passing its decide door (cinatra#4758: Allow and Do not allow are live for a
+// reader who may decide), and the run panel's
 // mount standing down inside a conversation host, where the column's card owns the run.
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -41,10 +42,11 @@ function enclosingHost(source: string, index: number): string | null {
 describe("the publish card's mounts (cinatra#4150)", () => {
   it.each([
     // The panel hands the card the ONE read its approval banner is decided from, so the card reads nothing itself.
-    [PANEL, "run_card", "<PublishDecisionCard runId={runId} read={publishRead} />"],
+    [PANEL, "run_card", "<PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />"],
     // The stepper panel (a publishing FLOW run on the run page) hands its card the ONE read its stage card is decided from.
-    [STEPPER, "run_card", "<PublishDecisionCard runId={runId} read={publishRead} />"],
-    [REVIEW_PAGE, "page_gate_region", "<PublishDecisionCard runId={runId} />"],
+    [STEPPER, "run_card", "<PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />"],
+    // The review page is a server component: its door is the session action itself.
+    [REVIEW_PAGE, "page_gate_region", "<PublishDecisionCard runId={runId} decide={decidePublishDecisionCardAction} />"],
   ])("%s mounts the card ONCE, keyed by the run, under %s", (file, host, element) => {
     const source = read(file);
     const elements = cardElements(source);
@@ -54,7 +56,7 @@ describe("the publish card's mounts (cinatra#4150)", () => {
 
   it("the run panel's mount stands down inside a conversation host, on the hitl screen's own switch", () => {
     const source = read(PANEL);
-    const at = source.indexOf("<PublishDecisionCard runId={runId} read={publishRead} />");
+    const at = source.indexOf("<PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />");
     const guard = source.lastIndexOf("const publishCard = panelMountsHitlScreenCard ? (", at);
     expect(guard).toBeGreaterThan(-1);
     // The switch opens right before this mount's own provider, with nothing between them.
@@ -85,17 +87,17 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(source.indexOf("{publishCard}")).toBeGreaterThan(box);
   });
 
-  it("the column mounts the card beside the hitl screen in every placement, with no decide door", () => {
+  it("the column mounts the card beside the hitl screen in every placement, with its decide door", () => {
     const source = read(COLUMN);
     expect(source).toContain(
-      'import {\n  PublishDecisionCard,\n  publishGateIsOpen,\n  usePublishDecisionCardRead,\n} from "@cinatra-ai/agents/publish-decision-card-view";',
+      'import {\n  PublishDecisionCard,\n  publishGateIsOpen,\n  usePublishDecisionCardRead,\n  usePublishDecisionDecide,\n} from "@cinatra-ai/agents/publish-decision-card-view";',
     );
     // ONE HELD-RUN CARD: while the shared read is an open publish gate the turn's hitl screen is withheld, by the
     // panels' own rule, so a stale screen never draws beside the publish card.
     expect(source).toMatch(/const hitlScreen = publishGateIsOpen\(publishRead\) \? null : \(\s*<AgentHitlScreenCard /);
     // The turn reads ONCE, keyed on the change signal the panel reports (status, gate, readings at a pause with no gate
     // context), and hands that read to its card and to the panel, so the card and the banner stand on one answer.
-    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} read={publishRead} />"]);
+    expect(cardElements(source)).toEqual(["<PublishDecisionCard runId={runId} read={publishRead} decide={publishDecide} />"]);
     expect(source).toContain("wireRef: runChange?.signal ?? null,");
     // The panel's run status rides beside the signal, so the shared read keeps re-reading until the run finishes.
     expect(source).toContain("runStatus: runChange?.status ?? null,");
@@ -236,9 +238,21 @@ describe("the publish card's mounts (cinatra#4150)", () => {
     expect(read(COLUMN)).toContain("<InlineAgentRunCard");
   });
 
-  it("no mount passes a decide door: the card's controls stay disabled until one is built", () => {
+  it("every host passes its decide door (cinatra#4758): the client hosts the one for their transport, the review page the session action", () => {
     for (const file of [PANEL, STEPPER, REVIEW_PAGE, COLUMN]) {
-      for (const element of cardElements(read(file))) expect(element, file).not.toMatch(/\bdecide=/);
+      const elements = cardElements(read(file));
+      expect(elements.length, file).toBeGreaterThan(0);
+      for (const element of elements) expect(element, file).toMatch(/\bdecide=\{\w+\}/);
     }
+    // A client host takes its door from the one hook, keyed on the credential its read uses: the broker answer for a
+    // credential-declaring host (the site widget), the session action otherwise.
+    for (const file of [PANEL, STEPPER, COLUMN]) {
+      expect(read(file), file).toContain("const publishDecide = usePublishDecisionDecide(ambientLifecycleAuth);");
+    }
+    expect(read(REVIEW_PAGE)).toContain(
+      'import { decidePublishDecisionCardAction } from "@cinatra-ai/agents/publish-decision-card-actions";',
+    );
+    const view = read("packages/agents/src/publish-decision-card-view.tsx");
+    expect(view).toMatch(/auth \? \(input\) => decidePublishDecisionThroughBroker\(input, auth\) : \(input\) => decidePublishDecisionCardAction\(input\)/);
   });
 });

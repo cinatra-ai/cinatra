@@ -21,7 +21,6 @@
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/orchestrator-stepper-panel-second-gate-of-one-pause-3035.test.tsx
  */
-// red-first-expect: the image gate drew no decision bar with its terminal control
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -259,7 +258,21 @@ describe("OrchestratorStepperPanel: the second gate of one pause", () => {
       { timeout: 10_000 },
     );
     expect(terminalControl(container)!.disabled).toBe(false);
-    expect(container.querySelector(CHROME_PROMPT_WINDOW), "the image gate drew no prompt window").not.toBeNull();
+    // The chrome draws the window only after the gate's screen registers in an
+    // effect and the chrome's mount node is set, a render or two after the bar:
+    // wait for it under the same limit, never read it in the bar's render.
+    await waitFor(
+      () => {
+        const control = terminalControl(container);
+        if (!control || control.disabled) {
+          throw new Error("the decision bar lost its enabled terminal control while the window mounted");
+        }
+        if (!container.querySelector(CHROME_PROMPT_WINDOW)) {
+          throw new Error("the image gate drew no prompt window");
+        }
+      },
+      { timeout: 10_000 },
+    );
     expect(container.querySelector(SETTLED), "the decided post gate is still drawn").toBeNull();
     expect(resolvedRefs).toContain(IMAGE_REF);
   }, 60_000);

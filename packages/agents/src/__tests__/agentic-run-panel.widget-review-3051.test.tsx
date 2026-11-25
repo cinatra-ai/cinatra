@@ -3,8 +3,6 @@
 // ports are fixtures; this is not hosted-widget/browser or capture proof.
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// Before the fix the review floor draws no Continue, so the query for it throws.
-// red-first-expect: Unable to find role="button" and name "Continue"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { LifecycleCardSurfaceProvider, lifecycleRequestCredential, type LifecycleCardAuth } from "../lifecycle-card-runtime";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "../agent-builder-ids";

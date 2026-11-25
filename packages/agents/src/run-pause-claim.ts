@@ -52,10 +52,17 @@ export { PAUSE_CLAIM_LEASE_SECONDS, PAUSE_SEND_LEASE_SECONDS };
 /** One pause: the run and the generation its claimer read. */
 export type PauseRef = { readonly runId: string; readonly orgId: string; readonly generation: number };
 
+/**
+ * A claim bound to the gate task it is taken for (cinatra#4758). `taskId` given, the claim lands only while the run
+ * waits at that task (`a2a_task_id`), in the same statement that checks the generation: a claimer that resumes one
+ * named gate never holds a pause the run took at another task. Absent, the claim checks the generation only.
+ */
+export type TaskBoundPauseRef = PauseRef & { readonly taskId?: string };
+
 export type PauseClaimRefusalReason =
   /** The run is not `pending_approval` (or there is no such run in this org). */
   | "not-pending"
-  /** `pending_approval`, but at another generation than the one read. */
+  /** `pending_approval`, but at another generation than the one read, or at another task than the one named. */
   | "moved-on"
   /** A live `claimed` or `sending` lease of another claimer. */
   | "held"
@@ -99,7 +106,8 @@ const leaseFromNow = (seconds: number) => sql`now() + make_interval(secs => ${sq
 const pauseIsFree = sql`(${agentRuns.pauseClaimToken} IS NULL OR (${agentRuns.pauseClaimPhase} IN ('claimed', 'sending') AND ${agentRuns.pauseClaimExpiresAt} <= now()))`;
 
 /**
- * Claim the pause at the generation the caller read, for PAUSE_CLAIM_LEASE_SECONDS.
+ * Claim the pause at the generation the caller read (and, when named, at the task it is taken for), for
+ * PAUSE_CLAIM_LEASE_SECONDS.
  *
  * One statement. It succeeds only while the run is `pending_approval` at that
  * generation and no live claim holds it; an expired lease is taken over. On a
@@ -107,11 +115,14 @@ const pauseIsFree = sql`(${agentRuns.pauseClaimToken} IS NULL OR (${agentRuns.pa
  * Nothing returns `claimed` unless the UPDATE returned its row.
  */
 export async function claimPause(
-  ref: PauseRef,
+  ref: TaskBoundPauseRef,
   authority: OrgWriteAuthority | undefined,
   opts?: PauseClaimWriteOptions,
 ): Promise<PauseClaim> {
   assertPauseRef(ref);
+  if (ref.taskId !== undefined && (typeof ref.taskId !== "string" || ref.taskId.length === 0)) {
+    throw new Error(`run-pause-claim: empty pause task id for run ${ref.runId}`);
+  }
   const token = opts?.token ?? randomUUID();
   assertToken(ref.runId, token);
   return guardedRunWrite(
@@ -132,6 +143,7 @@ export async function claimPause(
             eq(agentRuns.orgId, ref.orgId),
             eq(agentRuns.status, "pending_approval"),
             eq(agentRuns.pauseGeneration, ref.generation),
+            ...(ref.taskId !== undefined ? [eq(agentRuns.a2aTaskId, ref.taskId)] : []),
             pauseIsFree,
           ),
         )
@@ -149,6 +161,7 @@ export async function claimPause(
           status: agentRuns.status,
           generation: agentRuns.pauseGeneration,
           phase: agentRuns.pauseClaimPhase,
+          task: agentRuns.a2aTaskId,
         })
         .from(agentRuns)
         .where(and(eq(agentRuns.id, ref.runId), eq(agentRuns.orgId, ref.orgId)))
@@ -159,7 +172,7 @@ export async function claimPause(
       const reason: PauseClaimRefusalReason =
         row.status !== "pending_approval"
           ? "not-pending"
-          : generation !== ref.generation
+          : generation !== ref.generation || (ref.taskId !== undefined && row.task !== ref.taskId)
             ? "moved-on"
             : row.phase === "changes_requested"
               ? "changes-requested"

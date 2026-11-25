@@ -48,10 +48,6 @@ import type { WidgetSubmitHandle } from "@cinatra-ai/sdk-ui/widget";
 import { createChatWidgetRuntime } from "../../../../../packages/chat/src/widget-runtime";
 import type * as RunWindowOwnershipModule from "../../../../../tests/e2e/design/conformance/run-window-ownership";
 import { sendRunWindowTurn } from "../../../../../packages/agents/src/run-window-actions";
-// The modules the fix adds are loaded inside the tests that use them, through a
-// specifier the transform does not resolve when it loads this file: before the
-// fix the file still loads and those tests fail on the first missing module.
-// red-first-expect: Cannot find module '/src/app/design-fixtures/conformance/run-window-ownership-fixtures'
 const OWNERSHIP_FIXTURES = "../run-window-ownership-fixtures";
 const OWNERSHIP_DATA = "../run-window-ownership-fixture-data";
 const RUN_WINDOW_OWNERSHIP = "../../../../../tests/e2e/design/conformance/run-window-ownership";

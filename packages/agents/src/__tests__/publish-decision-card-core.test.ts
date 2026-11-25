@@ -22,12 +22,21 @@ vi.mock("../store", () => storeMock);
 const decisions = vi.hoisted(() => ({ readLatestDecisionForRun: vi.fn() }));
 vi.mock("../publish-decision-store", () => decisions);
 
-const access = vi.hoisted(() => ({ enforcePublishDecisionAccess: vi.fn(), widgetReaderMayDecidePublish: vi.fn() }));
+const access = vi.hoisted(() => ({
+  enforcePublishDecisionAccess: vi.fn(),
+  releasedPublishAwaitsResume: vi.fn(),
+  widgetReaderMayDecidePublish: vi.fn(),
+  approvePublishDecision: vi.fn(),
+  declinePublishDecision: vi.fn(),
+  approvePublishDecisionAsWidgetReader: vi.fn(),
+  declinePublishDecisionAsWidgetReader: vi.fn(),
+}));
 vi.mock("../publish-decision-actions", () => access);
 
 const names = vi.hoisted(() => ({ readDeciderName: vi.fn() }));
 vi.mock("@/lib/lifecycle/lifecycle-settled-outcome", () => names);
 
+import * as core from "../publish-decision-card-core";
 import {
   publishDecisionCardStateForRun,
   publishDecisionCardStateForWidgetRun,
@@ -69,6 +78,7 @@ beforeEach(() => {
   storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);
   decisions.readLatestDecisionForRun.mockResolvedValue(decision());
   access.enforcePublishDecisionAccess.mockResolvedValue({ run: RUN, deciderId: "user-a", authority: {} });
+  access.releasedPublishAwaitsResume.mockResolvedValue(false);
   names.readDeciderName.mockResolvedValue("Dana Okafor");
 });
 
@@ -82,6 +92,7 @@ describe("which card a run shows", () => {
         { label: "Title", value: "Autumn launch" },
         { label: "Where", value: "Blog" },
       ],
+      decisionId: "d1",
       mayDecide: true,
     });
     expect(decisions.readLatestDecisionForRun).toHaveBeenCalledWith("run-1");
@@ -118,6 +129,26 @@ describe("which card a run shows", () => {
     expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
     expect(names.readDeciderName).toHaveBeenCalledWith("user-b");
     expect(access.enforcePublishDecisionAccess).not.toHaveBeenCalled();
+  });
+
+  // An Allow whose resume did not complete leaves a released decision on a run that still waits at its gate. That run is
+  // not approved and going on: the card keeps Allow (and only Allow), so the run is never left with no way forward.
+  it("a released decision whose run still waits at its gate keeps Allow open on that decision, and draws no Approved", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
+    access.releasedPublishAwaitsResume.mockResolvedValue(true);
+    expect(await read()).toMatchObject({ state: "pending", decisionId: "d1", mayDecide: true, resumeOnly: true });
+    expect(access.releasedPublishAwaitsResume).toHaveBeenCalledWith(RUN, expect.objectContaining({ id: "d1", status: "released" }));
+    access.releasedPublishAwaitsResume.mockResolvedValue(false);
+    expect(await read()).toMatchObject({ state: "approved", deciderName: "Dana Okafor" });
+  });
+
+  // Whether the run still waits at the released decision's pause is read from the run row; a read that faults has not
+  // shown that the run went on, so it draws no card rather than a settled Approved over a run that may still wait.
+  it("a released decision whose waiting check faults draws no card, never Approved", async () => {
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released", decidedBy: "user-b", gateTaskId: "task-1" }));
+    access.releasedPublishAwaitsResume.mockRejectedValue(new Error("read failed"));
+    expect(await read()).toEqual({ state: "none" });
+    expect(names.readDeciderName).not.toHaveBeenCalled();
   });
 
   it("a declined decision names the person and carries the reason that was written", async () => {
@@ -258,7 +289,6 @@ describe("the rows are the pack's words over the surfaced values", () => {
     expect(await read()).toMatchObject({ state: "pending", rows: [] });
   });
 
-  // red-first-expect: to match object { rows: [
   it("a declared list row reads the surfaced records into the card (W4)", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue({
       ...TEMPLATE,
@@ -429,5 +459,96 @@ describe("a decision's rows are the ones its template declared at the park (revi
     expect((await read() as { rows: unknown }).rows).toEqual(STORED_ROWS);
     storeMock.readAgentTemplateById.mockResolvedValue(RECOMPILED);
     expect((await read() as { rows: unknown }).rows).toEqual([{ label: "Record", value: "row-77" }]);
+  });
+});
+
+// cinatra#4758: THE CARD'S ANSWER. Allow and Do not allow take the existing decision roads (approvePublishDecision and
+// declinePublishDecision, which check run.execute then run.approveHitl and write the one guarded decision); the site
+// widget's answer takes their widget-reader twins. The card is told only: decided, no longer open, or failed.
+describe("the card's answer (cinatra#4758)", () => {
+  type Decide = (input: { runId: string; decisionId: string; answer: "approve" | "decline"; note?: string | null }, who: typeof WHO) => Promise<string>;
+  const decideFor = (name: string): Decide => {
+    const fn = (core as unknown as Record<string, unknown>)[name];
+    expect(typeof fn, `${name} is exported`).toBe("function");
+    return fn as Decide;
+  };
+
+  beforeEach(() => {
+    access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: true });
+    access.declinePublishDecision.mockResolvedValue({ ok: true, runStopped: true });
+    access.approvePublishDecisionAsWidgetReader.mockResolvedValue({ ok: true, resumed: true });
+    access.declinePublishDecisionAsWidgetReader.mockResolvedValue({ ok: true, runStopped: true });
+  });
+
+  it("Allow releases the run through the approve road, as this person, and is decided", async () => {
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("decided");
+    expect(access.approvePublishDecision).toHaveBeenCalledWith({ runId: "run-1", decisionId: "d1", actorContext: WHO.actor, roleHints: WHO.roleHints });
+    expect(access.declinePublishDecision).not.toHaveBeenCalled();
+  });
+
+  it("Do not allow stops the run through the decline road, with the note recorded, and is decided", async () => {
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
+    expect(access.declinePublishDecision).toHaveBeenCalledWith({
+      runId: "run-1", decisionId: "d1", actorContext: WHO.actor, roleHints: WHO.roleHints, note: "Not ready yet.",
+    });
+    expect(access.approvePublishDecision).not.toHaveBeenCalled();
+  });
+
+  it("a blank note is no note, and Allow never carries one", async () => {
+    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "   " }, WHO);
+    expect((access.declinePublishDecision.mock.calls[0]![0] as { note: unknown }).note).toBeNull();
+    await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "a note" }, WHO);
+    expect(access.approvePublishDecision.mock.calls[0]![0]).not.toHaveProperty("note");
+  });
+
+  it("a second answer after the request was decided is no longer open", async () => {
+    access.declinePublishDecision.mockResolvedValue({ ok: false, code: "publish_decision_not_open", currentStatus: "released" });
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "" }, WHO)).toBe("not_open");
+    access.approvePublishDecision.mockResolvedValue({ ok: false, code: "publish_decision_not_open", currentStatus: "declined" });
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("not_open");
+    // An Allow that met a run no longer waiting at this decision (another Allow released it) resumed nothing.
+    access.approvePublishDecision.mockResolvedValue({ ok: true, resumed: false });
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("not_open");
+  });
+
+  it("a reader who may view but not decide is refused by the road's own access check: failed, nothing else told", async () => {
+    access.declinePublishDecision.mockRejectedValue(Object.assign(new Error("Run access denied."), { statusCode: 403 }));
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "decline", note: "x" }, WHO)).toBe("failed");
+    access.approvePublishDecision.mockRejectedValue(Object.assign(new Error("Run access denied."), { statusCode: 403 }));
+    expect(await decideFor("decidePublishDecisionCardForActor")({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("failed");
+  });
+
+  it.each([
+    ["no run id", { runId: "", answer: "approve" }],
+    ["an unknown answer", { runId: "run-1", decisionId: "d1", answer: "publish" }],
+    ["a note that is not text", { runId: "run-1", decisionId: "d1", answer: "decline", note: 7 }],
+    ["no decision (an answer must name the decision the card shows)", { runId: "run-1", answer: "approve" }],
+    ["an empty decision", { runId: "run-1", decisionId: "", answer: "decline" }],
+  ])("%s is failed, and no road is taken", async (_label, input) => {
+    expect(await decideFor("decidePublishDecisionCardForActor")(input as never, WHO)).toBe("failed");
+    expect(access.approvePublishDecision).not.toHaveBeenCalled();
+    expect(access.declinePublishDecision).not.toHaveBeenCalled();
+  });
+
+  // both doors hand the roads the decision the card showed, so the roads' guarded write lands
+  // only on that decision.
+  it.each([
+    ["the session door", "decidePublishDecisionCardForActor", "approvePublishDecision", "declinePublishDecision"],
+    ["the widget door", "decidePublishDecisionCardForWidgetReader", "approvePublishDecisionAsWidgetReader", "declinePublishDecisionAsWidgetReader"],
+  ] as const)("%s hands both roads the decision the card showed", async (_label, door, approve, decline) => {
+    await decideFor(door)({ runId: "run-1", decisionId: "d-shown", answer: "approve", note: "" }, WHO);
+    await decideFor(door)({ runId: "run-1", decisionId: "d-shown", answer: "decline", note: "" }, WHO);
+    expect(access[approve].mock.calls[0]![0]).toMatchObject({ runId: "run-1", decisionId: "d-shown" });
+    expect(access[decline].mock.calls[0]![0]).toMatchObject({ runId: "run-1", decisionId: "d-shown" });
+  });
+
+  it("the site widget's answer takes the widget-reader roads, never the session ones", async () => {
+    const decide = decideFor("decidePublishDecisionCardForWidgetReader");
+    expect(await decide({ runId: "run-1", decisionId: "d1", answer: "approve", note: "" }, WHO)).toBe("decided");
+    expect(await decide({ runId: "run-1", decisionId: "d1", answer: "decline", note: "Not ready yet." }, WHO)).toBe("decided");
+    expect(access.approvePublishDecisionAsWidgetReader).toHaveBeenCalledTimes(1);
+    expect((access.declinePublishDecisionAsWidgetReader.mock.calls[0]![0] as { note: unknown }).note).toBe("Not ready yet.");
+    expect(access.approvePublishDecision).not.toHaveBeenCalled();
+    expect(access.declinePublishDecision).not.toHaveBeenCalled();
   });
 });
