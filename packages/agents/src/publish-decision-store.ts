@@ -18,7 +18,9 @@ import {
   isPublishRowDeclaration,
   isPublishRowInput,
   PUBLISH_DECISION_MAX_NOTE_LENGTH,
+  PUBLISH_LIST_ROW_ITEMS_MAX,
   PUBLISH_ROW_INPUT_MAX,
+  publishRowKind,
   type PublishRowDeclaration,
 } from "./publish-decision-card";
 import { agentRunPublishDecisions, agentRuns } from "./schema";
@@ -448,4 +450,77 @@ export async function listDueParked(limit: number, now?: Date, afterId?: string)
     .orderBy(asc(agentRunPublishDecisions.expiresAt), asc(agentRunPublishDecisions.id))
     .limit(limit);
   return rows.map(deserialize);
+}
+
+/**
+ * The ONE list of records a person released with a decision (cinatra#3089), for a caller that acts on such a list after
+ * the release. A candidate is a surfaced value (by own key) that is, or is JSON text of, a list of 1 to
+ * PUBLISH_LIST_ROW_ITEMS_MAX records whose own keys are exactly `entryFields`, each a string. Answers:
+ *   - `{ ok: true, list: null }`: the decision surfaced no candidate;
+ *   - `{ ok: false }`: the decision is not released by a person, or two or more values are candidates (which one was
+ *     meant cannot be told), or no declared list row shows, record for record in the same order, each `shownFields`
+ *     value of the list (a row is drawn from a surfaced list of records, the records only, as the card draws it);
+ *   - `{ ok: true, list }`: the one candidate, as parsed.
+ * A shown value is compared after trimming both sides; `caseInsensitive` also ignores letter case. Errors name no value.
+ */
+export function releasedDecisionList(input: {
+  decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
+  entryFields: readonly string[];
+  shownFields: ReadonlyArray<{ field: string; caseInsensitive?: boolean }>;
+}): { ok: true; list: Array<Record<string, string>> | null } | { ok: false; error: string } {
+  const { decision, entryFields, shownFields } = input;
+  if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
+    return { ok: false, error: "the publish decision is not released by a person" };
+  }
+  const own = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
+  const surfaced = decision.surfacedValues;
+  const wanted = [...entryFields].sort().join("\u0000");
+  const asList = (value: unknown): Array<Record<string, string>> | null => {
+    let list = value;
+    if (typeof list === "string") {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        return null;
+      }
+    }
+    if (!Array.isArray(list) || list.length === 0 || list.length > PUBLISH_LIST_ROW_ITEMS_MAX) return null;
+    const ok = list.every(
+      (e) =>
+        isPlainObject(e) &&
+        Object.keys(e).sort().join("\u0000") === wanted &&
+        entryFields.every((f) => own(e, f) && typeof e[f] === "string"),
+    );
+    return ok ? (list as Array<Record<string, string>>) : null;
+  };
+  const candidates = Object.keys(surfaced).flatMap((key) => {
+    const list = own(surfaced, key) ? asList(surfaced[key]) : null;
+    return list ? [list] : [];
+  });
+  if (candidates.length === 0) return { ok: true, list: null };
+  if (candidates.length > 1) {
+    return { ok: false, error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
+  }
+  const list = candidates[0]!;
+  const same = (shown: string, value: string, caseInsensitive?: boolean) =>
+    caseInsensitive ? shown.trim().toLowerCase() === value.trim().toLowerCase() : shown.trim() === value.trim();
+  const shownOnRow = (decision.declaredRows ?? []).some((row) => {
+    if (publishRowKind(row) !== "list" || !own(surfaced, row.input)) return false;
+    const raw = surfaced[row.input];
+    if (!Array.isArray(raw)) return false;
+    const records = raw.filter(isPlainObject);
+    if (records.length !== list.length) return false;
+    const columns = (row as { columns: ReadonlyArray<{ field: string }> }).columns;
+    return list.every((entry, i) => {
+      const record = records[i]!;
+      const cells = columns
+        .map(({ field }) => (own(record, field) ? record[field] : undefined))
+        .filter((v): v is string => typeof v === "string");
+      return shownFields.every(({ field, caseInsensitive }) => cells.some((cell) => typeof entry[field] === "string" && same(cell, entry[field], caseInsensitive)));
+    });
+  });
+  if (!shownOnRow) {
+    return { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
+  }
+  return { ok: true, list };
 }

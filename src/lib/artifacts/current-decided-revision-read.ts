@@ -261,3 +261,61 @@ SELECT
     };
   }
 }
+
+// ---------------------------------------------------------------------------
+// THE REVIEW FILINGS OF A RUN (cinatra#3089), for a caller that must not act on
+// a run's unreviewed copy of work a person reviews elsewhere.
+//
+// The run's filings come from the materialization ledger
+// (`listRunFiledArtifactIds`: mid-run paths only, scoped to the organization,
+// so a run id of another organization answers exactly like an unknown one),
+// and each filed artifact's type is read through the access-checked objects
+// read (`getObjectById` under the acting kernel actor). The answer fails
+// closed: a run that filed more artifacts than the cap, or a filed artifact
+// that cannot be read (absent for this actor, or a read error), counts as
+// filed. The caller names the type; this module names none.
+// ---------------------------------------------------------------------------
+
+/** The code an action carries when its run filed artifacts for review and the
+ *  action names none of the reviewed ones. */
+export const REVIEWED_ARTIFACTS_REQUIRED = "REVIEWED_ARTIFACTS_REQUIRED";
+
+/** Refuses an action of a run whose steps filed artifacts for review, when the
+ *  action does not use what a person released; nothing is done. */
+export class ReviewedArtifactsRequiredError extends Error {
+  readonly code = REVIEWED_ARTIFACTS_REQUIRED;
+  constructor(message: string) {
+    super(`${REVIEWED_ARTIFACTS_REQUIRED}: ${message}`);
+    this.name = "ReviewedArtifactsRequiredError";
+  }
+}
+
+/** The most filed artifacts one answer reads; a run that filed more counts as
+ *  filed without reading them. */
+export const RUN_FILINGS_READ_CAP = 200;
+
+export async function runHasFiledReviewArtifacts(input: {
+  actor: ActorContext;
+  orgId: string;
+  runId: string;
+  objectTypeId: string;
+  cap?: number;
+}): Promise<boolean> {
+  const { listRunFiledArtifactIds } = await import("./materialization-ledger");
+  const { artifactIds, overCap } = await listRunFiledArtifactIds({
+    orgId: input.orgId,
+    runId: input.runId,
+    cap: input.cap ?? RUN_FILINGS_READ_CAP,
+  });
+  if (overCap) return true;
+  for (const artifactId of artifactIds) {
+    let type: string | undefined;
+    try {
+      type = getObjectById(artifactId, { orgId: input.orgId }, input.actor)?.type;
+    } catch {
+      return true;
+    }
+    if (type === undefined || type === input.objectTypeId) return true;
+  }
+  return false;
+}

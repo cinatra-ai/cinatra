@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { getPooledDb } from "@/lib/db/pooled";
 import {
   getPostgresConnectionString,
@@ -587,84 +588,67 @@ export async function recordFanoutReuseMaterialization(input: {
 }
 
 // ---------------------------------------------------------------------------
-// THE MAIL OF ONE BOUND MESSAGE, AT MOST ONCE (cinatra#3089).
+// AN EFFECT OF ONE BOUND REVISION, AT MOST ONCE PER RUN (cinatra#3089).
 //
-// The send that mails approved bodies hands each message to the mail provider
-// only after it holds that message's SEND ROW: a second `email_fanout` row of
-// the run, under the message's send identity (`email-send:<run>:<item>`, see
-// `fanoutMessageSendOutputId`), copied from the message's binding row (the
-// organization, the run, and the approved artifact and revision the mail
-// carries; not its pack, see below). The row's `phase` is the send state, with
-// the ledger's own two values:
-//   - `claimed`   — a caller won the message and may be handing it over now, or
-//                   stopped after the claim (a crash, or a provider error that
-//                   may have come after the hand-over). Nobody mails it again.
-//   - `finalized` — the provider accepted the mail.
-// The row's content hash is the fixed marker `FANOUT_MESSAGE_SEND_MARKER`, not
-// a hash of the text, and its extension is the fixed value
-// `FANOUT_MESSAGE_SEND_EXTENSION`, not the pack of the binding row (the pack
-// that wins the body type is chosen again on every send, and a send row
-// records a send, not an artifact of a pack). So the unique key (run, output,
-// extension, hash) admits ONE send row per message of a run whatever revision
-// is mailed and whichever pack wins the type: a person is mailed once per
-// message of a run. The insert is conditional on that key (`ON CONFLICT DO
-// NOTHING` on the unique index), which Postgres decides atomically: of
-// concurrent callers exactly one inserts, the others insert nothing.
+// A caller that performs an outside effect with a revision a run bound (a
+// finalized row of the run under `bindingOutputId` on `path`, pointing at the
+// artifact revision) first holds that effect's CLAIM ROW: a second row under the
+// SAME output id and path, copied from the binding row (organization, run,
+// artifact, revision), whose extension and content hash are both the effect's
+// name. The row's `phase` is the effect's state, with the ledger's two values:
+//   - `claimed`   — a caller won the effect and may be performing it now, or
+//                   stopped after the claim (a crash, or an error that may have
+//                   come after the effect). Nobody performs it again.
+//   - `finalized` — the effect is done.
+// The unique key (run, output, extension, hash) therefore admits ONE claim row
+// per effect of one binding output of a run, whatever revision is bound under
+// it later and whatever pack wrote the binding: a binding row's extension is a
+// pack and its hash the hash of the bytes, never the effect's name. The insert
+// is conditional on that key (`ON CONFLICT DO NOTHING` on the unique index),
+// which Postgres decides atomically: of concurrent callers exactly one inserts.
 // ---------------------------------------------------------------------------
 
-/** The content-hash value of every send row (see the block above). */
-export const FANOUT_MESSAGE_SEND_MARKER = "message-send";
-
-/** The extension value of every send row (see the block above). */
-export const FANOUT_MESSAGE_SEND_EXTENSION = "message-send";
-
-/** The send identity of a message, from its binding identity
- *  (`email-body:<run>:<item>` → `email-send:<run>:<item>`). */
-export function fanoutMessageSendOutputId(messageOutputId: string): string {
-  return messageOutputId.startsWith("email-body:")
-    ? `email-send:${messageOutputId.slice("email-body:".length)}`
-    : `email-send:${messageOutputId}`;
-}
-
-export type FanoutMessageSendClaim =
-  /** This caller holds the message: hand it over, then `markFanoutMessageSent`. */
+export type RevisionEffectClaim =
+  /** This caller holds the effect: perform it, then `markRevisionEffectDone`. */
   | { kind: "won"; ledgerId: string }
-  /** The provider accepted this message's mail earlier. */
-  | { kind: "sent"; artifactId: string | null; representationRevisionId: string | null }
-  /** Claimed but never marked sent: it may or may not have been handed over. */
-  | { kind: "in_doubt"; artifactId: string | null; representationRevisionId: string | null };
+  /** The effect was done earlier. */
+  | { kind: "done" }
+  /** Claimed but never marked done: it may or may not have happened. */
+  | { kind: "in_doubt" };
 
 /**
- * Claim the mail of ONE bound message. The send row is inserted from the
- * message's binding row (the finalized `email_fanout` row of this run, message,
- * artifact and revision), so only a bound message can be claimed. Throws when
- * the message has no binding row, and on an infra failure: the caller mails
+ * Claim one effect of ONE bound revision. The claim row is inserted from the
+ * binding row (the finalized row of this organization, run, output id, path,
+ * artifact and revision), so only a bound revision can be claimed. Throws when
+ * the revision has no binding row, and on an infra failure: the caller performs
  * nothing then.
  */
-export async function claimFanoutMessageSend(input: {
+export async function claimRevisionEffect(input: {
   orgId: string;
   runId: string;
-  /** The message's binding identity (the binding row's `output_id`). */
-  outputId: string;
+  path: MaterializationPath;
+  /** The binding row's `output_id`; the claim row takes the same one. */
+  bindingOutputId: string;
+  /** The effect's name: the claim row's extension and content hash. */
+  effect: string;
   artifactId: string;
   representationRevisionId: string;
-}): Promise<FanoutMessageSendClaim> {
+}): Promise<RevisionEffectClaim> {
   ensurePostgresSchema();
   const s = schema();
-  const sendOutputId = fanoutMessageSendOutputId(input.outputId);
   const inserted = await pool().query(
     `WITH bound AS (
   SELECT org_id, run_id, artifact_id, representation_revision_id
     FROM "${s}"."artifact_materializations"
-   WHERE org_id = $2 AND run_id = $3 AND output_id = $4
-     AND path = 'email_fanout' AND phase = 'finalized'
-     AND artifact_id = $5 AND representation_revision_id = $6
+   WHERE org_id = $2 AND run_id = $3 AND output_id = $4 AND path = $5
+     AND phase = 'finalized' AND artifact_id = $6 AND representation_revision_id = $7
+     AND NOT (extension = $8 AND content_hash = $8)
    LIMIT 1
 )
 INSERT INTO "${s}"."artifact_materializations"
   (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
    artifact_id, representation_revision_id, phase)
-SELECT $1, org_id, run_id, $7, NULL, 'email_fanout', $9, $8,
+SELECT $1, org_id, run_id, $4, NULL, $5, $8, $8,
        artifact_id, representation_revision_id, 'claimed'
   FROM bound
 ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
@@ -673,159 +657,253 @@ RETURNING id`,
       randomUUID(),
       input.orgId,
       input.runId,
-      input.outputId,
+      input.bindingOutputId,
+      input.path,
       input.artifactId,
       input.representationRevisionId,
-      sendOutputId,
-      FANOUT_MESSAGE_SEND_MARKER,
-      FANOUT_MESSAGE_SEND_EXTENSION,
+      input.effect,
     ],
   );
   if (inserted.rows.length > 0) {
     return { kind: "won", ledgerId: String(inserted.rows[0].id) };
   }
   const existing = await pool().query(
-    `SELECT id, phase, artifact_id, representation_revision_id
-   FROM "${s}"."artifact_materializations"
-  WHERE org_id = $1 AND run_id = $2 AND output_id = $3
-    AND path = 'email_fanout' AND content_hash = $4
-  ORDER BY created_at ASC
+    `SELECT phase FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+    AND extension = $5 AND content_hash = $5
   LIMIT 1`,
-    [input.orgId, input.runId, sendOutputId, FANOUT_MESSAGE_SEND_MARKER],
+    [input.orgId, input.runId, input.bindingOutputId, input.path, input.effect],
   );
-  const row = existing.rows[0] as
-    | { phase: string; artifact_id: string | null; representation_revision_id: string | null }
-    | undefined;
+  const row = existing.rows[0] as { phase?: string } | undefined;
   if (!row) {
     throw new Error(
-      `message ${input.outputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its mail cannot be claimed`,
+      `output ${input.bindingOutputId} of run ${input.runId} has no binding to revision ${input.representationRevisionId} of artifact ${input.artifactId}, so its ${input.effect} cannot be claimed`,
     );
   }
-  const refs = {
-    artifactId: row.artifact_id ?? null,
-    representationRevisionId: row.representation_revision_id ?? null,
-  };
-  return row.phase === "finalized" ? { kind: "sent", ...refs } : { kind: "in_doubt", ...refs };
+  return row.phase === "finalized" ? { kind: "done" } : { kind: "in_doubt" };
 }
 
-/** Record that the provider accepted the mail of a won message. True when the
- *  claim's row is `finalized` after the call: moved by this call, or already
- *  moved by an earlier write of the same mark whose reply was lost (the row is
- *  found by its id, which only this claim holds). False when the row is gone,
- *  or is not a send row of the organization in `finalized`. */
-export async function markFanoutMessageSent(input: {
+/** Record that the effect of a won claim is done. True when the claim's row is
+ *  `finalized` after the call: moved by this call, or already moved by an
+ *  earlier write of the same mark whose reply was lost (the row is found by its
+ *  id, which only this claim holds). False when the row is gone, or is not a
+ *  claim row of that effect in the organization in `finalized`. */
+export async function markRevisionEffectDone(input: {
   orgId: string;
   ledgerId: string;
+  effect: string;
 }): Promise<boolean> {
   ensurePostgresSchema();
   const s = schema();
   const res = await pool().query(
     `UPDATE "${s}"."artifact_materializations"
     SET phase = 'finalized'
-  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout' AND phase = 'claimed'
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3 AND phase = 'claimed'
   RETURNING id`,
-    [input.ledgerId, input.orgId],
+    [input.ledgerId, input.orgId, input.effect],
   );
   if (res.rows.length > 0) return true;
   // Nothing moved: an earlier write of this mark may have committed before its
   // reply was lost. The row of this claim, read by its id, decides.
   const row = await pool().query(
     `SELECT phase FROM "${s}"."artifact_materializations"
-  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout'
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3
   LIMIT 1`,
-    [input.ledgerId, input.orgId],
+    [input.ledgerId, input.orgId, input.effect],
   );
   return (row.rows[0] as { phase?: string } | undefined)?.phase === "finalized";
 }
 
-/**
- * Whether the drafting step of `runId` filed bodies of `objectTypeId` for
- * review (cinatra#3089): a finalized row of the run on a MID-RUN path
- * (`materialize_tool`, the `artifact_materialize` filing a list member or one
- * artifact; `end_node_binding`, a declared binding) whose artifact is of that
- * type. The send's own rows are on the path `email_fanout` (a body the send
- * writes or binds, and its send rows), so a send never counts its own rows: a
- * retry of a reference-only send finds only those and reads false. The run id
- * is unique, so the read needs no organization.
- */
-export async function runHasFiledReviewBodies(input: {
-  runId: string;
-  objectTypeId: string;
-}): Promise<boolean> {
-  ensurePostgresSchema();
-  const s = schema();
-  const res = await pool().query(
-    `SELECT EXISTS (
-  SELECT 1 FROM "${s}"."artifact_materializations" m
-    JOIN "${s}"."objects" o ON o.id = m.artifact_id
-   WHERE m.run_id = $1 AND m.path IN ('materialize_tool', 'end_node_binding')
-     AND m.phase = 'finalized' AND o.type = $2
-) AS filed`,
-    [input.runId, input.objectTypeId],
-  );
-  return (res.rows[0] as { filed?: boolean } | undefined)?.filed === true;
-}
-
-/**
- * Record the campaign correlation of an approved body on its object row
- * (cinatra#3089): `runId`, `campaignId` and `contactId` are merged into the
- * row's `data`, which the campaign views filter on (`data->>'campaignId'`). A
- * body the drafting step filed for review carries none of them, and the send
- * that mails it writes no body of its own, so without this the campaign views
- * never find a reviewed body. Only those three keys move: the revision rows,
- * the revision pointer and every other field are untouched (the merge is the
- * same `data || jsonb_build_object(...)` the revision append uses for its
- * pointer fields). The object id never changes, so no identity key re-keys or
- * merges the row (a type's identity key only derives the id of a NEW object at
- * save time). A key the row already holds with ANOTHER value is never
- * overwritten: the call answers false and writes nothing. A row that already
- * holds all three values is not written again. True when the row of that type
- * in the organization holds the three values after the call.
- */
-export async function recordFanoutMessageCorrelation(input: {
-  orgId: string;
-  artifactId: string;
-  objectTypeId: string;
-  runId: string;
-  campaignId: string;
-  contactId: string;
-}): Promise<boolean> {
-  ensurePostgresSchema();
-  const s = schema();
-  const values = [input.artifactId, input.orgId, input.objectTypeId, input.runId, input.campaignId, input.contactId];
-  const fields = `jsonb_build_object('runId', $4::text, 'campaignId', $5::text, 'contactId', $6::text)`;
-  await pool().query(
-    `UPDATE "${s}"."objects"
-    SET data = data || ${fields}, updated_at = now()
-  WHERE id = $1 AND org_id = $2 AND type = $3
-    AND COALESCE(data->>'runId', $4) = $4
-    AND COALESCE(data->>'campaignId', $5) = $5
-    AND COALESCE(data->>'contactId', $6) = $6
-    AND NOT (data @> ${fields})`,
-    values,
-  );
-  const held = await pool().query(
-    `SELECT (data @> ${fields}) AS held FROM "${s}"."objects"
-  WHERE id = $1 AND org_id = $2 AND type = $3
-  LIMIT 1`,
-    values,
-  );
-  return (held.rows[0] as { held?: boolean } | undefined)?.held === true;
-}
-
-/** Give a won message back, ONLY when its mail was demonstrably never handed to
- *  the provider: a later call may then mail it. Never touches a sent row. */
-export async function releaseFanoutMessageSend(input: {
+/** Give a won claim back, ONLY when its effect demonstrably never started: a
+ *  later call may then perform it. Never touches a done row. */
+export async function releaseRevisionEffect(input: {
   orgId: string;
   ledgerId: string;
+  effect: string;
 }): Promise<void> {
   ensurePostgresSchema();
   const s = schema();
   await pool().query(
     `DELETE FROM "${s}"."artifact_materializations"
-  WHERE id = $1 AND org_id = $2 AND path = 'email_fanout' AND phase = 'claimed'`,
-    [input.ledgerId, input.orgId],
+  WHERE id = $1 AND org_id = $2 AND extension = $3 AND content_hash = $3 AND phase = 'claimed'`,
+    [input.ledgerId, input.orgId, input.effect],
   );
+}
+
+// ---------------------------------------------------------------------------
+// An outside effect performed with a revision a run bound, AT MOST ONCE per run
+// (cinatra#3089).
+//
+// `performRevisionEffectOnce` first CLAIMS the effect's durable record (a
+// conditional insert only one caller wins, `claimRevisionEffect` above), then:
+//   - won: the effect is performed (`act`); on success the claim is marked done;
+//   - done: an earlier call performed it; nothing is done (`alreadyDone`);
+//   - in doubt: another call holds it (in flight, or stopped after its claim);
+//     it is NOT performed (`inDoubt`).
+// An error from `act` leaves the effect in doubt (it may have happened before
+// the error), except `EffectNotStartedError`: the effect demonstrably never
+// started, so the claim is given back and a later call may perform it. The done
+// mark is one conditional update, written again up to `MARK_DONE_ATTEMPTS` times
+// while it throws; an attempt whose write committed before its reply was lost
+// reads as written. A mark that is refused or still throws leaves the effect
+// performed AND in doubt. An effect in doubt is performed by no later call.
+//
+// Generic: the caller names the run, the binding output, the ledger path of the
+// binding row and the effect; this module knows no artifact type.
+// ---------------------------------------------------------------------------
+
+/** Thrown by an `act` that stopped BEFORE its effect started, so the effect
+ *  certainly did not happen and its claim may be given back. */
+export class EffectNotStartedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EffectNotStartedError";
+  }
+}
+
+/** The effect and the bound revision it is performed with. */
+export type RevisionEffectClaimKey = {
+  runId: string;
+  path: MaterializationPath;
+  /** The binding row's output id; the claim row takes the same one. */
+  bindingOutputId: string;
+  effect: string;
+  artifactId: string;
+  representationRevisionId: string;
+};
+
+/** The effect's durable record: `claim` lets exactly one caller perform it;
+ *  `markDone` records it done; `release` gives it back ONLY when it never
+ *  started. */
+export type RevisionEffectLedger = {
+  claim(
+    key: RevisionEffectClaimKey,
+    actor: PrimitiveActorContext,
+  ): Promise<{ kind: "won"; ledgerId: string } | { kind: "done" } | { kind: "in_doubt" }>;
+  markDone(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<boolean>;
+  release(ledgerId: string, key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<void>;
+};
+
+/** What one call did. `failure` names why the caller must not go on: the claim
+ *  could not be taken (`claim`), the effect did not start and its claim was
+ *  given back (`not_started`), the effect failed and is in doubt (`act`), it
+ *  did not start but its claim could not be given back (`release`), or it was
+ *  performed but its done mark could not be written (`mark`). */
+export type RevisionEffectOutcome = {
+  done: boolean;
+  alreadyDone: boolean;
+  inDoubt: boolean;
+  failure?: { stage: "claim" | "not_started" | "act" | "release" | "mark"; reason: string };
+};
+
+function effectOrgOf(actor: PrimitiveActorContext): string {
+  if (!actor.orgId) {
+    throw new Error("the acting actor carries no organization, so no effect can be recorded");
+  }
+  return actor.orgId;
+}
+
+/** The materialization ledger's claim rows (`claimRevisionEffect`). */
+export const defaultRevisionEffectLedger: RevisionEffectLedger = {
+  async claim(key, actor) {
+    const orgId = effectOrgOf(actor);
+    return claimRevisionEffect({ orgId, ...key });
+  },
+  async markDone(ledgerId, key, actor) {
+    const orgId = effectOrgOf(actor);
+    return markRevisionEffectDone({ orgId, ledgerId, effect: key.effect });
+  },
+  async release(ledgerId, key, actor) {
+    const orgId = effectOrgOf(actor);
+    await releaseRevisionEffect({ orgId, ledgerId, effect: key.effect });
+  },
+};
+
+/** How many times a done mark is written before the effect is left in doubt. */
+const MARK_DONE_ATTEMPTS = 3;
+
+const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** Perform the effect of `claimKey` at most once per run (see the module note). */
+export async function performRevisionEffectOnce(input: {
+  claimKey: RevisionEffectClaimKey;
+  actor: PrimitiveActorContext;
+  act: () => Promise<unknown>;
+  ledger?: RevisionEffectLedger;
+}): Promise<RevisionEffectOutcome> {
+  const { claimKey, actor, act } = input;
+  const ledger = input.ledger ?? defaultRevisionEffectLedger;
+  const none = { done: false, alreadyDone: false, inDoubt: false };
+  let claim: Awaited<ReturnType<RevisionEffectLedger["claim"]>>;
+  try {
+    claim = await ledger.claim(claimKey, actor);
+  } catch (err) {
+    return { ...none, failure: { stage: "claim", reason: reasonOf(err) } };
+  }
+  if (claim.kind === "done") return { ...none, alreadyDone: true };
+  if (claim.kind === "in_doubt") return { ...none, inDoubt: true };
+  try {
+    await act();
+  } catch (err) {
+    const reason = reasonOf(err);
+    if (!(err instanceof EffectNotStartedError)) {
+      return { ...none, inDoubt: true, failure: { stage: "act", reason } };
+    }
+    try {
+      await ledger.release(claim.ledgerId, claimKey, actor);
+    } catch (releaseErr) {
+      return { ...none, inDoubt: true, failure: { stage: "release", reason: `${reason}; ${reasonOf(releaseErr)}` } };
+    }
+    return { ...none, failure: { stage: "not_started", reason } };
+  }
+  let reason = "";
+  for (let attempt = 1; attempt <= MARK_DONE_ATTEMPTS; attempt += 1) {
+    try {
+      // True also when an earlier attempt committed and only its reply was
+      // lost: the ledger reads the claim's own row back.
+      if (await ledger.markDone(claim.ledgerId, claimKey, actor)) return { ...none, done: true };
+      // The claim's record is gone or was never moved to done: writing again
+      // cannot help.
+      reason = "the record was not open";
+      break;
+    } catch (err) {
+      reason = reasonOf(err);
+      if (attempt < MARK_DONE_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  return { ...none, done: true, inDoubt: true, failure: { stage: "mark", reason } };
+}
+
+/**
+ * The artifacts the steps of `runId` in `orgId` filed while the run ran
+ * (cinatra#3089): the distinct artifact of each finalized row on a MID-RUN path
+ * (`materialize_tool`, an `artifact_materialize` filing; `end_node_binding`, a
+ * declared binding), at most `cap` of them. `overCap` is true when the run
+ * filed more. Rows of any other path (a fan-out's bindings and claim rows) are
+ * not filings of a step. The ledger alone: the caller reads each artifact
+ * through its own access-checked road.
+ */
+export async function listRunFiledArtifactIds(input: {
+  orgId: string;
+  runId: string;
+  cap: number;
+}): Promise<{ artifactIds: string[]; overCap: boolean }> {
+  ensurePostgresSchema();
+  const s = schema();
+  const cap = Math.max(0, Math.floor(input.cap));
+  const res = await pool().query(
+    `SELECT DISTINCT artifact_id
+   FROM "${s}"."artifact_materializations"
+  WHERE run_id = $1 AND org_id = $2 AND path IN ('materialize_tool', 'end_node_binding')
+    AND phase = 'finalized' AND artifact_id IS NOT NULL
+  ORDER BY artifact_id
+  LIMIT $3`,
+    [input.runId, input.orgId, cap + 1],
+  );
+  const ids = (res.rows as Array<{ artifact_id?: unknown }>)
+    .map((row) => row.artifact_id)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  return { artifactIds: ids.slice(0, cap), overCap: ids.length > cap };
 }
 
 /**

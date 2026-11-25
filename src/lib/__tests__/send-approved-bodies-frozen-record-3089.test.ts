@@ -3,11 +3,12 @@
  * record of what a person approved.
  *
  * The bundle schemas let an agent change a bundle after the approval, so the
- * send takes nothing a person approved from it:
- *   - the address and the subject of each message are those of the publish
- *     decision a person released for the calling step (its frozen values, and
- *     a list row of the card that showed them); the bundle's own values only
- *     refuse the send when they differ;
+ * send takes nothing a person approved from it, nor from the request:
+ *   - the approved list, the address and the subject of each message, and the
+ *     campaign are those of the publish decision a person released for the
+ *     calling step (its frozen values, and a list row of the card that showed
+ *     them); the bundle's own values only refuse the send when they differ;
+ *   - each approved body must be filed for that campaign;
  *   - the run is the run of the call, from the server's own context of the
  *     call, never a run id written in a bundle;
  *   - one message is one approved body artifact of the run: a draft id or a
@@ -18,29 +19,33 @@
  * the real `materializeEmailFanout`.
  *
  * Cases:
- *   A1 after the approval, an address changed in the bundle and the same new
- *      address named in the approved bodies: refused, nothing claimed or mailed
+ *   A1 after the approval, an address changed in the bundle: refused, nothing
+ *      claimed or mailed
  *   A2 the same for a subject
  *   A3 the released decision's values are mailed, the address as the card
- *      showed it
- *   A4 no released decision, an unreadable one, or a call without a verified
- *      step: refused before anything is bound
- *   A5 a list the decision showed, but no list row of its card showing each
+ *      showed it, trimmed
+ *   A4 a decision that is not released, or no list on a run with filed bodies
+ *      (no decision, or a call without a verified step): refused
+ *   A4b a decision that cannot be read: refused before anything is bound
+ *   A5 a list the decision surfaced, but no list row of its card showing each
  *      address and subject: refused
+ *   A6 two surfaced lists of approved bodies: refused
+ *   A7 a released decision that shows no campaign, or another campaign than
+ *      the call names: refused
+ *   A8 an approved body filed for another campaign, or for none: refused
  *   B1 an empty `cinatraAgentRunId` beside a valid `cinatra_agent_run_id`, no
- *      approved bodies, the run has bodies filed for review: refused
+ *      released list, the run has bodies filed for review: refused
  *   B2 the same with no run on the call: every run either bundle names is
  *      looked up, and the send is refused
  *   B3 a bundle that names another run changes nothing: the approved form
  *      binds and claims under the run of the call
- *   B4 approved bodies on a call that carries no run: refused
+ *   B4 a call that carries no run reads no publish decision
  *   K1 two drafts sharing one draft id, each with its own approved body: both
  *      are mailed once
  *   K2 one approved body named twice: refused before anything is claimed
  *   K3 a draft id changed after a send: nobody is mailed again
- *   G1 each bind carries the campaign of the call and the contact of the
- *      approved list (recorded on the body for the campaign views), never a
- *      bundle field; a second send binds the same and mails nobody
+ *   G1 each bind names the run, the message and the approved revision only (the
+ *      send writes no object); a second send binds the same and mails nobody
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -60,13 +65,13 @@ function memorySendLedger() {
   let next = 0;
   const ledger: MessageSendLedger = {
     async claim(m) {
-      const row = rows.get(m.outputId);
-      if (row) return { kind: row.phase === "finalized" ? "sent" : "in_doubt" };
+      const row = rows.get(m.bindingOutputId);
+      if (row) return { kind: row.phase === "finalized" ? "done" : "in_doubt" };
       next += 1;
-      rows.set(m.outputId, { id: `send-${next}`, phase: "claimed" });
+      rows.set(m.bindingOutputId, { id: `send-${next}`, phase: "claimed" });
       return { kind: "won", ledgerId: `send-${next}` };
     },
-    async markSent(id) {
+    async markDone(id) {
       for (const row of rows.values()) {
         if (row.id === id && row.phase === "claimed") {
           row.phase = "finalized";
@@ -117,13 +122,18 @@ function draftsFor(entries: Entry[], ids: string[] = ["d-1", "d-2"]) {
   }));
 }
 
-/** The publish decision a person released: the card's Recipients list row and
- *  its Emails row, drawn from the frozen values. */
-function releasedCard(entries: Entry[]) {
+/** The publish decision a person released for the calling step: the campaign,
+ *  the card's Recipients list row and its Emails row, drawn from the frozen
+ *  values. */
+function releasedCard(entries: Entry[], extra: Record<string, unknown> = {}) {
   return {
+    status: "released",
+    decidedBy: "user-2",
     surfacedValues: {
+      campaignId: CAMPAIGN_ID,
       recipients: entries.map((e) => ({ name: e.contactId, email: e.recipientEmail, subject: e.subject })),
       emailBodies: entries,
+      ...extra,
     },
     declaredRows: [
       {
@@ -177,7 +187,7 @@ function makeFixture(opts?: {
     async (ref: { artifactId: string }): Promise<DecidedBodyRead> => ({
       ok: true,
       text: `Body of ${ref.artifactId}`,
-      data: {},
+      data: { campaignId: CAMPAIGN_ID },
     }),
   );
   const bindBody = vi.fn(
@@ -204,7 +214,7 @@ function makeFixture(opts?: {
   const reviewedRuns = new Set(opts?.reviewedRuns ?? []);
   const readRunReviewedBodies = vi.fn(async (runId: string) => reviewedRuns.has(runId));
   const callingRun = opts?.callingRun === undefined ? { runId: "run-1", stepId: "send" } : opts.callingRun;
-  const readReleasedPublishDecision = vi.fn(async () =>
+  const readPublishDecision = vi.fn(async () =>
     opts?.decision === undefined ? releasedCard(approved) : opts.decision,
   );
   const deps = {
@@ -217,7 +227,7 @@ function makeFixture(opts?: {
     messageSendLedger: sendLedger.ledger,
     readRunReviewedBodies,
     readCallingRun: async () => callingRun,
-    readReleasedPublishDecision,
+    readPublishDecision,
   } as unknown as TriggerEmailSendDeps;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
@@ -235,7 +245,17 @@ function makeFixture(opts?: {
       errorMessage?: string;
       alreadySentCount?: number;
     }>;
-  return { sent, sendEmail, bindBody, writeBody, sendLedger, readRunReviewedBodies, readReleasedPublishDecision, start };
+  return {
+    sent,
+    sendEmail,
+    bindBody,
+    writeBody,
+    sendLedger,
+    readRunReviewedBodies,
+    readPublishDecision,
+    readDecidedBody,
+    start,
+  };
 }
 
 async function expectNothingDone(fx: ReturnType<typeof makeFixture>) {
@@ -245,91 +265,113 @@ async function expectNothingDone(fx: ReturnType<typeof makeFixture>) {
   expect(fx.sendLedger.rows.size).toBe(0);
 }
 
+async function expectRefused(fx: ReturnType<typeof makeFixture>, reason: string) {
+  const result = await fx.start({});
+  // red-first-expect: expected 'completed' to be 'failed'
+  expect(result.status).toBe("failed");
+  expect(result.errorMessage).toContain(reason);
+  await expectNothingDone(fx);
+}
+
+/** A released decision of the calling step that surfaced no list. */
+const noListCard = { status: "released", decidedBy: "user-2", surfacedValues: { campaignId: CAMPAIGN_ID }, declaredRows: [] };
+
 describe("cinatra#3089 — what a person approved comes from the released publish decision", () => {
-  it("A1 an address changed in the bundle after the approval, named again in the approved bodies, is refused", async () => {
+  it("A1 an address changed in the bundle after the approval is refused", async () => {
     const changed = approved.map((e, i) => (i === 0 ? { ...e, recipientEmail: "other@example.com" } : e));
     const fx = makeFixture({
       drafts: draftsFor(changed),
       recipients: changed.map((e) => ({ contactId: e.contactId, email: e.recipientEmail })),
-      decision: releasedCard(approved),
     });
-    const result = await fx.start({ approvedBodies: changed });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("the approved bodies are not the list the released publish decision showed");
-    await expectNothingDone(fx);
+    await expectRefused(fx, "draft 1 of the bundle (contact c1): the recipient's address changed after the card was shown");
   });
 
-  it("A2 a subject changed in the bundle after the approval, named again in the approved bodies, is refused", async () => {
+  it("A2 a subject changed in the bundle after the approval is refused", async () => {
     const changed = approved.map((e, i) => (i === 1 ? { ...e, subject: "Another subject" } : e));
-    const fx = makeFixture({ drafts: draftsFor(changed), decision: releasedCard(approved) });
-    const result = await fx.start({ approvedBodies: changed });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("the approved bodies are not the list the released publish decision showed");
-    await expectNothingDone(fx);
+    await expectRefused(
+      makeFixture({ drafts: draftsFor(changed) }),
+      "draft 2 of the bundle (contact c2): the subject changed after the card was shown",
+    );
   });
 
   it("A3 each message goes to the address and with the subject the released card showed", async () => {
-    const shown = approved.map((e, i) => (i === 0 ? { ...e, recipientEmail: " One@Example.com " } : e));
+    const shown = approved.map((e, i) => (i === 0 ? { ...e, recipientEmail: " one@example.com " } : e));
     const fx = makeFixture({ decision: releasedCard(shown) });
-    const result = await fx.start({ approvedBodies: shown });
+    const result = await fx.start({});
     expect(result.status).toBe("completed");
-    expect(fx.readReleasedPublishDecision).toHaveBeenCalledWith("run-1", "send");
+    // red-first-expect: expected "vi.fn()" to be called with arguments
+    expect(fx.readPublishDecision).toHaveBeenCalledWith("run-1", "send");
     expect(fx.sent).toEqual([
-      expect.objectContaining({ to: ["One@Example.com"], subject: "Subject one", textBody: "Body of art-1" }),
+      expect.objectContaining({ to: ["one@example.com"], subject: "Subject one", textBody: "Body of art-1" }),
       expect.objectContaining({ to: ["two@example.com"], subject: "Subject two", textBody: "Body of art-2" }),
     ]);
   });
 
   it.each([
-    ["no released decision", { decision: null }, "no person released the publish decision of step send of run run-1"],
-    ["a call without a verified step", { callingRun: { runId: "run-1" } }, "the call carries no verified step of run run-1"],
+    ["a parked decision", { decision: { ...releasedCard(approved), status: "parked" } }, "the publish decision is not released by a person (step send of run run-1)"],
+    ["a decision no person decided", { decision: { ...releasedCard(approved), decidedBy: null } }, "the publish decision is not released by a person"],
+    ["no decision on a run with filed bodies", { decision: null, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
+    ["a released decision with no list on a run with filed bodies", { decision: noListCard, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
+    ["a call without a verified step on a run with filed bodies", { callingRun: { runId: "run-1" }, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
   ])("A4 %s refuses the send before anything is bound", async (_name, opts, reason) => {
-    const fx = makeFixture(opts as Parameters<typeof makeFixture>[0]);
-    const result = await fx.start({ approvedBodies: approved });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain(reason);
-    await expectNothingDone(fx);
+    await expectRefused(makeFixture(opts as Parameters<typeof makeFixture>[0]), reason);
   });
 
   it("A4b a decision that cannot be read refuses the send before anything is bound", async () => {
     const fx = makeFixture();
-    fx.readReleasedPublishDecision.mockRejectedValueOnce(new Error("the decision store is unavailable"));
-    const result = await fx.start({ approvedBodies: approved });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain(
-      "the publish decision of step send of run run-1 could not be read: the decision store is unavailable",
-    );
-    await expectNothingDone(fx);
+    fx.readPublishDecision.mockRejectedValueOnce(new Error("the decision store is unavailable"));
+    await expectRefused(fx, "the publish decision of step send of run run-1 could not be read: the decision store is unavailable");
   });
 
   it("A5 a decision whose card shows no list row with each address and subject refuses the send", async () => {
     const card = releasedCard(approved);
     // The Recipients row shows another subject for the second message than its entry carries.
     (card.surfacedValues.recipients[1] as { subject: string }).subject = "Shown subject";
-    const fx = makeFixture({ decision: card });
-    const result = await fx.start({ approvedBodies: approved });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("no list row of the released publish decision shows each message's address and subject");
-    await expectNothingDone(fx);
+    await expectRefused(
+      makeFixture({ decision: card }),
+      "no list row of the released publish decision shows each record of the released list",
+    );
+  });
+
+  it("A6 two surfaced lists of approved bodies refuse the send", async () => {
+    const card = releasedCard(approved, { otherBodies: JSON.stringify(approved) });
+    await expectRefused(makeFixture({ decision: card }), "the publish decision surfaced 2 lists of that shape");
+  });
+
+  it.each([
+    ["shows no campaign", { campaignId: undefined }, "the released publish decision shows no campaign (step send of run run-1)"],
+    ["shows an empty campaign", { campaignId: "  " }, "the released publish decision shows no campaign"],
+    ["shows another campaign", { campaignId: "44444444-4444-4444-8444-444444444444" }, "the call names another campaign than the released publish decision shows"],
+  ])("A7 a released decision that %s refuses the send", async (_name, extra, reason) => {
+    const card = releasedCard(approved, extra);
+    if (extra.campaignId === undefined) delete (card.surfacedValues as Record<string, unknown>).campaignId;
+    await expectRefused(makeFixture({ decision: card }), reason);
+  });
+
+  it.each([
+    ["another campaign", { campaignId: "44444444-4444-4444-8444-444444444444" }],
+    ["no campaign", {}],
+  ])("A8 an approved body filed for %s refuses the send", async (_name, data) => {
+    const fx = makeFixture();
+    fx.readDecidedBody.mockImplementation(async (ref: { artifactId: string }) => ({
+      ok: true,
+      text: `Body of ${ref.artifactId}`,
+      data: ref.artifactId === "art-2" ? data : { campaignId: CAMPAIGN_ID },
+    }));
+    await expectRefused(fx, `approved body 2 is not filed for campaign ${CAMPAIGN_ID}`);
   });
 });
 
 describe("cinatra#3089 — the run is the run of the call, never a bundle field", () => {
   it("B1 an empty cinatraAgentRunId beside a valid cinatra_agent_run_id does not hide the run's filed bodies", async () => {
+    // The call's own run filed nothing; the run the bundle names did.
     const fx = makeFixture({
+      callingRun: { runId: "run-call" },
       bundleData: { cinatraAgentRunId: "", cinatra_agent_run_id: "run-1" },
       reviewedRuns: ["run-1"],
     });
-    const result = await fx.start({});
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("REVIEWED_BODIES_REQUIRED");
-    await expectNothingDone(fx);
+    await expectRefused(fx, "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: run run-1 filed artifacts");
+    expect(fx.readRunReviewedBodies.mock.calls.map(([runId]) => runId)).toEqual(["run-call", "run-1"]);
   });
 
   it("B2 a call without a run looks up every run either bundle names", async () => {
@@ -338,16 +380,12 @@ describe("cinatra#3089 — the run is the run of the call, never a bundle field"
       bundleData: { cinatraAgentRunId: "", cinatra_agent_run_id: "run-1" },
       reviewedRuns: ["run-1"],
     });
-    const result = await fx.start({});
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("run run-1 has email bodies filed for review");
-    await expectNothingDone(fx);
+    await expectRefused(fx, "run run-1 filed artifacts for review");
   });
 
   it("B3 a bundle that names another run changes nothing: the messages are bound and claimed under the run of the call", async () => {
     const fx = makeFixture({ bundleData: { cinatraAgentRunId: "run-other" } });
-    const result = await fx.start({ approvedBodies: approved });
+    const result = await fx.start({});
     expect(result.status).toBe("completed");
     // red-first-expect: expected "vi.fn()" to be called with arguments
     expect(fx.bindBody).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
@@ -355,20 +393,22 @@ describe("cinatra#3089 — the run is the run of the call, never a bundle field"
     expect([...fx.sendLedger.rows.keys()]).toEqual(["email-body:run-1:art-1", "email-body:run-1:art-2"]);
   });
 
-  it("B4 approved bodies on a call that carries no run are refused, whatever run the bundle names", async () => {
+  it("B4 a call that carries no run reads no publish decision", async () => {
     const fx = makeFixture({ callingRun: null });
-    const result = await fx.start({ approvedBodies: approved });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("the call carries no run");
-    await expectNothingDone(fx);
+    const result = await fx.start({});
+    expect(result.status).toBe("completed");
+    expect(fx.readPublishDecision).not.toHaveBeenCalled();
+    expect(fx.readDecidedBody).not.toHaveBeenCalled();
+    // red-first-expect: expected "vi.fn()" to be called with arguments
+    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.anything());
+    expect(fx.bindBody).not.toHaveBeenCalled();
   });
 });
 
 describe("cinatra#3089 — one message is one approved body artifact of the run", () => {
   it("K1 two drafts sharing one draft id, each with its own approved body, are both mailed once", async () => {
     const fx = makeFixture({ drafts: draftsFor(approved, ["d-1", "d-1"]) });
-    const result = await fx.start({ approvedBodies: approved });
+    const result = await fx.start({});
     expect(result.status).toBe("completed");
     // red-first-expect: expected undefined to be +0
     expect(result.alreadySentCount).toBe(0);
@@ -377,15 +417,11 @@ describe("cinatra#3089 — one message is one approved body artifact of the run"
   });
 
   it("K2 one approved body named twice is refused before anything is claimed", async () => {
-    const fx = makeFixture();
-    const result = await fx.start({ approvedBodies: [approved[0], { ...approved[0], contactId: "c2" }] });
-    // red-first-expect: expected 'completed' to be 'failed'
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("approved body 2 names artifact art-1 a second time");
-    await expectNothingDone(fx);
+    const twice = [approved[0]!, { ...approved[0]!, contactId: "c2", recipientEmail: "two@example.com", subject: "Subject two" }];
+    await expectRefused(makeFixture({ decision: releasedCard(twice) }), "approved body 2 names artifact art-1 a second time");
   });
 
-  it("G1 each bind carries the campaign of the call and the contact of the approved list, never a bundle field; a second send binds the same and mails nobody", async () => {
+  it("G1 each bind names the run, the message and the approved revision only; a second send binds the same and mails nobody", async () => {
     const sendLedger = memorySendLedger();
     const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
     const fx = makeFixture({
@@ -393,8 +429,8 @@ describe("cinatra#3089 — one message is one approved body artifact of the run"
       sent,
       bundleData: { cinatraAgentRunId: "run-other", campaignId: "camp-other" },
     });
-    expect((await fx.start({ approvedBodies: approved })).status).toBe("completed");
-    // red-first-expect: expected [] to deeply equal [ { runId: 'run-1', …(5) }, …(1) ]
+    expect((await fx.start({})).status).toBe("completed");
+    // red-first-expect: expected [] to deeply equal [ { runId: 'run-1', …(4) }, …(1) ]
     expect(fx.bindBody.mock.calls.map(([b]) => b)).toEqual(
       approved.map((e) => ({
         runId: "run-1",
@@ -402,11 +438,10 @@ describe("cinatra#3089 — one message is one approved body artifact of the run"
         markdown: `Body of ${e.artifactId}`,
         artifactId: e.artifactId,
         representationRevisionId: e.representationRevisionId,
-        correlation: { campaignId: CAMPAIGN_ID, contactId: e.contactId },
       })),
     );
     const again = makeFixture({ sendLedger, sent });
-    const result = await again.start({ approvedBodies: approved });
+    const result = await again.start({});
     expect(result).toMatchObject({ status: "completed", sentCount: 0, alreadySentCount: 2 });
     expect(again.bindBody.mock.calls.map(([b]) => b)).toEqual(fx.bindBody.mock.calls.map(([b]) => b));
     expect(sent).toHaveLength(2);
@@ -415,10 +450,10 @@ describe("cinatra#3089 — one message is one approved body artifact of the run"
   it("K3 a draft id changed after a send mails nobody again", async () => {
     const sendLedger = memorySendLedger();
     const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
-    const first = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
+    const first = await makeFixture({ sendLedger, sent }).start({});
     expect(first.status).toBe("completed");
     const again = makeFixture({ sendLedger, sent, drafts: draftsFor(approved, ["d-1-renamed", "d-2"]) });
-    const result = await again.start({ approvedBodies: approved });
+    const result = await again.start({});
     // red-first-expect: expected 2 to be +0
     expect(result.sentCount).toBe(0);
     expect(result.alreadySentCount).toBe(2);

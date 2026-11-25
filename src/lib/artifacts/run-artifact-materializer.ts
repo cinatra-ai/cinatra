@@ -39,7 +39,6 @@ import {
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
   recordFanoutReuseMaterialization,
-  recordFanoutMessageCorrelation,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -1840,12 +1839,8 @@ export async function materializeFanoutMessageRevision(input: {
  * A message already bound to ANOTHER artifact or revision of the same bytes is
  * refused, never re-pointed. The run must be an agent run of the organisation,
  * and the pack is the organisation's winning claim over the declared type, as
- * for a written body. Given a `correlation`, the bound body's object row also
- * receives its campaign correlation (`recordFanoutMessageCorrelation`: run,
- * campaign and contact merged into its data, the revision untouched), on the
- * first bind and again, writing nothing, on a retry; a row that already names
- * another run, campaign or contact refuses the bind. Never throws: a refusal is
- * a returned error.
+ * for a written body. The bind writes the ledger row only, never the artifact.
+ * Never throws: a refusal is a returned error.
  */
 export async function bindFanoutMessageRevision(input: {
   runId: string;
@@ -1858,29 +1853,7 @@ export async function bindFanoutMessageRevision(input: {
   markdown: string;
   artifactId: string;
   representationRevisionId: string;
-  /** The campaign and the contact of the message, from the approved list. */
-  correlation?: { campaignId: string; contactId: string };
 }): Promise<ToolArtifactMaterialization> {
-  // The campaign correlation of the bound body (see above), after the bind.
-  const correlate = async (
-    bound: ToolArtifactMaterialization,
-  ): Promise<ToolArtifactMaterialization> => {
-    if (!bound.ok || !input.correlation) return bound;
-    const held = await recordFanoutMessageCorrelation({
-      orgId: input.orgId,
-      artifactId: input.artifactId,
-      objectTypeId: input.objectTypeId,
-      runId: input.runId,
-      campaignId: input.correlation.campaignId,
-      contactId: input.correlation.contactId,
-    });
-    return held
-      ? bound
-      : {
-          ok: false,
-          error: `artifact ${input.artifactId} already names another run, campaign or contact, so message ${input.outputId} of run ${input.runId} cannot be correlated with its campaign`,
-        };
-  };
   try {
     ensurePostgresSchema();
     const s = postgresSchema.replaceAll('"', '""');
@@ -1923,7 +1896,7 @@ export async function bindFanoutMessageRevision(input: {
       row.representationRevisionId === input.representationRevisionId;
     const own = await findFinalizedFanoutMessageMaterialization(messageKey);
     if (own) {
-      if (sameRevision(own)) return await correlate({ ok: true, ...own, deduped: true });
+      if (sameRevision(own)) return { ok: true, ...own, deduped: true };
       return {
         ok: false,
         error: `message ${input.outputId} of run ${input.runId} is already bound to revision ${own.representationRevisionId} of artifact ${own.artifactId}`,
@@ -1942,7 +1915,7 @@ export async function bindFanoutMessageRevision(input: {
         error: `message ${input.outputId} of run ${input.runId} could not be bound to revision ${input.representationRevisionId} of artifact ${input.artifactId}`,
       };
     }
-    return await correlate({ ok: true, ...bound, deduped: false });
+    return { ok: true, ...bound, deduped: false };
   } catch (err) {
     return {
       ok: false,
