@@ -421,53 +421,146 @@ export async function getOrAddWayflowRendererGateIndex(
   await rememberWayflowGateTask(runId, taskId);
   const key = `cinatra:wayflow:renderer-gates:${runId}`;
   const r = getPublisher();
-  const list = (await r.lrange(key, 0, -1)) as string[];
-  const existing = list.indexOf(taskId);
+  const repeatKey = rendererGateRepeatKey(runId);
+  const replacedKey = rendererGateReplacedKey(runId);
   // cinatra#3562: a pause that follows a list step's refresh is that same step
   // again. Its fresh task id takes the refreshed task's place in the list, so
   // the position does not advance. A read fault throws: no later index is guessed.
-  const repeatKey = rendererGateRepeatKey(runId);
-  const repeatRaw = await r.get(repeatKey);
-  if (existing !== -1) {
-    if (repeatRaw !== null && readRendererGateRepeat(repeatRaw)?.taskId === taskId) await r.del(repeatKey);
-    else if (repeatRaw !== null) await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
-    await r.expire(key, GATE_SEQUENCE_TTL_S);
-    return existing;
-  }
-  if (repeatRaw !== null) {
-    await r.del(repeatKey);
-    const repeat = readRendererGateRepeat(repeatRaw);
-    if (repeat === null) {
-      throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
+  //
+  // Every write of the list goes through one commit (RENDERER_GATE_COMMIT_LUA)
+  // that applies only when the list and the refresh note are still as read
+  // here; when another report changed them in between, they are read again.
+  // So two reports of one pause, or of two pauses, never both take a place.
+  for (let attempt = 0; attempt < RENDERER_GATE_COMMIT_ATTEMPTS; attempt += 1) {
+    const list = (await r.lrange(key, 0, -1)) as string[];
+    const existing = list.indexOf(taskId);
+    const repeatRaw = await r.get(repeatKey);
+    // The same pause reported again (a reconnect, a retry) keeps its place. A
+    // note stays until the next pause takes the refreshed task's place.
+    if (existing !== -1) {
+      if (repeatRaw !== null) await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
+      await r.expire(key, GATE_SEQUENCE_TTL_S);
+      return existing;
     }
-    const at = repeat.index;
-    if (list.length > at) {
-      // The list is still there: the refreshed task must be its last entry.
-      if (at !== list.length - 1 || list[at] !== repeat.taskId) {
-        throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+    const repeat = repeatRaw === null ? null : readRendererGateRepeat(repeatRaw);
+    // The refreshed task reported again while its list entry is gone (the list
+    // expired): it is not the next pause, so it keeps the note's place and the
+    // note stays.
+    if (repeat !== null && repeat.taskId === taskId) {
+      await r.expire(repeatKey, GATE_SEQUENCE_TTL_S);
+      return repeat.index;
+    }
+    // A refreshed task reported after the next pause took its place keeps that place.
+    const replacedAt = await r.hget(replacedKey, taskId);
+    if (replacedAt !== null) {
+      const at = Number(replacedAt);
+      if (!Number.isInteger(at) || at < 0) {
+        throw new Error(`renderer gate ${taskId} on run ${runId} was replaced at a place that cannot be read`);
       }
-      await r.lset(key, at, taskId);
-    } else {
-      // The list expired before or after the refresh (or lost its tail): the
-      // position is restored from the note. Only this function reads the list, and only by
-      // `indexOf(taskId)` and by length, so the earlier places it cannot know
-      // are filled with a value that is never a task id.
-      const vacant = Array.from({ length: at - list.length }, () => VACANT_RENDERER_GATE);
-      await r.rpush(key, ...vacant, taskId);
+      return at;
     }
-    await r.expire(key, GATE_SEQUENCE_TTL_S);
-    return at;
+    let at: number;
+    let push: string[];
+    if (repeatRaw === null) {
+      at = list.length; // new renderer-gate index = old list length
+      push = [taskId];
+    } else {
+      // A note that cannot be used is kept (not consumed): every later pause is
+      // refused in the same way until the note expires, and none is given a guessed place.
+      if (repeat === null) {
+        throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh whose position cannot be read`);
+      }
+      at = repeat.index;
+      if (list.length > at) {
+        // The list is still there: the refreshed task must be its last entry.
+        if (at !== list.length - 1 || list[at] !== repeat.taskId) {
+          throw new Error(`renderer gate ${taskId} on run ${runId} follows a refresh of a task that is not the last renderer gate`);
+        }
+        push = [];
+      } else {
+        // The list expired before or after the refresh (or lost its tail): the
+        // position is restored from the note. Only this function reads the list, and only by
+        // `indexOf(taskId)` and by length, so the earlier places it cannot know
+        // are filled with a value that is never a task id.
+        push = [...Array.from({ length: at - list.length }, () => VACANT_RENDERER_GATE), taskId];
+      }
+    }
+    const committed = await r.eval(
+      RENDERER_GATE_COMMIT_LUA,
+      3,
+      key,
+      repeatKey,
+      replacedKey,
+      repeatRaw ?? "",
+      String(GATE_SEQUENCE_TTL_S),
+      taskId,
+      String(at),
+      repeat === null ? "" : repeat.taskId,
+      String(list.length),
+      String(push.length),
+      ...list,
+      ...push,
+    );
+    if (Number(committed) === 1) return at;
   }
-  await r.rpush(key, taskId);
-  await r.expire(key, GATE_SEQUENCE_TTL_S);
-  return list.length; // new renderer-gate index = old list length
+  throw new Error(`renderer gate ${taskId} on run ${runId} was not given a place: the run's renderer gates kept changing`);
 }
+
+/** How often a renderer gate report reads the list again after another report changed it. */
+const RENDERER_GATE_COMMIT_ATTEMPTS = 8;
+
+/**
+ * cinatra#3562: the one write of a run's renderer gate list, in one server-side
+ * step. It applies only when the list (KEYS[1]) and the refresh note (KEYS[2])
+ * are exactly as the caller read them; otherwise it changes nothing and returns 0.
+ *
+ * ARGV: 1 the note as read ('' = none), 2 the time to live, 3 the arriving task
+ * id, 4 its place, 5 the refreshed task the note names ('' = none), 6 the list's
+ * length as read (n), 7 the count of values to push (m), then the n entries as
+ * read, then the m values to push.
+ *
+ * With a note, the note is consumed here and nowhere else: the arriving task
+ * takes the refreshed task's place (set in place when nothing is pushed, or
+ * pushed after the vacant places), and the refreshed task's place is kept in
+ * KEYS[3] for a late report of it. Without a note, the values are pushed.
+ */
+const RENDERER_GATE_COMMIT_LUA = `
+local note = redis.call('GET', KEYS[2]) or ''
+if note ~= ARGV[1] then return 0 end
+local n = tonumber(ARGV[6])
+local m = tonumber(ARGV[7])
+local list = redis.call('LRANGE', KEYS[1], 0, -1)
+if #list ~= n then return 0 end
+for i = 1, n do
+  if list[i] ~= ARGV[7 + i] then return 0 end
+end
+local ttl = tonumber(ARGV[2])
+if m == 0 then
+  redis.call('LSET', KEYS[1], tonumber(ARGV[4]), ARGV[3])
+else
+  for i = 1, m do
+    redis.call('RPUSH', KEYS[1], ARGV[7 + n + i])
+  end
+end
+redis.call('EXPIRE', KEYS[1], ttl)
+if ARGV[1] ~= '' then
+  redis.call('DEL', KEYS[2])
+  redis.call('HSET', KEYS[3], ARGV[5], ARGV[4])
+  redis.call('EXPIRE', KEYS[3], ttl)
+end
+return 1
+`;
 
 /** Fills a renderer gate place whose task id is not known; never equal to a task id. */
 const VACANT_RENDERER_GATE = "";
 
 function rendererGateRepeatKey(runId: string): string {
   return `cinatra:wayflow:renderer-gate-repeat:${runId}`;
+}
+
+/** The places of refreshed tasks whose place a later pause took: task id -> place. */
+function rendererGateReplacedKey(runId: string): string {
+  return `cinatra:wayflow:renderer-gate-replaced:${runId}`;
 }
 
 function readRendererGateRepeat(raw: string): { taskId: string; index: number } | null {

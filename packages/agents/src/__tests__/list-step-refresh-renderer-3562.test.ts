@@ -121,14 +121,22 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 vi.mock("../wayflow-run-token-carrier", () => ({ mintResumeRunTokenMetadata: vi.fn(async () => ({ token: "t" })) }));
 
 /**
- * An in-memory `ioredis` double with the string and list commands the gate
- * sequence uses. It keeps each key's time to live in seconds as last set
+ * An in-memory `ioredis` double with the string, list and hash commands the
+ * gate sequence uses. It keeps each key's time to live in seconds as last set
  * (no clock runs), and answers `ttl` as Redis does: -2 absent, -1 none.
+ *
+ * `eval` runs the renderer gate list's commit script (the only script these
+ * flows send with three keys) step by step on the same maps, as the script
+ * reads its keys and arguments, in one synchronous call, so no other command
+ * runs in between (as on Redis). Any other script answers "absent" (the
+ * answered-gate consume, which these tests do not exercise).
  */
 const redis = vi.hoisted(() => {
   const store = new Map<string, string>();
   const lists = new Map<string, string[]>();
+  const hashes = new Map<string, Map<string, string>>();
   const ttls = new Map<string, number>();
+  const has = (key: string) => store.has(key) || lists.has(key) || hashes.has(key);
   class FakeRedis {
     async set(key: string, value: string, mode?: string, seconds?: number): Promise<"OK"> {
       store.set(key, value);
@@ -141,7 +149,10 @@ const redis = vi.hoisted(() => {
     }
     async del(key: string): Promise<number> {
       ttls.delete(key);
-      return (store.delete(key) ? 1 : 0) + (lists.delete(key) ? 1 : 0);
+      return (store.delete(key) ? 1 : 0) + (lists.delete(key) ? 1 : 0) + (hashes.delete(key) ? 1 : 0);
+    }
+    async hget(key: string, field: string): Promise<string | null> {
+      return hashes.get(key)?.get(field) ?? null;
     }
     async lrange(key: string): Promise<string[]> {
       return [...(lists.get(key) ?? [])];
@@ -159,16 +170,40 @@ const redis = vi.hoisted(() => {
       return "OK";
     }
     async expire(key: string, seconds: number): Promise<number> {
-      if (!store.has(key) && !lists.has(key)) return 0;
+      if (!has(key)) return 0;
       ttls.set(key, seconds);
       return 1;
     }
     async ttl(key: string): Promise<number> {
-      if (!store.has(key) && !lists.has(key)) return -2;
+      if (!has(key)) return -2;
       return ttls.get(key) ?? -1;
     }
-    async eval(): Promise<string> {
-      return "absent";
+    async eval(_script: string, numKeys: number, ...rest: string[]): Promise<number | string> {
+      if (numKeys !== 3) return "absent";
+      const [listKey, noteKey, replacedKey, noteAsRead, ttl, taskId, at, refreshedTaskId, nRaw, mRaw, ...tail] = rest;
+      if ((store.get(noteKey) ?? "") !== noteAsRead) return 0;
+      const n = Number(nRaw);
+      const m = Number(mRaw);
+      const list = lists.get(listKey) ?? [];
+      if (list.length !== n) return 0;
+      for (let i = 0; i < n; i += 1) if (list[i] !== tail[i]) return 0;
+      if (m === 0) {
+        if (Number(at) < 0 || Number(at) >= list.length) throw new Error("ERR index out of range");
+        list[Number(at)] = taskId;
+      } else {
+        list.push(...tail.slice(n, n + m));
+        lists.set(listKey, list);
+      }
+      ttls.set(listKey, Number(ttl));
+      if (noteAsRead !== "") {
+        store.delete(noteKey);
+        ttls.delete(noteKey);
+        const hash = hashes.get(replacedKey) ?? new Map<string, string>();
+        hash.set(refreshedTaskId, at);
+        hashes.set(replacedKey, hash);
+        ttls.set(replacedKey, Number(ttl));
+      }
+      return 1;
     }
     async quit(): Promise<"OK"> {
       return "OK";
@@ -177,7 +212,7 @@ const redis = vi.hoisted(() => {
       return this;
     }
   }
-  return { store, lists, ttls, FakeRedis };
+  return { store, lists, hashes, ttls, FakeRedis };
 });
 vi.mock("ioredis", () => ({ Redis: redis.FakeRedis, default: redis.FakeRedis }));
 
@@ -271,6 +306,7 @@ function arrange() {
   row.a2aTaskId = null;
   redis.store.clear();
   redis.lists.clear();
+  redis.hashes.clear();
   redis.ttls.clear();
   // A refused send leaves its queued answer behind: drop it.
   sendTask.mockReset();
@@ -479,5 +515,99 @@ describe("cinatra#3562 — the place a refresh keeps, and when it is refused", (
     expect(rendererGateIndexOfRenderer([s("a"), s("b")], "list")).toBeNull();
     expect(rendererGateIndexOfRenderer([s("list"), s("list")], "list")).toBeNull();
     expect(rendererGateIndexOfRenderer([s("a"), s("list", { gateCount: 2 })], "list")).toBeNull();
+  });
+});
+
+describe("cinatra#3562 — a refreshed pause reported again keeps the next pause on the list step", () => {
+  /** A reconnect or a retry reports a pause the run already parked at. */
+  async function reportAgain(taskId: string): Promise<void> {
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY as never, runId: RUN.id, run: liveRun() as never, fromStatus: "pending_approval", task: pauseTask(taskId) as never });
+  }
+
+  it.each([1, 3])("the refreshed pause is reported %i time(s) before the next pause arrives: the next pause carries the list step's renderer, and a pick reaches the second step", async (times) => {
+    await firstPause("task-list-1");
+    sendTask.mockImplementationOnce(async () => {
+      for (let i = 0; i < times; i += 1) await reportAgain("task-list-1");
+      return pauseTask("task-list-2");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(renderers()).toEqual(Array.from({ length: times + 2 }, () => LIST_STEP_ID));
+
+    await pick("task-list-2", "task-second-1");
+    expect(renderers().at(-1)).toBe(SECOND_STEP_ID);
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("the refreshed pause is reported again, then the pause after the refresh is reported twice: every report carries the list step's renderer", async () => {
+    await firstPause("task-list-1");
+    sendTask.mockImplementationOnce(async () => {
+      await reportAgain("task-list-1");
+      return pauseTask("task-list-2");
+    });
+    durableGate.value = listStepGate("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    await reportAgain("task-list-2");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID, LIST_STEP_ID]);
+
+    await pick("task-list-2", "task-second-1");
+    expect(renderers().at(-1)).toBe(SECOND_STEP_ID);
+  });
+
+  it("the refreshed pause and the next pause are reported in either order, or at once: both keep the list step's place, and the following pause takes the next one", async () => {
+    const { getOrAddWayflowRendererGateIndex, rememberWayflowRendererGateRepeat } = await import("@cinatra-ai/a2a");
+    // The list step is the run's second renderer pause (place 1).
+    const atListStep = async (suffix: string): Promise<{ a: string; b: string; next: string }> => {
+      const run = `${RUN.id}-${suffix}`;
+      expect(await getOrAddWayflowRendererGateIndex(run, `first-${suffix}`)).toBe(0);
+      expect(await getOrAddWayflowRendererGateIndex(run, `list-a-${suffix}`)).toBe(1);
+      await rememberWayflowRendererGateRepeat(run, `list-a-${suffix}`);
+      return { a: `list-a-${suffix}`, b: `list-b-${suffix}`, next: `second-${suffix}` };
+    };
+    const place = (suffix: string, taskId: string) => getOrAddWayflowRendererGateIndex(`${RUN.id}-${suffix}`, taskId);
+
+    // The refreshed pause first, then the next pause, then the refreshed pause late.
+    // red-first-expect: No "rememberWayflowRendererGateRepeat" export is defined on the "@cinatra-ai/a2a" mock
+    let t = await atListStep("ab");
+    expect([await place("ab", t.a), await place("ab", t.b), await place("ab", t.a)]).toEqual([1, 1, 1]);
+    expect(await place("ab", t.next)).toBe(2);
+
+    // The next pause first, then the refreshed pause.
+    t = await atListStep("ba");
+    expect([await place("ba", t.b), await place("ba", t.a), await place("ba", t.b)]).toEqual([1, 1, 1]);
+    expect(await place("ba", t.next)).toBe(2);
+
+    // Both at once, in both orders, and the next pause twice at once.
+    t = await atListStep("ab2");
+    expect(await Promise.all([place("ab2", t.a), place("ab2", t.b)])).toEqual([1, 1]);
+    expect(await place("ab2", t.next)).toBe(2);
+    t = await atListStep("ba2");
+    expect(await Promise.all([place("ba2", t.b), place("ba2", t.a)])).toEqual([1, 1]);
+    expect(await place("ba2", t.next)).toBe(2);
+    t = await atListStep("bb");
+    expect(await Promise.all([place("bb", t.b), place("bb", t.b)])).toEqual([1, 1]);
+    expect(await place("bb", t.next)).toBe(2);
+
+    // The list expired before the next pause: the refreshed pause reported again
+    // keeps the note's place and leaves the note, which the next pause then uses.
+    t = await atListStep("gone");
+    redis.lists.delete(`cinatra:wayflow:renderer-gates:${RUN.id}-gone`);
+    expect([await place("gone", t.a), await place("gone", t.b), await place("gone", t.a)]).toEqual([1, 1, 1]);
+    expect(await place("gone", t.next)).toBe(2);
+  });
+
+  it("a note that names a task that is not the last renderer gate refuses every pause and stays", async () => {
+    const { getOrAddWayflowRendererGateIndex } = await import("@cinatra-ai/a2a");
+    const repeatKey = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+    redis.lists.set(RENDERER_GATES_KEY, ["task-first-1", "task-list-1"]);
+    redis.store.set(repeatKey, JSON.stringify({ taskId: "task-first-1", index: 0 }));
+    // red-first-expect: promise resolved "2" instead of rejecting
+    for (let i = 0; i < 2; i += 1) {
+      await expect(getOrAddWayflowRendererGateIndex(RUN.id, "task-next-1")).rejects.toThrow("is not the last renderer gate");
+      expect(redis.store.has(repeatKey)).toBe(true);
+    }
+    expect(redis.lists.get(RENDERER_GATES_KEY)).toEqual(["task-first-1", "task-list-1"]);
   });
 });
