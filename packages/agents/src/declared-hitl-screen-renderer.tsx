@@ -111,7 +111,7 @@ export function makeDeclaredHitlScreenRenderer(card: DeclaredHitlCard): Componen
       blocks.push(
         <div key={i} className="grid gap-[3px]">
           <Label htmlFor={id}>{s.label}</Label>
-          {s.multiline === true ? <Textarea {...control} /> : <Input type="text" {...control} />}
+          {s.multiline === true ? <Textarea {...control} /> : <Input {...control} type="text" />}
         </div>,
       );
     });
