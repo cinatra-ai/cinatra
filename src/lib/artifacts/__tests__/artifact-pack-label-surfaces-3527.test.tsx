@@ -10,7 +10,6 @@ import type { ArtifactSummary } from "../artifact-service";
 const ports = vi.hoisted(() => ({ artifact: {} as ArtifactSummary, gate: vi.fn() }));
 vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
   isArtifactUnderOpenReview: async () => false,
-  readArtifactRevisionReview: async () => ({ status: "none" }),
 }));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: async () => ({ session: { activeOrganizationId: "org-label" } }),

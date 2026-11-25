@@ -40,7 +40,6 @@ const mocks = vi.hoisted(() => ({
   })),
   mounted: [] as Array<Record<string, unknown>>,
   isArtifactUnderOpenReview: vi.fn(async () => false),
-  readArtifactRevisionReview: vi.fn(async () => ({ status: "none" })),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -66,7 +65,6 @@ vi.mock("@/lib/authz/enforce", () => ({ can: mocks.can }));
 // The store read is the seam, so the page's own fail-closed reading runs for real.
 vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
   isArtifactUnderOpenReview: mocks.isArtifactUnderOpenReview,
-  readArtifactRevisionReview: mocks.readArtifactRevisionReview,
 }));
 vi.mock("@/lib/dashboards/dashboard-artifact-surface", () => ({
   isDashboardArtifactType: mocks.isDashboardArtifactType,
