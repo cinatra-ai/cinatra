@@ -99,18 +99,8 @@ describe.skipIf(!HAS_REAL_DB)("cinatra#2088 bundle-aware content authority (real
     await client.query(`DROP SCHEMA IF EXISTS "${TEST_SCHEMA}" CASCADE`);
 
     const { buildCreateStoreSchemaQueries } = await import("../../drizzle-store");
-    for (const q of buildCreateStoreSchemaQueries(TEST_SCHEMA)) {
-      const head = q.text.trim().slice(0, 6).toUpperCase();
-      if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && head !== "DO $$") {
-        continue;
-      }
-      try {
-        await client.query(q.text, (q as { values?: unknown[] }).values as never[]);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!msg.includes("does not exist")) throw err;
-      }
-    }
+    const { replayStoreSchema } = await import("@/lib/test-support/store-schema-replay");
+    await replayStoreSchema(client, buildCreateStoreSchemaQueries(TEST_SCHEMA));
     (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
     // Seed the two revisions + a skills head so readRevisionBundle resolves and

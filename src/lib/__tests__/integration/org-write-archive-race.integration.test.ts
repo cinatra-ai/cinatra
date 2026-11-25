@@ -45,6 +45,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { sql } from "drizzle-orm";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import {
   guardOrgMutation,
   guardOrgLifecycleMutation,
@@ -123,17 +124,7 @@ const anyAuthority = (orgId: string): OrgWriteAuthority => ({
 });
 
 async function applyStoreDdl(client: Client, schema: string): Promise<void> {
-  for (const q of buildCreateStoreSchemaQueries(schema)) {
-    const head = q.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") {
-      continue;
-    }
-    try {
-      await client.query(q.text, q.values ?? []);
-    } catch (err) {
-      if (!(err instanceof Error) || !err.message.includes("does not exist")) throw err;
-    }
-  }
+  await replayStoreSchema(client, buildCreateStoreSchemaQueries(schema));
 }
 
 describe.skipIf(!enabled)("org-write archive race — kernel harness on live Postgres (#1939)", () => {
