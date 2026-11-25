@@ -461,7 +461,6 @@ describe("an image with no source yet is pending", () => {
     );
     const { rerender } = render(view());
     await held();
-    // red-first-expect: expected [ 'island-ready', …(2) ] to deeply equal [ 'island-ready', 'panel-mounted' ]
     expect(types()).toEqual(["island-ready", "panel-mounted"]);
     rerender(view("/late.png"));
     await held();

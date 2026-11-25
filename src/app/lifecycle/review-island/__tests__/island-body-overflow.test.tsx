@@ -196,7 +196,6 @@ describe("the island body is the container a wide representation scrolls inside"
     await islandBody();
     const panel = document.body.querySelector("[data-conformance-id='review-target']");
     if (!panel) throw new Error("no panel");
-    // red-first-expect: expected 'contents' not to be 'contents'
     expect((panel.parentElement as HTMLElement).style.display).not.toBe("contents");
     expect(panel.parentElement?.hasAttribute("data-island-panel")).toBe(false);
     expect(panel.nextElementSibling?.hasAttribute("data-island-panel-signal")).toBe(true);
