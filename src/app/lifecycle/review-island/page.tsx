@@ -188,6 +188,10 @@ function emptyIsland(scheme: IslandColorScheme | null) {
       data-island-color-scheme={scheme ?? undefined}
       style={scheme ? { colorScheme: scheme } : undefined}
     >
+      {/* cinatra#3089: the empty document reports zero items drawn, the same
+          word for every denial, so a host waiting on the items reads it as
+          empty and never as drawn. It renders nothing. */}
+      <IslandReadySignal panels={0} />
     </div>
   );
 }
@@ -440,7 +444,9 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           card that this document is alive, so the card stops watching for a
           first response and starts watching for progress instead. It carries
           nothing (see `island-height-report.ts`) and renders nothing. */}
-      <IslandReadySignal />
+      {/* cinatra#3089: with the panel count, it also posts `island-drawn`
+          once every panel below has mounted. */}
+      <IslandReadySignal panels={drawn.length} />
 
       {/* §II — the producing agent's one-line summary when the gate carried one.
           Part of the target's context, not of the decision. */}

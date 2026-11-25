@@ -597,9 +597,19 @@ function reviewIslandFrameName(attempt: number): string {
  */
 function readIslandProgress(
   data: unknown,
-): { type: "island-ready" | "panel-mounted"; attempt: number } | null {
+): { type: "island-ready" | "panel-mounted"; attempt: number } | { type: "island-drawn"; attempt: number; count: number } | null {
   if (typeof data !== "object" || data === null) return null;
   const keys = Object.keys(data);
+  // THE DRAWN REPORT (cinatra#3089): the same channel and attempt, plus how many
+  // panels the island drew once every one of them mounted (0 for the empty
+  // document). Closed like the two progress events: exactly these four keys.
+  if (keys.length === 4 && keys.every((key) => ["channel", "type", "attempt", "count"].includes(key))) {
+    const { channel, type, attempt, count } = data as { channel?: unknown; type?: unknown; attempt?: unknown; count?: unknown };
+    if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL || type !== "island-drawn") return null;
+    if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 0) return null;
+    return { type, attempt, count };
+  }
   if (keys.length !== 3 || !keys.every((key) => ["channel", "type", "attempt"].includes(key))) return null;
   const { channel, type, attempt } = data as {
     channel?: unknown;
@@ -2354,6 +2364,10 @@ function ReviewTargetIsland({
      *  that reading as an empty panel (`onSettledEmpty`). */
     empty: false,
   });
+  // A HOST THAT ASKS FOR THE STATE (`onLoadState`, the publish card) reads the
+  // island as loaded only on the island's own drawn report (cinatra#3089); every
+  // other host keeps the frame's `load` as before.
+  const strict = onLoadState !== undefined;
   if (load.identity !== identity) {
     setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
   }
@@ -2397,6 +2411,21 @@ function ReviewTargetIsland({
       if (!frame || event.source !== frame.contentWindow) return;
       const progress = readIslandProgress(event.data);
       if (!progress || progress.attempt !== load.attempt) return;
+      if (progress.type === "island-drawn") {
+        // Only a strict host reads it; it also heals a plate already painted.
+        if (!strict) return;
+        const count = progress.count;
+        setLoad((current) =>
+          current.loaded || current.attempt !== progress.attempt
+            ? current
+            : count > 0
+              ? { ...current, loaded: true, timedOut: false, empty: false }
+              : onSettledEmpty !== undefined
+                ? { ...current, loaded: true, timedOut: false, empty: true }
+                : { ...current, timedOut: true },
+        );
+        return;
+      }
       setLoad((current) => {
         if (current.loaded || current.attempt !== progress.attempt) return current;
         if (progress.type === "island-ready") {
@@ -2413,7 +2442,7 @@ function ReviewTargetIsland({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [islandOrigin, load.attempt]);
+  }, [islandOrigin, load.attempt, strict, onSettledEmpty]);
 
   // THE TWO BOUNDS, as one restarting timer (cinatra#3334). Before
   // `island-ready` it is the INITIAL-RESPONSE bound, running from the moment
@@ -2613,6 +2642,11 @@ function ReviewTargetIsland({
             // `null`: the denial was then taken for a drawn target.
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
             const emptyIsSettled = onSettledEmpty !== undefined;
+            // A strict host (cinatra#3089): a readable document that is not the
+            // island (an error page, a sign-in page) is the failed reading at
+            // once; any other load waits for the island's drawn report, and its
+            // bound turns silence into the failed reading.
+            const foreign = strict && !servedTheDenial && islandFrameIsForeign(event.currentTarget);
             setLoad((current) =>
               current.identity === identity
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
@@ -2640,7 +2674,11 @@ function ReviewTargetIsland({
                   ? emptyIsSettled
                     ? { ...current, loaded: true, timedOut: false, empty: true }
                     : { ...current, loaded: false, timedOut: true, empty: false }
-                  : { ...current, loaded: true, empty: false }
+                  : foreign
+                    ? { ...current, loaded: false, timedOut: true, empty: false }
+                    : strict
+                      ? current
+                      : { ...current, loaded: true, empty: false }
                 : current,
             );
           }}
@@ -2723,6 +2761,29 @@ export function islandFrameServedTheDenial(frame: HTMLIFrameElement | null): boo
     return false;
   }
 }
+
+/**
+ * Is the frame's document readable and NOT the island (cinatra#3089)? The
+ * island draws one of two roots, its body or its one empty document; a
+ * same-origin error page or sign-in page draws neither. An unreadable
+ * document (another origin), one not parsed yet, or the frame's initial blank
+ * document answers `false`: the island's drawn report, or its bound, decides.
+ */
+export function islandFrameIsForeign(frame: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = frame?.contentDocument;
+    if (!doc || doc.URL === "about:blank") return false;
+    return (
+      doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_BODY_MARKER}']`) === null &&
+      doc.querySelector(`[data-conformance-id='${REVIEW_ISLAND_EMPTY_MARKER}']`) === null
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The marker the island's BODY carries (src/app/lifecycle/review-island/page.tsx). */
+export const REVIEW_ISLAND_BODY_MARKER = "review-target-island-body";
 
 /** The marker the island's DENIAL carries. The server half of this literal lives
  *  on the island route, and the two are pinned to each other by this card's own

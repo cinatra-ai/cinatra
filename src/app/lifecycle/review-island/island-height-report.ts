@@ -136,7 +136,7 @@ export const REVIEW_ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
 /** The prefix of the frame name the card stamps its attempt into. */
 export const REVIEW_ISLAND_FRAME_NAME_PREFIX = "cinatra-review-island";
 
-/** The two things this document says, and the only two. */
+/** The two progress events; `island-drawn` (below) is the third message. */
 export type ReviewIslandProgressType = "island-ready" | "panel-mounted";
 
 /** One progress message — the closed shape, with nothing else in it. */
@@ -176,4 +176,28 @@ export function reviewIslandProgressMessage(
   attempt: number,
 ): ReviewIslandProgressMessage {
   return { channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type, attempt };
+}
+
+// ---------------------------------------------------------------------------
+// THE DRAWN REPORT (cinatra#3089). A host whose decision waits on the island's
+// items (the publish card's Allow, design XV.1 "Allow waits for the items")
+// needs a POSITIVE word that the items are on screen: a frame's `load` fires for
+// an error page or a sign-in page too. The island posts `island-drawn` once
+// every panel it was given has mounted, with how many that is; the one empty
+// document posts it with 0. It carries the channel, the attempt and that count,
+// nothing read out of the surface model, and the card checks its provenance as
+// it checks the progress messages (origin, source frame, attempt).
+// ---------------------------------------------------------------------------
+
+/** The drawn report: every panel of this document has mounted. */
+export interface ReviewIslandDrawnMessage {
+  channel: typeof REVIEW_ISLAND_PROGRESS_CHANNEL;
+  type: "island-drawn";
+  attempt: number;
+  count: number;
+}
+
+/** Compose the drawn report, in one place. */
+export function reviewIslandDrawnMessage(attempt: number, count: number): ReviewIslandDrawnMessage {
+  return { channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type: "island-drawn", attempt, count };
 }

@@ -380,6 +380,12 @@ const ITEMS_READING: Record<IslandLoadState, ItemsReading> = {
 };
 /** The line under the controls while Allow waits on items that are not on screen (XV.1). */
 const ALLOW_WAITS = "Allow waits until the items are shown.";
+/** The line's anchor for each reason, as design XV.1 names them (conformance manifest at design 69868e8f). */
+const ALLOW_WAITS_ANCHOR = {
+  failed: "publish-allow-waits-failed",
+  refused: "publish-allow-waits-refused",
+  empty: "publish-allow-waits-empty",
+} as const;
 
 type HeldArtifactsAddress = {
   /** The row identity the address was taken for: the ref names the run, the decision and the input, and is minted
@@ -682,6 +688,15 @@ export function PublishDecisionCard({
   const itemsWait = readings.some((reading) => reading !== "drawn");
   const waitReason = (["failed", "refused", "empty"] as const).find((reading) => readings.includes(reading)) ?? null;
   const describeWait = itemsWait && !restricted;
+  // THE ROWS FRAME'S ANCHOR (XV.1): the design draws a card with an items row under publish-card-rows while its items
+  // load, under publish-card-items-shown once every item is drawn, and under publish-card-items-failed while a panel
+  // did not load. A row that could not be shown, or a panel that stays empty, keeps its own row anchor.
+  const rowsAnchor =
+    readings.length > 0 && !itemsWait
+      ? "publish-card-items-shown"
+      : readings.includes("failed")
+        ? "publish-card-items-failed"
+        : "publish-card-rows";
   const cardState = refreshing ? "loading" : noLongerOpen ? "no_longer_open" : restricted ? "restricted" : state.state;
 
   let body: ReactElement;
@@ -758,7 +773,7 @@ export function PublishDecisionCard({
               </Button>
             </div>
             {describeWait && waitReason !== null ? (
-              <p id={waitsId} data-conformance-id={`publish-allow-waits-${waitReason}`}
+              <p id={waitsId} data-conformance-id={ALLOW_WAITS_ANCHOR[waitReason]}
                 className="mt-2.5 text-right text-xs text-muted-foreground">
                 {ALLOW_WAITS}
               </p>
@@ -789,8 +804,8 @@ export function PublishDecisionCard({
     const frameAnchor = restricted ? "publish-state-restricted" : resumeOnly ? "publish-card-allow-again" : undefined;
     body = (
       <>
-        <div className={FRAME} data-conformance-id={frameAnchor ?? (state.rows.length > 0 ? "publish-card-rows" : undefined)}>
-          {frameAnchor !== undefined && state.rows.length > 0 ? <div data-conformance-id="publish-card-rows">{card}</div> : card}
+        <div className={FRAME} data-conformance-id={frameAnchor ?? (state.rows.length > 0 ? rowsAnchor : undefined)}>
+          {frameAnchor !== undefined && state.rows.length > 0 ? <div data-conformance-id={rowsAnchor}>{card}</div> : card}
         </div>
         {settledMarker(state)}
       </>

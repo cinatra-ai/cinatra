@@ -87,3 +87,37 @@ describe("the island reports its own progress, data-free", () => {
     expect(posted).toEqual([]);
   });
 });
+
+// cinatra#3089 — THE DRAWN REPORT. A host whose decision waits on the items (the publish card's Allow) needs a positive
+// word that they are on screen; a frame's `load` fires for an error page too. Once every panel the document was given
+// has mounted it posts `island-drawn` with that count, once; the one empty document posts it with 0. Each test loads
+// the module afresh: the count is the document's own state.
+describe("the island reports its items drawn", () => {
+  const drawnPosts = () =>
+    posted.filter(([message]) => (message as { type?: string }).type === "island-drawn");
+
+  it("posts island-drawn once, with the count, after every panel it was given has mounted", async () => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(2);
+    render(<Ready panels={2} />);
+    render(<Panel />);
+    expect(drawnPosts()).toEqual([]);
+    render(<Panel />);
+    expect(drawnPosts()).toEqual([
+      [{ channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type: "island-drawn", attempt: 2, count: 2 }, "*"],
+    ]);
+    render(<Panel />);
+    expect(drawnPosts()).toHaveLength(1);
+  });
+
+  it("the empty document posts island-drawn with 0 and no island-ready", async () => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(0);
+    render(<Ready panels={0} />);
+    expect(posted).toEqual([
+      [{ channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type: "island-drawn", attempt: 0, count: 0 }, "*"],
+    ]);
+  });
+});

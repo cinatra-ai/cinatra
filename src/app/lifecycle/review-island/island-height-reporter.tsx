@@ -13,10 +13,10 @@
 // The island stays display-only. This posts ONE NUMBER to the frame that holds
 // it, at its own origin, and offers the host nothing to call.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import type { ReactElement } from "react";
 
-import { islandContentHeight, reviewIslandHeightMessage, parseReviewIslandFrameName, reviewIslandProgressMessage, type ReviewIslandProgressType } from "./island-height-report";
+import { islandContentHeight, reviewIslandHeightMessage, parseReviewIslandFrameName, reviewIslandDrawnMessage, reviewIslandProgressMessage, type ReviewIslandProgressType } from "./island-height-report";
 import { islandPaletteClass } from "./island-color-scheme";
 import { parseReviewIslandPalette } from "./island-palette-message";
 
@@ -115,23 +115,57 @@ function postProgress(type: ReviewIslandProgressType): void {
   window.parent.postMessage(reviewIslandProgressMessage(type, attempt), "*");
 }
 
+// THE DRAWN COUNT (cinatra#3089): the panels this document was given and the
+// ones that have mounted. One document holds one island, so module state is
+// that document's; a Set keyed by each signal's own id counts a panel once even
+// when its effect runs twice.
+const drawnState: { expected: number | null; mounted: Set<string>; posted: boolean } = {
+  expected: null,
+  mounted: new Set(),
+  posted: false,
+};
+
+function postDrawnWhenComplete(): void {
+  const { expected, mounted, posted } = drawnState;
+  if (posted || expected === null || mounted.size < expected) return;
+  if (typeof window === "undefined") return;
+  const attempt = parseReviewIslandFrameName(window.name);
+  if (attempt === null) return;
+  drawnState.posted = true;
+  // `*` for the reason given in `postProgress`: the card checks provenance.
+  window.parent.postMessage(reviewIslandDrawnMessage(attempt, expected), "*");
+}
+
 /**
  * "The island document is answering." Posted BEFORE any panel work — it is the
  * first child of the body — so the card can cancel its initial-response bound
  * and start watching for progress instead.
+ *
+ * `panels` (cinatra#3089) is how many panels this document draws: once that many
+ * have mounted it posts `island-drawn` with the count (0 at once, for the one
+ * empty document). Omitted, nothing is reported as drawn.
  */
-export function IslandReadySignal(): null {
+export function IslandReadySignal({ panels }: { panels?: number } = {}): null {
   useEffect(() => {
-    postProgress("island-ready");
-  }, []);
+    if (panels === undefined) {
+      postProgress("island-ready");
+      return;
+    }
+    if (panels > 0) postProgress("island-ready");
+    drawnState.expected = panels;
+    postDrawnWhenComplete();
+  }, [panels]);
   return null;
 }
 
 /** "A panel arrived." Posted as each target's panel mounts, which restarts the
  *  card's idle-progress bound: a gate that is still streaming is never plated. */
 export function IslandPanelMountedSignal(): null {
+  const id = useId();
   useEffect(() => {
     postProgress("panel-mounted");
-  }, []);
+    drawnState.mounted.add(id);
+    postDrawnWhenComplete();
+  }, [id]);
   return null;
 }
