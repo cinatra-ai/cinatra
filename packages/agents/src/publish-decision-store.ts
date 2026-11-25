@@ -457,18 +457,33 @@ export async function listDueParked(limit: number, now?: Date, afterId?: string)
  * the release. A candidate is a surfaced value (by own key) that is, or is JSON text of, a list of 1 to
  * PUBLISH_LIST_ROW_ITEMS_MAX records whose own keys are exactly `entryFields`, each a string. Answers:
  *   - `{ ok: true, list: null }`: the decision surfaced no candidate;
- *   - `{ ok: false }`: the decision is not released by a person, or two or more values are candidates (which one was
- *     meant cannot be told), or no declared list row shows, record for record in the same order, each `shownFields`
- *     value of the list (a row is drawn from a surfaced list of records, the records only, as the card draws it);
+ *   - `{ ok: false }`: `shownFields` is not a set of distinct entry fields on distinct, named columns; or the decision
+ *     is not released by a person; or two or more values are candidates (which one was meant cannot be told); or no
+ *     declared list row shows the list record for record, in the same order (a row is drawn from a surfaced list of
+ *     records, the records only, as the card draws it);
  *   - `{ ok: true, list }`: the one candidate, as parsed.
- * A shown value is compared after trimming both sides; `caseInsensitive` also ignores letter case. Errors name no value.
+ * A row shows a record when, for EACH `shownFields` entry, the row declares the named `column` (a column `field` of
+ * the row) and the record's string value of that column equals the entry's value of `field`. Each column proves one
+ * field only, so one drawn cell never shows two fields. A shown value is compared after trimming both sides;
+ * `caseInsensitive` also ignores letter case. Errors name no value.
  */
 export function releasedDecisionList(input: {
   decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
   entryFields: readonly string[];
-  shownFields: ReadonlyArray<{ field: string; caseInsensitive?: boolean }>;
+  /** For each entry field the card must show, the row column (its `field`) that shows it. */
+  shownFields: ReadonlyArray<{ field: string; column: string; caseInsensitive?: boolean }>;
 }): { ok: true; list: Array<Record<string, string>> | null } | { ok: false; error: string } {
   const { decision, entryFields, shownFields } = input;
+  const columnsNamed = new Set(shownFields.map((s) => s.column));
+  const fieldsNamed = new Set(shownFields.map((s) => s.field));
+  if (
+    shownFields.length === 0 ||
+    columnsNamed.size !== shownFields.length ||
+    fieldsNamed.size !== shownFields.length ||
+    shownFields.some((s) => typeof s.column !== "string" || s.column === "" || !entryFields.includes(s.field))
+  ) {
+    return { ok: false, error: "the fields a list row must show are not distinct entry fields on distinct columns" };
+  }
   if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
     return { ok: false, error: "the publish decision is not released by a person" };
   }
@@ -510,13 +525,16 @@ export function releasedDecisionList(input: {
     if (!Array.isArray(raw)) return false;
     const records = raw.filter(isPlainObject);
     if (records.length !== list.length) return false;
-    const columns = (row as { columns: ReadonlyArray<{ field: string }> }).columns;
+    const columns = (row as { columns?: ReadonlyArray<{ field: string }> }).columns;
+    if (!Array.isArray(columns)) return false;
+    const drawn = new Set(columns.map((c) => c.field));
+    if (shownFields.some(({ column }) => !drawn.has(column))) return false;
     return list.every((entry, i) => {
       const record = records[i]!;
-      const cells = columns
-        .map(({ field }) => (own(record, field) ? record[field] : undefined))
-        .filter((v): v is string => typeof v === "string");
-      return shownFields.every(({ field, caseInsensitive }) => cells.some((cell) => typeof entry[field] === "string" && same(cell, entry[field], caseInsensitive)));
+      return shownFields.every(({ field, column, caseInsensitive }) => {
+        const cell = own(record, column) ? record[column] : undefined;
+        return typeof cell === "string" && typeof entry[field] === "string" && same(cell, entry[field], caseInsensitive);
+      });
     });
   });
   if (!shownOnRow) {

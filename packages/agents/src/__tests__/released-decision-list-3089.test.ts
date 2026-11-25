@@ -7,7 +7,7 @@ vi.mock("../db", () => ({ db: {} }));
 import { releasedDecisionList } from "../publish-decision-store";
 
 const FIELDS = ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"] as const;
-const SHOWN = [{ field: "recipientEmail" }, { field: "subject" }];
+const SHOWN = [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "subject" }];
 
 function entries(count: number) {
   return Array.from({ length: count }, (_, i) => ({
@@ -122,7 +122,40 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     const upper = decision(list, { shown: [{ email: "P0@Example.com", subject: "Subject 0" }] });
     expect(read(upper).ok).toBe(false);
     expect(
-      releasedDecisionList({ decision: upper, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", caseInsensitive: true }, { field: "subject" }] }).ok,
+      releasedDecisionList({ decision: upper, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "email", caseInsensitive: true }, { field: "subject", column: "subject" }] }).ok,
     ).toBe(true);
+  });
+
+  it("L9 one drawn cell never proves two fields: each field is read from its own named column", () => {
+    const list = [{ ...entries(1)[0]!, subject: "p0@example.com" }];
+    const onlyEmail = {
+      ...decision(list, { shown: [{ email: "p0@example.com" }] }),
+      declaredRows: [{ kind: "list" as const, label: "Recipients", input: "recipients", columns: [{ label: "Email", field: "email" }] }],
+    };
+    const NO_ROW = { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
+    // red-first-expect: is not a function
+    expect(read(onlyEmail as ReturnType<typeof decision>)).toEqual(NO_ROW);
+    // The values drawn in each other's column do not show the entry either.
+    const swapped = decision(entries(1), { shown: [{ email: "Subject 0", subject: "p0@example.com" }] });
+    expect(read(swapped)).toEqual(NO_ROW);
+    // A row that draws the named column under another field shows nothing.
+    const otherColumn = {
+      ...decision(entries(1), { shown: [{ mail: "p0@example.com", subject: "Subject 0" }] }),
+      declaredRows: [{ kind: "list" as const, label: "Recipients", input: "recipients", columns: [{ label: "Email", field: "mail" }, { label: "Subject", field: "subject" }] }],
+    };
+    expect(read(otherColumn as ReturnType<typeof decision>)).toEqual(NO_ROW);
+  });
+
+  it("L10 a column named for two fields, or a field named twice, is refused", () => {
+    const d = decision(entries(1));
+    const twiceColumn = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "email" }] });
+    // red-first-expect: is not a function
+    expect(twiceColumn.ok).toBe(false);
+    const twiceField = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "subject", column: "email" }, { field: "subject", column: "subject" }] });
+    expect(twiceField.ok).toBe(false);
+    const noColumn = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "" }] });
+    expect(noColumn.ok).toBe(false);
+    const notAnEntryField = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "name", column: "email" }] });
+    expect(notAnEntryField.ok).toBe(false);
   });
 });

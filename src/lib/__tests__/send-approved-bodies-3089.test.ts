@@ -562,7 +562,8 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
       expect.objectContaining({ to: ["one@example.com"], textBody: "Approved body one" }),
       expect.objectContaining({ to: ["two@example.com"], textBody: "Approved body two" }),
     ]);
-    expect(fx.readDecidedBody.mock.calls.map(([ref]) => ref.artifactId)).toEqual(["art-1", "art-2"]);
+    // Each body is read at the check and again at its send time; art-9 never.
+    expect(fx.readDecidedBody.mock.calls.map(([ref]) => ref.artifactId)).toEqual(["art-1", "art-2", "art-1", "art-2"]);
     const direct = makeFixture();
     const uc = createTriggerEmailSendUseCases(direct.deps);
     const answer = await uc.startInitialSend(

@@ -970,9 +970,25 @@ async function runInitialSend(args: {
     // contact, address, subject), and a list row of the card must show each
     // message's address and subject, in the same order
     // (`releasedDecisionList`). The campaign is the decision's surfaced
-    // `campaignId`, which must be the campaign the call names. Nothing of the
+    // `campaignId`, which must be the campaign the call names. The sender is
+    // the decision's surfaced `senderEmail`: a call that names another sender,
+    // or a sender the decision did not surface, is refused. Nothing of the
     // request decides what is mailed: the request carries no list.
-    let released: { list: Array<Record<string, string>>; campaignId: string } | null = null;
+    //
+    // EVERY VALUE THE APPROVED SEND AUTHORIZES OR MAILS WITH comes from (a) the
+    // released decision's frozen values (artifact, revision, contact, address,
+    // subject, campaign, sender), (b) the decided revision itself (its text,
+    // read again at each message's send time), or (c) the server's context of
+    // the call (the run and the step). The body object's own `data` can be
+    // changed after the decision without a new revision, so it never
+    // authorizes: its `contactId` and `campaignId` are read only to REFUSE a
+    // body that disagrees with the decision. The bundle is likewise read only
+    // to refuse a send whose bundle changed after the card.
+    let released: {
+      list: Array<Record<string, string>>;
+      campaignId: string;
+      senderEmail: string | undefined;
+    } | null = null;
     const stepId = callingRun?.stepId;
     if (runScopeId && stepId) {
       const decisionOf = `step ${stepId} of run ${runScopeId}`;
@@ -987,7 +1003,10 @@ async function runInitialSend(args: {
         const read = releasedDecisionList({
           decision,
           entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
-          shownFields: [{ field: "recipientEmail" }, { field: "subject" }],
+          shownFields: [
+            { field: "recipientEmail", column: "email" },
+            { field: "subject", column: "subject" },
+          ],
         });
         if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
         if (read.list) {
@@ -999,7 +1018,18 @@ async function runInitialSend(args: {
           if (campaignId !== input.campaignId.trim()) {
             refuse(`the call names another campaign than the released publish decision shows (${decisionOf})`);
           }
-          released = { list: read.list, campaignId: campaignId! };
+          const senderEmail = Object.prototype.hasOwnProperty.call(surfaced, "senderEmail")
+            ? textOf(surfaced.senderEmail)
+            : undefined;
+          const callSender = textOf(input.senderEmail);
+          if (callSender !== undefined && callSender !== senderEmail) {
+            refuse(
+              senderEmail
+                ? `the call names another sender than the released publish decision shows (${decisionOf})`
+                : `the call names a sender the released publish decision does not show (${decisionOf})`,
+            );
+          }
+          released = { list: read.list, campaignId: campaignId!, senderEmail };
         }
       }
     }
@@ -1046,8 +1076,10 @@ async function runInitialSend(args: {
     // swapped between drafts, or a draft changed after its body was filed, are
     // refused. Every check and every read runs before the fan-out and before
     // any mail, and any failure refuses the whole send.
-    let approvedByIndex: Map<number, ApprovedFanoutBody & { subject: string; recipientEmail: string }> | null =
-      null;
+    let approvedByIndex: Map<
+      number,
+      ApprovedFanoutBody & { subject: string; recipientEmail: string; contactId: string }
+    > | null = null;
     if (released) {
       // Each message is bound to its approved revision under the run of the
       // call before any mail (a released list is only read for a run's step).
@@ -1145,6 +1177,10 @@ async function runInitialSend(args: {
         if (!read.ok) {
           return refuse(`approved body ${body.position}: ${read.error}`);
         }
+        // The body object's `data` only refuses (see above): a value of it that
+        // disagrees with the decision refuses the send; agreeing authorizes
+        // nothing, the decision's entry already binds the contact and the
+        // decision the campaign.
         const ownContact = textOf(read.data.contactId);
         if (ownContact !== undefined && ownContact !== contact) {
           refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
@@ -1172,6 +1208,7 @@ async function runInitialSend(args: {
           text: read.text,
           subject: body.subject,
           recipientEmail: body.recipientEmail,
+          contactId: contact,
         });
       }
     }
@@ -1268,8 +1305,12 @@ async function runInitialSend(args: {
       const inDoubt: string[] = [];
       // Mailed (handed over), but no sent record could be written.
       const unrecorded: string[] = [];
+      // Refused at its send time: the body was no longer decided (or read
+      // another text), so it was not mailed and its claim was given back.
+      const refusedAtSend: string[] = [];
       let stopped: string | undefined;
-      const { performRevisionEffectOnce } = await import("./artifacts/materialization-ledger");
+      const fromEmail = released?.senderEmail;
+      const { EffectNotStartedError, performRevisionEffectOnce } = await import("./artifacts/materialization-ledger");
       for (const [index, draft] of drafts.entries()) {
         if (!recipientEmailFor(draft, recipients)) continue;
         const approved = approvedByIndex.get(index);
@@ -1279,7 +1320,7 @@ async function runInitialSend(args: {
           break;
         }
         const name = `draft ${index + 1} (${outputId})`;
-        const contactId = textOf(draft.contactId);
+        let notDecidedNow: string | undefined;
         const outcome = await performRevisionEffectOnce({
           claimKey: {
             runId: runScopeId,
@@ -1291,13 +1332,36 @@ async function runInitialSend(args: {
           },
           actor,
           ...(messageSendLedger ? { ledger: messageSendLedger } : {}),
-          act: () =>
-            sendEmail(
+          // THE CHECK AND THE MAIL ARE BOUND PER MESSAGE: with the claim won,
+          // the decided-revision read runs again right before the hand-over,
+          // and the text mailed is the one it reads then. A revision no longer
+          // current and decided (superseded, reopened, sent back or repaired
+          // since the check), a read that fails, or another text, stops this
+          // message before anything started, so its claim is given back.
+          act: async () => {
+            let now: DecidedBodyRead;
+            try {
+              now = await readDecidedBody(
+                {
+                  artifactId: approved.artifactId,
+                  representationRevisionId: approved.representationRevisionId,
+                  runId: runScopeId,
+                },
+                actor,
+              );
+            } catch (err) {
+              now = { ok: false, error: err instanceof Error ? err.message : String(err) };
+            }
+            if (!now.ok || now.text !== approved.text) {
+              notDecidedNow = now.ok ? "its revision read another text at its send time than the one checked" : now.error;
+              throw new EffectNotStartedError(notDecidedNow);
+            }
+            return sendEmail(
               {
                 to: [approved.recipientEmail],
                 subject: approved.subject,
-                textBody: approved.text,
-                fromEmail: input.senderEmail,
+                textBody: now.text,
+                ...(fromEmail ? { fromEmail } : {}),
               },
               {
                 userId: actor.userId,
@@ -1305,10 +1369,11 @@ async function runInitialSend(args: {
                 correlation: {
                   campaignId: input.campaignId,
                   runId: runScopeId,
-                  ...(contactId ? { contactId } : {}),
+                  contactId: approved.contactId,
                 },
               },
-            ),
+            );
+          },
         });
         if (outcome.alreadyDone) {
           alreadySentCount += 1;
@@ -1323,6 +1388,10 @@ async function runInitialSend(args: {
               `[trigger-email-send] ${name} of run ${runScopeId} is claimed but not recorded as sent; it was not mailed again`,
             );
           }
+          continue;
+        }
+        if (failure.stage === "not_started" && notDecidedNow !== undefined) {
+          refusedAtSend.push(`${name} was not sent, its body was refused at its send time: ${notDecidedNow}`);
           continue;
         }
         if (failure.stage === "mark") {
@@ -1347,6 +1416,7 @@ async function runInitialSend(args: {
         break;
       }
       const problems = [
+        ...refusedAtSend,
         ...(stopped ? [stopped] : []),
         ...unrecorded,
         ...(inDoubt.length > 0 ? [`${inDoubt.length} message(s) are in doubt: ${inDoubt.join(", ")}`] : []),
