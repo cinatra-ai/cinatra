@@ -217,8 +217,10 @@ beforeEach(() => {
     return { kind: "claimed", ledgerId: `led-${n}` };
   });
   let a = 0;
-  createSemanticArtifactMock.mockImplementation(async () => {
+  createSemanticArtifactMock.mockImplementation(async (input: { objectType: string; title: string; typedData?: Record<string, unknown> }) => {
     a += 1;
+    // The row the creation path writes: the typed data under the writer's own title.
+    storedObjects.set(`art-${a}`, { type: input.objectType, data: { ...(input.typedData ?? {}), title: input.title } });
     return { artifactId: `art-${a}`, representationRevisionId: `rep-${a}` };
   });
 });
@@ -496,6 +498,42 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       expect(outcome).toMatchObject({ ok: true, deduped: false });
       expect(createSemanticArtifactMock.mock.calls[0]![0].typedData).toEqual(fullData(MESSAGES[0]));
       expect(objectReadMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("a retried message is admitted only when what it would write is what is stored (cinatra#3089)", () => {
+    const CODE = "fanout_reuse_typed_data_mismatch";
+    const CORRELATION = ["runId", "campaignId"];
+    const corrected = (m: (typeof MESSAGES)[number]) => ({
+      ...bodyInput(m),
+      typedData: { ...bodyInput(m).typedData, campaignId: "camp-CORRECTED" },
+      reuseMustCarry: CORRELATION,
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B8 refuses a retry whose message already has its own mapping to a body of another campaign", async () => {
+      const first = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(first).toMatchObject({ ok: true, artifactId: "art-1" });
+      findFinalizedFanoutMessageMaterializationMock.mockResolvedValue({ artifactId: "art-1", representationRevisionId: "rep-1" });
+      createSemanticArtifactMock.mockClear();
+      const retry = await materializeFanoutMessageRevision(corrected(MESSAGES[0]));
+      expect(retry).toMatchObject({ ok: false, code: CODE });
+      expect((retry as { error: string }).error).toContain("differs: keys: campaignId");
+      expect((retry as { error: string }).error).not.toContain("camp-CORRECTED");
+      expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B8 refuses a retry of a fresh write (a finalized claim) with a corrected campaign, and writes nothing", async () => {
+      await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
+      claimMaterializationMock.mockImplementation(async () => ({
+        kind: "finalized", artifactId: "art-1", representationRevisionId: "rep-1", path: "email_fanout",
+      }));
+      createSemanticArtifactMock.mockClear();
+      const retry = await materializeFanoutMessageRevision(corrected(MESSAGES[0]));
+      expect(retry).toMatchObject({ ok: false, code: "filed_values_differ" });
+      expect((retry as { error: string }).error).toContain("differs: keys: campaignId");
+      expect(createSemanticArtifactMock).not.toHaveBeenCalled();
     });
   });
 

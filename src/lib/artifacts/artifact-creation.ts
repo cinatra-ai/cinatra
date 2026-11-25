@@ -318,6 +318,35 @@ function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolea
   return def.isArtifact != null || def.dispositions?.projection === "artifact-safe";
 }
 
+/**
+ * The object data of an artifact, composed in ONE place for the pre-storage check, the post-storage check
+ * and the row (item 0.28): the caller's typed data is the BASE and the writer's own fields are spread over
+ * it, so a caller can add to the object and can never restate or forge the digest, size, revision id,
+ * detected MIME, origin or title. A check that builds this any other way checks another shape than the one
+ * that is stored.
+ */
+export function buildArtifactObjectData(input: {
+  typedData?: Record<string, unknown>;
+  representationRevisionId: string;
+  digest: string;
+  mime: string;
+  size: number;
+  originKind: ArtifactOriginKind;
+  title?: string;
+}): ArtifactObjectData {
+  return {
+    ...(input.typedData ?? {}),
+    artifactType: "file",
+    latestRepresentationRevisionId: input.representationRevisionId,
+    latestDigest: input.digest,
+    mime: input.mime,
+    size: input.size,
+    originKind: input.originKind,
+    viewerHint: "mime",
+    title: input.title,
+  } as ArtifactObjectData;
+}
+
 /** What the blob store derives from the bytes of a write: the MIME its sniffer reads from the first 512 bytes
  *  and the declared MIME, the sha256 and the size. A pure function of the bytes and the declaration, so a
  *  refusal that depends on them can be found before the bytes are stored. */
@@ -348,7 +377,8 @@ export function artifactWriteRefusal(
     typedData?: Record<string, unknown>;
     title?: string;
     originKind: ArtifactOriginKind;
-    representationRevisionId: string;
+    /** The writer's own revision id; absent (a check before any write) it is generated, a UUID as the writer's is. */
+    representationRevisionId?: string;
   },
   facts: { mimeDetected: string; sha256: string; sizeBytes: number },
 ): string | null {
@@ -364,20 +394,18 @@ export function artifactWriteRefusal(
   ) {
     return `detected MIME "${facts.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`;
   }
-  // The caller's typed data UNDER the envelope (item 0.28): the writer's own
-  // facts always win, so the payload the schema sees carries the type's
-  // declared fields and an unforgeable envelope.
-  const previewEnvelope = {
-    ...(input.typedData ?? {}),
-    artifactType: "file",
-    latestRepresentationRevisionId: input.representationRevisionId,
-    latestDigest: facts.sha256,
+  // The envelope the writer composes, built by the writer's own builder with values of
+  // the same form: a revision id of the form the writer generates (a UUID), the digest,
+  // size and detected MIME of the bytes.
+  const previewEnvelope = buildArtifactObjectData({
+    typedData: input.typedData,
+    representationRevisionId: input.representationRevisionId ?? randomUUID(),
+    digest: facts.sha256,
     mime: facts.mimeDetected,
     size: facts.sizeBytes,
     originKind: input.originKind,
-    viewerHint: "mime",
     title: input.title,
-  } as ArtifactObjectData;
+  });
   const parsed = preDef.schema.safeParse(previewEnvelope);
   if (!parsed.success) {
     return `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`;
@@ -833,17 +861,15 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     }),
   );
 
-  const objectData = {
-    ...(input.typedData ?? {}),
-    artifactType: "file",
-    latestRepresentationRevisionId: representationRevisionId,
-    latestDigest: newBlob.sha256,
+  const objectData = buildArtifactObjectData({
+    typedData: input.typedData,
+    representationRevisionId,
+    digest: newBlob.sha256,
     mime: authoritative.mime,
     size: authoritative.sizeBytes,
     originKind,
-    viewerHint: "mime",
     title: input.title,
-  } as ArtifactObjectData;
+  });
 
   // -------------------------------------------------------------------
   // Dedupe-delta re-validation (epic #1785, wave A3). The pre-Tx1 validation

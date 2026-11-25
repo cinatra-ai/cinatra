@@ -42,6 +42,7 @@ const {
   readFinalizedMaterializationMock,
   findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterializationMock,
+  findFinalizedToolMaterializationMock,
   recordFanoutReuseMaterializationMock,
   isWriteAllowedMock,
   resolveBoundArtifactTargetMock,
@@ -57,6 +58,7 @@ const {
   readFinalizedMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   findFinalizedMidRunMaterializationMock: vi.fn(),
   findFinalizedFanoutMessageMaterializationMock: vi.fn(),
+  findFinalizedToolMaterializationMock: vi.fn(),
   recordFanoutReuseMaterializationMock: vi.fn(),
   isWriteAllowedMock: vi.fn(async () => true),
   resolveBoundArtifactTargetMock: vi.fn(),
@@ -97,6 +99,7 @@ vi.mock("../materialization-ledger", () => ({
   readFinalizedMaterialization: readFinalizedMaterializationMock,
   findFinalizedMidRunMaterialization: findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterialization: findFinalizedFanoutMessageMaterializationMock,
+  findFinalizedToolMaterialization: findFinalizedToolMaterializationMock,
   recordFanoutReuseMaterialization: recordFanoutReuseMaterializationMock,
   isMaterializationFinalizeConflict: (err: unknown) =>
     err instanceof Error && err.message.includes("materialization-finalize-conflict"),
@@ -276,6 +279,15 @@ beforeEach(() => {
           r.runId === k.runId && r.extension === k.extension && r.contentHash === k.contentHash &&
           (r.path === "materialize_tool" || r.path === "end_node_binding") && r.artifactId &&
           !ledger.some((f) => f.path === "email_fanout" && f.artifactId === r.artifactId),
+      );
+      return row ? { artifactId: row.artifactId!, representationRevisionId: row.representationRevisionId! } : null;
+    },
+  );
+  findFinalizedToolMaterializationMock.mockImplementation(
+    async (k: { runId: string; outputId: string; extension: string; contentHash: string }) => {
+      const row = ledger.find(
+        (r) => r.path === "materialize_tool" && r.runId === k.runId && r.outputId === k.outputId &&
+          r.extension === k.extension && r.contentHash === k.contentHash && r.artifactId,
       );
       return row ? { artifactId: row.artifactId!, representationRevisionId: row.representationRevisionId! } : null;
     },
@@ -643,6 +655,97 @@ describe("cinatra#3089 — the tool's write check before storage (precheckToolMa
   });
 });
 
+describe("cinatra#3089 — the write check builds the envelope as the writer does", () => {
+  // The legal inline schema of a pack that asks the revision id to be a UUID (register-artifact-extensions).
+  const uuidDef = {
+    dispositions: { projection: "artifact-safe" },
+    schema: { safeParse: (v: Record<string, unknown>) =>
+      typeof v.latestRepresentationRevisionId === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v.latestRepresentationRevisionId) &&
+      /^[0-9a-f]{64}$/.test(String(v.latestDigest))
+        ? { success: true }
+        : { success: false, error: { message: "latestRepresentationRevisionId: Invalid uuid" } } },
+  };
+
+  // red-first-expect: precheckToolMaterializeWrite is not a function
+  it("admits a member whose type asks the revision id to be a UUID, as the writer's own revision id is", async () => {
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    vi.spyOn(objectTypeRegistry, "resolve").mockReturnValue(uuidDef as never);
+    expect(
+      await precheckToolMaterializeWrite({
+        orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", extension: EXT, objectTypeId: BODY_TYPE,
+        mime: "text/markdown", content: "# Hi", nodeId: NODE, title: "Hello",
+      }),
+    ).toEqual({ ok: true });
+  });
+
+  // red-first-expect: to contain 'const objectData = buildArtifactObjec
+  it("builds the checked envelope and the stored object data with ONE builder", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("../artifact-creation.ts", import.meta.url), "utf8");
+    expect(source).toContain("const objectData = buildArtifactObjectData(");
+    expect(source).toMatch(/const previewEnvelope = buildArtifactObjectData\(/);
+    // No placeholder revision id is left anywhere a checked envelope is built.
+    const writeCheck = readFileSync(new URL("../run-artifact-materializer.ts", import.meta.url), "utf8");
+    expect(writeCheck).not.toContain('representationRevisionId: "pending"');
+  });
+});
+
+describe("cinatra#3089 — a retry is admitted only when what it would write is what is stored", () => {
+  const FILED = "filed_values_differ";
+  const file = (typedData: Record<string, unknown>, over?: { title?: string; verify?: boolean }) =>
+    materializeToolArtifact({
+      runId: "run-1", orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", createdBy: "user-1",
+      nodeId: NODE, verifiedStepId: NODE, extension: EXT, objectTypeId: BODY_TYPE,
+      title: over?.title ?? "Hello Ada", mime: "text/markdown", content: "Dear Ada",
+      typedData, ...(over?.verify === false ? {} : { verifyFinalizedHit: true }),
+    });
+
+  // red-first-expect: to match object { ok: false
+  it("L8 a finalized hit with a corrected contact or title is refused, naming what differs and never the values; the stored artifact is not touched", async () => {
+    const first = await file({ contactId: "c-OLD" });
+    expect(first).toMatchObject({ ok: true, deduped: false });
+    createSemanticArtifactMock.mockClear();
+
+    const same = await file({ contactId: "c-OLD" });
+    expect(same).toMatchObject({ ok: true, deduped: true });
+
+    const corrected = await file({ contactId: "c-NEW" });
+    expect(corrected).toMatchObject({ ok: false, code: FILED });
+    expect((corrected as { error: string }).error).toContain("differs: keys: contactId");
+    const retitled = await file({ contactId: "c-OLD" }, { title: "Hello Ada Lovelace" });
+    expect(retitled).toMatchObject({ ok: false, code: FILED });
+    expect((retitled as { error: string }).error).toContain("differs: title");
+    for (const r of [corrected, retitled]) {
+      for (const value of ["c-OLD", "c-NEW", "Hello Ada"]) expect((r as { error: string }).error).not.toContain(value);
+    }
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(storedObjects.get("art-1")!.data).toMatchObject({ contactId: "c-OLD", title: "Hello Ada" });
+  });
+
+  it("L8 a filing that does not ask for the check keeps today's behaviour: the hit is returned as it is", async () => {
+    await file({ contactId: "c-OLD" }, { verify: false });
+    expect(await file({ contactId: "c-NEW" }, { verify: false })).toMatchObject({ ok: true, deduped: true });
+  });
+
+  // red-first-expect: precheckToolMaterializeWrite is not a function
+  it("L8 the list's write check finds the same difference BEFORE any member is stored", async () => {
+    await file({ contactId: "c-OLD" });
+    const check = (typedData: Record<string, unknown>) =>
+      precheckToolMaterializeWrite({
+        orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", extension: EXT, objectTypeId: BODY_TYPE,
+        mime: "text/markdown", content: "Dear Ada", nodeId: NODE, title: "Hello Ada", typedData,
+        runId: "run-1", outputId: NODE, verifyFiledValues: true,
+      });
+    const { objectTypeRegistry } = await import("@cinatra-ai/objects/registry");
+    vi.spyOn(objectTypeRegistry, "resolve").mockReturnValue({ dispositions: { projection: "artifact-safe" }, schema: { safeParse: () => ({ success: true }) } } as never);
+    expect(await check({ contactId: "c-OLD" })).toEqual({ ok: true });
+    const refused = await check({ contactId: "c-NEW" });
+    expect(refused).toMatchObject({ ok: false, error: expect.stringContaining("differs: keys: contactId") });
+    expect((refused as { error: string }).error).not.toContain("c-NEW");
+  });
+});
+
 describe("cinatra#3089 — a list call that fails after storing members", () => {
   // red-first-expect: input.title must be a non-empty string
   it("L7 member 2 fails: the failure names what is stored and carries no review targets; a retry files the rest once and the gate covers every member", async () => {
@@ -750,14 +853,15 @@ describe("cinatra#3089 — typed data of a list-filed body", () => {
     for (const call of createSemanticArtifactMock.mock.calls) expect(call[0]).not.toHaveProperty("typedData");
   });
 
-  // red-first-expect: MATERIALIZE_LIST_ENVELOPE_FIELDS
+  // red-first-expect: expected 0 to be greater than 0
   it("keeps the writer-owned fields the creation path puts over a caller's typed data in step with the refused names", async () => {
     // The creation path composes `{ ...typedData, <the writer's own fields> }`: a caller's
     // typed data can add to the object and can never restate those fields. The names a
     // declaration may not use are exactly them.
     const { readFileSync } = await import("node:fs");
     const source = readFileSync(new URL("../artifact-creation.ts", import.meta.url), "utf8");
-    const block = source.slice(source.indexOf("const objectData = {"), source.indexOf("} as ArtifactObjectData;", source.indexOf("const objectData = {")));
+    const from = source.indexOf("export function buildArtifactObjectData(");
+    const block = source.slice(source.indexOf("return {", from), source.indexOf("} as ArtifactObjectData;", from));
     const owned = [...block.matchAll(/^\s+(\w+)\s*[:,]/gm)].map((m) => m[1]!).sort();
     expect(owned.length).toBeGreaterThan(0);
     expect([...MATERIALIZE_LIST_ENVELOPE_FIELDS].sort()).toEqual(owned);

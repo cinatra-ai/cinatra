@@ -725,6 +725,11 @@ export async function POST(req: Request): Promise<Response> {
             ...(verifiedStepId !== undefined && verifiedStepId === shaped.nodeId ? { nodeId: shaped.nodeId } : {}),
             title: member.title,
             typedData: typedDataOf(member),
+            // A member the run already filed under this node is compared with what is stored,
+            // before anything of this list is stored (the filing compares it again).
+            runId: run.id,
+            outputId: shaped.nodeId,
+            verifyFiledValues: true,
           }),
         );
         if (refused !== null) {
@@ -745,21 +750,47 @@ export async function POST(req: Request): Promise<Response> {
             mime: shaped.declaredMime,
             content: member.content,
             ...(typedDataOf(member) !== undefined ? { typedData: typedDataOf(member) } : {}),
+            verifyFinalizedHit: true,
           }),
         );
         if (!listed.ok) {
-          // The members stored before the failure were written as their gate's write and
-          // that gate will not open with them: each is put under a review of its own,
-          // through the same review store the declared gate uses, with the id the
-          // produced-review path derives for it (so a later sweep finds the same gate).
+          // The members stored before the failure were written as their gate's write and that
+          // gate will not open with them. They are put under review ONLY as the declared gate
+          // itself would have put them (execution.ts asks the same decision): the organization's
+          // policy decides, and a policy that forbids or declines review opens none. Each review
+          // opened takes the id the produced-review path derives (a later sweep finds the same gate).
           const { producedEventId } = await import("@/lib/lifecycle/lifecycle-produced-event");
           const { autoReviewTaskId } = await import("@/lib/lifecycle/lifecycle-orchestration");
-          const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: { emit(input: {
-            runId: string; orgId: string; reviewTaskId: string; targets: unknown;
-          }): Promise<{ ok: boolean }> } }).__cinatraArtifactReviewGateSeam;
-          const { underReview } = await reviewStoredMembers(listed.filed, async (member) => {
-            if (!seam) return false;
-            const emitted = await seam.emit({
+          type Pair = { artifactId: string; representationRevisionId: string };
+          const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: {
+            decideDeclaredReview(input: { orgId: string; templateId: string | null; packageVersion: string | null; targets: unknown }):
+              Promise<{ review: true; targets: readonly Pair[]; reason: string } | { review: false; why: string }>;
+            emit(input: { runId: string; orgId: string; reviewTaskId: string; targets: unknown }): Promise<{ ok: boolean }>;
+          } }).__cinatraArtifactReviewGateSeam;
+          let reviewPolicy: { review: boolean | null; why?: string };
+          let toOpen: readonly Pair[] = [];
+          if (!seam) {
+            reviewPolicy = { review: null, why: "no review store bound" };
+          } else {
+            try {
+              const decision = await seam.decideDeclaredReview({
+                orgId: run.orgId,
+                templateId: run.templateId,
+                packageVersion: run.packageVersion ?? null,
+                targets: listed.filed,
+              });
+              if (decision.review) {
+                toOpen = decision.targets;
+                reviewPolicy = { review: true };
+              } else {
+                reviewPolicy = { review: false, why: decision.why };
+              }
+            } catch {
+              reviewPolicy = { review: null, why: "the review policy could not be read" };
+            }
+          }
+          const { underReview } = await reviewStoredMembers(toOpen, async (member) => {
+            const emitted = await seam!.emit({
               runId: run.id,
               orgId: run.orgId,
               reviewTaskId: autoReviewTaskId(producedEventId(member.artifactId, member.representationRevisionId)),
@@ -771,10 +802,19 @@ export async function POST(req: Request): Promise<Response> {
           return NextResponse.json(
             { error: notReviewed === 0
                 ? listed.error
-                : `${listed.error} — ${notReviewed} stored member(s) could not be put under review`,
+                : `${listed.error} — ${[
+                    ...(listed.filed.length - toOpen.length > 0 && reviewPolicy.review !== null
+                      ? [`${listed.filed.length - toOpen.length} stored member(s) were not put under review (the organization's policy${reviewPolicy.why ? `: ${reviewPolicy.why}` : ""})`]
+                      : []),
+                    ...(reviewPolicy.review === null
+                      ? [`${notReviewed} stored member(s) could not be put under review`]
+                      : toOpen.length - underReview > 0
+                        ? [`${toOpen.length - underReview} stored member(s) could not be put under review`]
+                        : []),
+                  ].join("; ")}`,
               code: listed.code,
               failedMember: listed.failedMember, filedCount: listed.filedCount,
-              filedArtifacts: listed.filed, underReview },
+              filedArtifacts: listed.filed, underReview, reviewPolicy },
             { status: 400 },
           );
         }

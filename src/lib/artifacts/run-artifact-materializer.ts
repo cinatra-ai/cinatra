@@ -39,6 +39,7 @@ import {
   readFinalizedMaterialization,
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
+  findFinalizedToolMaterialization,
   recordFanoutReuseMaterialization,
   type MaterializationDetection,
 } from "./materialization-ledger";
@@ -889,6 +890,11 @@ export async function writeClaimedArtifact(input: {
   /** OPTIONAL typed data for the object's own declared fields (cinatra#3089),
    *  passed to the creation path's `typedData`; absent for every other caller. */
   typedData?: Record<string, unknown>;
+  /** OPTIONAL (cinatra#3089): a FINALIZED ledger hit returns the stored artifact only when its object is of this
+   *  write's type and title and carries this write's typed data equal (`reuseDifferences`, the comparison the
+   *  fan-out's reuse asks); otherwise the call is refused with `FILED_VALUES_DIFFER_CODE`, because the caller
+   *  believes it filed these values. Absent: the hit is returned as it is, as every earlier caller. */
+  verifyFinalizedHit?: boolean;
   /** OPTIONAL extra Tx2 queries composed into the SAME transaction as the
    *  artifact write + the ledger finalize (cinatra#1893). The derived_output
    *  path passes its token-guarded outbox `done`-settle here so the settle and
@@ -906,7 +912,7 @@ export async function writeClaimedArtifact(input: {
       representationRevisionId: string;
       deduped: boolean;
     }
-  | { ok: false; error: string }
+  | { ok: false; error: string; code?: string }
 > {
   const acceptedMimes = input.resolvedTarget.acceptedFileMimeTypes;
   if (!acceptedMimes.includes(input.mime)) {
@@ -958,6 +964,27 @@ export async function writeClaimedArtifact(input: {
     };
   }
   if (claim.kind === "finalized") {
+    if (input.verifyFinalizedHit) {
+      const differs = await reuseDifferences({
+        orgId: input.orgId,
+        artifactId: claim.artifactId,
+        objectTypeId: input.resolvedTarget.objectTypeId,
+        title: input.title,
+        typedData: input.typedData ?? {},
+        mustCarry: Object.keys(input.typedData ?? {}),
+      });
+      const what = describeDifferences(differs);
+      if (what !== null) {
+        return {
+          ok: false,
+          code: FILED_VALUES_DIFFER_CODE,
+          error:
+            `${FILED_VALUES_DIFFER_CODE}: the artifact already filed for these bytes in this run does not match what this ` +
+            `call would store (differs: ${what}); it was not changed. File the corrected values in a new run, or with body ` +
+            "bytes that differ",
+        };
+      }
+    }
     return {
       ok: true,
       artifactId: claim.artifactId,
@@ -1653,6 +1680,11 @@ export async function precheckToolMaterializeWrite(input: {
   nodeId?: string;
   title: string;
   typedData?: Record<string, unknown>;
+  /** With `runId` and `outputId` (the calling node's id): a member whose bytes the run already filed under this
+   *  node is compared with what is stored, as the filing itself will compare it (`verifyFinalizedHit`). */
+  runId?: string;
+  outputId?: string;
+  verifyFiledValues?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
     const title = input.title.trim();
@@ -1668,6 +1700,36 @@ export async function precheckToolMaterializeWrite(input: {
       ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
     });
     if (!authorized.ok) return { ok: false, error: authorized.error };
+    if (input.verifyFiledValues && input.runId !== undefined && input.outputId !== undefined) {
+      const filed = await findFinalizedToolMaterialization({
+        orgId: input.orgId,
+        runId: input.runId,
+        outputId: input.outputId,
+        extension: input.extension,
+        contentHash: createHash("sha256").update(input.content, "utf8").digest("hex"),
+      });
+      if (filed) {
+        const what = describeDifferences(
+          await reuseDifferences({
+            orgId: input.orgId,
+            artifactId: filed.artifactId,
+            objectTypeId: authorized.target.objectTypeId,
+            title,
+            typedData: input.typedData ?? {},
+            mustCarry: Object.keys(input.typedData ?? {}),
+          }),
+        );
+        if (what !== null) {
+          return {
+            ok: false,
+            error:
+              `${FILED_VALUES_DIFFER_CODE}: the artifact already filed for these bytes in this run does not match what this ` +
+              `call would store (differs: ${what}); it was not changed. File the corrected values in a new run, or with ` +
+              "body bytes that differ",
+          };
+        }
+      }
+    }
     const refusal = artifactWriteRefusal(
       {
         objectType: authorized.target.objectTypeId,
@@ -1675,7 +1737,6 @@ export async function precheckToolMaterializeWrite(input: {
         typedData: input.typedData,
         title,
         originKind: authorized.reviewed ? "live_generator" : "agent_generated",
-        representationRevisionId: "pending",
       },
       artifactWriteFactsOfContent(input.content, input.mime),
     );
@@ -1708,6 +1769,8 @@ export async function materializeToolArtifact(input: {
   /** OPTIONAL typed data for the object's own declared fields (cinatra#3089):
    *  stored beside the writer's own fields, which the creation path puts over it. */
   typedData?: Record<string, unknown>;
+  /** OPTIONAL (cinatra#3089): see `writeClaimedArtifact`. A list filing asks it for every member. */
+  verifyFinalizedHit?: boolean;
 }): Promise<ToolArtifactMaterialization> {
   try {
     // The SHARED write authorization (produces, text-authorable form, the cap
@@ -1756,6 +1819,7 @@ export async function materializeToolArtifact(input: {
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
       ...(input.typedData ? { typedData: input.typedData } : {}),
+      ...(input.verifyFinalizedHit ? { verifyFinalizedHit: true } : {}),
       // cinatra#3035: a mid-run write an executed marked gate reviews carries
       // the intermediate origin; that gate is the review of it.
       ...(resolved.reviewed ? { originKind: "live_generator" as const } : {}),
@@ -1773,6 +1837,17 @@ export async function materializeToolArtifact(input: {
 // ---------------------------------------------------------------------------
 
 export const FANOUT_REUSE_TYPED_DATA_CODE = "fanout_reuse_typed_data_mismatch";
+export const FILED_VALUES_DIFFER_CODE = "filed_values_differ";
+
+/** The words of a `reuseDifferences` answer (`objectType; title; keys: a, b`), or null when nothing differs. */
+function describeDifferences(d: { objectType: boolean; title: boolean; keys: string[] }): string | null {
+  const parts = [
+    ...(d.objectType ? ["objectType"] : []),
+    ...(d.title ? ["title"] : []),
+    ...(d.keys.length > 0 ? [`keys: ${d.keys.join(", ")}`] : []),
+  ];
+  return parts.length === 0 ? null : parts.join("; ");
+}
 
 /** What of a pre-filed body differs from what the writer would have stored: the object type, the title (the
  *  subject, compared without surrounding whitespace, as it is stored) and the keys of `mustCarry` (those
@@ -1892,43 +1967,46 @@ export async function materializeFanoutMessageRevision(input: {
 
     const contentHash = createHash("sha256").update(input.markdown, "utf8").digest("hex");
     const messageKey = { orgId: input.orgId, runId: input.runId, extension, contentHash };
+    // A body is admitted for this message only when it is of exactly this write's object type and
+    // title and already carries what this write would have stored (read from its live object, scoped
+    // to the organization): nothing is written to it, so a missing or different key, title or type
+    // would stay so while the send reported success. The same question is asked of the message's own
+    // earlier mapping, so a retry with corrected values is not answered with the old body.
+    const admit = async (artifactId: string): Promise<ToolArtifactMaterialization | null> => {
+      const what = describeDifferences(
+        await reuseDifferences({
+          orgId: input.orgId,
+          artifactId,
+          objectTypeId: input.objectTypeId,
+          title: input.title,
+          typedData: input.typedData,
+          mustCarry: input.reuseMustCarry ?? Object.keys(input.typedData),
+        }),
+      );
+      return what === null
+        ? null
+        : {
+            ok: false,
+            code: FANOUT_REUSE_TYPED_DATA_CODE,
+            error:
+              `${FANOUT_REUSE_TYPED_DATA_CODE}: the body already filed for this message is not the one the send would write ` +
+              `(differs: ${what}); declare the fields on the filing (memberDataFields / memberData / memberRunIdField) ` +
+              "and file it under the object type and the title the send uses; the body was not reused",
+          };
+    };
     // A retried message keeps its own mapping before any mid-run lookup.
     const own = await findFinalizedFanoutMessageMaterialization({
       ...messageKey,
       outputId: input.outputId,
     });
-    if (own) return { ok: true, ...own, deduped: true };
+    if (own) {
+      return (await admit(own.artifactId)) ?? { ok: true, ...own, deduped: true };
+    }
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
-      // A reuse is admitted only for a body of exactly this write's object type and
-      // title that already carries what this write would have stored (read from its
-      // live object, scoped to the organization): nothing is written to it, so a
-      // missing or different key, title or type would stay so while the send
-      // reported success.
-      const differs = await reuseDifferences({
-        orgId: input.orgId,
-        artifactId: prefiled.artifactId,
-        objectTypeId: input.objectTypeId,
-        title: input.title,
-        typedData: input.typedData,
-        mustCarry: input.reuseMustCarry ?? Object.keys(input.typedData),
-      });
-      if (differs.objectType || differs.title || differs.keys.length > 0) {
-        const what = [
-          ...(differs.objectType ? ["objectType"] : []),
-          ...(differs.title ? ["title"] : []),
-          ...(differs.keys.length > 0 ? [`keys: ${differs.keys.join(", ")}`] : []),
-        ].join("; ");
-        return {
-          ok: false,
-          code: FANOUT_REUSE_TYPED_DATA_CODE,
-          error:
-            `${FANOUT_REUSE_TYPED_DATA_CODE}: the body already filed for this message is not the one the send would write ` +
-            `(differs: ${what}); declare the fields on the filing (memberDataFields / memberData / memberRunIdField) ` +
-            "and file it under the object type and the title the send uses; the body was not reused",
-        };
-      }
+      const refused = await admit(prefiled.artifactId);
+      if (refused) return refused;
       await recordFanoutReuseMaterialization({
         ...messageKey,
         outputId: input.outputId,
@@ -1953,6 +2031,7 @@ export async function materializeFanoutMessageRevision(input: {
       mimeDescription: "the fan-out message body MIME",
       originKind: "live_generator",
       typedData: input.typedData,
+      verifyFinalizedHit: true,
     });
   } catch (err) {
     return {

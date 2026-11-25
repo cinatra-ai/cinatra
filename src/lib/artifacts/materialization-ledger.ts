@@ -551,6 +551,45 @@ export async function findFinalizedFanoutMessageMaterialization(input: {
 }
 
 /**
+ * The finalized `materialize_tool` row of ONE filing of the tool (cinatra#3089): the calling node's id as the
+ * output id + extension + content hash, or null. Read before a list filing stores its first member, so a
+ * member that would only return the artifact an earlier call stored is compared with it, not discovered
+ * half way through the list.
+ */
+export async function findFinalizedToolMaterialization(input: {
+  orgId: string;
+  runId: string;
+  outputId: string;
+  extension: string;
+  contentHash: string;
+}): Promise<{ artifactId: string; representationRevisionId: string } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT artifact_id, representation_revision_id
+   FROM "${s}"."artifact_materializations"
+  WHERE run_id = $1 AND output_id = $2 AND extension = $3 AND content_hash = $4
+    AND org_id = $5 AND path = 'materialize_tool' AND phase = 'finalized'
+  LIMIT 1`,
+    [input.runId, input.outputId, input.extension, input.contentHash, input.orgId],
+  );
+  const row = res.rows[0] as
+    | { artifact_id: string | null; representation_revision_id: string | null }
+    | undefined;
+  if (
+    !row ||
+    typeof row.artifact_id !== "string" ||
+    typeof row.representation_revision_id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    artifactId: row.artifact_id,
+    representationRevisionId: row.representation_revision_id,
+  };
+}
+
+/**
  * Bind a mid-run body the fan-out reused to its message (cinatra#3089): a
  * finalized `email_fanout` row under the message identity pointing at the
  * drafting step's artifact. The retry then reads it as the message's own

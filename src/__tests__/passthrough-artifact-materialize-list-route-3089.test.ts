@@ -28,6 +28,7 @@ const h = vi.hoisted(() => ({
   materializeToolArtifact: vi.fn(),
   precheckToolMaterializeWrite: vi.fn(),
   gateEmit: vi.fn(),
+  gateDecide: vi.fn(),
   frames: [] as unknown[],
 }));
 
@@ -177,7 +178,13 @@ beforeEach(() => {
   h.precheckToolMaterializeWrite.mockResolvedValue({ ok: true });
   h.gateEmit.mockReset();
   h.gateEmit.mockResolvedValue({ ok: true });
-  (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = { emit: h.gateEmit };
+  // The policy decision the declared gate itself asks: fire for every target unless a test says otherwise.
+  h.gateDecide.mockReset();
+  h.gateDecide.mockImplementation(async (input: { targets: unknown }) => ({ review: true, targets: input.targets, reason: "default" }));
+  (globalThis as { __cinatraArtifactReviewGateSeam?: unknown }).__cinatraArtifactReviewGateSeam = {
+    emit: h.gateEmit,
+    decideDeclaredReview: h.gateDecide,
+  };
   // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
   h.materializeToolArtifact.mockReset();
   let n = 0;
@@ -219,6 +226,8 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
         title: draft.subject,
         mime: "text/markdown",
         content: draft.body,
+        // A finalized hit is compared with what the call would store, for every member.
+        verifyFinalizedHit: true,
       });
       // Each member is filed inside the run's verified frame.
       expect(h.frames[i]).toMatchObject({ runId: RUN.id, verifiedStepId: NODE, orgWriteAuthority: AUTHORITY });
@@ -256,7 +265,14 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       filedArtifacts: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
     });
     expect(body.error).toContain("materialization failed: db down");
-    // The stored member is put under a review of its own, the one a plain agent write gets.
+    // The stored member is put under a review of its own, when the policy the declared gate asks says fire.
+    expect(h.gateDecide).toHaveBeenCalledWith({
+      orgId: "org-a",
+      templateId: "tpl-1",
+      packageVersion: "1.2.3",
+      targets: [{ artifactId: "art-1", representationRevisionId: "rep-1" }],
+    });
+    expect(body.reviewPolicy).toEqual({ review: true });
     expect(body.underReview).toBe(1);
     expect(h.gateEmit).toHaveBeenCalledTimes(1);
     expect(h.gateEmit).toHaveBeenCalledWith({
@@ -326,7 +342,12 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
         title: "Hello Ada",
         typedData: { recipientId: "c-1", runId: "run-1" },
         nodeId: NODE,
+        runId: "run-1",
+        outputId: NODE,
+        verifyFiledValues: true,
       });
+      // The filing itself compares a finalized hit with what it would write.
+      expect(h.materializeToolArtifact.mock.calls[0]![0]).toMatchObject({ verifyFinalizedHit: true });
     });
 
     // red-first-expect: expected { Object (error) } to match object
@@ -362,6 +383,53 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
       expect(body).toMatchObject({ code: "materialize_list_partial", filedCount: 1, underReview: 0 });
       expect(body.error).toContain("1 stored member(s) could not be put under review");
       expect(body.filedArtifacts).toEqual([{ artifactId: "art-1", representationRevisionId: "rep-1" }]);
+    });
+
+    // red-first-expect: expected { Object (error) } to match object
+    it.each([
+      ["forbids review for this class", { review: false, why: "org policy forbids review for this class" }, "org policy forbids review for this class"],
+      ["declines it", { review: false, why: "the review core declined" }, "the review core declined"],
+    ])("opens no review when the organization's policy %s, and says so truthfully", async (_n, decision, why) => {
+      h.gateDecide.mockResolvedValue(decision);
+      h.materializeToolArtifact
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
+        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(res.status).toBe(400);
+      expect(body).toMatchObject({ code: "materialize_list_partial", filedCount: 1, underReview: 0, reviewPolicy: { review: false, why } });
+      expect(body.error).toContain(`1 stored member(s) were not put under review (the organization's policy: ${why})`);
+      expect(body.filedArtifacts).toEqual([{ artifactId: "art-1", representationRevisionId: "rep-1" }]);
+      expect(h.gateEmit).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected { Object (error) } to match object
+    it("opens a review only for the members the policy fires for", async () => {
+      h.gateDecide.mockImplementation(async () => ({ review: true, targets: [{ artifactId: "art-2", representationRevisionId: "rep-2" }], reason: "x" }));
+      h.materializeToolArtifact
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-2", representationRevisionId: "rep-2", deduped: false })
+        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(body).toMatchObject({ filedCount: 2, underReview: 1 });
+      expect(h.gateEmit.mock.calls.map((c) => (c[0] as { targets: unknown }).targets)).toEqual([
+        [{ artifactId: "art-2", representationRevisionId: "rep-2" }],
+      ]);
+      expect(body.error).toContain("1 stored member(s) were not put under review");
+    });
+
+    // red-first-expect: expected { Object (error) } to match object
+    it("opens no review when the policy cannot be read, and says that, never a review it did not open", async () => {
+      h.gateDecide.mockRejectedValue(new Error("org rule read failed"));
+      h.materializeToolArtifact
+        .mockResolvedValueOnce({ ok: true, artifactId: "art-1", representationRevisionId: "rep-1", deduped: false })
+        .mockResolvedValueOnce({ ok: false, error: "materialization failed: disk full" });
+      const res = await POST(post(listBody()));
+      const body = await res.json();
+      expect(body).toMatchObject({ underReview: 0, reviewPolicy: { review: null, why: "the review policy could not be read" } });
+      expect(body.error).toContain("1 stored member(s) could not be put under review");
+      expect(h.gateEmit).not.toHaveBeenCalled();
     });
 
     // red-first-expect: expected undefined to be 'materialize_list_partial'
