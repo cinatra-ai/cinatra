@@ -39,7 +39,7 @@
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
 
-import { useState, type ComponentProps, type ReactNode } from "react";
+import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
@@ -47,6 +47,7 @@ import {
   narrowToSinglePortlet,
   type NarrowableDashboardConfig,
 } from "./narrow-to-single-portlet";
+import { withEagerLoad } from "./read-only-eager-load";
 
 /**
  * The data road a display hands the composition: the address its series are
@@ -123,10 +124,13 @@ function MountedDataRoad({
  * that consults it renders its read-only reading too.
  */
 export function ReadOnlyComposedDashboard({ dataRoad, ...props }: ReadOnlyComposedDashboardProps) {
+  // Loaded at once, never deferred (cinatra#3092): see `read-only-eager-load.ts`.
+  const config = useMemo(() => withEagerLoad(props.config), [props.config]);
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
         {...(props as ComponentProps<typeof DashboardProvider>)}
+        config={config as never}
         editable={false}
       >
         <div data-cinatra-read-only-composition="dashboard">
@@ -159,7 +163,10 @@ export function ReadOnlySinglePortlet({ portletId, dataRoad, ...rest }: ReadOnly
   };
   // THE NARROWING IS A PURE LEAF (`narrow-to-single-portlet.ts`) so the rule that
   // decides what the grid may see is provable without rendering drizzle-cube.
-  const narrowed = narrowToSinglePortlet(props.config, portletId);
+  const narrowed = useMemo(
+    () => withEagerLoad(narrowToSinglePortlet(props.config, portletId)),
+    [props.config, portletId],
+  );
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
