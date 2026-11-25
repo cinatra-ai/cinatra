@@ -11,8 +11,9 @@
  *   @cinatra-ai/website-artifacts:page-diff · revision rev_c410… · pinned ·
  *   WordPress · Team: Growth · Private · acme.example/pricing"
  *
- * On the artifact's OWN page the pinned marker is not drawn (this page pins
- * nothing; `w3-artifact-page-header-drawn`). Core names no extension: the
+ * On the artifact's OWN page the pinned marker is drawn only where the revision
+ * shown is a review target (cinatra#3092; `w3-artifact-page-header-drawn`); these
+ * lines are read with no review standing. Core names no extension: the
  * display's module declares the two facts through two optional exports, read
  * generically. Fixture names stand in for the pack here.
  *

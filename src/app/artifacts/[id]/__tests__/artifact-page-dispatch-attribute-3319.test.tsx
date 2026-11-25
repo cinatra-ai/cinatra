@@ -161,6 +161,7 @@ const mocks = vi.hoisted(() => ({
 // ── The page's authorization and row reads ──────────────────────────────────
 vi.mock("@cinatra-ai/agents/artifact-open-review-read", () => ({
   isArtifactUnderOpenReview: async () => false,
+  readArtifactRevisionReview: async () => ({ status: "none" }),
 }));
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: mocks.getAuthSession,
