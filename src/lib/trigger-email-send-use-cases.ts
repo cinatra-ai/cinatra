@@ -84,7 +84,7 @@ export type TriggerEmailSendDeps = {
   getDraftsByIds: (draftIds: string[]) => Promise<Draft[]>;
   sendEmail: (
     message: EmailMessage,
-    options?: { userId?: string; orgId?: string; correlation?: SendCorrelation },
+    options?: { userId?: string; orgId?: string; connectorId?: string; correlation?: SendCorrelation },
   ) => Promise<EmailSendReceipt>;
   // Fetch a bundle envelope by ref. Defaults to the deterministic objects
   // client (`fetchObjectsByRef`). Injectable so the initial-send fan-out is
@@ -136,8 +136,9 @@ export type MessageSendLedger = {
   release(ledgerId: string, actor: PrimitiveActorContext): Promise<void>;
 };
 
-/** Thrown by a `sendEmail` that stopped BEFORE it reached the mail provider (no
- *  transport could be resolved), so the message was certainly not handed over. */
+/** Thrown by a `sendEmail` that stopped BEFORE it handed the message to the
+ *  provider's transport (no mailbox, no connector, the development redirect on
+ *  with no address), so the message was certainly not handed over. */
 export class MailNotHandedOverError extends Error {
   constructor(message: string) {
     super(message);
@@ -201,22 +202,65 @@ async function loadDefaultGetDraftsByIds(): Promise<TriggerEmailSendDeps["getDra
   };
 }
 
-async function loadDefaultSendEmail(): Promise<TriggerEmailSendDeps["sendEmail"]> {
-  // The provider-neutral facade (dev-mode recipient override + provider
-  // routing stay centralized in the email connector layer) resolves through
-  // the `email-system` capability the email-connector registers at activation
-  // (lazy/guarded host-access cutover). Connector absent → the send fails
-  // with a descriptive error (same failure class as "No connected email
-  // connector is available.").
-  const { requireEmailSystemFacade } = await import("@/lib/email-transport-provider");
-  const facade = requireEmailSystemFacade();
-  return facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
+/**
+ * The shipped mail sender, in two parts split at the hand-over to the provider's
+ * transport.
+ *
+ * BEFORE the hand-over, every step that can refuse runs here, and any failure
+ * throws `MailNotHandedOverError` (nothing reached a provider, so a retry may
+ * mail the message): the provider-neutral facade must be installed (it resolves
+ * through the `email-system` capability the email connector registers); the
+ * host routing resolves the connector (the sender identity's, else the first
+ * installed one, as the facade does) and that connector must be installed and
+ * report its mailbox connected; the development redirect is applied once, so a
+ * redirect switched on with no address refuses here.
+ *
+ * THE HAND-OVER is the facade's send, pinned to the connector resolved above.
+ * Any failure from there on may follow the provider's acceptance (a timeout, a
+ * reset connection, an error answer: the connectors throw a plain error for
+ * every provider answer, a rejected recipient included, so nothing shows the
+ * provider took nothing), and it is thrown as it is: the caller keeps the
+ * message in doubt. The facade repeats its routing and the redirect inside
+ * that call; a failure there is read as in doubt too, which never mails twice.
+ */
+export function createDefaultSendEmail(): TriggerEmailSendDeps["sendEmail"] {
+  return async (message, options) => {
+    let send: TriggerEmailSendDeps["sendEmail"];
+    let connectorId: string;
+    try {
+      const [{ requireEmailSystemFacade }, { resolveEmailSendProviders, resolveHostEmailRouting }] =
+        await Promise.all([import("@/lib/email-transport-provider"), import("@/lib/email-send-providers")]);
+      const facade = requireEmailSystemFacade();
+      const routing = resolveHostEmailRouting();
+      if (!routing) throw new Error("The host email routing is not registered.");
+      const providers = resolveEmailSendProviders();
+      const routed = await routing.resolveConnectorId({ userId: options?.userId, orgId: options?.orgId });
+      const provider = routed ? providers.find((p) => p.definition.connectorId === routed) : providers[0];
+      if (!provider) {
+        throw new Error(
+          routed ? `The email connector ${routed} is not installed.` : "No connected email connector is available.",
+        );
+      }
+      const status = await provider.getStatus({ userId: options?.userId });
+      if (status.status !== "connected") {
+        throw new Error(
+          `The mailbox of ${provider.definition.name} is not connected${status.detail ? `: ${status.detail}` : "."}`,
+        );
+      }
+      routing.applyDevModeOverride(message);
+      connectorId = provider.definition.connectorId;
+      send = facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
+    } catch (err) {
+      throw new MailNotHandedOverError(err instanceof Error ? err.message : String(err));
+    }
+    return send(message, { ...options, connectorId });
+  };
 }
 
 function buildLazyDefaultDeps(): TriggerEmailSendDeps {
   let cachedGetCampaign: TriggerEmailSendDeps["getCampaign"] | null = null;
   let cachedGetDrafts: TriggerEmailSendDeps["getDraftsByIds"] | null = null;
-  let cachedSend: TriggerEmailSendDeps["sendEmail"] | null = null;
+  const defaultSend = createDefaultSendEmail();
   return {
     async getCampaign(campaignId) {
       if (!cachedGetCampaign) cachedGetCampaign = await loadDefaultGetCampaign();
@@ -226,16 +270,8 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       if (!cachedGetDrafts) cachedGetDrafts = await loadDefaultGetDraftsByIds();
       return cachedGetDrafts(ids);
     },
-    async sendEmail(message, options) {
-      if (!cachedSend) {
-        try {
-          cachedSend = await loadDefaultSendEmail();
-        } catch (err) {
-          // No transport, so no provider was called for this message.
-          throw new MailNotHandedOverError(err instanceof Error ? err.message : String(err));
-        }
-      }
-      return cachedSend(message, options);
+    sendEmail(message, options) {
+      return defaultSend(message, options);
     },
     getObjectByRef(ref, actor) {
       return fetchObjectsByRef(ref, actor);
@@ -845,11 +881,39 @@ function sendRecordCounts(row: InitialSendStateRow): {
  *     it is NOT mailed, it is counted in `inDoubtCount` and named in the answer.
  * A provider error after a won claim leaves the message in doubt (the provider
  * may have taken the mail before it failed) and stops the send; the claim is
- * given back only for an error raised before any provider was reached
- * (`MailNotHandedOverError`), so a later call may mail it. A message in doubt
- * stays unmailed by every later call until a person establishes with the mail
- * provider whether it went out; the answer and the log name it.
+ * given back only for an error raised before the hand-over to the transport
+ * (`MailNotHandedOverError`), so a later call may mail it. A mail handed over
+ * is marked sent; the mark is one conditional update, written again up to
+ * `MARK_SENT_ATTEMPTS` times while it throws. A mark that is refused (the
+ * record is not open) or that still throws leaves the message in doubt: it is
+ * counted in `sentCount` (the mail went out) AND in `inDoubtCount`, named in
+ * `errorMessage`, and the answer is failed. A message in doubt stays unmailed
+ * by every later call until a person establishes with the mail provider
+ * whether it went out; the answer and the log name it.
  */
+/** How many times a sent mark is written before the message is left in doubt. */
+const MARK_SENT_ATTEMPTS = 3;
+
+/** Write one message's sent mark: true when written, else the reason. */
+async function markSentWithRetry(
+  ledger: MessageSendLedger,
+  ledgerId: string,
+  actor: PrimitiveActorContext,
+): Promise<true | string> {
+  let reason = "";
+  for (let attempt = 1; attempt <= MARK_SENT_ATTEMPTS; attempt += 1) {
+    try {
+      if (await ledger.markSent(ledgerId, actor)) return true;
+      // The conditional update found no open record: writing again cannot help.
+      return "the record was not open";
+    } catch (err) {
+      reason = err instanceof Error ? err.message : String(err);
+      if (attempt < MARK_SENT_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, 50 * attempt));
+    }
+  }
+  return reason;
+}
+
 async function mailApprovedMessages(args: {
   input: { campaignId: string; senderEmail?: string };
   actor: PrimitiveActorContext;
@@ -866,6 +930,8 @@ async function mailApprovedMessages(args: {
   let sentCount = 0;
   let alreadySentCount = 0;
   const inDoubt: string[] = [];
+  // Mailed (handed over), but no sent record could be written.
+  const unrecorded: string[] = [];
   let stopped: string | undefined;
   for (const [index, draft] of args.drafts.entries()) {
     const recipientEmail = recipientEmailFor(draft, args.recipients);
@@ -944,24 +1010,23 @@ async function mailApprovedMessages(args: {
       break;
     }
     sentCount += 1;
-    try {
-      if (!(await ledger.markSent(claim.ledgerId, actor))) {
-        console.warn(
-          `[trigger-email-send] ${name} of run ${runScopeId} was mailed but its send record was not open; later calls read it as in doubt`,
-        );
-      }
-    } catch (err) {
+    const marked = await markSentWithRetry(ledger, claim.ledgerId, actor);
+    if (marked !== true) {
+      unrecorded.push(`${name} was mailed, but its sent record could not be written: ${marked}`);
       console.warn(
-        `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; later calls read it as in doubt:`,
-        err instanceof Error ? err.message : String(err),
+        `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; it is in doubt: ${marked}`,
       );
     }
   }
   const problems = [
     ...(stopped ? [stopped] : []),
+    ...unrecorded,
     ...(inDoubt.length > 0
+      ? [`${inDoubt.length} message(s) are in doubt: ${inDoubt.join(", ")}`]
+      : []),
+    ...(inDoubt.length + unrecorded.length > 0
       ? [
-          `${inDoubt.length} message(s) in doubt were not mailed by this call: ${inDoubt.join(", ")}. A message in doubt is mailed by no later call until a person establishes with the mail provider whether it went out`,
+          "A message in doubt is mailed by no later call until a person establishes with the mail provider whether it went out",
         ]
       : []),
   ];
@@ -971,7 +1036,7 @@ async function mailApprovedMessages(args: {
     completedAt: new Date().toISOString(),
     sentCount,
     alreadySentCount,
-    inDoubtCount: inDoubt.length,
+    inDoubtCount: inDoubt.length + unrecorded.length,
     ...(problems.length > 0 ? { errorMessage: problems.join("; ") } : {}),
   };
 }

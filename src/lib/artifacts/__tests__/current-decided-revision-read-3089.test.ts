@@ -23,11 +23,19 @@
  *   D10 object data whose revision pointer was moved back to an older revision
  *       does not make that revision current: the newest representation row
  *       decides
- *   D11 a pointer in object data that disagrees with the newest representation
- *       row is a refusal
+ *   D11 a body saved by the editor road (which leaves the cached pointer on
+ *       the revision the artifact was created with) and then approved is read:
+ *       the cached pointer decides nothing
  *   D12 a revision no person approved is refused
- *   D13 a body changed after its approval (a subject altered through an object
- *       update) is refused, whatever the altered data says
+ *   D13 an object update after the approval does not refuse the body: what is
+ *       mailed is the immutable revision's text, and the object's own data
+ *       (a subject altered through an object update) decides nothing
+ *   D14 an approval that names no person of the organisation is refused: no
+ *       decider, a system principal, an assistant account, a user who is not a
+ *       member of the organisation, a decider with no user row, and a gate
+ *       resolved by its expiry
+ *   D15 the approval is the approve audit row of the decision that resolved
+ *       the gate, and its decider is read from the user and member rows
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -63,10 +71,17 @@ const ref = {
 };
 const UNSEEN = "artifact art-1 is not an artifact this organisation can see";
 /** The decision state of an approved, current, undisputed revision. */
+/** A person's approval: a human user of the organisation resolved the gate with
+ *  a decision fingerprint (the sha256 of the decision). */
+const PERSON = {
+  resolvedBy: "user-9",
+  fingerprint: "a".repeat(64),
+  deciderUserType: "human",
+  deciderIsMember: true,
+};
 const CLEAR = {
   latest_revision_id: "rev-2",
-  approved: true,
-  changed_after_approval: false,
+  approvals: [PERSON],
   decided_against: false,
   open_gate: false,
   repaired: false,
@@ -204,7 +219,6 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     );
     // Approved is a person's approve audit row on a resolved approve gate pinning the revision.
     expect(sql).toMatch(/a\.disposition = 'approve'\s+AND g\.status = 'resolved' AND g\.disposition = 'approve'/);
-    expect(sql).toContain("o.updated_at > approval.approved_at");
   });
 
   it("D8 an actor that may not read the artifact gets the refusal of an absent artifact, and nothing else is read", async () => {
@@ -261,47 +275,82 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     expect(readTextMock).not.toHaveBeenCalled();
   });
 
-  it("D11 a pointer in object data that disagrees with the newest representation row is a refusal", async () => {
+  it("D11 a body saved by the editor road and then approved is read: the cached pointer decides nothing", async () => {
+    // The artifact was created at rev-1 (the cached pointer names it); the
+    // editor saved rev-2 through the expected-base append, which leaves the
+    // pointer where it is; a person approved rev-2.
     getObjectByIdMock.mockReturnValue({
       id: "art-1",
       type: BODY_TYPE,
       orgId: "org-1",
-      data: { latestRepresentationRevisionId: "rev-9", subject: "Hello" },
+      data: { latestRepresentationRevisionId: "rev-1", subject: "Hello", contactId: "c1" },
     });
     const read = await readCurrentDecidedRevision(ref);
     // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
-    expect(read).toEqual({
-      ok: false,
-      error: "revision rev-2 of artifact art-1 is the newest revision of the artifact, but the artifact names rev-9 as its current one",
-    });
-    expect(readTextMock).not.toHaveBeenCalled();
+    expect(read).toMatchObject({ ok: true, representationRevisionId: "rev-2", text: "The approved body" });
   });
 
   it("D12 a revision no person approved is refused", async () => {
-    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, approved: false }] }]);
+    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, approvals: [] }] }]);
     const read = await readCurrentDecidedRevision(ref);
     // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
     expect(read).toEqual({ ok: false, error: "revision rev-2 of artifact art-1 was not approved by a person" });
     expect(readTextMock).not.toHaveBeenCalled();
   });
 
-  it("D13 a body changed after its approval is refused, whatever the altered data says", async () => {
-    // The subject was altered through an object update after the approval; the
-    // data itself looks like any other (it even keeps the right pointer).
+  it("D13 an object update after the approval does not refuse the body; the object's data decides nothing", async () => {
+    // The subject was altered through an object update after the approval
+    // (the object's updated time is later than the approval). The send mails
+    // the subject its entry carries and the revision's text, so the read
+    // answers the approved text.
     getObjectByIdMock.mockReturnValue({
       id: "art-1",
       type: BODY_TYPE,
       orgId: "org-1",
       data: { latestRepresentationRevisionId: "rev-2", subject: "Altered subject", contactId: "c1" },
     });
-    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, changed_after_approval: true }] }]);
     const read = await readCurrentDecidedRevision(ref);
     // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
-    expect(read).toEqual({ ok: false, error: "artifact art-1 was changed after revision rev-2 of artifact art-1 was approved" });
+    expect(read).toMatchObject({ ok: true, text: "The approved body" });
+    const [{ queries }] = runQueriesMock.mock.calls[0] as [{ queries: Array<{ text: string }> }];
+    expect(queries[0]!.text).not.toContain("updated_at");
+  });
+
+  it("D14 an approval that names no person of the organisation is refused", async () => {
+    const notAPerson =
+      "revision rev-2 of artifact art-1 was approved, but not by a person of organisation org-1";
+    for (const approval of [
+      { ...PERSON, resolvedBy: null },
+      { ...PERSON, resolvedBy: "   " },
+      { ...PERSON, resolvedBy: "system:lifecycle" },
+      { ...PERSON, deciderUserType: "assistant" },
+      { ...PERSON, deciderUserType: "uat-fixture" },
+      { ...PERSON, deciderIsMember: false },
+      { ...PERSON, deciderUserType: null },
+      { ...PERSON, fingerprint: "expiry:gate-1" },
+      { ...PERSON, fingerprint: null },
+    ]) {
+      runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, approvals: [approval] }] }]);
+      const read = await readCurrentDecidedRevision(ref);
+      // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+      expect(read).toEqual({ ok: false, error: notAPerson });
+    }
     expect(readTextMock).not.toHaveBeenCalled();
-    // The same data with no change after the approval reads: the decision rests
-    // on the rows, not on what the data says.
-    const unchanged = await readCurrentDecidedRevision(ref);
-    expect(unchanged.ok).toBe(true);
+    // One person's approval beside a non-person's is a person's approval.
+    runQueriesMock.mockResolvedValueOnce([
+      { rows: [{ ...CLEAR, approvals: [{ ...PERSON, resolvedBy: null }, PERSON] }] },
+    ]);
+    expect((await readCurrentDecidedRevision(ref)).ok).toBe(true);
+  });
+
+  it("D15 the approval is the approve audit row of the decision that resolved the gate, with its decider's user and member rows", async () => {
+    await readCurrentDecidedRevision(ref);
+    const [{ queries }] = runQueriesMock.mock.calls[0] as [{ queries: Array<{ text: string }> }];
+    const sql = queries[0]!.text;
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(sql).toContain("a.decision_fingerprint = g.fingerprint");
+    expect(sql).toContain("a.run_id = g.run_id AND a.review_task_id = g.review_task_id");
+    expect(sql).toMatch(/FROM public\."user" u WHERE u\.id = g\.resolved_by/);
+    expect(sql).toMatch(/FROM public\."member" m\s+WHERE m\."organizationId" = \$1 AND m\."userId" = g\.resolved_by/);
   });
 });

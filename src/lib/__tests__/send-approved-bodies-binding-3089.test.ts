@@ -24,19 +24,39 @@
  *   I1 the same approved call twice mails every recipient once
  *   I2 two concurrent approved calls mail each message at most once
  *   I3 a claim without a hand-over is not mailed by the retry and is in doubt
- *   I4 a mail stopped before any provider was reached is given back and mailed
- *      by the retry
+ *   H1-H5 the shipped mail sender tells a failure before the hand-over to the
+ *      transport from one at or after it: no connected mailbox, no installed
+ *      connector, the development redirect on with no address are given back
+ *      and mailed by the retry; a transport that throws, and a provider that
+ *      answers with a rejection, leave the message in doubt
+ *   M1-M3 a mail handed over whose sent record cannot be written is counted
+ *      and named in doubt and the answer is failed; the record is written
+ *      again a bounded number of times when the write throws
  *   R1 the reference-only form is unchanged
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { createTriggerEmailSendHandlers } from "@cinatra-ai/trigger-email-send";
 
-const { readRevisionMock, typesListMock, bindRevisionMock, writeRevisionMock } = vi.hoisted(() => ({
+const {
+  readRevisionMock,
+  typesListMock,
+  bindRevisionMock,
+  writeRevisionMock,
+  transportMock,
+  mailboxes,
+  routing,
+} = vi.hoisted(() => ({
   readRevisionMock: vi.fn(),
   typesListMock: vi.fn(),
   bindRevisionMock: vi.fn(),
   writeRevisionMock: vi.fn(),
+  // The mail facade's send: the hand-over to the provider's transport.
+  transportMock: vi.fn(),
+  // The installed email connectors (the mailbox lookup).
+  mailboxes: { list: [] as Array<{ definition: { connectorId: string; name: string }; getStatus: () => Promise<{ status: string; detail?: string }> }> },
+  // The host routing: the routed connector and the development redirect.
+  routing: { connectorId: null as string | null, redirectOn: false, redirectTo: "" },
 }));
 
 vi.mock("../artifacts/current-decided-revision-read", () => ({
@@ -49,11 +69,28 @@ vi.mock("../artifacts/run-artifact-materializer", () => ({
   bindFanoutMessageRevision: bindRevisionMock,
   materializeFanoutMessageRevision: writeRevisionMock,
 }));
+vi.mock("../email-transport-provider", () => ({
+  requireEmailSystemFacade: () => ({ sendEmail: transportMock }),
+}));
+vi.mock("../email-send-providers", () => ({
+  resolveEmailSendProviders: () => mailboxes.list,
+  resolveHostEmailRouting: () => ({
+    resolveConnectorId: async () => routing.connectorId,
+    // The host's override: with the redirect on and no address it throws.
+    applyDevModeOverride: <M extends { to: string[] }>(msg: M): M => {
+      if (!routing.redirectOn) return msg;
+      if (!routing.redirectTo) {
+        throw new Error("Development mode is enabled, but no override recipient email is configured.");
+      }
+      return { ...msg, to: [routing.redirectTo] };
+    },
+  }),
+}));
 
 import {
+  createDefaultSendEmail,
   createTriggerEmailSendUseCases,
   EMAIL_BODY_TYPE_ID,
-  MailNotHandedOverError,
   materializeEmailFanout,
   type DecidedBodyRead,
   type EmailFanoutArgs,
@@ -136,6 +173,8 @@ function makeFixture(opts?: {
   sent?: Array<{ to: string[]; textBody: string }>;
   /** Let each mail wait a turn, so two calls interleave. */
   slowMail?: boolean;
+  /** The mail sender in place of the recording stand-in (the shipped one). */
+  sendEmail?: TriggerEmailSendDeps["sendEmail"];
 }) {
   const sendLedger = opts?.sendLedger ?? memorySendLedger();
   const sent: Array<{ to: string[]; textBody: string }> = opts?.sent ?? [];
@@ -187,7 +226,7 @@ function makeFixture(opts?: {
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
-    sendEmail: sendEmail as unknown as TriggerEmailSendDeps["sendEmail"],
+    sendEmail: opts?.sendEmail ?? (sendEmail as unknown as TriggerEmailSendDeps["sendEmail"]),
     getObjectByRef: async (ref) => envelopes[ref] ?? null,
     ...(emitEmailFanout ? { emitEmailFanout } : {}),
     ...(readDecidedBody ? { readDecidedBody } : {}),
@@ -213,8 +252,29 @@ function makeFixture(opts?: {
   return { sent, sendEmail, bindBody, writeBody, ledger, sendLedger, start };
 }
 
+/** One connected mailbox, routed by the sender identity. */
+function connectedMailbox(status = "connected") {
+  return {
+    definition: { connectorId: "mailbox-a", name: "Mailbox A" },
+    getStatus: async () => ({ status, ...(status === "connected" ? {} : { detail: "not signed in" }) }),
+  };
+}
+
+/** The transport, recording each message it took. */
+function recordingTransport(sent: Array<{ to: string[]; textBody: string }>) {
+  return async (message: { to: string[]; textBody: string }) => {
+    sent.push(message);
+    return { providerId: "mailbox-a", providerMessageId: `m-${sent.length}`, sentAt: "2026-11-25T00:00:00Z" };
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  transportMock.mockReset();
+  mailboxes.list = [connectedMailbox()];
+  routing.connectorId = "mailbox-a";
+  routing.redirectOn = false;
+  routing.redirectTo = "";
   typesListMock.mockResolvedValue({ types: [{ type: EMAIL_BODY_TYPE_ID }] });
   readRevisionMock.mockImplementation(async (input: { artifactId: string; actor?: { principalId?: string } }) =>
     input.actor?.principalId === "user-1"
@@ -407,20 +467,143 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect(result.errorMessage).toContain("in doubt");
   });
 
-  it("I4 a mail stopped before any provider was reached gives its claim back, and the retry mails it", async () => {
+  it("H1 no connected mailbox stops before the hand-over: the claim is given back and the retry mails it", async () => {
     const sendLedger = memorySendLedger();
     const sent: Array<{ to: string[]; textBody: string }> = [];
-    const first = makeFixture({ sendLedger, sent });
-    first.sendEmail.mockImplementationOnce(async () => {
-      throw new MailNotHandedOverError("No connected email connector is available.");
+    transportMock.mockImplementation(recordingTransport(sent));
+    mailboxes.list = [connectedMailbox("not_connected")];
+    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
     });
-    const stopped = await first.start({ approvedBodies: approved });
-    // red-first-expect: expected { …(7) } to match object { status: 'failed', …(2) }
+    // red-first-expect: createDefaultSendEmail is not a function
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
     expect(stopped.errorMessage).toContain("no mail provider was reached");
-    const retry = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
+    expect(stopped.errorMessage).toContain("Mailbox A is not connected");
+    expect(transportMock).not.toHaveBeenCalled();
+    mailboxes.list = [connectedMailbox()];
+    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
     expect(retry).toMatchObject({ status: "completed", sentCount: 3, alreadySentCount: 0, inDoubtCount: 0 });
     expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p2@example.com", "p3@example.com"]);
+    // The transport is handed the connector the routing resolved.
+    expect(transportMock).toHaveBeenCalledWith(
+      expect.objectContaining({ to: ["p1@example.com"] }),
+      expect.objectContaining({ connectorId: "mailbox-a", userId: "user-1", orgId: "org-1" }),
+    );
+  });
+
+  it("H2 no installed email connector stops before the hand-over and the claim is given back", async () => {
+    const sendLedger = memorySendLedger();
+    mailboxes.list = [];
+    routing.connectorId = null;
+    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    // red-first-expect: createDefaultSendEmail is not a function
+    expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
+    expect(stopped.errorMessage).toContain("No connected email connector is available.");
+    expect(transportMock).not.toHaveBeenCalled();
+    expect([...sendLedger.rows.values()]).toEqual([]);
+  });
+
+  it("H3 the development redirect on with no address stops before the hand-over and the claim is given back", async () => {
+    const sendLedger = memorySendLedger();
+    const sent: Array<{ to: string[]; textBody: string }> = [];
+    transportMock.mockImplementation(recordingTransport(sent));
+    routing.redirectOn = true;
+    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    // red-first-expect: createDefaultSendEmail is not a function
+    expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
+    expect(stopped.errorMessage).toContain("no override recipient email is configured");
+    expect(transportMock).not.toHaveBeenCalled();
+    routing.redirectTo = "dev@example.com";
+    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    expect(retry).toMatchObject({ status: "completed", sentCount: 3, inDoubtCount: 0 });
+  });
+
+  it("H4 a transport that throws leaves the message in doubt, and the retry does not mail it", async () => {
+    const sendLedger = memorySendLedger();
+    const sent: Array<{ to: string[]; textBody: string }> = [];
+    transportMock.mockImplementation(recordingTransport(sent));
+    transportMock.mockImplementationOnce(async () => {
+      throw new Error("socket hang up");
+    });
+    const first = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    // red-first-expect: createDefaultSendEmail is not a function
+    expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
+    expect(first.errorMessage).toContain("may or may not have gone out: socket hang up");
+    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    expect(sent.map((m) => m.to[0])).toEqual(["p2@example.com", "p3@example.com"]);
+    expect(retry).toMatchObject({ status: "failed", sentCount: 2, inDoubtCount: 1 });
+  });
+
+  it("H5 a provider that answers with a rejection leaves the message in doubt: the answer does not show it took nothing", async () => {
+    const sendLedger = memorySendLedger();
+    // The connectors throw a plain error on a provider error answer (an
+    // invalid recipient included); no status or code reaches this module.
+    transportMock.mockImplementationOnce(async () => {
+      throw new Error("Resend send failed: Invalid `to` field.");
+    });
+    const first = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+      approvedBodies: approved,
+    });
+    // red-first-expect: createDefaultSendEmail is not a function
+    expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
+    expect(first.errorMessage).toContain("Resend send failed: Invalid `to` field.");
+    expect([...sendLedger.rows.values()][0]).toMatchObject({ phase: "claimed" });
+  });
+
+  it("M1 a mail whose sent record is not open is counted and named in doubt, and the answer is failed", async () => {
+    const sendLedger = memorySendLedger();
+    const markSent = vi.spyOn(sendLedger.ledger, "markSent");
+    markSent.mockResolvedValueOnce(false);
+    const fx = makeFixture({ sendLedger });
+    const result = await fx.start({ approvedBodies: approved });
+    // The mail went out: all three were handed over.
+    expect(fx.sent).toHaveLength(3);
+    // red-first-expect: expected { …(7) } to match object { Object (status, sentCount, ...) }
+    expect(result).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
+    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:idx-0) was mailed, but its sent record could not be written");
+    // A record that is not open is not written again.
+    expect(markSent).toHaveBeenCalledTimes(3);
+  });
+
+  it("M2 a sent record whose write throws is written again, and a later success answers completed", async () => {
+    const sendLedger = memorySendLedger();
+    const markSent = vi.spyOn(sendLedger.ledger, "markSent");
+    markSent.mockRejectedValueOnce(new Error("connection reset")).mockRejectedValueOnce(new Error("connection reset"));
+    const result = await makeFixture({ sendLedger }).start({ approvedBodies: approved });
+    // red-first-expect: expected "markSent" to be called 5 times, but got 0 times
+    expect(markSent).toHaveBeenCalledTimes(5);
+    expect(result).toMatchObject({ status: "completed", sentCount: 3, inDoubtCount: 0 });
+    expect([...sendLedger.rows.values()].map((r) => r.phase)).toEqual(["finalized", "finalized", "finalized"]);
+  });
+
+  it("M3 a sent record that cannot be written in the bounded attempts is in doubt; the retry does not mail it again", async () => {
+    const sendLedger = memorySendLedger();
+    const sent: Array<{ to: string[]; textBody: string }> = [];
+    const markSent = vi.spyOn(sendLedger.ledger, "markSent");
+    markSent
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockRejectedValueOnce(new Error("connection reset"))
+      .mockRejectedValueOnce(new Error("connection reset"));
+    const first = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
+    // red-first-expect: expected { …(7) } to match object { Object (status, sentCount, ...) }
+    expect(first).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
+    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:idx-0) was mailed, but its sent record could not be written: connection reset");
+    expect(markSent).toHaveBeenCalledTimes(5);
+    const retry = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
+    expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p2@example.com", "p3@example.com"]);
+    expect(retry).toMatchObject({ status: "failed", sentCount: 0, alreadySentCount: 2, inDoubtCount: 1 });
   });
 
   it("R1 the reference-only form is unchanged: every call mails the whole bundle, keeps no send record and adds no field", async () => {

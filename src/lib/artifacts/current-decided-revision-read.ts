@@ -24,17 +24,31 @@ import "server-only";
 //     `revision`, allocated under the unique index on organisation, artifact
 //     and revision; the table refuses UPDATE and DELETE by trigger), so a body
 //     produced again after the decision supersedes the old revision. The
-//     pointer the objects row carries (`latestRepresentationRevisionId`) is
-//     object data an ordinary object update can merge, so it never decides; it
-//     must agree with the table when present, and a disagreement is a refusal;
-//   - no person APPROVED this exact revision: an `artifact_review_audit` row of
-//     disposition approve for the revision, on a gate of the organisation that
-//     pinned the revision and resolved as approve (a gate that lapsed at its
-//     expiry writes no audit row, so it is no approval);
-//   - the objects row changed after that approval (`objects.updated_at`, set by
-//     the store on every write, later than the approval's audit row): the
-//     body's own fields (`subject`, `contactId`) are object data, so a change
-//     after the decision is content no person decided on;
+//     pointer the objects row caches (`latestRepresentationRevisionId`)
+//     decides nothing: it is written when the artifact is created and moved
+//     by some appends only (the editor's save leaves it on an older revision,
+//     see `resolveEditorRevisionId`), and an ordinary object update can merge
+//     any value into it. An older revision never passes as current, because
+//     the table's order alone answers which revision is newest;
+//   - no PERSON APPROVED this exact revision. An approval is an
+//     `artifact_review_audit` row of disposition approve for the revision that
+//     belongs to the decision which resolved its gate (the row's
+//     `decision_fingerprint` is the gate's `fingerprint`, same run and task),
+//     on a gate of the organisation that pinned the revision and resolved as
+//     approve. That decision is a person's only when (a) its fingerprint is
+//     the sha256 the decision core computes, so a gate resolved by its expiry
+//     (`expiry:<gate id>`, and no audit row) is no approval; (b) the gate
+//     names its decider (`resolved_by`, the user id the decision core takes
+//     from the deciding session), not null and not a `system:` principal;
+//     (c) that user's row is a person's (`"userType"` human, or null on rows
+//     older than the column; an assistant or fixture account is not a person);
+//     and (d) the user is a member of the organisation. The audit row records
+//     no actor of its own: it is tied to the decider through the decision
+//     fingerprint the same transaction stamped on the gate.
+//     The objects row's own fields decide nothing either: the text mailed is
+//     the immutable revision's, and the subject is the caller's, so a later
+//     object update (a title, a status, the cached pointer) changes nothing
+//     this read answers;
 //   - a gate decided against the revision (an `artifact_review_audit` row of
 //     disposition reject or changes_requested), a gate that pins it is still
 //     open, or a repair names it as its base (`lifecycle_repair`): each of these
@@ -63,6 +77,34 @@ export type CurrentDecidedRevisionRead =
       data: Record<string, unknown>;
     }
   | { ok: false; error: string };
+
+/** One approve audit row of the revision, with the gate decision it belongs to. */
+type ApprovalRow = {
+  resolvedBy?: unknown;
+  fingerprint?: unknown;
+  deciderUserType?: unknown;
+  deciderIsMember?: unknown;
+};
+
+/** The fingerprint the decision core stamps on a gate a decision resolved: the
+ *  sha256 of the decision (`reviewDecisionFingerprint`). A gate resolved by its
+ *  expiry carries `expiry:<gate id>` instead. */
+const DECISION_FINGERPRINT = /^[a-f0-9]{64}$/;
+
+/** A person of the organisation decided: a decision fingerprint, a named
+ *  decider that is not a system principal, a person's user row and a
+ *  membership of the organisation. Anything missing reads as no person. */
+function isPersonsApproval(a: ApprovalRow): boolean {
+  return (
+    typeof a.fingerprint === "string" &&
+    DECISION_FINGERPRINT.test(a.fingerprint) &&
+    typeof a.resolvedBy === "string" &&
+    a.resolvedBy.trim().length > 0 &&
+    !a.resolvedBy.startsWith("system:") &&
+    a.deciderUserType === "human" &&
+    a.deciderIsMember === true
+  );
+}
 
 /**
  * Read the text of `representationRevisionId` of `artifactId`, refusing every
@@ -108,12 +150,17 @@ export async function readCurrentDecidedRevision(input: {
       queries: [
         {
           text: `WITH approval AS (
-  SELECT max(a.created_at) AS approved_at
+  SELECT g.resolved_by, g.fingerprint,
+    (SELECT COALESCE(u."userType", 'human') FROM public."user" u WHERE u.id = g.resolved_by) AS decider_user_type,
+    EXISTS (SELECT 1 FROM public."member" m
+             WHERE m."organizationId" = $1 AND m."userId" = g.resolved_by) AS decider_is_member
     FROM "${s}"."artifact_review_audit" a
     JOIN "${s}"."artifact_review_gates" g ON g.id = a.gate_id
    WHERE g.org_id = $1 AND a.artifact_id = $2 AND a.representation_revision_id = $3
      AND a.disposition = 'approve'
      AND g.status = 'resolved' AND g.disposition = 'approve'
+     AND a.decision_fingerprint = g.fingerprint
+     AND a.run_id = g.run_id AND a.review_task_id = g.review_task_id
      AND g.pinned_targets @> jsonb_build_array(
            jsonb_build_object('artifactId', $2::text, 'representationRevisionId', $3::text))
 )
@@ -121,11 +168,10 @@ SELECT
   (SELECT p.id FROM "${s}"."representation" p
     WHERE p.org_id = $1 AND p.artifact_id = $2
     ORDER BY p.revision DESC LIMIT 1) AS latest_revision_id,
-  (SELECT approved_at IS NOT NULL FROM approval) AS approved,
-  EXISTS (
-    SELECT 1 FROM "${s}"."objects" o, approval
-     WHERE o.id = $2 AND o.org_id = $1 AND o.updated_at > approval.approved_at
-  ) AS changed_after_approval,
+  (SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'resolvedBy', resolved_by, 'fingerprint', fingerprint,
+      'deciderUserType', decider_user_type, 'deciderIsMember', decider_is_member)), '[]'::jsonb)
+     FROM approval) AS approvals,
   EXISTS (
     SELECT 1 FROM "${s}"."artifact_review_audit" a
       JOIN "${s}"."artifact_review_gates" g ON g.id = a.gate_id
@@ -155,8 +201,7 @@ SELECT
     const row = (res?.rows?.[0] ?? null) as
       | {
           latest_revision_id?: string | null;
-          approved?: boolean;
-          changed_after_approval?: boolean;
+          approvals?: unknown;
           decided_against?: boolean;
           open_gate?: boolean;
           repaired?: boolean;
@@ -174,13 +219,6 @@ SELECT
         error: `${name} is not its current revision (the current one is ${latest}); a revision filed after the decision supersedes it`,
       };
     }
-    const pointer = data.latestRepresentationRevisionId;
-    if (pointer !== undefined && pointer !== latest) {
-      return {
-        ok: false,
-        error: `${name} is the newest revision of the artifact, but the artifact names ${String(pointer)} as its current one`,
-      };
-    }
     if (row.filed_in_run !== true) {
       return { ok: false, error: `${name} was not filed in run ${runId}` };
     }
@@ -193,11 +231,12 @@ SELECT
     if (row.repaired === true) {
       return { ok: false, error: `${name} has a repair filed against it` };
     }
-    if (row.approved !== true) {
+    const approvals = Array.isArray(row.approvals) ? (row.approvals as ApprovalRow[]) : [];
+    if (approvals.length === 0) {
       return { ok: false, error: `${name} was not approved by a person` };
     }
-    if (row.changed_after_approval === true) {
-      return { ok: false, error: `artifact ${artifactId} was changed after ${name} was approved` };
+    if (!approvals.some(isPersonsApproval)) {
+      return { ok: false, error: `${name} was approved, but not by a person of organisation ${orgId}` };
     }
 
     const { readArtifactRepresentationText } = await import("./extension-artifact-reads");
