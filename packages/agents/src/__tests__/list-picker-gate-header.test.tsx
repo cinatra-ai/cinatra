@@ -133,7 +133,7 @@ function labelTexts(container: HTMLElement): string[] {
 
 async function settled() {
   await waitFor(() =>
-    expect(screen.queryByText("Loading lists…")).toBeNull(),
+    expect(screen.queryByTestId("list-picker-loading")).toBeNull(),
   );
 }
 
@@ -230,6 +230,7 @@ describe("list-picker gate header — the census of mounts (cinatra#3720)", () =
     expect(screen.queryByText(WAITING)).toBeNull();
   });
 
+  // red-first-expect: Unable to find an element by: [data-testid="list-picker-loading"]
   it("the waiting pill stands while the lists load and over the rows", async () => {
     let resolve: (rows: typeof ROWS) => void = () => {};
     vi.mocked(actions.fetchAvailableLists).mockReturnValueOnce(
@@ -241,7 +242,7 @@ describe("list-picker gate header — the census of mounts (cinatra#3720)", () =
       <ListPickerRenderer {...baseProps({ mode: "edit" })} />,
     );
 
-    expect(screen.getByText("Loading lists…")).toBeTruthy();
+    expect(screen.getByTestId("list-picker-loading")).toBeTruthy();
     expect(container.querySelector(WAITING_EL)?.textContent?.trim()).toBe(
       WAITING,
     );
@@ -379,7 +380,18 @@ describe("list-picker gate header — nothing else of the list step changes (cin
     expect(search.getAttribute("type")).toBe("search");
     expect(screen.queryByTestId("build-list-with-ai-cta")).toBeNull();
     expect(container.querySelector("a[href]")).toBeNull();
-    expect(container.querySelector("[data-conformance-id]")).toBeNull();
+    // The only design anchors the step carries are its own readings (design
+    // I.1, cinatra#3562); no anchor of a road out of the step.
+    const anchors = Array.from(
+      container.querySelectorAll("[data-conformance-id]"),
+    ).map((el) => el.getAttribute("data-conformance-id"));
+    for (const anchor of anchors) {
+      expect([
+        "run-list-step-empty-source",
+        "run-list-step-loading",
+        "run-list-step-error",
+      ]).toContain(anchor);
+    }
   });
 
   it("keeps a declared description in place of the helper sentence", async () => {
@@ -394,7 +406,8 @@ describe("list-picker gate header — nothing else of the list step changes (cin
     expect(screen.queryByText(HELPER)).toBeNull();
   });
 
-  it("keeps the loading line, the empty card and the rows", async () => {
+  // red-first-expect: Unable to find an element by: [data-testid="list-picker-loading"]
+  it("draws the loading reading, the declared empty-state message and the rows", async () => {
     let resolve: (rows: typeof ROWS) => void = () => {};
     vi.mocked(actions.fetchAvailableLists).mockReturnValueOnce(
       new Promise((r) => {
@@ -402,7 +415,7 @@ describe("list-picker gate header — nothing else of the list step changes (cin
       }),
     );
     render(<ListPickerRenderer {...baseProps({ mode: "edit" })} />);
-    expect(screen.getByText("Loading lists…")).toBeTruthy();
+    expect(screen.getByTestId("list-picker-loading")).toBeTruthy();
     resolve(ROWS);
     await waitFor(() => screen.getByText("Beta Prospects"));
     expect(screen.getByText("Q2 Targets")).toBeTruthy();
@@ -413,11 +426,16 @@ describe("list-picker gate header — nothing else of the list step changes (cin
 
     cleanup();
     vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce([]);
-    render(<ListPickerRenderer {...baseProps({ mode: "edit" })} />);
+    render(
+      <ListPickerRenderer
+        {...baseProps({
+          mode: "edit",
+          bindingParams: { emptyState: "There are no lists to pick yet." },
+        })}
+      />,
+    );
     await waitFor(() =>
-      expect(
-        screen.getByText("No lists yet. Create one to get started."),
-      ).toBeTruthy(),
+      expect(screen.getByText("There are no lists to pick yet.")).toBeTruthy(),
     );
   });
 

@@ -228,3 +228,64 @@ describe("AgentHitlScreenCard — the prop reaches a pack-shipped component thro
     }
   });
 });
+
+/**
+ * THE SHIPPED LIST PICKER (cinatra#3562). A list binding with no shipped
+ * component resolves, through the real registration road, to the host's own
+ * `ListPickerRenderer`, the renderer the application mounts for the list step
+ * today. It draws the design's failed-read alert with Try again, the loading
+ * reading while the new read is pending, and the lists the read returns.
+ */
+const HOST_STEP_ID = "@cinatra-test/pack-agent-host:list-picker";
+
+describe("AgentHitlScreenCard — the shipped list picker's Try again (cinatra#3562)", () => {
+  function mountHostPicker() {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockRejectedValue(new Error("search failed"));
+  }
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  // red-first-expect: Unable to find role="alert"
+  it("a failed first read draws the alert with Try again; a press reads again for the gate, draws the loading reading, then the lists", async () => {
+    mountHostPicker();
+    let resolveRead: (value: unknown) => void = () => {};
+    listActions.readListStepContent.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRead = resolve as (value: unknown) => void; }) as never,
+    );
+    asking = askingOn(HOST_STEP_ID);
+    mountOn("chat_thread");
+    await settle();
+    const alert = await screen.findByRole("alert", undefined, { timeout: 3000 });
+    expect(alert.textContent).toContain("This list could not be read.");
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(screen.getByTestId("list-picker-loading")).toBeTruthy());
+    expect(listActions.readListStepContent).toHaveBeenCalledTimes(1);
+    expect(listActions.readListStepContent).toHaveBeenCalledWith(RUN_ID, "task-list-1");
+    resolveRead({ lists: [{ id: "l-9", name: "Read again" }], listsRead: "ok" });
+    await screen.findByText("Read again");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByTestId("list-picker-loading")).toBeNull();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(hitlActions.rejectReviewTask).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: Unable to find role="alert"
+  it("a failed re-read draws the alert again, with Try again", async () => {
+    mountHostPicker();
+    listActions.readListStepContent.mockResolvedValueOnce({ lists: [], listsRead: "failed" } as never);
+    asking = askingOn(HOST_STEP_ID);
+    mountOn("chat_thread");
+    await settle();
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(listActions.readListStepContent).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByTestId("list-picker-loading")).toBeNull());
+    expect(screen.getByRole("alert").textContent).toContain("This list could not be read.");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+});
