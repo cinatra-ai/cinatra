@@ -81,8 +81,10 @@ export const HOST_DASHBOARD_COMPOSITION_MODULE = "@cinatra-ai/sdk-dashboard/comp
  * bump is a breaking change to {@link HOST_DESIGN_PRIMITIVES_EXPORTS} (an export
  * removed or renamed, or a prop contract broken); a MINOR adds exports. A bundle
  * records the contract version it was BUILT against and the host refuses, at
- * load, a bundle whose MAJOR it does not serve (see
- * {@link checkDesignPrimitivesContract}).
+ * load, a bundle whose caret range (`^<built against>`) its served version does
+ * not satisfy: another MAJOR, or a newer MINOR/PATCH whose exports this host
+ * may lack (see {@link checkDesignPrimitivesContract}). The SDK states that
+ * range as `cinatra.hostServedPeers` in its package.json.
  */
 export const HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION = "1.1.0";
 
@@ -230,10 +232,20 @@ export function designPrimitivesContractMajorOf(version: string): number | null 
   return Number(match[1]);
 }
 
+/** The `[major, minor, patch]` of a `X.Y.Z` contract version, or null. */
+function designPrimitivesContractPartsOf(version: string): [number, number, number] | null {
+  if (typeof version !== "string") return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (match === null) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
 /**
- * The LOAD-TIME contract check: does the host still serve the primitives
- * contract MAJOR a bundle was built against? Returns null when it does, else a
- * fail-loud refusal reason. Pure over its inputs so the host shim, the
+ * The LOAD-TIME contract check: does the host's served primitives version
+ * satisfy the caret range `^<builtAgainst>` of a bundle (the same MAJOR, and a
+ * MINOR.PATCH at or above the one the bundle was built against, because a
+ * minor adds exports)? Returns null when it does, else a fail-loud refusal
+ * reason. Pure over its inputs so the host shim, the
  * publish-time builder mirror and a unit test share ONE rule. Fail-closed: a
  * malformed or absent `builtAgainst` refuses.
  */
@@ -261,6 +273,19 @@ export function checkDesignPrimitivesContract(input: {
       `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract major ${built} ` +
       `(${input.builtAgainst}) but this host serves major ${served} (${hostServes}) — ` +
       `rebuild the bundle against the host's contract`
+    );
+  }
+  const builtParts = designPrimitivesContractPartsOf(input.builtAgainst) as [number, number, number];
+  const servedParts = designPrimitivesContractPartsOf(hostServes) as [number, number, number];
+  if (
+    servedParts[1] < builtParts[1] ||
+    (servedParts[1] === builtParts[1] && servedParts[2] < builtParts[2])
+  ) {
+    const built = input.builtAgainst.trim();
+    return (
+      `bundle was built against "${HOST_DESIGN_PRIMITIVES_MODULE}" contract ${built} and ` +
+      `requires "^${built}", but this host serves ${hostServes.trim()} — upgrade the host ` +
+      `or rebuild the bundle against the host's contract`
     );
   }
   return null;

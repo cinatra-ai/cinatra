@@ -315,7 +315,6 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     import("@cinatra-ai/mcp-server/request-context").then(({ mcpRequestContextStorage }) =>
       mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration } } as never, run));
 
-  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
   it("a re-drive in a later attempt restamps the stored revision's event with that attempt before it serves it (cinatra#4762)", async () => {
     h.restamp.length = 0;
     h.claimMaterialization.mockResolvedValueOnce({ kind: "finalized", artifactId: "art-0", representationRevisionId: "rev-0", path: "materialize_tool" });
@@ -326,7 +325,6 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(restampSteps()).toEqual(["BEGIN", "lock run-1", "event rev-0 generation 1", "COMMIT"]);
   });
 
-  // red-first-expect: expected [] to deeply equal [ 'BEGIN', 'lock run-1', …(2) ]
   it("the loser of a double drive restamps the winner's revision for its own attempt before it serves it (cinatra#4762)", async () => {
     h.restamp.length = 0;
     h.createSemanticArtifact.mockRejectedValueOnce(new Error(`${MATERIALIZATION_FINALIZE_CONFLICT_MARKER}: rows=0`));
@@ -343,7 +341,6 @@ describe("fileFirstArtifactWrite (cinatra#4223)", () => {
     expect(h.restamp).toEqual([]);
   });
 
-  // red-first-expect: promise resolved "{ kind: 'refused', …(2) }" instead of rejecting
   it("lets the in-flight fence's refusal reach the caller's catch as the typed, retryable refusal (cinatra#4762)", async () => {
     // The fence's database abort, as the writer's transaction raises it.
     h.createSemanticArtifact.mockRejectedValueOnce(

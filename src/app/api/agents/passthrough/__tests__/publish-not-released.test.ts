@@ -169,7 +169,6 @@ describe("the passthrough road refuses a publish the decision does not let throu
     }
   });
 
-  // red-first-expect: expected [ 'answered' ] to deeply equal []
   it("a served publishing call answers only after the release of its claim is written (cinatra#4762)", async () => {
     const order: string[] = [];
     let writeRelease!: () => void;

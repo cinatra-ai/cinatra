@@ -337,7 +337,6 @@ describe("the content region carries artifact-render-typed on the typed rung onl
       const count = (html.match(/data-conformance-id="artifact-render-typed"/g) ?? []).length;
 
       if (typed) {
-        // red-first-expect: to contain 'data-conformance-id="artifact-render-
         expect(tag).toContain('data-conformance-id="artifact-render-typed"');
         expect(count).toBe(1);
       } else {

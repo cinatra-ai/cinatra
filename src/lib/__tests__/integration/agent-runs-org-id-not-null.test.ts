@@ -22,6 +22,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
@@ -83,24 +84,10 @@ describe.skipIf(!hasDb)(
     });
 
     async function applyMigration(): Promise<void> {
-      const qs = buildCreateStoreSchemaQueries(schema);
-      for (const q of qs) {
-        const head = q.text.trim().slice(0, 6).toUpperCase();
-        if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S" && head !== "DELETE" && head !== "UPDATE") {
-          continue;
-        }
-        try {
-          await client.query(q.text, q.values ?? []);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          // Some statements reference seed dependencies that aren't present
-          // in a fresh empty schema — skip them. Genuine schema problems
-          // re-throw.
-          if (!msg.includes("does not exist") && !msg.includes("relation")) {
-            throw err;
-          }
-        }
-      }
+      // The loop this replaced also replayed the heads named here, so they stay.
+      await replayStoreSchema(client, buildCreateStoreSchemaQueries(schema), {
+        additionalHeads: ["DELETE", "UPDATE"],
+      });
     }
 
     it("deletes pre-existing org_id=NULL rows during migration", async () => {

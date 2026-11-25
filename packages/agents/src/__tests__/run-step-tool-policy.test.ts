@@ -141,7 +141,6 @@ describe("the executed source's publishing calls, checked before the first send"
  const env = () => { vi.stubEnv("WAYFLOW_BASE_URL", "http://wayflow.test:3010"); vi.stubEnv("CINATRA_BRIDGE_TOKEN", "bridge-test-value"); };
  afterEach(() => { vi.unstubAllEnvs(); });
 
- // red-first-expect: expected null to be an instance of RunStepToolPolicyRefusal
  it("refuses a publishing ParallelFlowNode with a direct external call, naming the node and never the URL", async () => {
   env();
   const refusal = await select(executed("https://api.example.invalid/v2/posts")).then(() => null, (err: unknown) => err as Error);
@@ -150,7 +149,6 @@ describe("the executed source's publishing calls, checked before the first send"
   expect(refusal?.message).not.toContain("example.invalid");
  });
 
- // red-first-expect: but got 'step_tool_source_invalid'
  it("refuses an executed source whose publishing steps cannot be read", async () => {
   env();
   await expect(select("[]")).rejects.toThrow(/^PUBLISH_CALL_UNCHECKED: the executed source cannot be read/);

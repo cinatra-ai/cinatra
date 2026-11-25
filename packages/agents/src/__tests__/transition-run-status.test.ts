@@ -492,7 +492,6 @@ describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () =
     return new PgDialect().sqlToQuery(w as import("drizzle-orm").SQL);
   };
 
-  // red-first-expect: expected '("cinatra"."agent_runs"."id" = $1 and…' to match /"agent_runs"\."reset_generation" = \$…/
   it("the CAS lands only at the named generation, and the generation never reaches the meta write", async () => {
     await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2 }, SESSION);
     const cas = await sqlOf(shared.wheres[0]);
@@ -522,7 +521,6 @@ describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () =
     expect(shared.updateCalls).toBe(0);
   });
 
-  // red-first-expect: expected { Object (id, templateId, ...) } to be { Object (id, orgId, ...) } // Object.is equality
   it("a stop that ends its attempt closes the attempt's parked decisions in the same transaction, after the CAS", async () => {
     const { agentRuns, agentRunPublishDecisions } = await import("../schema");
     await transitionRunStatus(RUN, "running", "stopped", { error: "no review", completedAt: new Date(), attemptGeneration: 2, endParkedDecisions: true }, SESSION);
@@ -543,7 +541,6 @@ describe("an edge fenced to its attempt's reset generation (cinatra#4762)", () =
     expect(shared.updateTables.includes(agentRunPublishDecisions)).toBe(false);
   });
 
-  // red-first-expect: promise resolved "undefined" instead of rejecting
   it("closing the parked decisions needs the attempt's generation and an edge that ends it: refused before any write", async () => {
     for (const [from, to, meta] of [
       ["running", "stopped", { endParkedDecisions: true }],

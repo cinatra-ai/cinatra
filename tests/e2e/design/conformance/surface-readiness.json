@@ -89,6 +89,14 @@
         },
         {
           "surface": "review-card-mixed-kind",
+          "aspect": "action",
+          "action": "download-artifact",
+          "outcome": "file-downloaded",
+          "awaits": 4786,
+          "why": "No first-party module carries a control for this action yet. The drawing (design@cbf0faa5) gives the review card's pdf floor a real Download PDF button that declares it; the product's control is the pull request named in awaits, and the card's per-kind reading is also drawn inside the review card's credentialed island frame, which a props-only harness mount cannot reach. The entry retires itself: the day a first-party file carries the attribute, the readiness test goes red until the surface is driven or the entry is pinned with shippedBy."
+        },
+        {
+          "surface": "review-card-mixed-kind",
           "aspect": "state",
           "states": [
             "error",
@@ -143,6 +151,14 @@
             "src/lib/lifecycle/held-turn-card-contract.ts"
           ],
           "why": "Shipped, drive proof owed: the review floor's Continue now ships the attribute for this action-and-outcome pair at packages/agents/src/review-decision-bar.tsx:290 and its anchor at src/lib/lifecycle/held-turn-card-contract.ts:524, the two files named in shippedBy. What keeps the surface undriven is the reason its other entries give: the card for this artifact kind is not drawn at all, so there is nothing for the floor to sit under. The wave's drive proof is owed to pull request 3100; until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
+        },
+        {
+          "surface": "review-card-slide-deck",
+          "aspect": "action",
+          "action": "download-artifact",
+          "outcome": "file-downloaded",
+          "awaits": 4786,
+          "why": "No first-party module carries a control for this action yet. The drawing (design@cbf0faa5) gives the review card's pdf floor a real Download PDF button that declares it; the product's control is the pull request named in awaits, and the card's per-kind reading is also drawn inside the review card's credentialed island frame, which a props-only harness mount cannot reach. The entry retires itself: the day a first-party file carries the attribute, the readiness test goes red until the surface is driven or the entry is pinned with shippedBy."
         },
         {
           "surface": "review-card-slide-deck",

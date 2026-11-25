@@ -1063,6 +1063,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       delegatedRunId: delegatedActor?.delegation === "agent_run" ? delegatedActor.runId : undefined,
       delegatedStepId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedStepId : undefined,
       delegatedExecutedSource: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedExecutedSource : undefined,
+      delegatedPublishDecisionId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedPublishDecisionId : undefined,
       delegatedSourceCurrent,
       durable: durableRunContext,
       headerRunId: request.headers.get("x-cinatra-run-id") ?? undefined,
@@ -1092,6 +1093,8 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       // the channel that served the verified run id (see resolveRequestRunContext).
       verifiedStepId: runContext.stepId,
       verifiedExecutedSource: runContext.verifiedExecutedSource,
+      // The publish decision of the call (cinatra#3745), only with the on-behalf-of proof it was signed beside.
+      verifiedPublishDecisionId: runContext.publishDecisionId,
       platformRole: resolvedPlatformRole,
       orgRole: resolvedOrgRole,
       // delegated-chat allowlist is keyed on the CHAT delegation type only.

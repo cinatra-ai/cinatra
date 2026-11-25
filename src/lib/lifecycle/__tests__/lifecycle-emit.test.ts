@@ -74,7 +74,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(op.values[1]).toBe("org-1");
   });
 
-  // red-first-expect: expected { restamps: false, onlyNewer: false } to deeply equal { restamps: true, onlyNewer: true }
   it("a newer attempt of the same run that writes the same revision again records only its generation; a replay changes nothing", () => {
     const text = buildProducedEventInsertOp("cinatra", base).text.replace(/\s+/g, " ");
     const event = `"cinatra"."artifact_produced_outbox"`;
@@ -110,7 +109,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(op.values[7]).toBe("agent-9");
   });
 
-  // red-first-expect: to contain 'producer_run_generation'
   it("records the producing attempt's reset generation as the attempt carries it, never the run row's live state (cinatra#4762)", () => {
     // The delayed drain raises the event's review later, perhaps after a retry's reset began the next attempt: the
     // event itself carries the generation of the attempt that produced it, in both insert shapes.
@@ -129,7 +127,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     }
   });
 
-  // red-first-expect: expected [] to deeply equal [ null, 'attempt-7' ]
   it("a verified dispatch names its attempt id; no attempt identity, or no run, records -1 (cinatra#4762)", () => {
     const dispatched = buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { executionAttemptId: "attempt-7" } });
     expect(dispatched.values.slice(11, 13)).toEqual([null, "attempt-7"]);
@@ -141,7 +138,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 1.5 } }).values.slice(11, 13)).toEqual([null, null]);
   });
 
-  // red-first-expect: to deeply equal { locksRunRow: true, guardKept: true }
   it("takes the producing run's row FOR KEY SHARE in the insert itself, so a Publish's locked fence read serializes with it (cinatra#4762)", () => {
     const LOCK = `(SELECT count(*) FROM (SELECT 1 FROM "cinatra"."agent_runs" run_lock WHERE run_lock.id = $7::text FOR KEY SHARE) locked_run) >= 0`;
     const flat = (text: string) => text.replace(/\s+/g, " ");
@@ -154,7 +150,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: null }).values[6]).toBe("run-9");
   });
 
-  // red-first-expect: to match /calls_in_flight > 0/
   it("refuses the whole write while a publishing call of the run's current attempt holds its released decision (cinatra#4762)", () => {
     // That call read the review fence without this output; the event's cast of the fence's sentinel aborts the writer's
     // transaction, its artifact rows included. The writer's earlier lock statement (producerRunLockOps) makes this read
@@ -169,7 +164,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     }
   });
 
-  // red-first-expect: publishCallClaimForRun) is not a function
   it("a write in the frame of a publishing call names that call's own claim, so only that claim does not refuse it (cinatra#4762)", () => {
     const inFrame = <T>(frame: Record<string, unknown> | null, fn: () => T): T =>
       frame ? mcpRequestContextStorage.run(frame as never, fn) : fn();
@@ -191,7 +185,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     expect(claimOf({ publishCallClaim: { runId: "run-9", decisionId: "" } }, "run-9")).toEqual({ read: null, bound: null });
   });
 
-  // red-first-expect: expected undefined to be defined
   it("the in-flight abort is its own error, never a division by zero or another cast (cinatra#4762)", () => {
     // What Postgres raises for the fence's cast, read from the op itself.
     const op = buildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
@@ -216,7 +209,6 @@ describe("buildProducedEventInsertOp — op shape", () => {
     }
   });
 
-  // red-first-expect: producerRunLockOps) is not a function
   it("a writer whose rows precede its event takes the producing run's row FOR KEY SHARE first, only when it splices the event (cinatra#4762)", () => {
     const event = maybeBuildProducedEventInsertOp("cinatra", { ...base, producerRunId: "run-9", producerAttempt: { generation: 0 } });
     expect(producerRunLockOps("cinatra", "run-9", event)).toEqual([
