@@ -87,14 +87,24 @@ export function islandContentHeight(container: Element, exclude?: Element | null
   // An empty island is its own padding — never zero, so a document that has
   // nothing to draw still reports a box rather than collapsing the frame.
   let content = padTop;
-  for (const child of Array.from(container.children)) {
-    if (child === exclude) continue;
-    const rect = child.getBoundingClientRect();
-    // A child the layout gave no box — the ground stylesheet, anything
-    // `display:none` — is not part of the work's height.
-    if (rect.width === 0 && rect.height === 0) continue;
-    content = Math.max(content, rect.bottom - box.top);
-  }
+  const walk = (parent: Element) => {
+    for (const child of Array.from(parent.children)) {
+      if (child === exclude) continue;
+      // A `display: contents` wrapper (each panel's drawn-report signal,
+      // cinatra#3089) has no box of its own: its children are laid out in its
+      // place, so they are the work measured.
+      if (view.getComputedStyle(child).display === "contents") {
+        walk(child);
+        continue;
+      }
+      const rect = child.getBoundingClientRect();
+      // A child the layout gave no box — the ground stylesheet, anything
+      // `display:none` — is not part of the work's height.
+      if (rect.width === 0 && rect.height === 0) continue;
+      content = Math.max(content, rect.bottom - box.top);
+    }
+  };
+  walk(container);
   return Math.ceil(above + content + padBottom);
 }
 
