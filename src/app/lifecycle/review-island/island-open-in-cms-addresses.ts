@@ -1,0 +1,91 @@
+// ---------------------------------------------------------------------------
+// THE ADDRESSES THE OPEN-IN-THE-CMS ROAD MAY OPEN (cinatra#3092), read on the
+// island's server from the pinned targets this document draws.
+//
+// The island's host listener (`island-open-in-cms.tsx`) hands a link's address
+// to the card only when the address EQUALS one of these. They come from the
+// target's own display props, which the host built from the pinned revision:
+// the host-authorized `actions.openInSource`, and every https text in the
+// pinned content projection (for a text projection, in its text read as JSON).
+// The read names no artifact type and no field of any type's form: core treats
+// a type's content as opaque, and this only collects https addresses from it.
+// So a display can hand the card an address its pinned data holds and no other,
+// and markup drawn from data cannot add one.
+//
+// Pure, and shared by the server render and the client listener, so both read
+// an address in the same parsed form.
+// ---------------------------------------------------------------------------
+
+/** The longest address the road opens; the card holds the same bound. */
+export const ISLAND_OPEN_IN_CMS_MAX_URL_LENGTH = 2048;
+
+/** At most this many addresses per target, read at most this deep. */
+const MAX_ADDRESSES = 64;
+const MAX_DEPTH = 32;
+const MAX_NODES = 20_000;
+
+/**
+ * The parsed form of an address the road may open, or null: a text that starts
+ * with `https://`, parses as an https URL, carries no user name or password and
+ * fits the length bound.
+ */
+export function islandOpenableAddress(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > ISLAND_OPEN_IN_CMS_MAX_URL_LENGTH) return null;
+  if (!/^https:\/\//i.test(value)) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" || url.username !== "" || url.password !== "") return null;
+  if (url.href.length > ISLAND_OPEN_IN_CMS_MAX_URL_LENGTH) return null;
+  return url.href;
+}
+
+/** The slice of the display props this reads. */
+type OpenableSource = {
+  actions?: { openInSource?: unknown } | null;
+  content?: unknown;
+} | null | undefined;
+
+/** The addresses of one pinned target, in parsed form, without repeats. */
+export function islandOpenableAddresses(props: OpenableSource): string[] {
+  if (!props || typeof props !== "object") return [];
+  const found = new Set<string>();
+  let nodes = 0;
+  const add = (value: unknown) => {
+    const address = islandOpenableAddress(value);
+    if (address !== null && found.size < MAX_ADDRESSES) found.add(address);
+  };
+  const walk = (value: unknown, depth: number) => {
+    if (found.size >= MAX_ADDRESSES || depth > MAX_DEPTH || nodes >= MAX_NODES) return;
+    nodes += 1;
+    if (typeof value === "string") {
+      add(value);
+      return;
+    }
+    if (typeof value !== "object" || value === null) return;
+    const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+    for (const child of children) walk(child, depth + 1);
+  };
+
+  add(props.actions?.openInSource);
+  const content = props.content;
+  walk(content, 0);
+  if (
+    typeof content === "object" &&
+    content !== null &&
+    (content as { kind?: unknown }).kind === "text" &&
+    typeof (content as { text?: unknown }).text === "string"
+  ) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse((content as { text: string }).text);
+    } catch {
+      parsed = undefined;
+    }
+    walk(parsed, 0);
+  }
+  return [...found];
+}

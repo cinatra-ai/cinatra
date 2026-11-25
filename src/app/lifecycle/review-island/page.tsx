@@ -153,6 +153,9 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 import { IslandHeightReporter } from "./island-height-reporter";
+// cinatra#3092 — the open-in-the-CMS road: see `island-open-in-cms.tsx`.
+import { IslandOpenInCmsAddresses } from "./island-open-in-cms";
+import { islandOpenableAddresses } from "./island-open-in-cms-addresses";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
@@ -525,6 +528,9 @@ function StreamedReviewTarget({
       {/* The card's idle-progress bound restarts on this: a gate that is still
           streaming panels is never painted over with a failure plate. */}
       <IslandPanelMountedSignal />
+      {/* cinatra#3092 — the https addresses this target's pinned data holds:
+          the only ones the island hands the card to open in a new tab. */}
+      <IslandOpenInCmsAddresses addresses={islandOpenableAddresses(target.props)} />
     </>
   );
 }
