@@ -39,6 +39,17 @@
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
 
+// THE LIBRARY'S OWN STYLESHEET TRAVELS WITH THE COMPOSITION (cinatra#3092).
+// The dashboards shell loads it (`dashboards-client-shell.tsx`), but a display
+// draws this composition on pages outside that shell (`/artifacts/<id>`, the
+// review island), where nothing else loads it. Without it every `dc:` class is
+// inert: the card does not fill its grid cell, and the loading, error and empty
+// readings, sized by those classes, draw as nothing under the title bar. Only
+// the library's file can be loaded here: Cinatra's colour overrides live in
+// `@cinatra-ai/dashboards`, which this package must not import, and the app
+// cannot resolve `drizzle-cube` itself (it is not hoisted to the root).
+import "drizzle-cube/client/styles.css";
+
 import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
