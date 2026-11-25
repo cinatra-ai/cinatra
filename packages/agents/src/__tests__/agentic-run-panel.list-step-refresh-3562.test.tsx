@@ -427,3 +427,63 @@ describe("AgenticRunPanel — the bare alias `list-picker` (cinatra#3562)", () =
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * cinatra#3562 — TWO QUESTIONS DECIDE A LIST STEP'S ROAD. Whether the renderer
+ * is the list picker (`declaresListPicker`: bare alias or qualified id), and
+ * whether the pause is a mid-run step or a setup step (its review task id). On
+ * a setup step the pick is sent under the field's name; on a mid-run step it
+ * is lifted into the approval note.
+ */
+describe("AgenticRunPanel — a list step's road follows the pause, for the bare alias and a qualified id (cinatra#3562)", () => {
+  const LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+  async function renderPausedAt(xRenderer: string, reviewTaskId: string, fieldName?: string) {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_9] as never);
+    const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
+    const stream = streamResultFor(xRenderer, {});
+    (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...stream,
+      interruptContext: { ...stream.interruptContext, reviewTaskId, ...(fieldName ? { fieldName } : {}) },
+    });
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        runId="run-3562"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled
+        templateId="tmpl-3562"
+      />,
+    );
+    fireEvent.click(await screen.findByText("Read again", undefined, { timeout: 3000 }));
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    return hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>];
+  }
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  for (const xRenderer of ["list-picker", HOST_STEP_ID]) {
+    it(`${xRenderer} on a setup step: the pick is sent under the field's name`, async () => {
+      const [taskId, sent] = await renderPausedAt(xRenderer, "setup-run-3562", "targetList");
+      expect(taskId).toBe("setup-run-3562");
+      expect(sent.targetList).toMatchObject({ listId: "l-9", listName: "Read again" });
+      expect(sent.listId).toBeUndefined();
+      expect(sent.approvalNote).toBeUndefined();
+    });
+
+    it(`${xRenderer} on a mid-run step: the pick is lifted into the note`, async () => {
+      const [taskId, sent] = await renderPausedAt(xRenderer, "wayflow-task-1");
+      expect(taskId).toBe("wayflow-task-1");
+      expect(JSON.parse(String(sent.approvalNote ?? "{}"))).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+    });
+  }
+});

@@ -68,7 +68,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
+import { classifyMidRunGate } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -127,11 +127,13 @@ import {
   applyRendererApprovalNote,
   createGateValidityStore,
   buildSchemaFieldGatePayload,
+  declaresListPicker,
   gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   hitlGateIdentityKey,
   isGroupedSetupRenderer,
+  isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
   listStepRefreshFor,
@@ -916,7 +918,7 @@ function HitlApprovalCard({
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
-  const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
+  const isMidRunHitl = classifyMidRunGate(interruptContext.xRenderer, interruptContext.reviewTaskId);
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper
@@ -1057,10 +1059,13 @@ function HitlApprovalCard({
     // sends a nonblank `userResponse` before the note, so the list step's
     // lift removes any `userResponse` from the payload. The attachment
     // envelope below wraps the note (`applyAttachmentEnvelope`).
-    const approvalNoteLift = liftRendererApprovalNote(
-      interruptContext.xRenderer,
-      bufferedHitlValue,
-    );
+    // A list step's pick is lifted on a mid-run step only; on a setup step it
+    // is sent under the field's name (`isMidRunListStepGate`).
+    const approvalNoteLift =
+      declaresListPicker(interruptContext.xRenderer) &&
+      !isMidRunListStepGate(interruptContext.xRenderer, interruptContext.reviewTaskId)
+        ? null
+        : liftRendererApprovalNote(interruptContext.xRenderer, bufferedHitlValue);
     nextBuffered = applyRendererApprovalNote(
       interruptContext.xRenderer,
       nextBuffered,

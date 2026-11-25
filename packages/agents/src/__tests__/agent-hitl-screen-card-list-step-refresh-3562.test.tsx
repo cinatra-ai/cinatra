@@ -614,3 +614,70 @@ describe("AgentHitlScreenCard — the bare alias `list-picker` (cinatra#3562)", 
     expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * cinatra#3562 — TWO QUESTIONS DECIDE A LIST STEP'S ROAD. Whether the renderer
+ * is the list picker (`declaresListPicker`: bare alias or qualified id), and
+ * whether the pause is a mid-run step or a setup step (its review task id). On
+ * a setup step the pick is sent under the field's name; on a mid-run step it
+ * is lifted into the approval note.
+ */
+describe("AgentHitlScreenCard — a list step's road follows the pause, for the bare alias and a qualified id (cinatra#3562)", () => {
+  const LIST_9 = { id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" };
+  const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+  async function mountPausedAt(xRenderer: string, reviewTaskId: string, fieldName?: string) {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockResolvedValue([LIST_9] as never);
+    const base = askingOn(xRenderer, {});
+    asking = {
+      ...base,
+      gate: {
+        ...base.gate,
+        reviewTaskId,
+        ...(fieldName
+          ? {
+              inputSchema: {
+                type: "object",
+                properties: { [fieldName]: { type: "object" } },
+                required: [fieldName],
+              } as unknown as { type: string },
+              fieldName: fieldName as unknown as undefined,
+            }
+          : {}),
+      },
+    };
+    render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <AgentHitlScreenCard runId={RUN_ID} wireRef={reviewTaskId} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await settle();
+    fireEvent.click(await screen.findByText("Read again", undefined, { timeout: 3000 }));
+    await waitFor(() => expect(continueOf().disabled).toBe(false));
+    fireEvent.click(continueOf());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    return hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, Record<string, unknown>];
+  }
+
+  afterEach(() => {
+    listActions.fetchAvailableLists.mockImplementation(async () => []);
+    __resetFieldRendererComponentMapForTests();
+  });
+
+  for (const xRenderer of ["list-picker", HOST_STEP_ID]) {
+    it(`${xRenderer} on a setup step: the pick is sent under the field's name`, async () => {
+      const [taskId, sent] = await mountPausedAt(xRenderer, `setup-${RUN_ID}`, "targetList");
+      expect(taskId).toBe(`setup-${RUN_ID}`);
+      expect(sent.targetList).toMatchObject({ listId: "l-9", listName: "Read again" });
+      expect(sent.listId).toBeUndefined();
+      expect(sent.approvalNote).toBeUndefined();
+    });
+
+    it(`${xRenderer} on a mid-run step: the pick is lifted into the note`, async () => {
+      const [taskId, sent] = await mountPausedAt(xRenderer, "wayflow-task-1");
+      expect(taskId).toBe("wayflow-task-1");
+      expect(JSON.parse(String(sent.approvalNote ?? "{}"))).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+    });
+  }
+});

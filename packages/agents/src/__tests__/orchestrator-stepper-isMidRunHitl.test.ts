@@ -7,7 +7,7 @@
  * are matched only by strict equality against the full namespaced renderer ID.
  */
 import { describe, it, expect, beforeAll } from "vitest";
-import { classifyMidRunHitl } from "../orchestrator-mid-run-hitl";
+import { classifyMidRunGate, classifyMidRunHitl } from "../orchestrator-mid-run-hitl";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 // The strict slice is registry-driven (cinatra#151 Stage 5): the flagged IDs
@@ -46,17 +46,37 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
     expect(classifyMidRunHitl("@cinatra/whatever:output")).toBe(true);
     expect(classifyMidRunHitl("@cinatra/whatever:contacts-output")).toBe(true);
     // :contact-source-selector retired with the lists_* / segment surface.
-    expect(classifyMidRunHitl("@cinatra/whatever:list-picker")).toBe(true);
     expect(classifyMidRunHitl("@cinatra/whatever:scrape-schema-review")).toBe(true);
     expect(classifyMidRunHitl("@cinatra/whatever:final-list-review")).toBe(true);
     expect(classifyMidRunHitl("@cinatra/whatever:setup-form")).toBe(true);
   });
 
-  // cinatra#3562: the list picker's bare alias is a list step as a qualified
-  // id is (`declaresListPicker`), whatever the registry flags.
-  // red-first-expect: expected false to be true
-  it("the list picker's bare alias `list-picker` is a mid-run gate", () => {
-    expect(classifyMidRunHitl("list-picker")).toBe(true);
+  // cinatra#3562: a list step asks two questions. Is the renderer the list
+  // picker (`declaresListPicker`: the bare alias or a qualified id), and is the
+  // pause a mid-run step (its review task id). A list picker on a setup step
+  // stays on the setup road; the renderer alone never says "mid-run".
+  // red-first-expect: classifyMidRunGate) is not a function
+  it("the list picker, bare alias or qualified id, is a mid-run gate on a mid-run step", () => {
+    expect(classifyMidRunGate("list-picker", "wayflow-task-1")).toBe(true);
+    expect(classifyMidRunGate("@cinatra/whatever:list-picker", "wayflow-task-1")).toBe(true);
+  });
+
+  // red-first-expect: classifyMidRunGate) is not a function
+  it("the list picker, bare alias or qualified id, is no mid-run gate on a setup step", () => {
+    expect(classifyMidRunGate("@cinatra/whatever:list-picker", "setup-run-1")).toBe(false);
+    expect(classifyMidRunGate("list-picker", "setup-run-1")).toBe(false);
+  });
+
+  // red-first-expect: expected true to be false
+  it("the renderer alone never classifies the list picker as mid-run", () => {
+    expect(classifyMidRunHitl("@cinatra/whatever:list-picker")).toBe(false);
+    expect(classifyMidRunHitl("list-picker")).toBe(false);
+  });
+
+  it("every other renderer is classified by its id on any pause", () => {
+    expect(classifyMidRunGate("@cinatra/whatever:output", "setup-run-1")).toBe(true);
+    expect(classifyMidRunGate("@cinatra/whatever:output", "wayflow-task-1")).toBe(true);
+    expect(classifyMidRunGate("random-string", "wayflow-task-1")).toBe(false);
   });
 
   it("non-HITL renderer ids return false", () => {

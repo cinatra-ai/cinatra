@@ -659,6 +659,35 @@ describe("cinatra#3582 — approveReviewTaskInternal refuses a blank answer for 
     expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
   });
 
+  // A setup list step, bare alias or qualified id: the pick a host sends under
+  // the field's name is accepted, and the raw pick a host would send for a
+  // mid-run step (its keys at the top level) is refused.
+  for (const xRenderer of ["list-picker", "@cinatra-ai/email-outreach-agent:list-picker"]) {
+    it(`cinatra#3562: a setup list field declared as ${xRenderer} takes its pick under the field's name`, async () => {
+      const field = { targetList: { ...LIST_FIELD.targetList, "x-renderer": xRenderer } };
+      armRun("run-setup-list1", field, ["targetList"]);
+      await approveReviewTaskInternal(
+        "setup-run-setup-list1",
+        "actor-1",
+        { targetList: { scope: "list", listId: "l-9", listName: "Read again", memberCount: 0 } },
+        "targetList",
+      );
+      expect(dbWrites.find((w) => w.set?.status === "queued")).toBeDefined();
+
+      dbWrites.length = 0;
+      armRun("run-setup-list2", field, ["targetList"]);
+      await expect(
+        approveReviewTaskInternal(
+          "setup-run-setup-list2",
+          "actor-1",
+          { scope: "list", listId: "l-9", listName: "Read again", memberCount: 0, approved: true },
+          "targetList",
+        ),
+      ).rejects.toThrow(/targetList/);
+      expect(dbWrites).toHaveLength(0);
+    });
+  }
+
   it("cinatra#3562: a GENERIC object field is never judged as a list, whatever it carries", async () => {
     armRun("run-blank-list4", { settings: { type: "object" } }, ["settings"]);
     await approveReviewTaskInternal(

@@ -14,7 +14,7 @@
  */
 
 import { fieldRendererRegistry } from "./field-renderer-registry";
-import { declaresListPicker } from "./hitl-gate-submit";
+import { declaresListPicker, isMidRunListStepGate } from "./hitl-gate-submit";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -37,15 +37,33 @@ export function hasMidRunHitlBinding(xRenderer: string): boolean {
  *     hazard;
  *   - some renderer families still use the `endsWith(...)` fallback until
  *     they can be narrowed by a dedicated audit.
+ *
+ * The list picker is never classified here: whether a list step is mid-run
+ * is the pause's to say, not the renderer's (`classifyMidRunGate`).
  */
 export function classifyMidRunHitl(xRenderer: string): boolean {
+  if (declaresListPicker(xRenderer)) return false;
   if (hasMidRunHitlBinding(xRenderer)) return true;
   return (
     xRenderer.endsWith(":output") ||
     xRenderer.endsWith("-output") || // per-content IDs: :contacts-output, :drafts-output, :followups-output
-    declaresListPicker(xRenderer) || // list-based recipient selection (bare alias or qualified id)
     xRenderer.endsWith(":scrape-schema-review") || // Gate 1 - list-curator
     xRenderer.endsWith(":final-list-review") || // Gate 2 - list-curator
     xRenderer.endsWith(":setup-form")
   );
+}
+
+/**
+ * Classify one PAUSE as a mid-run HITL gate: the stepper's reading.
+ *
+ * THE LIST STEP (cinatra#3562) asks two questions, never one: is the renderer
+ * the list picker (`declaresListPicker`, by the declared renderer only), and
+ * is this pause a mid-run step (by the pause itself: its review task id).
+ * `isMidRunListStepGate` asks both, so a list picker on a `setup-*` step stays
+ * on the setup road, where its answer is sent under the field's name. Every
+ * other renderer is classified by `classifyMidRunHitl`.
+ */
+export function classifyMidRunGate(xRenderer: string, reviewTaskId: string): boolean {
+  if (declaresListPicker(xRenderer)) return isMidRunListStepGate(xRenderer, reviewTaskId);
+  return classifyMidRunHitl(xRenderer);
 }
