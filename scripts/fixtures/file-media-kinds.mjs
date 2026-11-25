@@ -5,6 +5,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createViteServer } from "vitest/node";
+import { pickerActionSessionPlugin } from "./lib/picker-action-session.mjs";
 
 if (process.env.CINATRA_RUNTIME_MODE !== "development") {
   throw new Error("Media fixtures require CINATRA_RUNTIME_MODE=development");
@@ -14,7 +15,7 @@ const server = await createViteServer({
   root, configFile: false, appType: "custom", logLevel: "error",
   server: { middlewareMode: true, hmr: false, watch: null },
   optimizeDeps: { noDiscovery: true },
-  plugins: [{
+  plugins: [pickerActionSessionPlugin(root), {
     name: "fixture-commonjs-path-globals",
     transform(code, id) {
       const file = id.split("?")[0];
