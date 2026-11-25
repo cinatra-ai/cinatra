@@ -376,6 +376,9 @@ export type LocalDiskBlobStoreOptions = {
    *  Used by the reachability-guarded content-addressed delete. The
    *  default queries the DB and FAILS SAFE (treats errors as referenced). */
   isStorageKeyReferenced?: (orgId: string, storageKey: string) => Promise<boolean> | boolean;
+  /** Does this organization already hold these bytes (`findHeldContent`)? Used by the quota, which charges only
+   *  bytes that would be newly stored. The default queries the DB and answers `false` on any error (the quota is kept). */
+  isContentHeld?: (orgId: string, sha256: string, sizeBytes: number) => Promise<boolean> | boolean;
   /** Current org byte usage for the quota check. Default sums
    *  `artifact_blobs.size_bytes` for the org; errors skip the check. */
   getOrgUsageBytes?: (orgId: string) => Promise<number | null> | number | null;
@@ -409,6 +412,52 @@ WHERE org_id = $1 AND storage_key = $2 LIMIT 1`,
     return (res?.rows?.length ?? 0) > 0;
   } catch {
     return true;
+  }
+}
+
+/**
+ * THE definition of "this organization already holds these bytes", used by the store's quota check and by the
+ * admission of a whole list, so the two can never disagree: the content is held when the organization (the unit of
+ * the quota and of the dedupe: `resource` is unique per organization, kind and substance key) has a live blob
+ * resource of this SHA-256 (its substance key) whose blob row exists and has this size, whatever storage key (legacy,
+ * scope-derived or content-addressed) the file lives under. It is the same pair of rows the dedupe of a write resolves
+ * onto and requires (`ResourceOrphanedError` otherwise), and the blob row is what the quota counts. The file itself
+ * is not part of the question: bytes are charged by their blob row, and a write that the dedupe resolves adds none.
+ * Returns the SHA-256s that are held. Throws when the database cannot answer; each caller decides what that means.
+ */
+export async function findHeldContent(
+  orgId: string,
+  contents: ReadonlyArray<{ sha256: string; sizeBytes: number }>,
+): Promise<ReadonlySet<string>> {
+  if (contents.length === 0) return new Set();
+  const { runPostgresQueriesSync } = await import("@/lib/postgres-sync");
+  const { getPostgresConnectionString, postgresSchema } = await import("@/lib/postgres-config");
+  const { deriveSubstanceKey } = await import("./resource-store");
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT w.sha256 FROM unnest($2::text[], $3::text[], $4::bigint[]) AS w(sha256, substance_key, size_bytes)
+JOIN "${schema}"."resource" r ON r.org_id = $1 AND r.kind = 'blob' AND r.substance_key = w.substance_key
+JOIN "${schema}"."artifact_blobs" b ON b.org_id = r.org_id AND b.id = r.metadata->>'blobId' AND b.size_bytes = w.size_bytes`,
+        values: [
+          orgId,
+          contents.map((c) => c.sha256),
+          contents.map((c) => deriveSubstanceKey({ kind: "blob", sha256: c.sha256 })),
+          contents.map((c) => c.sizeBytes),
+        ],
+      },
+    ],
+  });
+  return new Set((res?.rows ?? []).map((row) => String((row as { sha256: string }).sha256)));
+}
+
+async function defaultIsContentHeld(orgId: string, sha256: string, sizeBytes: number): Promise<boolean> {
+  try {
+    return (await findHeldContent(orgId, [{ sha256, sizeBytes }])).has(sha256);
+  } catch {
+    return false;
   }
 }
 
@@ -543,6 +592,7 @@ export function createLocalDiskBlobStore(
   const isReferenced =
     options?.isStorageKeyReferenced ?? defaultIsStorageKeyReferenced;
   const orgUsageBytes = options?.getOrgUsageBytes ?? defaultGetOrgUsageBytes;
+  const isContentHeld = options?.isContentHeld ?? defaultIsContentHeld;
 
   return {
     async put(input: BlobPutInput): Promise<BlobRecord> {
@@ -557,12 +607,24 @@ export function createLocalDiskBlobStore(
       // quota also bounds the INCOMING stream: the pre-check alone would let
       // an org just under quota land an arbitrarily large blob, so the
       // remaining headroom is enforced during streaming like maxBytes.
+      //
+      // The quota charges NEW bytes only. Whether these bytes are new is known once they are hashed, so an
+      // over-quota verdict is held until the stream has been read and is then lifted for content the
+      // organization already holds (`findHeldContent`, the one definition the whole-list admission uses too).
+      // The write then goes on as any write does and the dedupe resolves it onto the held resource, which adds no
+      // bytes: a write of held content never fails on the quota.
       let enforcedRemainingBytes = Infinity;
+      let overQuota: ArtifactQuotaExceededError | null = null;
       const orgQuota = envBytes(ARTIFACT_ORG_QUOTA_BYTES_ENV);
       if (orgQuota > 0) {
         const used = await orgUsageBytes(input.orgId);
         if (typeof used === "number") {
-          applyQuotaVerdict("org-quota", used, orgQuota);
+          try {
+            applyQuotaVerdict("org-quota", used, orgQuota);
+          } catch (err) {
+            if (!(err instanceof ArtifactQuotaExceededError)) throw err;
+            overQuota = err;
+          }
           if (quotaMode() === "enforce") {
             enforcedRemainingBytes = Math.max(0, orgQuota - used);
           }
@@ -588,8 +650,8 @@ export function createLocalDiskBlobStore(
           if (size > input.maxBytes) {
             throw new BlobTooLargeError(input.maxBytes);
           }
-          if (size > enforcedRemainingBytes) {
-            throw new ArtifactQuotaExceededError(
+          if (size > enforcedRemainingBytes && overQuota === null) {
+            overQuota = new ArtifactQuotaExceededError(
               "org-quota",
               orgQuota,
               orgQuota - enforcedRemainingBytes + size,
@@ -632,6 +694,7 @@ export function createLocalDiskBlobStore(
       };
 
       try {
+        if (overQuota !== null && !(await isContentHeld(input.orgId, sha256, size))) throw overQuota;
         // Reuse-or-publish runs under the per-storage-key critical section,
         // serialized against the guarded delete's stale→probe→unlink (see
         // the storageKeyLocks header): entering second means observing the

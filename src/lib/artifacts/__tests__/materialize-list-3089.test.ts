@@ -681,6 +681,7 @@ describe("cinatra#3089 — a fault is a refusal only when the call can be refuse
     ["the type's own refusal (a MIME the winner of a same-bytes resource carries)", async () => new (await import("../artifact-creation")).ObjectsTypeNotRegisteredError("@cinatra-ai/email:body", 'persisted (dedupe-winner) MIME "application/pdf" is not accepted by "@cinatra-ai/email:body"'), "materialize_list_member_refused", "persisted (dedupe-winner) MIME"],
     ["the organization's byte quota", async () => new (await import("../local-disk-blob-store")).ArtifactQuotaExceededError("org-quota", 1000, 999999), "materialize_list_quota_exceeded", "storage quota would be exceeded"],
     ["a member over the size limit", async () => new (await import("@cinatra-ai/artifacts")).BlobTooLargeError(10), "materialize_list_member_refused", "larger than the artifact size limit"],
+    ["the server's upload staging area being full", async () => new (await import("../local-disk-blob-store")).ArtifactQuotaExceededError("staging-cap", 1000, 999999), "materialize_list_staging_full", "upload staging area is full"],
   ])("E1 %s is a refusal with a fixed code and text, with nothing stored", async (_n, make, code, text) => {
     createSemanticArtifactsMock.mockRejectedValueOnce(await make());
     const refused = await fileSet();
@@ -1179,6 +1180,11 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
       const first = input.queries[0]!;
       // The usage the quota reads: the sum of the organization's blob rows.
       if (first.text.includes("SUM(size_bytes)")) return [{ rows: [{ total: usedBytes() }], rowCount: 1 }];
+      // What the organization holds, by content: the live blob rows of this SHA-256 and this size (`findHeldContent`).
+      if (first.text.includes("unnest(")) {
+        const [, shas, keys, sizes] = first.values as [string, string[], string[], number[]];
+        return [{ rows: shas.filter((_, i) => rows.get(keys[i]!)?.size === Number(sizes[i])).map((sha256) => ({ sha256 })), rowCount: 1 }];
+      }
       if (first.text.includes("WITH resource_op")) {
         const v = first.values as string[];
         const existing = rows.get(v[2]!);
@@ -1190,14 +1196,6 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
       }
       if (first.text.includes("artifact_blobs")) return [{ rows: [{ "?column?": 1 }], rowCount: 1 }];
       return input.queries.map(() => ({ rows: [], rowCount: 0 }));
-    });
-    const base = poolQueryMock.getMockImplementation()!;
-    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
-      if (text.includes('FROM "public"."resource"') && text.includes("substance_key")) {
-        const keys = (values as [string, string[]])[1];
-        return { rows: keys.filter((k) => rows.has(k)).map((k) => ({ substance_key: k })) };
-      }
-      return base(text, values);
     });
   });
   afterEach(() => {
@@ -1243,6 +1241,58 @@ describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
       { title: "B", content: "n".repeat(30), typedData: { contactId: "c-2" } },
     ]);
     expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+  });
+
+  // The admission and the store agree: a member that adds no bytes never fails on the quota, in whatever order the
+  // members come (a new content that fills the room, then a member that repeats it, or that is held already).
+  const member = (title: string, content: string, contactId: string): ToolArtifactSetMember => ({ title, content, typedData: { contactId } });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q2 a new member fills the room and the next member repeats its bytes: both are filed", async () => {
+    // 40 used, 60 left: the first content is 60 bytes and adds all of them; its repeat adds nothing.
+    const filed = await fileSet([member("A", "r".repeat(60), "c-1"), member("B", "r".repeat(60), "c-2")]);
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+    expect(rows.size).toBe(2);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q2 a new member fills the room and the next member is bytes the organization already holds: both are filed", async () => {
+    const heldContent = "h".repeat(30);
+    rows.set(`blob:${sha256(heldContent)}`, { resource_id: "res-held", blob_id: "blob-held", storage_key: "orgs/org-a/legacy/held.bin", size: 30 });
+    // 70 used, 30 left: the new member adds 30 and fills the room; the held member (a legacy-keyed resource) adds nothing.
+    const filed = await fileSet([member("A", "n".repeat(30), "c-1"), member("B", heldContent, "c-2")]);
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q2 a list whose members all repeat one content, with room for one copy, is filed", async () => {
+    const filed = await fileSet([member("A", "z".repeat(60), "c-1"), member("B", "z".repeat(60), "c-2"), member("C", "z".repeat(60), "c-3")]);
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+    expect(rows.size).toBe(2);
+  });
+
+  // red-first-expect: artifact org-quota exceeded: 100 bytes used, limit 100
+  it("Q2 a SINGLE write of content the organization holds succeeds at a full quota; content it does not hold is refused and stores nothing", async () => {
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    const { ArtifactQuotaExceededError } = await import("../local-disk-blob-store");
+    const held = "h".repeat(60);
+    rows.set(`blob:${sha256(held)}`, { resource_id: "res-held", blob_id: "blob-held", storage_key: "orgs/org-a/held.bin", size: 60 });
+    expect(usedBytes()).toBe(100);
+    const one = (content: string) => ({
+      orgId: "org-a", objectType: BODY_TYPE, expectedAcceptMimes: ["text/markdown"], createdBy: "user-1",
+      ownerLevel: "organization" as const, ownerId: "org-a", visibility: "organization" as const, title: "T",
+      declaredMime: "text/markdown", originKind: "live_generator" as const, typedData: { contactId: "c-1" },
+      stream: (async function* () { yield new TextEncoder().encode(content); })(),
+      createdByRunId: "run-1", producerAssertionExtension: EXT, skipFallbackClassification: true,
+    });
+    const filed = await creation.createSemanticArtifact(one(held));
+    expect(filed.resourceId).toBe("res-held");
+    expect(usedBytes()).toBe(100);
+    await expect(creation.createSemanticArtifact(one("new bytes"))).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
     expect(usedBytes()).toBe(100);
   });
 

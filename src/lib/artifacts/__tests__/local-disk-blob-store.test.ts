@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
@@ -373,6 +374,71 @@ describe("createLocalDiskBlobStore", () => {
         maxBytes: 1024,
       });
       expect(rec.sizeBytes).toBe(3);
+    });
+
+    describe("bytes the organization already holds are never refused for the quota they already count against", () => {
+      const scope = { orgId: "org1", artifactId: "a", representationRevisionId: "v" };
+      const HELD = "held bytes of the org";
+      const heldSha = createHash("sha256").update(HELD).digest("hex");
+      const full = (held: (org: string, sha: string, size: number) => boolean) => {
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "10";
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        return createLocalDiskBlobStore({ getOrgUsageBytes: () => 10, isContentHeld: held });
+      };
+      const read = async (store: ReturnType<typeof createLocalDiskBlobStore>, key: string) => {
+        const handle = await store.openByStorageKey({ orgId: "org1", storageKey: key });
+        const chunks: Uint8Array[] = [];
+        for await (const c of handle.stream) chunks.push(c);
+        return Buffer.concat(chunks).toString("utf8");
+      };
+
+      // red-first-expect: artifact org-quota exceeded: 10 bytes used, limit 10
+      it("a put of held bytes is admitted over a full quota, and over a stream longer than the remaining headroom", async () => {
+        const store = full((org, sha, size) => org === "org1" && sha === heldSha && size === Buffer.byteLength(HELD));
+        const rec = await store.put({ ...scope, stream: bytes("held bytes ", "of the org"), maxBytes: 1024 });
+        expect(rec.sha256).toBe(heldSha);
+        expect(await read(store, rec.storageKey)).toBe(HELD);
+        expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+      });
+
+      // red-first-expect: artifact org-quota exceeded: 10 bytes used, limit 10
+      it("bytes held under a LEGACY storage key are admitted too: the decision is by content, the dedupe's own, never by the new key", async () => {
+        // The organization's live resource carries the same SHA-256 under a legacy scope-derived key; no file exists at the
+        // content-addressed key. The probe is asked by SHA and size only.
+        const asked: Array<[string, string, number]> = [];
+        const store = full((org, sha, size) => { asked.push([org, sha, size]); return true; });
+        const rec = await store.put({ ...scope, stream: bytes(HELD), maxBytes: 1024 });
+        expect(asked).toEqual([["org1", heldSha, Buffer.byteLength(HELD)]]);
+        // The write goes on as any write (the dedupe resolves it onto the held resource), with a readable file of its own.
+        expect(await read(store, rec.storageKey)).toBe(HELD);
+      });
+
+      it("other bytes, bytes whose size differs, or a probe that cannot answer are refused and leave no file or staging residue", async () => {
+        const none = full(() => false);
+        await expect(none.put({ ...scope, stream: bytes(HELD), maxBytes: 1024 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        const other = full((_o, sha) => sha === heldSha);
+        await expect(other.put({ ...scope, stream: bytes("other bytes"), maxBytes: 1024 })).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        const throws = full(() => { throw new Error("db down"); });
+        await expect(throws.put({ ...scope, stream: bytes(HELD), maxBytes: 1024 })).rejects.toThrow("db down");
+        expect(readdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME))).toEqual([]);
+        expect(existsSync(path.join(dataRoot(), "orgs"))).toBe(false);
+      });
+
+      it("a full staging area refuses a write with its own kind, even for held bytes", async () => {
+        process.env[ARTIFACT_STAGING_CAP_BYTES_ENV] = "1";
+        mkdirSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME), { recursive: true });
+        writeFileSync(path.join(dataRoot(), ARTIFACT_STAGING_DIR_NAME, "occupied"), "xx");
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+        const store = createLocalDiskBlobStore({ isContentHeld: () => true });
+        const refused = await store.put({ ...scope, stream: bytes(HELD), maxBytes: 1024 }).catch((e: unknown) => e);
+        expect(refused).toBeInstanceOf(ArtifactQuotaExceededError);
+        expect((refused as ArtifactQuotaExceededError).kind).toBe("staging-cap");
+      });
+
+      it("the size limit still bounds a stream of held bytes", async () => {
+        const store = full(() => true);
+        await expect(store.put({ ...scope, stream: bytes("x".repeat(40)), maxBytes: 8 })).rejects.toBeInstanceOf(BlobTooLargeError);
+      });
     });
 
     describe("assertOrgQuotaRoom: the whole batch is asked of the quota before its first blob is stored", () => {

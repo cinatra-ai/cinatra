@@ -37,8 +37,7 @@ import {
   ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
 } from "./artifact-creation";
-import { ArtifactQuotaExceededError, assertOrgQuotaRoom } from "./local-disk-blob-store";
-import { deriveSubstanceKey } from "./resource-store";
+import { ArtifactQuotaExceededError, assertOrgQuotaRoom, findHeldContent } from "./local-disk-blob-store";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
@@ -1814,6 +1813,7 @@ export const MATERIALIZE_LIST_MEMBER_REFUSED = "materialize_list_member_refused"
 export const MATERIALIZE_LIST_SET_DIFFERS = "materialize_list_set_differs";
 export const MATERIALIZE_LIST_SET_BUSY = "materialize_list_set_busy";
 export const MATERIALIZE_LIST_QUOTA_EXCEEDED = "materialize_list_quota_exceeded";
+export const MATERIALIZE_LIST_STAGING_FULL = "materialize_list_staging_full";
 
 export type ToolArtifactSetMember = {
   title: string;
@@ -1823,9 +1823,9 @@ export type ToolArtifactSetMember = {
 };
 
 /** The bytes a list would ADD to the organization's stored bytes: each distinct content once (the members of a list
- *  share one resource per content hash), and none that an existing resource of the organization already holds.
- *  `null` when the existing resources cannot be read (the quota check is then left to the blob store, as an
- *  unreadable usage figure is). */
+ *  share one resource per content hash), and none the organization already holds (`findHeldContent`: the same
+ *  definition the store's quota check uses, so no member's write can fail on the quota after this admission).
+ *  `null` when the database cannot say what is held (the quota check is then left to the blob store). */
 async function newBytesOfList(orgId: string, contents: readonly string[], mime: string): Promise<number | null> {
   const sizeBySha = new Map<string, number>();
   for (const content of contents) {
@@ -1833,14 +1833,9 @@ async function newBytesOfList(orgId: string, contents: readonly string[], mime: 
     sizeBySha.set(facts.sha256, facts.sizeBytes);
   }
   try {
-    const s = postgresSchema.replaceAll('"', '""');
-    const res = await pool().query(
-      `SELECT substance_key FROM "${s}"."resource" WHERE org_id = $1 AND kind = 'blob' AND substance_key = ANY($2::text[])`,
-      [orgId, [...sizeBySha.keys()].map((sha256) => deriveSubstanceKey({ kind: "blob", sha256 }))],
-    );
-    const held = new Set((res.rows as Array<{ substance_key: string }>).map((r) => r.substance_key));
+    const held = await findHeldContent(orgId, [...sizeBySha].map(([sha256, sizeBytes]) => ({ sha256, sizeBytes })));
     let bytes = 0;
-    for (const [sha256, size] of sizeBySha) if (!held.has(deriveSubstanceKey({ kind: "blob", sha256 }))) bytes += size;
+    for (const [sha256, size] of sizeBySha) if (!held.has(sha256)) bytes += size;
     return bytes;
   } catch {
     return null;
@@ -2086,6 +2081,15 @@ export async function materializeToolArtifactSet(input: {
         ok: false,
         code: MATERIALIZE_LIST_MEMBER_REFUSED,
         error: `artifact_materialize list was not filed: ${err.message} — nothing was filed`,
+      };
+    }
+    // The server's upload staging area is full: a condition of the host, not of the organization's storage quota,
+    // and it passes; it has its own reason.
+    if (err instanceof ArtifactQuotaExceededError && err.kind === "staging-cap") {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_STAGING_FULL,
+        error: `${MATERIALIZE_LIST_STAGING_FULL}: the server's upload staging area is full; nothing was filed, retry the call later`,
       };
     }
     if (err instanceof ArtifactQuotaExceededError) {
