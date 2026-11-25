@@ -43,7 +43,8 @@ vi.mock("@cinatra-ai/agents/store", () => ({
     constructor(readonly code: string) { super(code); this.name = "RunStepToolPolicyRefusal"; }
   },
 }));
-vi.mock("@cinatra-ai/agents/run-action-decision-consumption", () => ({
+// Mocked by its file, which the subpath `@cinatra-ai/agents/run-action-decision-consumption` resolves to.
+vi.mock("../../../../../../packages/agents/src/run-action-decision-consumption", () => ({
   consumeRunActionDecision: vi.fn(async () => ({})),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
@@ -227,7 +228,7 @@ afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
-  vi.doUnmock("@cinatra-ai/agents/run-action-decision-consumption");
+  vi.doUnmock("../../../../../../packages/agents/src/run-action-decision-consumption");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
   vi.doUnmock("@cinatra-ai/llm/actor-context");

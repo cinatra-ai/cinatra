@@ -54,7 +54,8 @@ vi.mock("@cinatra-ai/agents/store", () => ({
   verifyRunExecutedSource: h.verifyRunExecutedSource,
   RunStepToolPolicyRefusal: h.RunStepToolPolicyRefusal,
 }));
-vi.mock("@cinatra-ai/agents/run-action-decision-consumption", () => ({
+// Mocked by its file, which the subpath `@cinatra-ai/agents/run-action-decision-consumption` resolves to.
+vi.mock("../../../../../../packages/agents/src/run-action-decision-consumption", () => ({
   consumeRunActionDecision: h.consumeRunActionDecision,
 }));
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
@@ -311,7 +312,7 @@ afterAll(() => {
   vi.doUnmock("server-only");
   vi.doUnmock("@cinatra-ai/agents");
   vi.doUnmock("@cinatra-ai/agents/store");
-  vi.doUnmock("@cinatra-ai/agents/run-action-decision-consumption");
+  vi.doUnmock("../../../../../../packages/agents/src/run-action-decision-consumption");
   vi.doUnmock("@/lib/org-write/run-authority-mint");
   vi.doUnmock("@cinatra-ai/a2a");
   vi.doUnmock("@cinatra-ai/mcp-server");
