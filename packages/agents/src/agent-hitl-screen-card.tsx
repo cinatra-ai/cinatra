@@ -139,7 +139,6 @@ import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
-import { readListStepContent } from "./list-picker-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
@@ -1507,7 +1506,11 @@ export function AgentHitlScreenCard({
               isCurrentWaitingStep: cookieSession === true && !withholdRenderer,
               mode: "edit",
             },
-            (reviewTaskId) => readListStepContent(runId, reviewTaskId),
+            (reviewTaskId) =>
+              // Loaded on the press only: a surface without a list step loads no server read for it.
+              import("./list-picker-actions").then((actions) =>
+                actions.readListStepContent(runId, reviewTaskId),
+              ),
           )}
         />
         </RendererFloorReportContext.Provider>

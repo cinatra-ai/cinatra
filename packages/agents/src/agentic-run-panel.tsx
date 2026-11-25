@@ -82,7 +82,6 @@ import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-car
 import { ReviewGateBlocked, ReviewGatePlaceholder, shortRunReference } from "./review-gate-states";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
-import { readListStepContent } from "./list-picker-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
 // user_envelope attachment wrap, the setup/grouped/mid-run resume-payload
 // discrimination, and the #817 context-selector envelope synthesis all
@@ -1806,7 +1805,11 @@ export function AgenticRunPanel({
                 answeredReviewTaskId !== listStepReviewTaskId,
               mode: "edit",
             },
-            (reviewTaskId) => readListStepContent(runId, reviewTaskId),
+            (reviewTaskId) =>
+              // Loaded on the press only: a surface without a list step loads no server read for it.
+              import("./list-picker-actions").then((actions) =>
+                actions.readListStepContent(runId, reviewTaskId),
+              ),
           )
         : undefined,
     [listStepXRenderer, listStepReviewTaskId, isPendingApproval, gateBlocked, answeredReviewTaskId, runId],

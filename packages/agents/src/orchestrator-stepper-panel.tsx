@@ -115,7 +115,6 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { readListStepContent } from "./list-picker-actions";
 import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
@@ -1481,7 +1480,11 @@ function HitlApprovalCard({
           isCurrentWaitingStep: gateBlocked === null && setupSentKey !== setupGateKey,
           mode: "edit",
         },
-        (reviewTaskId) => readListStepContent(runId, reviewTaskId),
+        (reviewTaskId) =>
+              // Loaded on the press only: a surface without a list step loads no server read for it.
+              import("./list-picker-actions").then((actions) =>
+                actions.readListStepContent(runId, reviewTaskId),
+              ),
       ),
     [interruptContext.xRenderer, interruptContext.reviewTaskId, gateBlocked, setupSentKey, setupGateKey, runId],
   );

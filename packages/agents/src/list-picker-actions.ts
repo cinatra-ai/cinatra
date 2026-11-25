@@ -11,6 +11,7 @@ import {
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
+import { runWaitsAtGateTask } from "./run-status";
 import { readAgentRunById, readLatestDurableHitlGateArtifact } from "./store";
 
 // The picker still exposes the legacy `AvailableListSummary` shape so its
@@ -228,6 +229,9 @@ const LIST_STEP_NOT_WAITING = "list_step_not_waiting";
 /** A run that waits for a person stands at this status. */
 const WAITING_RUN_STATUS = "pending_approval";
 
+/** A mid-run gate's review task is this prefix and the flow's gate task id. */
+const FLOW_GATE_TASK_PREFIX = "wayflow-";
+
 /** The renderer id of a list step ends with this. */
 const LIST_STEP_RENDERER_SUFFIX = ":list-picker";
 
@@ -295,15 +299,54 @@ function toListStepLists(
 }
 
 /**
+ * Is the list gate `gate` the pause the run waits at NOW? All must hold:
+ *   - the run is `pending_approval`;
+ *   - no publish decision holds the run (`assertNoOpenPublishDecision`, the
+ *     hold every resume road checks): a later publish gate parks the run in
+ *     `pending_approval` without writing a generic gate, so the list gate
+ *     before it would still be the newest row;
+ *   - the gate's review task is a flow gate task (`wayflow-<task>`), and the
+ *     run waits at that task: `runWaitsAtGateTask`, the one reading of "the
+ *     pause the run waits at" (the run row's gate task, and the latest-task
+ *     key when it holds a value), read as the answer road reads it, with a
+ *     key that cannot be read leaving the run row's word. An answered gate
+ *     fails it: the answer moves the run out of `pending_approval`, and a run
+ *     that paused again names its new gate task.
+ * Any fault reads as not waiting.
+ */
+async function listGateIsCurrentPause(
+  run: AgentRunRecord,
+  gate: { reviewTaskId: string; xRenderer: string },
+): Promise<boolean> {
+  if (run.status !== WAITING_RUN_STATUS) return false;
+  if (typeof gate.xRenderer !== "string" || !gate.xRenderer.endsWith(LIST_STEP_RENDERER_SUFFIX)) {
+    return false;
+  }
+  if (!gate.reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX)) return false;
+  const gateTaskId = gate.reviewTaskId.slice(FLOW_GATE_TASK_PREFIX.length);
+  try {
+    const { assertNoOpenPublishDecision } = await import("./publish-decision-actions");
+    await assertNoOpenPublishDecision(run.id);
+  } catch {
+    return false;
+  }
+  const latest = await (async () =>
+    (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(run.id))().catch(() => null);
+  return runWaitsAtGateTask(run, gateTaskId, latest ?? null);
+}
+
+/**
  * Read the CRM lists again for the list step the run waits at (cinatra#3562).
  * A step's Try again calls this; nothing is sent to the run, the run does not
  * resume, and no gate is answered. The checks, in order:
  *
  *   1. the signed-in person may read the run (the run page's rule, as
  *      `fetchAvailableLists`); a refusal is thrown before anything else is read;
- *   2. the run waits now (`pending_approval`) at a list step: its newest
- *      durable gate names a renderer that ends with `:list-picker`, and, when
- *      a review task is named, it is that gate's. Otherwise the fixed refusal
+ *   2. the run waits now at this list step: its newest durable gate names a
+ *      renderer that ends with `:list-picker`, when a review task is named it
+ *      is that gate's, and that gate is the pause the run waits at now
+ *      (`listGateIsCurrentPause`: no publish hold, the run row's gate task
+ *      and the latest-task key). Otherwise the fixed refusal
  *      `list_step_not_waiting` is thrown and no CRM call is made. This is
  *      stricter than `fetchAvailableLists`, which reads the lists for any run
  *      the person may read;
@@ -331,9 +374,8 @@ export async function readListStepContent(
   if (
     run === null ||
     gate === null ||
-    typeof gate.xRenderer !== "string" ||
-    !gate.xRenderer.endsWith(LIST_STEP_RENDERER_SUFFIX) ||
-    (namedTask !== null && gate.reviewTaskId !== namedTask)
+    (namedTask !== null && gate.reviewTaskId !== namedTask) ||
+    !(await listGateIsCurrentPause(run, gate))
   ) {
     console.warn("[list-picker] a new list read was refused: the run is not waiting at a list step");
     throw new Error(LIST_STEP_NOT_WAITING);

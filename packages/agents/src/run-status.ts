@@ -1674,3 +1674,26 @@ function rewriteStandingWaitClause(
     match.replace(RUN_START_SCHEDULE_WAIT_CLAUSE, sentence),
   );
 }
+
+// ---------------------------------------------------------------------------
+// The pause the run waits at
+// ---------------------------------------------------------------------------
+
+/**
+ * Does the run still wait at the pause of the gate task `gateTaskId`? Read from the run row (durable): the run is
+ * pending_approval and its a2a_task_id names that gate task. Every pause writes the run's gate task before its move to
+ * pending_approval (the interrupt's task-id write, or the move's own pauseTaskId), and every gate visit mints a new task
+ * id, so a run that went on and paused at another gate names that gate instead. `latest` is the latest-task key
+ * (Redis, a seven-day key that can be lost): when it holds a value it must agree; when it is absent it adds nothing.
+ *
+ * One reading for every caller that must know the pause the run waits at now: the publish decision's gate
+ * (publish-decision-actions.ts) and the list step's new read (list-picker-actions.ts, cinatra#3562).
+ */
+export function runWaitsAtGateTask(
+  run: { readonly status: string; readonly a2aTaskId: string | null },
+  gateTaskId: string,
+  latest: string | null,
+): boolean {
+  return run.status === "pending_approval" && gateTaskId.length > 0 && run.a2aTaskId === gateTaskId
+    && (latest === null || latest === gateTaskId);
+}

@@ -414,7 +414,9 @@ function toListStepReadValue(answer: unknown): ListStepReadValue {
  * THE LIST STEP'S TRY AGAIN (cinatra#3562). The `onRequestRefresh` prop a run
  * surface hands a list step's renderer, or `undefined` when the step offers no
  * new read. It is handed only when ALL hold:
- *   - the gate's renderer id ends with `:list-picker`;
+ *   - the gate is a mid-run list step (`isMidRunListStepGate`: the renderer id
+ *     ends with `:list-picker` and it is not a setup gate; the server reads
+ *     again only for a flow gate the run waits at);
  *   - the gate is the step the run waits at now (the surface says so);
  *   - the renderer is drawn in edit mode;
  *   - the step is not disabled.
@@ -433,7 +435,7 @@ export function listStepRefreshFor(
   },
   readAgain: (reviewTaskId: string) => Promise<unknown>,
 ): (() => Promise<ListStepReadValue>) | undefined {
-  if (!gate.xRenderer.endsWith(":list-picker")) return undefined;
+  if (!isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId)) return undefined;
   if (gate.isCurrentWaitingStep !== true) return undefined;
   if ((gate.mode ?? "edit") !== "edit") return undefined;
   if (gate.disabled === true) return undefined;

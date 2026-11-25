@@ -18,6 +18,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
 import type { FieldRendererProps } from "../field-renderer-registry";
+import { registerFieldRendererBindings } from "../register-default-renderers";
+import {
+  __resetFieldRendererComponentMapForTests,
+  __setFieldRendererComponentMapForTests,
+} from "../field-renderer-components";
 
 const screenStateMock = vi.fn();
 vi.mock("../agent-hitl-screen-actions", () => ({
@@ -169,5 +174,57 @@ describe("AgentHitlScreenCard — a waiting list step's Try again (cinatra#3562)
     mountOn("chat_thread");
     await settle();
     await waitFor(() => expect(screen.getByTestId("offers-refresh").textContent).toBe("no"));
+  });
+});
+
+/**
+ * THE PACK'S COMPONENT, RESOLVED AS A PINNED PACK'S IS. A binding whose
+ * component is in the build's component map resolves, through the real
+ * registration road (`registerFieldRendererBindings`), to the extension
+ * wrapper that loads the pack-shipped component. The stand-in below takes the
+ * place of the pack's list step; the prop must reach it through that road.
+ */
+const SHIPPED_STEP_ID = "@cinatra-test/pack-agent-shipped:list-picker";
+
+describe("AgentHitlScreenCard — the prop reaches a pack-shipped component through the registry (cinatra#3562)", () => {
+  // red-first-expect: Unable to find an element by: [data-testid="shipped-offers-refresh"]
+  it("a list binding with a shipped component gets onRequestRefresh, and its press reads again", async () => {
+    function ShippedListStep({ onRequestRefresh }: FieldRendererProps) {
+      const [shown, setShown] = React.useState<unknown>(null);
+      if (!onRequestRefresh) return <p data-testid="shipped-without-refresh">no Try again</p>;
+      return (
+        <div>
+          <p data-testid="shipped-offers-refresh">yes</p>
+          <Button type="button" onClick={() => void onRequestRefresh().then(setShown)}>
+            Try again
+          </Button>
+          <p data-testid="shipped-shown">{JSON.stringify(shown)}</p>
+        </div>
+      );
+    }
+    __setFieldRendererComponentMapForTests({
+      [SHIPPED_STEP_ID]: {
+        resolution: "guardedOptional",
+        packageName: "@cinatra-test/pack-agent-shipped",
+        propsApiVersion: 1,
+        load: async () => ({ default: ShippedListStep }),
+      },
+    });
+    try {
+      registerFieldRendererBindings([{ id: SHIPPED_STEP_ID, kind: "list-picker", priority: 80 }]);
+      asking = askingOn(SHIPPED_STEP_ID);
+      mountOn("chat_thread");
+      await settle();
+      await screen.findByTestId("shipped-offers-refresh", undefined, { timeout: 3000 });
+      fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("shipped-shown").textContent).toBe(
+          JSON.stringify({ lists: [{ id: "l-9", name: "Read again" }], listsRead: "ok" }),
+        ),
+      );
+      expect(listActions.readListStepContent).toHaveBeenCalledWith(expect.any(String), "task-list-1");
+    } finally {
+      __resetFieldRendererComponentMapForTests();
+    }
   });
 });

@@ -73,11 +73,23 @@ vi.mock("@/lib/authz/audit", () => ({ logAuditEvent: logAuditEventMock }));
 
 vi.mock("@/lib/crm-integration-providers", () => ({ resolveCrmListReader: vi.fn() }));
 
+// The publish hold and the latest-task key: the two readers the answer road
+// and the publish hold use to tell the pause the run waits at.
+const { assertNoOpenPublishDecisionMock, resolveLatestTaskMock } = vi.hoisted(() => ({
+  assertNoOpenPublishDecisionMock: vi.fn<(runId: string) => Promise<boolean>>(),
+  resolveLatestTaskMock: vi.fn<(runId: string) => Promise<string | null>>(),
+}));
+vi.mock("../publish-decision-actions", () => ({
+  assertNoOpenPublishDecision: assertNoOpenPublishDecisionMock,
+}));
+vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: resolveLatestTaskMock }));
+
 import { readListStepContent } from "../list-picker-actions";
 import { resolveCrmListReader } from "@/lib/crm-integration-providers";
 
 const RUN_ID = "run-3562";
-const TASK_ID = "task-list-1";
+const GATE_TASK = "flow-task-1";
+const TASK_ID = `wayflow-${GATE_TASK}`;
 const LIST_RENDERER = "@cinatra-test/pack-agent:list-picker";
 const ORG_ONLY_CEILING = [{ tier: "organization" as const, id: "org-1" }];
 const TEAM_CEILING = [
@@ -93,6 +105,7 @@ function waitingRun(overrides: Record<string, unknown> = {}) {
     status: "pending_approval",
     runBy: "member-1",
     orgId: "org-1",
+    a2aTaskId: GATE_TASK,
     oboCeiling: ORG_ONLY_CEILING,
     ...overrides,
   };
@@ -144,6 +157,10 @@ beforeEach(() => {
     new FakeAuthzError({ statusCode: 404, reason: "hidden", message: "Not found." }),
   );
   logAuditEventMock.mockClear();
+  assertNoOpenPublishDecisionMock.mockReset();
+  assertNoOpenPublishDecisionMock.mockResolvedValue(false);
+  resolveLatestTaskMock.mockReset();
+  resolveLatestTaskMock.mockResolvedValue(GATE_TASK);
   resolveOrgRoleForUserMock.mockClear();
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -189,6 +206,23 @@ describe("readListStepContent — only for the list step the run waits at", () =
       () => readLatestGateMock.mockResolvedValueOnce(listGate({ xRenderer: "@cinatra-test/pack-agent:output" })),
     ],
     ["a gate of another review task", () => readLatestGateMock.mockResolvedValueOnce(listGate({ reviewTaskId: "task-other" }))],
+    [
+      "a run parked on a publish decision after the list step",
+      () =>
+        assertNoOpenPublishDecisionMock.mockRejectedValueOnce(
+          Object.assign(new Error("held"), { code: "publish_decision_required" }),
+        ),
+    ],
+    ["a publish hold that cannot be read", () => assertNoOpenPublishDecisionMock.mockRejectedValueOnce(new Error("db down"))],
+    [
+      "an answered list gate (the run went on and paused at another task)",
+      () => readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ a2aTaskId: "flow-task-2" })),
+    ],
+    ["a stale task (the latest-task key names a later pause)", () => resolveLatestTaskMock.mockResolvedValueOnce("flow-task-2")],
+    [
+      "a setup gate, which names no flow task",
+      () => readLatestGateMock.mockResolvedValueOnce(listGate({ reviewTaskId: `setup-${RUN_ID}` })),
+    ],
   ];
 
   for (const [name, arrange] of notWaiting) {
@@ -207,6 +241,20 @@ describe("readListStepContent — only for the list step the run waits at", () =
   it("reads the newest gate of the run the person may read", async () => {
     await readListStepContent(RUN_ID, TASK_ID);
     expect(readLatestGateMock).toHaveBeenCalledWith(RUN_ID);
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("the list gate the run waits at reads, after the publish hold and the latest-task key are asked", async () => {
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toMatchObject({ listsRead: "ok" });
+    expect(assertNoOpenPublishDecisionMock).toHaveBeenCalledWith(RUN_ID);
+    expect(resolveLatestTaskMock).toHaveBeenCalledWith(RUN_ID);
+    expect(searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("a latest-task key that cannot be read leaves the run row's word, as on the answer road", async () => {
+    resolveLatestTaskMock.mockRejectedValueOnce(new Error("redis down"));
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toMatchObject({ listsRead: "ok" });
   });
 });
 

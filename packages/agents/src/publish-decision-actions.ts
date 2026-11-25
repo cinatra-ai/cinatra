@@ -35,6 +35,7 @@ import {
   type AgentRunStatus,
 } from "./store";
 import { resolveWayflowUrl } from "./wayflow-url";
+import { runWaitsAtGateTask } from "./run-status";
 import { claimPause, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 import { isHumanDecisionFingerprint, isPersonDecider } from "./declared-review-pause";
 
@@ -913,17 +914,6 @@ export interface PublishCallClaim {
   decisionId: string;
 }
 
-/**
- * Does the run still wait at the pause of the gate task `gateTaskId`? Read from the run row (durable): the run is
- * pending_approval and its a2a_task_id names that gate task. Every pause writes the run's gate task before its move to
- * pending_approval (the interrupt's task-id write, or the move's own pauseTaskId), and every gate visit mints a new task
- * id, so a run that went on and paused at another gate names that gate instead. `latest` is the latest-task key
- * (Redis, a seven-day key that can be lost): when it holds a value it must agree; when it is absent it adds nothing.
- */
-function runWaitsAtGateTask(run: Pick<AgentRunRecord, "status" | "a2aTaskId">, gateTaskId: string, latest: string | null): boolean {
-  return run.status === "pending_approval" && gateTaskId.length > 0 && run.a2aTaskId === gateTaskId
-    && (latest === null || latest === gateTaskId);
-}
 
 /**
  * Does the run still wait at the very pause this released decision was released at? Read from durable data only: the

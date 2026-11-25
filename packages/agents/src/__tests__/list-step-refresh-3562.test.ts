@@ -27,6 +27,7 @@ describe("listStepRefreshFor — which steps offer a new read", () => {
     ["a gate of another renderer", { xRenderer: "@cinatra-test/pack-agent:output" }],
     ["a list step the run no longer waits at", { isCurrentWaitingStep: false }],
     ["a list step drawn read-only", { mode: "view" as never }],
+    ["a list step on a setup gate", { reviewTaskId: "setup-run-1" }],
   ];
   for (const [name, change] of without) {
     // red-first-expect: listStepRefreshFor) is not a function
