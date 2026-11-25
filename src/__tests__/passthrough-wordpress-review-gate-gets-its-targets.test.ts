@@ -14,6 +14,13 @@
  * declared-tool argument check and the scoped-tool dispatch are test doubles; the dispatch answers the shape the
  * real `artifacts_get` answers.
  *
+ * Two more cases follow the run past the review: the read step hands the
+ * review's answer to the pack's own declared tool through the host's real
+ * extension-tool dispatch (only the content read is a double), so a Regenerate's
+ * approved successor is the revision read; and the write-back of a run that
+ * published nothing reaches the REAL objects_update handler (only the object
+ * store is a double) and writes nothing.
+ *
  *   pnpm exec vitest run src/__tests__/passthrough-wordpress-review-gate-gets-its-targets.test.ts
  */
 import * as fs from "node:fs";
@@ -24,6 +31,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 const h = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   dispatchExtensionScopedTool: vi.fn(),
+  collectAllPrimitiveHandlers: vi.fn(async (): Promise<Record<string, unknown>> => ({})),
+  getObjectById: vi.fn(),
+  upsertObjectAndEnqueue: vi.fn(),
 }));
 
 vi.mock("@cinatra-ai/agents", () => ({
@@ -31,7 +41,16 @@ vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: h.readAgentRunById,
 }));
 vi.mock("@/lib/primitive-handlers", () => ({
-  collectAllPrimitiveHandlers: async () => ({}),
+  collectAllPrimitiveHandlers: h.collectAllPrimitiveHandlers,
+}));
+// The object store under the REAL objects_update handler (the failing-publish
+// case below): the store upsert is what records a new revision, its history
+// and its outbox row.
+vi.mock("@/lib/objects-store", () => ({
+  getObjectById: h.getObjectById,
+  upsertObjectAndEnqueue: h.upsertObjectAndEnqueue,
+  listObjectsByFilter: vi.fn(),
+  softDeleteObject: vi.fn(),
 }));
 vi.mock("@/lib/wayflow-bridge-auth", () => ({ isAuthorizedBridgeRequest: () => true }));
 vi.mock("@/lib/authz/bridge-run-binding", () => ({
@@ -71,6 +90,16 @@ vi.mock("@/lib/extension-host-context", () => ({
 }));
 
 import { POST } from "../app/api/agents/passthrough/route";
+import { buildReviewResumeText } from "@/lib/artifacts/artifact-review-rejection";
+import { dispatchExtensionTool } from "@/lib/extension-tool-dispatch";
+import { createObjectsPrimitiveHandlers } from "../../packages/objects/src/mcp/handlers";
+
+const PACK_ROOT = path.resolve(__dirname, "../../extensions/cinatra-ai/blog-wordpress-publish-agent");
+const PACK_JSON = JSON.parse(fs.readFileSync(path.join(PACK_ROOT, "package.json"), "utf8")) as {
+  name: string;
+  version: string;
+  cinatra: Record<string, unknown>;
+};
 
 type Ref = { $component_ref: string };
 type Node = Record<string, unknown> & {
@@ -142,6 +171,9 @@ function packNodes() {
 }
 
 beforeEach(() => {
+  h.collectAllPrimitiveHandlers.mockReset().mockResolvedValue({});
+  h.getObjectById.mockReset();
+  h.upsertObjectAndEnqueue.mockReset();
   h.readAgentRunById.mockReset().mockResolvedValue({
     id: "run-wp",
     orgId: "org-1",
@@ -161,6 +193,7 @@ afterAll(() => {
   for (const m of [
     "@cinatra-ai/agents",
     "@/lib/primitive-handlers",
+    "@/lib/objects-store",
     "@/lib/wayflow-bridge-auth",
     "@/lib/authz/bridge-run-binding",
     "@/lib/authz/build-actor-context-from-run",
@@ -201,5 +234,117 @@ describe("the WordPress publish pack's review gate gets its targets", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body[targetsInput]).toBeUndefined();
+  });
+});
+
+// A person can choose Regenerate on the review and approve the successor
+// revision. The host resumes the review step with its own approval envelope,
+// which names the approved target. The pack's read step, as it ships, hands
+// that answer to the pack's declared tool through the host's real dispatch, so
+// the words read (and then shown on the publish card and sent) are the
+// successor's, never the revision the run started with.
+describe("the WordPress publish pack reads the revision the review approved", () => {
+  it("a Regenerate's successor, approved on the review, is the revision whose words are read", async () => {
+    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
+    const read = oas.$referenced_components.read_post_text;
+    const readData = read.data as { tool?: string; input?: Record<string, unknown> };
+    expect(readData.tool).toBe("extension_tool");
+    const successor = { artifactId: START.postArtifactId, representationRevisionId: "rev-post-8" };
+    const resume = buildReviewResumeText({
+      disposition: "approve",
+      reviewTaskId: "review-task-1",
+      comment: null,
+      targets: [successor],
+    });
+    if (resume.kind !== "approve") throw new Error("an approval resumes with approve text");
+    const values: Record<string, string> = {
+      reviewDecision: resume.userResponse,
+      postArtifactId: START.postArtifactId,
+    };
+    const fillFrom = (value: unknown): unknown => {
+      if (typeof value === "string") {
+        return value.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
+          const v = values[name];
+          if (v === undefined) throw new Error(`no value for ${name}`);
+          return v;
+        });
+      }
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillFrom(v)]));
+      }
+      return value;
+    };
+    const contentRead = vi.fn(async (request: Record<string, unknown>) => ({
+      text: "# The regenerated title\n\nThe regenerated words.",
+      truncated: false,
+      representationRevisionId: request.representationRevisionId,
+    }));
+    const result = await dispatchExtensionTool({
+      packageName: PACK_JSON.name,
+      packageVersion: PACK_JSON.version,
+      orgId: "org-1",
+      cinatra: PACK_JSON.cinatra,
+      request: fillFrom(readData.input) as Record<string, unknown>,
+      ports: {
+        artifacts: { list: vi.fn(), contentRead },
+      } as unknown as Parameters<typeof dispatchExtensionTool>[0]["ports"],
+      deps: { resolvePackageRoot: async () => PACK_ROOT },
+    });
+    expect(contentRead).toHaveBeenCalledTimes(1);
+    expect(contentRead).toHaveBeenCalledWith(successor);
+    expect(result).toEqual({
+      ...successor,
+      text: "# The regenerated title\n\nThe regenerated words.",
+      truncated: false,
+    });
+  });
+});
+
+// When nothing is published, the publish step answers its failure envelope: the
+// three address members are empty strings. The write_address leaf renders the
+// patch only when each member is present and non-empty, so for that envelope it
+// renders `{}` (its else branch, pinned in
+// packages/agents/src/__tests__/blog-wordpress-publish-agent-validates.test.ts).
+// That text, sent through the real route to the REAL objects_update handler,
+// writes nothing: no store upsert, so no new version, no history and no outbox
+// row, and no change-set to undo.
+describe("the WordPress publish pack's failing publish leaves the artifact unchanged", () => {
+  it("the write-back of the failure envelope reaches objects_update and writes nothing", async () => {
+    const write = oas.$referenced_components.write_address;
+    const writeData = write.data as { tool?: string; input?: Record<string, unknown> };
+    expect(writeData.tool).toBe("objects_update");
+    expect(String(writeData.input?.data).endsWith("{% else %}{}{% endif %}")).toBe(true);
+    h.getObjectById.mockReturnValue({
+      id: START.postArtifactId,
+      type: "@cinatra-ai/blog-post-artifact:post",
+      parentId: null,
+      parentType: null,
+      data: { title: "The post" },
+      createdBy: "user-1",
+      orgId: "org-1",
+      source: "agent",
+      runId: "run-wp",
+      agentId: null,
+      packageVersion: null,
+      agentSpecVersion: null,
+      version: 3,
+      deletedAt: null,
+      // The run owner's own artifact, so the handler's access check admits it.
+      ownerLevel: "user",
+      ownerId: "user-1",
+      visibility: "private",
+      projectId: null,
+    });
+    // What a write would answer: the next version, with a change-set to undo.
+    h.upsertObjectAndEnqueue.mockReturnValue({ id: START.postArtifactId, version: 4, changeSetId: "cs-1" });
+    const realUpdate = createObjectsPrimitiveHandlers().objects_update;
+    h.collectAllPrimitiveHandlers.mockResolvedValue({ objects_update: realUpdate });
+    const res = await POST(
+      nodeRequest({ ...writeData, input: { ...writeData.input, data: "{}" } }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(h.getObjectById).toHaveBeenCalledTimes(1);
+    expect(h.upsertObjectAndEnqueue).not.toHaveBeenCalled();
   });
 });

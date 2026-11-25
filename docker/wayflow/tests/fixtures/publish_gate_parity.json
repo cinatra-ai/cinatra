@@ -1,5 +1,5 @@
 {
-  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress bd0ac3d1, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs declare (the WordPress pack declares it itself at its pin, and parks on the host's review of the pinned revision, gather_review_target then review_post, before anything is read for publishing); every value is a string. The third has a publishing step first after start and a second one.",
+  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress ed523da6, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs declare (the WordPress pack declares it itself at its pin, and parks on the host's review of the pinned revision, gather_review_target then review_post, before anything is read for publishing, and the read step takes the revision the review approved from the review step's answer); every value is a string. The third has a publishing step first after start and a second one.",
   "gatePrefix": "cinatra_publish_gate__",
   "flows": [
     {
@@ -187,15 +187,15 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_postRepresentationRevisionId_to_read_post_text_postRepresentationRevisionId",
+            "name": "review_post_reviewDecision_to_read_post_text_reviewDecision",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "review_post"
             },
-            "source_output": "postRepresentationRevisionId",
+            "source_output": "reviewDecision",
             "destination_node": {
               "$component_ref": "read_post_text"
             },
-            "destination_input": "postRepresentationRevisionId"
+            "destination_input": "reviewDecision"
           },
           {
             "component_type": "DataFlowEdge",
@@ -211,11 +211,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_postArtifactId_to_publish_postArtifactId",
+            "name": "read_post_text_artifactId_to_publish_postArtifactId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "postArtifactId",
+            "source_output": "artifactId",
             "destination_node": {
               "$component_ref": "publish"
             },
@@ -223,11 +223,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_postRepresentationRevisionId_to_publish_postRepresentationRevisionId",
+            "name": "read_post_text_representationRevisionId_to_publish_postRepresentationRevisionId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "postRepresentationRevisionId",
+            "source_output": "representationRevisionId",
             "destination_node": {
               "$component_ref": "publish"
             },
@@ -271,11 +271,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_postArtifactId_to_write_address_postArtifactId",
+            "name": "read_post_text_artifactId_to_write_address_postArtifactId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "postArtifactId",
+            "source_output": "artifactId",
             "destination_node": {
               "$component_ref": "write_address"
             },
@@ -410,18 +410,18 @@
             "http_method": "POST",
             "data": {
               "input": {
+                "reviewDecision": "{{ reviewDecision }}",
                 "postArtifactId": "{{ postArtifactId }}",
-                "postRepresentationRevisionId": "{{ postRepresentationRevisionId }}",
                 "cinatra_run_id": "{{ cinatra_run_id }}"
               }
             },
             "inputs": [
               {
-                "title": "postArtifactId",
+                "title": "reviewDecision",
                 "type": "string"
               },
               {
-                "title": "postRepresentationRevisionId",
+                "title": "postArtifactId",
                 "type": "string"
               },
               {
@@ -430,6 +430,14 @@
               }
             ],
             "outputs": [
+              {
+                "title": "artifactId",
+                "type": "string"
+              },
+              {
+                "title": "representationRevisionId",
+                "type": "string"
+              },
               {
                 "title": "text",
                 "type": "string"

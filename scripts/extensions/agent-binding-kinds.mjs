@@ -36,6 +36,7 @@ export const KNOWN_FIELD_RENDERER_KINDS = Object.freeze([
   "send-confirmation",
   "test-delivery-input",
   "wayflow-setup-form",
+  "wordpress-draft-confirm",
 ]);
 
 export const KNOWN_A2UI_TRANSLATOR_KINDS = Object.freeze([

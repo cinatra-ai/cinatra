@@ -153,6 +153,51 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(components.read_post_record).toBeUndefined();
   });
 
+  it("Pin 4c: the words read for publishing are the revision the review approved, not the one the run started with", () => {
+    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
+    // A person can choose Regenerate on the review and approve the successor.
+    // The review step answers with the approved target, so the read step takes
+    // its revision from that answer (the pack's declared approved_post_text
+    // tool), and the publish step gets the approved artifact and revision from
+    // the read step. The start revision feeds only the review itself.
+    type Ref = { $component_ref: string };
+    const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const readData = components.read_post_text.data as {
+      tool?: string;
+      input?: { name?: string; input?: Record<string, unknown> };
+    };
+    expect(readData.tool).toBe("extension_tool");
+    expect(readData.input?.name).toBe("approved_post_text");
+    expect(readData.input?.input).toEqual({
+      reviewDecision: "{{ reviewDecision }}",
+      artifactId: "{{ postArtifactId }}",
+    });
+    const tools = ((pkg.cinatra ?? {}) as { tools?: unknown }).tools;
+    expect(tools).toContainEqual({
+      name: "approved_post_text",
+      module: "./cinatra/tools/approved-post-text.mjs",
+    });
+    const edges = (
+      oas.data_flow_connections as Array<{
+        source_node: Ref;
+        source_output: string;
+        destination_node: Ref;
+        destination_input: string;
+      }>
+    ).map(
+      (e) =>
+        `${e.source_node.$component_ref}.${e.source_output}->${e.destination_node.$component_ref}.${e.destination_input}`,
+    );
+    expect(edges).toContain("review_post.reviewDecision->read_post_text.reviewDecision");
+    expect(edges).toContain("read_post_text.artifactId->publish.postArtifactId");
+    expect(edges).toContain(
+      "read_post_text.representationRevisionId->publish.postRepresentationRevisionId",
+    );
+    expect(edges.filter((e) => e.startsWith("start.postRepresentationRevisionId->"))).toEqual([
+      "start.postRepresentationRevisionId->gather_review_target.postRepresentationRevisionId",
+    ]);
+  });
+
   it("Pin 5: single ApiNode targeting templated /api/llm-bridge, agent_id, no skill_source_path", () => {
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const publish = components.publish as Record<string, unknown>;
@@ -199,7 +244,9 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     // red-first-expect: to contain 'the review
     expect(skill).toContain("never raw text and never a blog record");
     expect(skill).toContain("the review's projection step reads the artifact's record (artifacts_get)");
-    expect(skill).toContain("reads the pinned revision's words (artifact_content_read)");
+    expect(skill).toContain(
+      "a step reads the approved revision's words (artifact_content_read, through the tool this package declares)",
+    );
     // Defensive: the blog-record road's obsolete BackgroundProcessRunStatus
     // string must not come back with it.
     const wrongMatches = skill.match(/status === ["']completed["']/g);
@@ -212,8 +259,8 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     expect(skill).not.toContain("blog_post_publish_wordpress_status");
   });
 
-  it("publishes the pinned revision's words, not a draft row's", () => {
-    expect(skill).toContain("THE REVISION THE PERSON CONTINUED WITH");
+  it("publishes the approved revision's words, not a draft row's", () => {
+    expect(skill).toContain("THE REVISION THE REVIEW APPROVED");
     expect(skill).toContain("postRepresentationRevisionId");
     expect(skill).not.toContain("wordpressDraftGeneration");
     expect(skill).not.toMatch(/post\.wordpressDrafts/);
@@ -266,7 +313,9 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     // red-first-expect: the recipe spells out its failure envelope: expected null to be truthy
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const declared = (components.publish.outputs as Array<{ title: string }>).map((o) => o.title).sort();
-    const tail = skill.slice(skill.indexOf("When nothing was published, return this failure envelope"));
+    const tail = skill.slice(
+      skill.indexOf("The failure envelope, with a one-line `summary` that names the cause"),
+    );
     const block = /```json\n([\s\S]*?)\n```/.exec(tail);
     expect(block, "the recipe spells out its failure envelope").toBeTruthy();
     const envelope = JSON.parse(block![1]) as Record<string, unknown>;
@@ -280,6 +329,15 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
       wordpressPublishedExternalId: "",
       wordpressPublishedRevisionId: "",
     });
+    // The partial envelope (the site returned only an address or only an id)
+    // carries the same empty patch, so its write-back writes nothing either.
+    const partialTail = skill.slice(skill.indexOf("The partial envelope"));
+    const partialBlock = /```json\n([\s\S]*?)\n```/.exec(partialTail);
+    expect(partialBlock, "the recipe spells out its partial envelope").toBeTruthy();
+    const partial = JSON.parse(partialBlock![1]) as Record<string, unknown>;
+    expect(Object.keys(partial).sort()).toEqual(declared);
+    expect(partial.addressWritten).toBe(false);
+    expect(partial.addressPatch).toEqual(envelope.addressPatch);
   });
 });
 

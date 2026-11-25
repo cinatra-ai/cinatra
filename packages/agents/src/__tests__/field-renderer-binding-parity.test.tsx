@@ -22,6 +22,7 @@ import {
 import {
   KNOWN_FIELD_RENDERER_KINDS,
   KNOWN_A2UI_TRANSLATOR_KINDS,
+  validateFieldRendererDeclarations,
 } from "../../../../scripts/extensions/agent-binding-kinds.mjs";
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
@@ -215,20 +216,20 @@ describe("resolution parity with the retired hand map", () => {
     },
   );
 
-  // cinatra#3650 / #4150: the WordPress publish pack declares no field renderer
-  // any more (the host's review card, then its publish card, replace its
-  // draft-confirm screen), and its kind left the host's vocabulary. A stored
-  // interrupt that still carries the old id resolves to NO renderer in this
-  // registry. A run parked on that id before the upgrade stays answerable only
-  // because cinatra#4777 (a parked step with a retired renderer id falls to the
-  // application's schema form, with its Continue) merges BEFORE this pin; this
-  // pin must not merge without it.
-  it("the retired WordPress draft-confirm id resolves to no renderer, and its kind is gone", () => {
-    // red-first-expect: expected { …(7) } to be null
+  // cinatra#3650 / #4150: the WordPress publish pack at this pin declares no
+  // field renderer (the host's review card, then its publish card, replace its
+  // draft-confirm screen), so the bundled tree carries no binding for the old
+  // id. The KIND stays in the host's vocabulary: a workspace that still has an
+  // older version of the pack installed at runtime keeps its binding, so a run
+  // parked on that screen keeps the host's schema floor with its Continue (the
+  // runtime-path case below).
+  it("the WordPress draft-confirm id has no bundled binding at this pin, and its kind stays", () => {
+    // red-first-expect: expected true to be false
     const id = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+    expect(GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === id)).toBe(false);
     expect(resolveWith(id), id).toBeNull();
-    expect(KNOWN_FIELD_RENDERER_KINDS).not.toContain("wordpress-draft-confirm");
-    expect(hasMidRunHitlBinding(id)).toBe(false);
+    expect(KNOWN_FIELD_RENDERER_KINDS).toContain("wordpress-draft-confirm");
+    expect(knownFieldRendererKinds()).toContain("wordpress-draft-confirm");
   });
 
   it.each([
@@ -449,6 +450,30 @@ describe("kind vocabulary cannot drift", () => {
 });
 
 describe("registerFieldRendererBindings (runtime path)", () => {
+  it("an older WordPress publish pack installed at runtime keeps its draft-confirm step on the floor, with its Continue", () => {
+    // The declaration the pack shipped before this pin (version 0.5.0).
+    const id = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+    const { entries, errors } = validateFieldRendererDeclarations(
+      "@cinatra-ai/blog-wordpress-publish-agent",
+      [
+        {
+          id,
+          kind: "wordpress-draft-confirm",
+          priority: 90,
+          midRunHitl: true,
+          component: { entry: "./src/renderers/draft-confirm.tsx", propsApiVersion: 1 },
+        },
+      ],
+    );
+    expect(errors.join("\n")).toBe("");
+    registerFieldRendererBindings(entries);
+    const entry = resolveWith(id);
+    expect(entry?.renderer).toBe(SchemaOnlyFloorRenderer);
+    expect(entry?.drawsOwnSubmit).toBe(true);
+    expect(hasMidRunHitlBinding(id)).toBe(true);
+    expect(classifyMidRunHitl(id)).toBe(true);
+  });
+
   it("registers a runtime binding idempotently and skips unknown kinds with a warning", () => {
     registerFieldRendererBindings([
       { id: "@cinatra-ai/future-agent:thing", kind: "cta", priority: 70 },

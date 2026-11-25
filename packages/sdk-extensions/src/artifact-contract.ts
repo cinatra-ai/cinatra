@@ -191,9 +191,9 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
  * resolves each `component.entry` relative to the DECLARING package's dir
  * (`declaredBy`), so declaring the binding on the artifact pack populates
  * `GENERATED_FIELD_RENDERER_BINDINGS` + `GENERATED_FIELD_RENDERER_COMPONENTS`
- * keyed by the unchanged id (exactly like the agent packs' migrated
- * field-renderer components of cinatra#1625, such as list-curator-agent's
- * review screens, only declared by an artifact pack). The one host-contract gap the ruling predates was THIS allowlist:
+ * keyed by the unchanged id (exactly like the `blog-wordpress-publish-agent`
+ * `wordpress-draft-confirm` component precedent, only declared by an artifact
+ * pack). The one host-contract gap the ruling predates was THIS allowlist:
  * without admitting the key the artifact bridge (`registerArtifactExtensions`)
  * rejects the whole manifest as extraneous and drops the pack's `artifact`
  * descriptor AND its `objectTypes` claims at boot. Admitting it here is purely

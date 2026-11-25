@@ -229,6 +229,17 @@ const RENDERER_KIND_TABLE: Record<
   // as final-list-review above.
   "test-delivery-input": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "wayflow-setup-form": { renderer: GroupedSetupFormRenderer, drawsOwnSubmit: true },
+  // MIGRATED (cinatra#1625 S8/M3): the blog-wordpress draft-confirm component
+  // moved into @cinatra-ai/blog-wordpress-publish-agent. The pinned pack no
+  // longer declares this binding (cinatra#3650, #4150: the host's review and
+  // publish cards replace that screen). The KIND stays for a workspace that
+  // still has an older version of the pack installed at runtime: its binding
+  // is validated against this vocabulary, so without the kind it is skipped
+  // and a run parked on that screen has no renderer and no Continue. With the
+  // kind, that binding degrades to the SchemaFieldRenderer floor here (AC4
+  // never-blank). Same shape as final-list-review / scrape-schema-review /
+  // linkedin-draft-review above.
+  "wordpress-draft-confirm": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
 };
 
 /** Pinned by the kind-vocabulary set-equality test. */
