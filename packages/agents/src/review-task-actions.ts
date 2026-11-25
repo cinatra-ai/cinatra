@@ -1065,8 +1065,9 @@ export async function approveReviewTaskInternal(
       resumeText = "[Approved by operator]";
     }
 
-    // Extract structured submission payload: a named single text answer under
-    // its field (cinatra#4244), else parsed userResponse JSON, else values minus
+    // Extract structured submission payload: a named single answer under its
+    // field, of its own type (cinatra#4244; an unnamed floor answer is named
+    // `hitl-field`), else parsed userResponse JSON, else values minus
     // userResponse, else null. The resume text above is unchanged by this.
     const submittedValues = readWayflowSubmittedValues(values);
 

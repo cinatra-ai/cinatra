@@ -61,6 +61,22 @@ describe("readWayflowSubmittedValues (cinatra#4244)", () => {
     expect(read({ answer: 41, ...STAMP, userResponse: "42", userResponseFieldName: "answer" })).toBeNull();
   });
 
+  // red-first-expect: to deeply equal { answer: null }
+  it("records a named blank answer under its field, told apart from no submission", async () => {
+    const read = await reader();
+    for (const value of [null, "", "  ", []] as const) {
+      expect(read({ answer: value, ...STAMP, userResponseFieldName: "answer" }), JSON.stringify(value)).toEqual({
+        answer: value,
+      });
+    }
+    // A name over a value that is not blank, with no resume text, is not believed.
+    expect(read({ answer: "x", ...STAMP, userResponseFieldName: "answer" })).toEqual({
+      answer: "x",
+      ...STAMP,
+      userResponseFieldName: "answer",
+    });
+  });
+
   it("records a named answer to a field called __proto__ as an own key", async () => {
     const read = await reader();
     const values = JSON.parse(

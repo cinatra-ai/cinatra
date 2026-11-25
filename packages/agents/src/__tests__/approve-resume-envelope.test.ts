@@ -516,11 +516,74 @@ describe("a named number, boolean or list answer survives in the durable record"
   }
 
   // red-first-expect: buildSchemaFloorGatePayload is not a function
-  it("without a field name the resume text is the same and nothing is named", async () => {
+  it("without a field name the resume text is the same", async () => {
     for (const c of NAMED) {
       const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.value });
       expect(payload.userResponse).toBe(c.text);
-      expect(payload).not.toHaveProperty("userResponseFieldName");
     }
+  });
+});
+
+// AN UNNAMED ANSWER IS KEPT TOO. An ordinary WayFlow gate carries no field
+// name, so the floor's answer is written under `hitl-field` (the name the plain
+// form and the read-only replay give a single field with no name of its own),
+// with its own type. The prompt record and the Continue receipt carry it, and
+// WayFlow receives the same resume text as before. `null`, a blank text and an
+// empty list send the marker, as before, and are still kept in the record.
+describe("an unnamed answer of any type survives in the durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const KEY = "hitl-field";
+  const GATE = {
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer: FLOOR_ID,
+    inputSchema: {},
+    values: {},
+    materializedAt: "2026-11-24T00:00:00.000Z",
+  };
+  const UNNAMED: Array<{ label: string; schema: Record<string, unknown>; value: unknown; text: string }> = [
+    { label: "42", schema: { type: "number" }, value: 42, text: "42" },
+    { label: "0", schema: { type: "integer" }, value: 0, text: "0" },
+    { label: "false", schema: { type: "boolean" }, value: false, text: "false" },
+    { label: '["a"]', schema: { type: "array", items: { type: "string" } }, value: ["a"], text: '["a"]' },
+    { label: "empty text", schema: { type: "string" }, value: "", text: "[Approved by operator]" },
+    { label: "null", schema: { type: "string" }, value: null, text: "[Approved by operator]" },
+    { label: "a text", schema: { type: "string" }, value: "Ship it.", text: "Ship it." },
+    { label: "a JSON-looking text", schema: { type: "string" }, value: "42", text: "42" },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue({ ...GATE });
+  });
+
+  for (const c of UNNAMED) {
+    // red-first-expect: buildSchemaFloorGatePayload is not a function
+    it(`an unnamed ${c.label} answer is written, read back and receipted`, async () => {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.value });
+      expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ [KEY]: c.value });
+      expect(gateSubmit.readWayflowSubmittedValues(JSON.parse(JSON.stringify(payload)))).toEqual({
+        [KEY]: c.value,
+      });
+      await approveReviewTaskInternal(TASK, "actor-1", payload);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual({ [KEY]: c.value });
+      // The stored record read back through a JSON copy keeps the value and its type.
+      expect(JSON.parse(JSON.stringify(written?.submittedValues))).toEqual({ [KEY]: c.value });
+      expect(continueMock.recordSuccessfulContinue).toHaveBeenCalledTimes(1);
+      expect(continueMock.recordSuccessfulContinue.mock.calls[0]?.[0]?.submittedValues).toEqual({
+        [KEY]: c.value,
+      });
+    });
+  }
+
+  // red-first-expect: buildSchemaFloorGatePayload is not a function
+  it("nothing entered writes no answer", () => {
+    const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: { type: "number" }, next: undefined });
+    expect(payload).not.toHaveProperty(KEY);
+    expect(payload).not.toHaveProperty("userResponse");
   });
 });

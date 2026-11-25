@@ -43,21 +43,21 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
     // Pre-existing suffix matchers are retained for now; narrowing those
     // is a separate audit. Spot-check a representative set so a refactor
     // accidentally dropping them gets caught.
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:output")).toBe(true);
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:contacts-output")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:output")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:contacts-output")).toBe(true);
     // :contact-source-selector retired with the lists_* / segment surface.
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:list-picker")).toBe(true);
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:scrape-schema-review")).toBe(true);
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:final-list-review")).toBe(true);
-    expect(classifyMidRunHitl("@cinatra-ai/whatever:setup-form")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:list-picker")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:scrape-schema-review")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:final-list-review")).toBe(true);
+    expect(classifyMidRunHitl("@cinatra/whatever:setup-form")).toBe(true);
   });
 
   // red-first-expect: expected true to be false
   it("a tombstoned id is never mid-run, whatever its suffix", () => {
-    // `@cinatra/...` is the retired scope: its review gates stay unresumable,
-    // so no host draws an outer Continue for them.
+    // The retired legacy-scope reviewer alias stays unresumable, so no host
+    // draws an outer Continue for it. Other `@cinatra/` ids keep their suffix
+    // classification (above).
     expect(classifyMidRunHitl("@cinatra/email-reviewer-agent:output")).toBe(false);
-    expect(classifyMidRunHitl("@cinatra/whatever:output")).toBe(false);
   });
 
   it("non-HITL renderer ids return false", () => {

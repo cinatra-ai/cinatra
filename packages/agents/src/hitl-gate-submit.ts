@@ -1179,12 +1179,17 @@ const FLOOR_RESERVED_KEYS: ReadonlySet<string> = new Set([
  *      - a number or a boolean: its JSON text (`42`, `true`, `false`); a
  *        number that is not finite is refused with `NonFiniteAnswerError`;
  *      - a list: its JSON text (`["a","b"]`).
- *    With the gate's `fieldName`, the value itself (of whatever type) is also
- *    written under that name and the name is given in `userResponseFieldName`,
- *    so the server records the answer under it (`readWayflowSubmittedValues`).
- *    The resume text is the same with or without the name.
- *    A blank text, an empty list and no value carry no resume text, so the
- *    flow receives the marker, as for an object gate answered with nothing.
+ *    The value itself (of whatever type) is also written under the gate's
+ *    `fieldName`, or, when the gate has none, under `HITL_PLACEHOLDER_FIELD_NAME`
+ *    (`hitl-field`, the name the plain form and the read-only replay give a
+ *    single field with no name of its own), and that key is given in
+ *    `userResponseFieldName`, so the server records the answer under it
+ *    (`readWayflowSubmittedValues`), with its own type, named or not. The
+ *    resume text is the same with or without the name.
+ *    A blank text, an empty list and `null` carry no resume text, so the flow
+ *    receives the marker, as for an object gate answered with nothing; the
+ *    value is still written under its key, so the record keeps the answer.
+ *    No value (`undefined`) writes nothing.
  */
 export function buildSchemaFloorGatePayload(args: {
   schema: unknown;
@@ -1203,7 +1208,7 @@ export function buildSchemaFloorGatePayload(args: {
     approved: true,
     approvedAt: args.now ?? new Date().toISOString(),
   };
-  if (value === undefined || value === null) return payload;
+  if (value === undefined) return payload;
   const field =
     typeof args.fieldName === "string" &&
     args.fieldName !== "" &&
@@ -1211,25 +1216,24 @@ export function buildSchemaFloorGatePayload(args: {
     !FLOOR_RESERVED_KEYS.has(args.fieldName)
       ? args.fieldName
       : null;
-  let resumeText: string;
-  if (typeof value === "string") {
-    if (value.trim() === "") return payload;
-    resumeText = value;
+  const key = field ?? HITL_PLACEHOLDER_FIELD_NAME;
+  let resumeText: string | null;
+  if (value === null) {
+    resumeText = null;
+  } else if (typeof value === "string") {
+    resumeText = value.trim() === "" ? null : value;
   } else if (typeof value === "number" || typeof value === "boolean") {
     if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
     resumeText = JSON.stringify(value);
   } else if (Array.isArray(value)) {
-    if (value.length === 0) return payload;
     if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
-    resumeText = JSON.stringify(value);
+    resumeText = value.length === 0 ? null : JSON.stringify(value);
   } else {
     return payload;
   }
-  payload.userResponse = resumeText;
-  if (field !== null) {
-    setOwn(payload, field, value);
-    payload.userResponseFieldName = field;
-  }
+  if (resumeText !== null) payload.userResponse = resumeText;
+  setOwn(payload, key, value);
+  payload.userResponseFieldName = key;
   return payload;
 }
 
@@ -1251,7 +1255,15 @@ export function buildSchemaFloorGatePayload(args: {
  *     the value of its own type - even when a text reads as JSON (`42`,
  *     `{"tone":"warm"}`), and although the reading below keeps only a JSON
  *     object. A name whose value is not the resume text is not believed.
- *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
+ *     An unnamed answer is named `hitl-field` (`HITL_PLACEHOLDER_FIELD_NAME`)
+ *     by `buildSchemaFloorGatePayload`, so it is read the same way:
+ *     `{ "hitl-field": 42 }`.
+ *  2. A NAMED BLANK ANSWER. No resume text, and `userResponseFieldName` names
+ *     an own key whose value is `null`, a blank text or an empty list (the
+ *     answers that send the flow the marker): recorded under that key alone,
+ *     so a blank answer is told apart from no submission. Any other value
+ *     under such a name is not believed.
+ *  3. Otherwise, as before: a `userResponse` that parses as a JSON object is the
  *     submitted values; one that is not JSON leaves the values without
  *     `userResponse`; no `userResponse` leaves the values themselves; nothing
  *     left is `null`.
@@ -1300,6 +1312,29 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
       const { userResponse: _u, ...rest } = valuesObj;
       void _u;
       return Object.keys(rest).length > 0 ? rest : null;
+    }
+  }
+  const blankName = own("userResponseFieldName");
+  if (
+    typeof blankName === "string" &&
+    blankName !== "userResponse" &&
+    blankName !== "userResponseFieldName" &&
+    Object.prototype.hasOwnProperty.call(valuesObj, blankName)
+  ) {
+    const blank = own(blankName);
+    if (
+      blank === null ||
+      (typeof blank === "string" && blank.trim() === "") ||
+      (Array.isArray(blank) && blank.length === 0)
+    ) {
+      const recorded: Record<string, unknown> = {};
+      Object.defineProperty(recorded, blankName, {
+        value: blank,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      return recorded;
     }
   }
   const { userResponse: _u, ...rest } = valuesObj;

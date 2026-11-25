@@ -31,6 +31,7 @@ const SRC = readFileSync(
 );
 
 describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button", () => {
+  // red-first-expect: to match /drawnByFloor
   it("defines isGenericObjectSchema as a gate the schema floor draws combined with object type", () => {
     // The condition must check BOTH that the floor draws the gate AND the schema type.
     // A missing type check would incorrectly show Continue for non-object schemas.

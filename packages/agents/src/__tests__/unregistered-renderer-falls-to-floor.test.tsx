@@ -419,3 +419,92 @@ describe("OrchestratorStepperPanel - a tombstoned gate stays unanswerable", () =
     }
   });
 });
+
+// THE `@cinatra/` SCOPE IS A PACKAGE SCOPE, NOT A RETIRED ONE. Installation
+// (`detectSourceRef`) and binding validation (`BINDING_ID_RE`) accept it, so a
+// package `@cinatra/foo` with a renderer `@cinatra/foo:output` registers,
+// resolves and draws its paused step. Only the listed ids and the listed
+// retired packages are refused.
+describe("a renderer of a `@cinatra/` package", () => {
+  const LIVE_ID = "@cinatra/foo:output";
+  const LIVE_SCHEMA = {
+    type: "object",
+    properties: { reply: { type: "string", title: "Reply" } },
+  };
+
+  // red-first-expect: isTombstonedHitlRendererId is not a function
+  it("registers, resolves and is classified mid-run like any other package's renderer", () => {
+    expect(midRun.isTombstonedHitlRendererId(LIVE_ID)).toBe(false);
+    registration.registerFieldRendererBindings([{ id: LIVE_ID, kind: "cta", priority: 90 }]);
+    expect(fieldRendererRegistry.list().some((e) => e.id === LIVE_ID)).toBe(true);
+    expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(LIVE_ID), CONTEXT)?.id).toBe(LIVE_ID);
+    expect(midRun.classifyMidRunHitl(LIVE_ID)).toBe(true);
+  });
+
+  it("draws its paused step on the stepper with a Continue that answers the gate", async () => {
+    registration.registerFieldRendererBindings([{ id: LIVE_ID, kind: "cta", priority: 90 }]);
+    INTERRUPT = { schema: LIVE_SCHEMA, xRenderer: LIVE_ID, values: {}, reviewTaskId: TASK_ID };
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel
+        {...baseProps()}
+        stepperSteps={[{ index: 1, stepNumber: 0, label: "Reply", xRenderer: LIVE_ID }]}
+      />,
+    );
+    await waitFor(() => expect(continues()).toHaveLength(1));
+    expect(document.body.textContent ?? "").not.toMatch(/no renderer configured/);
+    fireEvent.click(continues()[0]!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    expect((hitlActions.approveReviewTask.mock.calls[0] as unknown[])[0]).toBe(TASK_ID);
+  });
+
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_PACKAGES is not iterable
+  it("each listed id and each id of a listed retired package stays refused", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const packageIds = [...midRun.TOMBSTONED_HITL_RENDERER_PACKAGES].map((p) => `${p}:any-screen`);
+    for (const id of [...midRun.TOMBSTONED_HITL_RENDERER_IDS, ...packageIds]) {
+      expect(midRun.isTombstonedHitlRendererId(id), id).toBe(true);
+      expect(midRun.classifyMidRunHitl(id), id).toBe(false);
+      registration.registerFieldRendererBindings([{ id, kind: "cta", priority: 90 }]);
+      expect(fieldRendererRegistry.list().some((e) => e.id === id), id).toBe(false);
+      expect(midRun.resolveHitlGateRenderer("hitl", gateSchema(id), CONTEXT), id).toBeNull();
+    }
+    warn.mockRestore();
+  });
+
+  // red-first-expect: Cannot read properties of undefined (reading 'has')
+  it("agrees with the installation and validation rules: an id they accept is refused only when listed", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { BINDING_ID_RE } = await import("../../../../scripts/extensions/agent-binding-kinds.mjs");
+    const installSrc = readFileSync(
+      join(__dirname, "..", "..", "..", "extensions", "src", "add-from-chat.ts"),
+      "utf8",
+    );
+    // The scopes installation takes from the private registry.
+    const scopeLine = installSrc.split("\n").find((l) => l.includes("isPrivateScope ="));
+    expect(scopeLine).toBeDefined();
+    const scopes = [...scopeLine!.matchAll(/startsWith\("(@[^"]+\/)"\)/g)].map((m) => m[1]!);
+    expect(scopes).toContain("@cinatra/");
+    expect(scopes).toContain("@cinatra-ai/");
+    const packages = ["foo", "email-agent", "email-reviewer-agent", "context-selection-agent", "x"];
+    const locals = ["output", "ai-review-panel", "draft-review", "setup-form", "review", "screen"];
+    for (const scope of scopes) {
+      for (const pkg of packages) {
+        for (const local of locals) {
+          const id = `${scope}${pkg}:${local}`;
+          expect(BINDING_ID_RE.test(id), id).toBe(true);
+          const listed =
+            midRun.TOMBSTONED_HITL_RENDERER_IDS.has(id) ||
+            midRun.TOMBSTONED_HITL_RENDERER_PACKAGES.has(`${scope}${pkg}`);
+          expect(midRun.isTombstonedHitlRendererId(id), id).toBe(listed);
+        }
+      }
+    }
+    // A listed id that validation accepts sits in a scope installation accepts.
+    for (const id of midRun.TOMBSTONED_HITL_RENDERER_IDS) {
+      if (!BINDING_ID_RE.test(id)) continue;
+      expect(scopes.some((s) => id.startsWith(s)), id).toBe(true);
+    }
+  });
+});

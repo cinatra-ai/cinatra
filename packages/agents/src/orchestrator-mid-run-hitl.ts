@@ -62,46 +62,51 @@ export function classifyMidRunHitl(xRenderer: string): boolean {
  * must stay unresumable. A stored interrupt that carries one of them shows
  * "no renderer configured for this step" and no Continue, on every host.
  *
- *   - `@cinatra/...` is a RETIRED scope (never a real extension package). Its
- *     two reviewer aliases were deleted (cinatra#1625 S8/M3, owner
- *     action-boundary ruling 2026-07-18; cinatra#1796 teardown). The
- *     `ai-review-panel` alias could approve a review, so it is NOT a schema
- *     floor; the bare `ai-review-panel` alias went with it.
- *   - The retired reviewer and auditor packages (cinatra#2042 / #1796): their
- *     four reviewer-output bindings and the auditor review binding. These ids
- *     are assembled from parts, because the retirement identity gate keeps the
- *     package refs at zero in the whole tree.
+ *   - `@cinatra/email-reviewer-agent:output` and
+ *     `@cinatra/email-reviewer-agent:ai-review-panel`: the two legacy-scope
+ *     reviewer aliases, deleted (cinatra#1625 S8/M3, owner action-boundary
+ *     ruling 2026-07-18; cinatra#1796 teardown). The `ai-review-panel` alias
+ *     could approve a review, so it is NOT a schema floor; the bare
+ *     `ai-review-panel` alias went with it. Only these two ids are retired:
+ *     the `@cinatra/` scope itself is still a valid package scope (install and
+ *     binding validation accept it), so any other `@cinatra/<pkg>:<id>`
+ *     registers and resolves as any other package's renderer does.
+ *   - The retired reviewer and auditor packages (cinatra#2042 / #1796,
+ *     `TOMBSTONED_HITL_RENDERER_PACKAGES`): every id of these two exact
+ *     package names (their four reviewer-output
+ *     bindings and the auditor review binding). The names are assembled from
+ *     parts, because the retirement identity gate keeps the package refs at
+ *     zero in the whole tree.
  *
  * ONE LIST, READ IN TWO PLACES: `registerFieldRendererBindings` never
  * registers a tombstoned id, and the hosts classify none as mid-run
  * (`classifyMidRunHitl`, the HITL screen card).
  */
-const RETIRED_SCOPE_PREFIX = "@cinatra/";
-const RETIRED_PACKAGE_PREFIXES: readonly string[] = [
-  `@cinatra-ai/${"reviewer"}-agent:`,
-  `@cinatra-ai/${"auditor"}-agent:`,
-];
+export const TOMBSTONED_HITL_RENDERER_PACKAGES: ReadonlySet<string> = new Set([
+  `@cinatra-ai/${"reviewer"}-agent`,
+  `@cinatra-ai/${"auditor"}-agent`,
+]);
+const [RETIRED_REVIEWER_PACKAGE, RETIRED_AUDITOR_PACKAGE] = [...TOMBSTONED_HITL_RENDERER_PACKAGES];
 export const TOMBSTONED_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
   "@cinatra/email-reviewer-agent:output",
   "@cinatra/email-reviewer-agent:ai-review-panel",
   "ai-review-panel",
-  `${RETIRED_PACKAGE_PREFIXES[0]}output`,
-  `${RETIRED_PACKAGE_PREFIXES[0]}drafts-output`,
-  `${RETIRED_PACKAGE_PREFIXES[0]}followups-output`,
-  `${RETIRED_PACKAGE_PREFIXES[0]}contacts-output`,
-  `${RETIRED_PACKAGE_PREFIXES[1]}review`,
+  `${RETIRED_REVIEWER_PACKAGE}:output`,
+  `${RETIRED_REVIEWER_PACKAGE}:drafts-output`,
+  `${RETIRED_REVIEWER_PACKAGE}:followups-output`,
+  `${RETIRED_REVIEWER_PACKAGE}:contacts-output`,
+  `${RETIRED_AUDITOR_PACKAGE}:review`,
 ]);
 
 /**
- * Is this renderer id tombstoned? A listed id, any id in the retired
- * `@cinatra/` scope, and any id of a retired reviewer or auditor package.
+ * Is this renderer id tombstoned? A listed id, or any id of a listed retired
+ * package (`TOMBSTONED_HITL_RENDERER_PACKAGES`, exact package names). Nothing
+ * else: every other id, in any scope, registers and resolves as usual.
  */
 export function isTombstonedHitlRendererId(xRenderer: string): boolean {
-  return (
-    TOMBSTONED_HITL_RENDERER_IDS.has(xRenderer) ||
-    xRenderer.startsWith(RETIRED_SCOPE_PREFIX) ||
-    RETIRED_PACKAGE_PREFIXES.some((prefix) => xRenderer.startsWith(prefix))
-  );
+  if (TOMBSTONED_HITL_RENDERER_IDS.has(xRenderer)) return true;
+  const colon = xRenderer.indexOf(":");
+  return colon > 0 && TOMBSTONED_HITL_RENDERER_PACKAGES.has(xRenderer.slice(0, colon));
 }
 
 /**
