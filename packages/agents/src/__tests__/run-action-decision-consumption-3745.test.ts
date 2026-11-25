@@ -613,3 +613,68 @@ describe("the decision of the call's own visit (cinatra#3745)", () => {
     expect(h.calls).toEqual([]);
   });
 });
+
+// cinatra#4150: a flow that loops back through its publishing step (a test send sent again from the same run). The
+// flow's graph carries an edge from the publishing step back to itself, so one attempt visits the step twice. Each
+// visit stops at its own publish gate, whose task id is new, and the hold parks a decision under that task id
+// (insertParkedDecision, the store's real insert): two cards, two decisions. Each decision is released by a person
+// and used once by its own visit's call; the first release never serves the second visit.
+describe("a publishing step visited twice in one attempt (cinatra#4150)", () => {
+  const loop = structuredClone(graph) as typeof graph & { control_flow_connections: unknown[] };
+  loop.control_flow_connections.push({ component_type: "ControlFlowEdge", name: "call_llm_bridge_again",
+    from_node: { $component_ref: SEND_STEP }, to_node: { $component_ref: SEND_STEP } });
+  const loopSource = JSON.stringify(loop);
+  const loopSha = createHash("sha256").update(loopSource).digest("hex");
+  const loopProof = { ...proofFor(SEND_STEP), sourceSha256: loopSha, executedSourceSha256: loopSha, declarationSourceSha256: loopSha };
+  const visitCall = (publishDecisionId: string) => input({ proof: loopProof, publishDecisionId });
+  const park = (gateTaskId: string, surfaced: Record<string, unknown>) => insertParkedDecision({
+    orgId: "org-1", runId: "run-1", nodeId: SEND_STEP, gateTaskId, a2aContextId: "ctx", surfacedValues: surfaced,
+  });
+  const release = (id: string) => {
+    const row = h.tables.get(agentRunPublishDecisions)!.find((r) => r.id === id)!;
+    Object.assign(row, { status: "released", decidedBy: "user-7", decidedAt: new Date("2026-11-24T12:30:00Z") });
+  };
+
+  beforeEach(() => {
+    h.tables.set(agentRunOutwardActionPolicies, [{ runId: "run-1", orgId: "org-1", executionAttemptId: "attempt-1",
+      policy: { ...policy, sourceSha256: loopSha, executedSourceSha256: loopSha, declarationSourceSha256: loopSha, source: loopSource } }]);
+    h.tables.set(agentRunPublishDecisions, []);
+  });
+
+  // red-first-pin: parks a new decision for each visit's publish gate, and each is used once by its own visit
+  it("parks a new decision for each visit's publish gate, and each is used once by its own visit", async () => {
+    await loadModule();
+    const first = await park("publish-gate-task-1", { planJson: "plan-1" });
+    expect(first.inserted).toBe(true);
+    await expect(consume(visitCall(first.decision.id))).rejects.toMatchObject({ code: "action_person_decision_open" });
+    release(first.decision.id);
+    expect(await consume(visitCall(first.decision.id))).toMatchObject({ decisionId: first.decision.id });
+    await expect(consume(visitCall(first.decision.id))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+
+    const second = await park("publish-gate-task-2", { planJson: "plan-2" });
+    expect(second.inserted).toBe(true);
+    expect(second.decision.id).not.toBe(first.decision.id);
+    expect(second.decision.status).toBe("parked");
+    expect(second.decision.surfacedValues).toEqual({ planJson: "plan-2" });
+    // The second card waits for its own person's answer: the first release does not serve it.
+    await expect(consume(visitCall(second.decision.id))).rejects.toMatchObject({ code: "action_person_decision_open" });
+    release(second.decision.id);
+    expect(await consume(visitCall(second.decision.id))).toMatchObject({ decisionId: second.decision.id });
+    await expect(consume(visitCall(second.decision.id))).rejects.toMatchObject({ code: "action_person_decision_already_consumed" });
+
+    expect(h.tables.get(agentRunPublishDecisions)!.map((r) => r.gateTaskId)).toEqual(["publish-gate-task-1", "publish-gate-task-2"]);
+    expect(consumptions().map((c) => c.gateId)).toEqual([
+      `publish_decision:${first.decision.id}`, `publish_decision:${second.decision.id}`]);
+  });
+
+  // red-first-pin: a call that names no visit is refused once the step has two decisions
+  it("a call that names no visit is refused once the step has two decisions", async () => {
+    await loadModule();
+    const first = await park("publish-gate-task-1", { planJson: "plan-1" });
+    release(first.decision.id);
+    const second = await park("publish-gate-task-2", { planJson: "plan-2" });
+    release(second.decision.id);
+    await expect(consume(input({ proof: loopProof }))).rejects.toMatchObject({ code: "action_decision_binding_missing" });
+    expect(consumptions()).toEqual([]);
+  });
+});
