@@ -35,6 +35,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   poolQueryMock,
+  connectMock,
   registerAllObjectTypesMock,
   createSemanticArtifactMock,
   claimMaterializationMock,
@@ -49,6 +50,7 @@ const {
   readArtifactTypeClaimsForOrgMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
+  connectMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
   createSemanticArtifactMock: vi.fn(),
   claimMaterializationMock: vi.fn(),
@@ -66,7 +68,7 @@ const {
 vi.mock("@/lib/objects-store", () => ({ getObjectById: (...args: unknown[]) => objectReadMock(...args) }));
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
+  getPooledDb: () => ({ query: poolQueryMock, connect: () => connectMock() }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -96,6 +98,7 @@ vi.mock("../artifact-creation", () => ({
 vi.mock("../materialization-ledger", async () => ({
   // cinatra#4762: the reused revision's restamp, as the module ships it.
   restampReusedRevision: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevision,
+  restampReusedRevisions: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevisions,
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
@@ -186,6 +189,7 @@ beforeEach(() => {
       updatedAt: null,
     },
   ]);
+  connectMock.mockImplementation(async () => ({ query: poolQueryMock, release: () => {} }));
   poolQueryMock.mockImplementation(async (text: string) => {
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
@@ -208,6 +212,7 @@ beforeEach(() => {
           representationRevisionId: r.representationRevisionId,
         });
       }
+      return true;
     },
   );
   findFinalizedFanoutMessageMaterializationMock.mockImplementation(
@@ -755,6 +760,145 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
   });
 
+  describe("binding an unbound body to a message is atomic: at most one message wins an artifact (real ledger functions over a transaction double)", () => {
+    type Row = { run_id: string; org_id: string; output_id: string; path: string; extension: string; content_hash: string; artifact_id: string; rev: string };
+    let table: Row[];
+    let lockWaits: number;
+
+    /** The ledger table and the artifact advisory lock as PostgreSQL gives them: a transaction's rows are visible to
+     *  others only after its COMMIT, and `pg_advisory_xact_lock` waits until the holder's COMMIT or ROLLBACK. */
+    function install(seed: Array<{ artifact: string; rev: string }>, opts?: { dropLock?: boolean }) {
+      table = seed.map((r, i) => ({ run_id: "run-1", org_id: "org-a", output_id: `drafting-${i}`, path: "materialize_tool", extension: EXT, content_hash: sha256("Same body"), artifact_id: r.artifact, rev: r.rev }));
+      lockWaits = 0;
+      const holders = new Map<string, Promise<void>>();
+      const base = poolQueryMock.getMockImplementation()!;
+      poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+        if (text.includes("m.path IN")) {
+          const [runId, ext, hash, orgId, excluded] = values as [string, string, string, string, string[]];
+          const bound = (a: string) => table.some((f) => f.run_id === runId && f.org_id === orgId && f.path === "email_fanout" && f.artifact_id === a);
+          const hit = table.find((m) => m.run_id === runId && m.extension === ext && m.content_hash === hash && m.org_id === orgId
+            && ["materialize_tool", "end_node_binding"].includes(m.path) && !bound(m.artifact_id) && !excluded.includes(m.artifact_id));
+          return { rows: hit ? [{ artifact_id: hit.artifact_id, representation_revision_id: hit.rev }] : [] };
+        }
+        return base(text, values);
+      });
+      connectMock.mockImplementation(async () => {
+        const held: Array<() => void> = [];
+        let pending: Row[] = [];
+        const finish = () => { table.push(...pending); pending = []; for (const release of held.splice(0)) release(); };
+        return {
+          release: () => {},
+          query: async (text: string, values?: unknown[]) => {
+            if (text === "COMMIT") { finish(); return { rows: [] }; }
+            if (text === "ROLLBACK") { pending = []; for (const release of held.splice(0)) release(); return { rows: [] }; }
+            if (text.includes("pg_advisory_xact_lock")) {
+              if (opts?.dropLock) return { rows: [] };
+              const key = String((values as string[])[0]);
+              const before = holders.get(key);
+              if (before) lockWaits += 1;
+              let release!: () => void;
+              const mine = new Promise<void>((resolve) => { release = resolve; });
+              holders.set(key, (before ?? Promise.resolve()).then(() => mine));
+              await before;
+              held.push(release);
+              return { rows: [] };
+            }
+            if (text.includes("INSERT INTO") && text.includes("'email_fanout'") && text.includes("NOT EXISTS")) {
+              const [, org, run, output, ext, hash, artifact, rev] = values as string[];
+              const taken = table.some((f) => f.run_id === run && f.org_id === org && f.path === "email_fanout" && f.artifact_id === artifact);
+              const clash = table.some((f) => f.run_id === run && f.output_id === output && f.extension === ext && f.content_hash === hash);
+              if (taken || clash) return { rows: [] };
+              pending.push({ run_id: run!, org_id: org!, output_id: output!, path: "email_fanout", extension: ext!, content_hash: hash!, artifact_id: artifact!, rev: rev! });
+              return { rows: [{ id: "row" }] };
+            }
+            return base(text, values);
+          },
+        };
+      });
+      return holders;
+    }
+
+    /** Real ledger functions behind the materializer's seams, with a barrier after the SELECT of the first lookup of each
+     *  message: both messages hold the same unbound candidate before either binds. */
+    async function race(seed: Array<{ artifact: string; rev: string }>, opts?: { dropLock?: boolean }) {
+      const ledger = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+      install(seed, opts);
+      // The entry loads some modules lazily, and a first CONCURRENT load of a mocked module can bypass its mock: one
+      // earlier reuse (of a body with other bytes) goes through the same road, so both racing calls find them loaded.
+      table.push({ run_id: "run-1", org_id: "org-a", output_id: "drafting-warm", path: "materialize_tool", extension: EXT, content_hash: sha256("Warm-up body"), artifact_id: "w-1", rev: "wr-1" });
+      storedObjects.set("w-1", stored(fullData(MESSAGES[0])));
+      recordFanoutReuseMaterializationMock.mockImplementation(ledger.recordFanoutReuseMaterialization);
+      findFinalizedFanoutMessageMaterializationMock.mockImplementation(ledger.findFinalizedFanoutMessageMaterialization);
+      findFinalizedMidRunMaterializationMock.mockImplementation(ledger.findFinalizedMidRunMaterialization as never);
+      await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), outputId: "email-body:run-1:warm", markdown: "Warm-up body" });
+      for (const { artifact } of seed) storedObjects.set(artifact, stored(fullData(MESSAGES[0])));
+      let arrived = 0;
+      let released = 0;
+      let firstArrived!: () => void;
+      const first = new Promise<void>((resolve) => { firstArrived = resolve; });
+      let open!: () => void;
+      const barrier = new Promise<void>((resolve) => { open = resolve; });
+      findFinalizedMidRunMaterializationMock.mockImplementation((async (k: Parameters<typeof ledger.findFinalizedMidRunMaterialization>[0]) => {
+        const found = await ledger.findFinalizedMidRunMaterialization(k);
+        if ((k.excludeArtifactIds ?? []).length === 0) {
+          arrived += 1;
+          firstArrived();
+          if (arrived >= 2) open();
+          await barrier;
+          // The messages leave the first barrier one after the other so that their lazy module loads do not race.
+          if (arrived >= 2 && !released++) await new Promise((resolve) => setTimeout(resolve, 60));
+        }
+        return found;
+      }) as never);
+      // Second barrier: both messages hold the same candidate, admitted, and call the bind at the same moment.
+      let binding = 0;
+      let openBind!: () => void;
+      const bindBarrier = new Promise<void>((resolve) => { openBind = resolve; });
+      recordFanoutReuseMaterializationMock.mockImplementation(async (r: Parameters<typeof ledger.recordFanoutReuseMaterialization>[0]) => {
+        if (binding < 2) {
+          binding += 1;
+          if (binding >= 2) openBind();
+          await bindBarrier;
+        }
+        return ledger.recordFanoutReuseMaterialization(r);
+      });
+      findFinalizedFanoutMessageMaterializationMock.mockImplementation(ledger.findFinalizedFanoutMessageMaterialization);
+      // Two messages of one run with the same subject and bytes and the run's correlation: either may take the body.
+      const same = (m: (typeof MESSAGES)[number]) => ({ ...bodyInput(m), title: "Hello One", markdown: "Same body", reuseMustCarry: ["runId", "campaignId"] });
+      // The second message starts once the first holds its candidate (its lazy module loads then run one after the
+      // other), and both are parked at the barrier before either binds.
+      const one = materializeFanoutMessageRevision(same(MESSAGES[0]));
+      await first;
+      const two = materializeFanoutMessageRevision(same(MESSAGES[1]));
+      return Promise.all([one, two]);
+    }
+    const boundRows = () => table.filter((r) => r.path === "email_fanout" && r.content_hash === sha256("Same body"));
+
+    // red-first-expect: to deeply equal
+    it("B11 two messages that both selected the one unbound artifact: exactly one binds it, the other writes a body of its own", async () => {
+      const outcomes = await race([{ artifact: "u-1", rev: "ur-1" }]);
+      expect(boundRows().map((r) => r.artifact_id)).toEqual(["u-1"]);
+      expect(outcomes.map((o) => (o.ok ? o.artifactId : null)).sort()).toEqual(["art-1", "u-1"]);
+      expect(outcomes.filter((o) => o.ok && o.deduped)).toHaveLength(1);
+      expect(createSemanticArtifactMock).toHaveBeenCalledTimes(1);
+      expect(lockWaits).toBe(1);
+    });
+
+    // red-first-expect: to deeply equal
+    it("B11 with two unbound candidates, the message that lost the first takes the NEXT one: each artifact is bound by exactly one message", async () => {
+      const outcomes = await race([{ artifact: "u-1", rev: "ur-1" }, { artifact: "u-2", rev: "ur-2" }]);
+      expect(boundRows().map((r) => r.artifact_id).sort()).toEqual(["u-1", "u-2"]);
+      expect(new Set(boundRows().map((r) => r.output_id)).size).toBe(2);
+      expect(outcomes.map((o) => (o.ok ? o.artifactId : null)).sort()).toEqual(["u-1", "u-2"]);
+      expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("B11 the lock is what serializes the two binds: without it the double shows both messages bound to the same artifact", async () => {
+      await race([{ artifact: "u-1", rev: "ur-1" }], { dropLock: true });
+      expect(boundRows().map((r) => r.artifact_id)).toEqual(["u-1", "u-1"]);
+    });
+  });
+
   // red-first-expect: to deeply equal
   it("L1 the ledger reads a message's own row, skips a mid-run body bound to another message, and binds a reuse", async () => {
     const ledger = await vi.importActual<typeof import("../materialization-ledger")>(
@@ -795,7 +939,14 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
       artifactId: "prefiled-1",
       representationRevisionId: "prefiled-rep-1",
     });
-    const [insSql, insParams] = poolQueryMock.mock.calls[2] as [string, unknown[]];
+    // ONE transaction: the artifact's advisory lock, then ONE conditional insert (a row of the run that already binds the artifact blocks it).
+    expect(poolQueryMock.mock.calls.slice(2).map(([t]) => (/advisory/.test(String(t)) ? "LOCK" : String(t).trim().split(/\s/)[0]))).toEqual([
+      "BEGIN", "LOCK", "INSERT", "COMMIT",
+    ]);
+    expect((poolQueryMock.mock.calls[3] as [string, unknown[]])[1]).toEqual(["prefiled-1"]);
+    const [insSql, insParams] = poolQueryMock.mock.calls[4] as [string, unknown[]];
+    expect(insSql).toMatch(/WHERE NOT EXISTS \([\s\S]*f\.path = 'email_fanout' AND f\.artifact_id = \$7/);
+    expect(insSql).toMatch(/RETURNING id/);
     expect(insSql).toMatch(/'email_fanout', \$5, \$6, \$7, \$8, 'finalized'/);
     expect(insSql).toMatch(/ON CONFLICT \(run_id, output_id, extension, content_hash\) DO NOTHING/);
     expect(insParams.slice(1)).toEqual([

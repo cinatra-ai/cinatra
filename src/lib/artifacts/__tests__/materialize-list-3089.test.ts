@@ -367,6 +367,7 @@ beforeEach(() => {
   recordFanoutReuseMaterializationMock.mockImplementation(
     async (r: { runId: string; outputId: string; extension: string; contentHash: string; artifactId: string; representationRevisionId: string }) => {
       ledger.push({ ledgerId: `reuse-${r.outputId}`, path: "email_fanout", ...r });
+      return true;
     },
   );
 });
@@ -560,6 +561,46 @@ describe("cinatra#3089 — the set keeps the produced-event attempt and the in-f
     const again = await attempt(() => fileSet());
     expect(again).toEqual({ ok: true, deduped: true, artifacts: EXPECTED });
     expect(eventStatements()).toEqual(["rep-1", "rep-2", "rep-3"]);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("the restamp of a stored set is ONE transaction: a publish claim arriving between members leaves every member at its old attempt and answers the 409; a clean retry restamps all", async () => {
+    await fileSet();
+    // The events as the database holds them: a transaction's restamps apply at its COMMIT only.
+    const applied: unknown[] = [];
+    let pending: unknown[] = [];
+    const steps: string[] = [];
+    let claimAfter: number | null = 1;
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (text === "BEGIN" || text === "COMMIT" || text === "ROLLBACK") {
+        steps.push(text);
+        if (text === "BEGIN") pending = [];
+        if (text === "COMMIT") applied.push(...pending);
+        return { rows: [] };
+      }
+      if (text.includes("FOR KEY SHARE") && !text.includes("artifact_produced_outbox")) { steps.push("lock"); return { rows: [] }; }
+      if (text.includes("artifact_produced_outbox")) {
+        // The publishing call's claim committed after member `claimAfter` was restamped: the next event statement meets the fence.
+        if (claimAfter !== null && pending.length === claimAfter) {
+          throw Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
+        }
+        steps.push("event");
+        pending.push((values as unknown[])[3]);
+        return { rows: [] };
+      }
+      return base(text, values);
+    });
+    const refused = await attempt(() => fileSet());
+    expect(refused).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(applied).toEqual([]);
+    expect(steps).toEqual(["BEGIN", "lock", "event", "ROLLBACK"]);
+    // A clean retry: the run row is locked once, all three members are restamped, one commit.
+    claimAfter = null;
+    steps.length = 0;
+    expect(await attempt(() => fileSet())).toMatchObject({ ok: true, deduped: true });
+    expect(applied).toEqual(["rep-1", "rep-2", "rep-3"]);
+    expect(steps).toEqual(["BEGIN", "lock", "event", "event", "event", "COMMIT"]);
   });
 
   // red-first-expect: materializeToolArtifactSet is not a function

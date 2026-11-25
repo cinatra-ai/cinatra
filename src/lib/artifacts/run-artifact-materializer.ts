@@ -60,6 +60,7 @@ import {
   toolSetOutputId,
   recordFanoutReuseMaterialization,
   restampReusedRevision,
+  restampReusedRevisions,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -2038,15 +2039,9 @@ export async function materializeToolArtifactSet(input: {
     // cinatra#4762: answering the stored set writes no revision, so each member's existing produced event is
     // restamped for the attempt this call runs in (as every reuse road does), or the call is refused while a
     // publishing call of the run is in flight.
+    // ALL members in one transaction or none (`restampReusedRevisions`), the in-flight fence checked inside it.
     try {
-      for (const artifact of artifacts) {
-        await restampReusedRevision({
-          runId: input.runId,
-          orgId: input.orgId,
-          artifactId: artifact.artifactId,
-          representationRevisionId: artifact.representationRevisionId,
-        });
-      }
+      await restampReusedRevisions({ runId: input.runId, orgId: input.orgId, revisions: artifacts });
     } catch (err) {
       if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL;
       throw err;
@@ -2385,11 +2380,20 @@ export async function materializeFanoutMessageRevision(input: {
         firstRefusal ??= refused;
         continue;
       }
-      await recordFanoutReuseMaterialization({
+      // Binding is atomic and at most one message wins an artifact (`recordFanoutReuseMaterialization`).
+      // A message that lost it takes the NEXT unbound candidate (the artifact is now bound, so the lookup
+      // skips it), or, with none left, writes a body of its own; a message that already has its own mapping
+      // (a concurrent drive of this same message bound first) is answered from it, verified as any own mapping.
+      const bound = await recordFanoutReuseMaterialization({
         ...messageKey,
         outputId: input.outputId,
         ...prefiled,
       });
+      if (!bound) {
+        const mine = await findFinalizedFanoutMessageMaterialization({ ...messageKey, outputId: input.outputId });
+        if (mine) return (await admit(mine.artifactId)) ?? (await reusedArtifact(input, mine));
+        continue;
+      }
       return await reusedArtifact(input, prefiled);
     }
     if (firstRefusal) return firstRefusal;

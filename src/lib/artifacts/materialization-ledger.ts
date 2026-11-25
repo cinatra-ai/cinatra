@@ -350,28 +350,50 @@ export async function restampReusedRevision(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
-  if (!input.runId) return;
+  await restampReusedRevisions({
+    runId: input.runId,
+    orgId: input.orgId,
+    revisions: [{ artifactId: input.artifactId, representationRevisionId: input.representationRevisionId }],
+  });
+}
+
+/**
+ * The restamp of SEVERAL revisions of one run (the members of a stored set), ALL in one transaction or none: the run
+ * row FOR KEY SHARE once, then each revision's event statement, then COMMIT. The run row lock is held to the commit,
+ * so a publish check cannot begin its in-flight claim between two members; a claim that committed earlier is seen by
+ * the first event statement, which aborts the transaction, so no member moves and the caller receives
+ * PublishCallInFlightError. A set is therefore never visible to publishing or review partly restamped.
+ */
+export async function restampReusedRevisions(input: {
+  runId: string | null | undefined;
+  orgId: string;
+  revisions: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+}): Promise<void> {
+  if (!input.runId || input.revisions.length === 0) return;
   const producerAttempt = producerAttemptForRun(input.runId);
   if (!producerAttempt) return;
   const s = schema();
-  const op = maybeBuildProducedEventInsertOp(s, {
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-    emitter: "createSemanticArtifact",
-    originKind: "agent_generated",
-    producerRunId: input.runId,
-    producerAgentId: null,
-    producerAttempt,
-  }, {
-    whereExistsSql: `EXISTS (SELECT 1 FROM "${s}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+  const ops = input.revisions.flatMap((revision) => {
+    const op = maybeBuildProducedEventInsertOp(s, {
+      orgId: input.orgId,
+      artifactId: revision.artifactId,
+      representationRevisionId: revision.representationRevisionId,
+      emitter: "createSemanticArtifact",
+      originKind: "agent_generated",
+      producerRunId: input.runId,
+      producerAgentId: null,
+      producerAttempt,
+    }, {
+      whereExistsSql: `EXISTS (SELECT 1 FROM "${s}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+    });
+    return op ? [op] : [];
   });
-  if (!op) return;
+  if (ops.length === 0) return;
   const client = await pool().connect();
   try {
     await client.query("BEGIN");
-    for (const lock of producerRunLockOps(s, input.runId, op)) await client.query(lock.text, lock.values);
-    await client.query(op.text, op.values);
+    for (const lock of producerRunLockOps(s, input.runId, ops[0]!)) await client.query(lock.text, lock.values);
+    for (const op of ops) await client.query(op.text, op.values);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -756,6 +778,15 @@ export function isToolSetIdentityConflict(err: unknown): boolean {
  * finalized `email_fanout` row under the message identity pointing at the
  * drafting step's artifact. The retry then reads it as the message's own
  * mapping, and no other message of the run is handed the same artifact.
+ *
+ * The bind is ONE atomic step that at most one message can win per artifact: a transaction that takes the
+ * artifact's advisory lock (the lock its creation transaction and every later writer of it take) and then runs
+ * ONE conditional insert, `INSERT … SELECT … WHERE NOT EXISTS` a row of the run that already binds this artifact
+ * to a message. The message identity's unique key alone cannot do it (two messages have two identities), and a
+ * check-then-insert without the lock lets two transactions both see "unbound". The second message waits on the
+ * lock, then its statement (a new snapshot under READ COMMITTED) sees the first's committed row and inserts
+ * nothing. Returns whether THIS call inserted the row; false means the artifact is taken by another message, or
+ * this message already has its own mapping (the caller reads it).
  */
 export async function recordFanoutReuseMaterialization(input: {
   orgId: string;
@@ -765,27 +796,44 @@ export async function recordFanoutReuseMaterialization(input: {
   contentHash: string;
   artifactId: string;
   representationRevisionId: string;
-}): Promise<void> {
+}): Promise<boolean> {
   assertOutputIdNotReserved(input.outputId);
   ensurePostgresSchema();
   const s = schema();
-  await pool().query(
-    `INSERT INTO "${s}"."artifact_materializations"
+  const client = await pool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [input.artifactId]);
+    const res = await client.query(
+      `INSERT INTO "${s}"."artifact_materializations"
    (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
     artifact_id, representation_revision_id, phase)
- VALUES ($1, $2, $3, $4, NULL, 'email_fanout', $5, $6, $7, $8, 'finalized')
- ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING`,
-    [
-      randomUUID(),
-      input.orgId,
-      input.runId,
-      input.outputId,
-      input.extension,
-      input.contentHash,
-      input.artifactId,
-      input.representationRevisionId,
-    ],
-  );
+ SELECT $1, $2, $3, $4, NULL, 'email_fanout', $5, $6, $7, $8, 'finalized'
+  WHERE NOT EXISTS (
+    SELECT 1 FROM "${s}"."artifact_materializations" f
+     WHERE f.run_id = $3 AND f.org_id = $2 AND f.path = 'email_fanout' AND f.artifact_id = $7
+  )
+ ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING
+ RETURNING id`,
+      [
+        randomUUID(),
+        input.orgId,
+        input.runId,
+        input.outputId,
+        input.extension,
+        input.contentHash,
+        input.artifactId,
+        input.representationRevisionId,
+      ],
+    );
+    await client.query("COMMIT");
+    return (res.rows?.length ?? 0) > 0;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
