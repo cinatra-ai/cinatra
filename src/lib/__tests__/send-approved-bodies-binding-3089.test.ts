@@ -116,6 +116,8 @@ const approved = [1, 2, 3].map((n) => ({
   artifactId: `art-${n}`,
   representationRevisionId: `rev-${n}`,
   contactId: `c${n}`,
+  recipientEmail: `p${n}@example.com`,
+  subject: `Bundle subject ${n}`,
 }));
 const UNSEEN = "artifact art-2 is not an artifact this organisation can see";
 

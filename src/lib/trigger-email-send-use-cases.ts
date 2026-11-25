@@ -422,6 +422,13 @@ function asRecipientArray(data: unknown): RecipientRow[] {
   return arr as RecipientRow[];
 }
 
+/** An address in the form two addresses are compared in: trimmed and in lower
+ *  case (the rule of `normalizeRecipientEmail` in the send-events ledger,
+ *  which this module does not import, as that module loads the database). */
+function comparableEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 function recipientEmailFor(
   draft: DraftRow,
   recipients: ReadonlyArray<RecipientRow>,
@@ -851,7 +858,7 @@ async function mailApprovedMessages(args: {
   drafts: readonly DraftRow[];
   recipients: readonly RecipientRow[];
   runScopeId: string;
-  approvedByIndex: ReadonlyMap<number, ApprovedFanoutBody & { subject?: string }>;
+  approvedByIndex: ReadonlyMap<number, ApprovedFanoutBody & { subject: string }>;
   messageIdByArtifact: ReadonlyMap<string, string>;
   startedAt: string;
 }): Promise<InitialSendStateRow> {
@@ -904,7 +911,8 @@ async function mailApprovedMessages(args: {
       await sendEmail(
         {
           to: [recipientEmail],
-          subject: approved.subject ?? draft.subject ?? "(no subject)",
+          // The subject the card showed, compared before any claim.
+          subject: approved.subject,
           textBody: approved.text,
           fromEmail: input.senderEmail,
         },
@@ -978,6 +986,8 @@ async function runInitialSend(args: {
       artifactId: string;
       representationRevisionId: string;
       contactId: string;
+      recipientEmail: string;
+      subject: string;
     }>;
   };
   actor: PrimitiveActorContext;
@@ -1046,9 +1056,12 @@ async function runInitialSend(args: {
     // `recipientId`, and names exactly one draft of the bundle; a body that
     // carries a contact of its own must carry the same one. Every check and
     // every read runs before the fan-out and before any mail, and any failure
-    // refuses the whole send. Without `approvedBodies` the send reads the
-    // bundle exactly as before.
-    let approvedByIndex: Map<number, ApprovedFanoutBody & { subject?: string }> | null = null;
+    // refuses the whole send. Each message is also bound to what the publish
+    // card showed for it: the address the send resolves and the subject it
+    // mails must equal the entry's `recipientEmail` and `subject`, so an
+    // address or a subject changed while the card waited is never mailed.
+    // Without `approvedBodies` the send reads the bundle exactly as before.
+    let approvedByIndex: Map<number, ApprovedFanoutBody & { subject: string }> | null = null;
     if (input.approvedBodies) {
       const refuse = (reason: string): never => {
         throw new Error(`The send was refused before any email went out: ${reason}`);
@@ -1067,7 +1080,13 @@ async function runInitialSend(args: {
 
       const bodyByContact = new Map<
         string,
-        { artifactId: string; representationRevisionId: string; position: number }
+        {
+          artifactId: string;
+          representationRevisionId: string;
+          recipientEmail: string;
+          subject: string;
+          position: number;
+        }
       >();
       const namedArtifacts = new Set<string>();
       for (const [i, entry] of input.approvedBodies.entries()) {
@@ -1081,9 +1100,14 @@ async function runInitialSend(args: {
         if (earlier) {
           refuse(`approved bodies ${earlier.position} and ${position} are both for contact ${contact}`);
         }
+        if (typeof entry.recipientEmail !== "string" || typeof entry.subject !== "string") {
+          refuse(`approved body ${position} names no recipient address or no subject`);
+        }
         bodyByContact.set(contact, {
           artifactId: entry.artifactId,
           representationRevisionId: entry.representationRevisionId,
+          recipientEmail: entry.recipientEmail,
+          subject: entry.subject,
           position,
         });
       }
@@ -1109,6 +1133,23 @@ async function runInitialSend(args: {
           refuse(`draft ${index + 1} of the bundle has an address but no approved body`);
         }
       }
+      // The address of each message must be the one the card showed. It is the
+      // address the send resolves for the draft (`recipientEmailFor`) BEFORE
+      // the development redirect: the card shows the intended recipients, and
+      // the redirect is a separate, later replacement in the email connector,
+      // which this comparison does not see or change. The refusal names the
+      // draft and its contact, never an address.
+      for (const [contact, body] of bodyByContact) {
+        const index = draftsByContact.get(contact)![0]!;
+        const where = `draft ${index + 1} of the bundle (contact ${contact})`;
+        const resolved = recipientEmailFor(drafts[index]!, recipients);
+        if (!resolved) {
+          refuse(`approved body ${body.position} is for ${where}, which has no address`);
+        }
+        if (comparableEmail(resolved!) !== comparableEmail(body.recipientEmail)) {
+          refuse(`${where}: the recipient's address changed after the card was shown`);
+        }
+      }
 
       approvedByIndex = new Map();
       for (const [contact, body] of bodyByContact) {
@@ -1127,12 +1168,23 @@ async function runInitialSend(args: {
         if (ownContact !== undefined && ownContact !== contact) {
           refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
         }
-        const subject = textOf(read.data.subject) !== undefined ? String(read.data.subject) : undefined;
-        approvedByIndex.set(draftsByContact.get(contact)![0]!, {
+        // The subject mailed: the body artifact's own `subject` (artifact
+        // data, not part of the revision), else the draft's subject, else
+        // "(no subject)". It must equal the subject the card showed, exactly:
+        // the send hands it to the mail connector unchanged.
+        const index = draftsByContact.get(contact)![0]!;
+        const subject =
+          textOf(read.data.subject) !== undefined
+            ? String(read.data.subject)
+            : (drafts[index]!.subject ?? "(no subject)");
+        if (subject !== body.subject) {
+          refuse(`draft ${index + 1} of the bundle (contact ${contact}): the subject changed after the card was shown`);
+        }
+        approvedByIndex.set(index, {
           artifactId: body.artifactId,
           representationRevisionId: body.representationRevisionId,
           text: read.text,
-          ...(subject !== undefined ? { subject } : {}),
+          subject,
         });
       }
     }

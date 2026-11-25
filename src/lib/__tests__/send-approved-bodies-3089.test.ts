@@ -34,6 +34,12 @@
  *      files no new body (nor one for a draft without an address)
  *   Z1 the tool's schema keeps the list, bounded at 50 entries, closed to other
  *      keys
+ *   Z2 every entry carries the address and the subject the card showed
+ *   C1-C9 each message is mailed only to the address and with the subject the
+ *      publish card showed: a change in the bundle, the recipients list, the
+ *      draft's subject or the body's subject refuses the whole send before any
+ *      claim and names no address; equal values (the address in any letter
+ *      case, with spaces) are sent; the JSON text form behaves the same
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -141,12 +147,15 @@ function makeStore(): Map<string, StoredBody> {
   ]);
 }
 
+// Each entry carries what the publish card showed for its message: the
+// address and the subject the send mails (art-2 has no subject of its own, so
+// its draft's subject is the one mailed).
 const approved = [
-  { artifactId: "art-1", representationRevisionId: "rev-1", contactId: "c1" },
-  { artifactId: "art-2", representationRevisionId: "rev-2", contactId: "c2" },
+  { artifactId: "art-1", representationRevisionId: "rev-1", contactId: "c1", recipientEmail: "one@example.com", subject: "Approved subject one" },
+  { artifactId: "art-2", representationRevisionId: "rev-2", contactId: "c2", recipientEmail: "two@example.com", subject: "Bundle subject two" },
 ];
 
-function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[] }) {
+function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[]; recipients?: unknown[] }) {
   const store = opts?.store ?? makeStore();
   const sendLedger = memorySendLedger();
   const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
@@ -163,7 +172,7 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
     [RECIPIENTS_REF]: {
       id: RECIPIENTS_REF,
       type: "@cinatra-ai/campaigns:recipients",
-      data: { confirmedRecipients },
+      data: { confirmedRecipients: opts?.recipients ?? confirmedRecipients },
     },
   };
   // The approved-body reader: only the artifact's current revision of the body
@@ -229,7 +238,7 @@ function makeFixture(opts?: { store?: Map<string, StoredBody>; drafts?: unknown[
       },
       actor,
     } as never) as unknown as Promise<{ status: string; sentCount: number; errorMessage?: string }>;
-  return { store, sent, sendEmail, readDecidedBody, writeBody, bindBody, emitEmailFanout, start };
+  return { store, sent, sendEmail, readDecidedBody, writeBody, bindBody, emitEmailFanout, sendLedger, start };
 }
 
 async function expectRefused(
@@ -307,7 +316,12 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     // red-first-expect: expected 'completed' to be 'failed'
     await expectRefused(
       makeFixture({ store }),
-      { approvedBodies: [...approved, { artifactId: "art-9", representationRevisionId: "rev-2", contactId: "c9" }] },
+      {
+        approvedBodies: [
+          ...approved,
+          { artifactId: "art-9", representationRevisionId: "rev-2", contactId: "c9", recipientEmail: "nine@example.com", subject: "S" },
+        ],
+      },
       "approved body 3 is for contact c9, which no draft of the bundle names",
     );
   });
@@ -382,10 +396,148 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     const parsed = serviceAndCampaignIdSchema.parse({ ...base, approvedBodies: approved });
     // red-first-expect: expected undefined to deeply equal
     expect((parsed as { approvedBodies?: unknown }).approvedBodies).toEqual(approved);
-    const many = Array.from({ length: 51 }, (_, i) => ({ artifactId: `a${i}`, representationRevisionId: `r${i}`, contactId: `c${i}` }));
+    const many = Array.from({ length: 51 }, (_, i) => ({
+      artifactId: `a${i}`,
+      representationRevisionId: `r${i}`,
+      contactId: `c${i}`,
+      recipientEmail: `p${i}@example.com`,
+      subject: `S${i}`,
+    }));
     expect(serviceAndCampaignIdSchema.safeParse({ ...base, approvedBodies: many }).success).toBe(false);
     expect(serviceAndCampaignIdSchema.safeParse({ ...base, approvedBodies: many.slice(0, 50) }).success).toBe(true);
     expect(serviceAndCampaignIdSchema.safeParse({ ...base, approvedBodies: [{ ...approved[0], text: "x" }] }).success).toBe(false);
     expect(serviceAndCampaignIdSchema.safeParse({ ...base, approvedBodies: [{ artifactId: "a", representationRevisionId: "r" }] }).success).toBe(false);
+  });
+
+  it("Z2 every entry must carry the address and the subject the card showed", () => {
+    const base = { campaignId: CAMPAIGN_ID };
+    const { recipientEmail: _email, ...noEmail } = approved[0]!;
+    const { subject: _subject, ...noSubject } = approved[0]!;
+    for (const list of [[noEmail], [noSubject], [approved[0], noEmail], [{ ...approved[0], recipientEmail: 7 }]]) {
+      // red-first-expect: expected true to be false
+      expect(serviceAndCampaignIdSchema.safeParse({ ...base, approvedBodies: list }).success, JSON.stringify(list)).toBe(false);
+    }
+  });
+});
+
+const ADDRESS_CHANGED = "the recipient's address changed after the card was shown";
+const SUBJECT_CHANGED = "the subject changed after the card was shown";
+
+/** A refusal of the card's address or subject: nothing is claimed, bound or
+ *  mailed, and no address appears in the answer. */
+async function expectCardRefused(
+  fx: ReturnType<typeof makeFixture>,
+  input: Record<string, unknown>,
+  reason: string,
+  addresses: string[] = [],
+) {
+  await expectRefused(fx, input, reason);
+  const result = await fx.start(input);
+  expect(fx.sendLedger.rows.size).toBe(0);
+  for (const address of addresses) {
+    expect(result.errorMessage?.toLowerCase()).not.toContain(address.toLowerCase());
+  }
+}
+
+describe("cinatra#3089 — each message is sent to the address and with the subject the card showed", () => {
+  it("C1 an address changed in the bundle after the card was shown refuses the whole send and names no address", async () => {
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, recipientEmail: "new-two@example.org" } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture({ drafts }),
+      { approvedBodies: approved },
+      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      ["two@example.com", "new-two@example.org"],
+    );
+  });
+
+  it("C2 an address changed in the recipients list after the card was shown refuses the whole send and names no address", async () => {
+    // Draft 2 has no address of its own: the send resolves it from the
+    // confirmed recipient with the draft's contact.
+    const drafts = bundleDrafts.map((d) =>
+      d.recipientId === "c2" ? { contactId: "c2", recipientEmail: "", subject: d.subject, body: d.body } : d,
+    );
+    const recipients = confirmedRecipients.map((r) => (r.contactId === "c2" ? { ...r, email: "moved@example.org" } : r));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture({ drafts, recipients }),
+      { approvedBodies: approved },
+      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      ["two@example.com", "moved@example.org"],
+    );
+  });
+
+  it("C3 a subject changed on the draft refuses the whole send", async () => {
+    // art-2 has no subject of its own, so the draft's subject is the one mailed.
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, subject: "Changed subject two" } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(makeFixture({ drafts }), { approvedBodies: approved }, `draft 2 of the bundle (contact c2): ${SUBJECT_CHANGED}`);
+  });
+
+  it("C4 a subject changed on the body artifact refuses the whole send", async () => {
+    const store = makeStore();
+    store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "Changed subject one" };
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(makeFixture({ store }), { approvedBodies: approved }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+  });
+
+  it("C5 the subject is compared exactly: a different letter case refuses the send", async () => {
+    const entries = [{ ...approved[0]!, subject: "approved subject one" }, approved[1]];
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(makeFixture(), { approvedBodies: entries }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+  });
+
+  it("C6 equal values are sent as before, the address compared trimmed and in any letter case", async () => {
+    const entries = [{ ...approved[0]!, recipientEmail: "  ONE@Example.COM " }, { ...approved[1]!, recipientEmail: "Two@EXAMPLE.com" }];
+    const fx = makeFixture();
+    const result = await fx.start({ approvedBodies: entries });
+    expect(result.status).toBe("completed");
+    expect(result.sentCount).toBe(2);
+    // The mail goes to the address the send resolved, not to the entry's text.
+    // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Approved subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
+    ]);
+  });
+
+  it("C7 an equal address resolved from the recipients list is sent as before", async () => {
+    const drafts = bundleDrafts.map((d) =>
+      d.recipientId === "c2" ? { contactId: "c2", recipientEmail: "", subject: d.subject, body: d.body } : d,
+    );
+    const fx = makeFixture({ drafts });
+    const result = await fx.start({ approvedBodies: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.sent.map((m) => m.to)).toEqual([["one@example.com"], ["two@example.com"]]);
+    // red-first-expect: to deeply equal [ 'Approved body one', …(1) ]
+    expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
+  });
+
+  it("C8 an entry for a draft without an address refuses the whole send", async () => {
+    const store = makeStore();
+    store.set("art-3", { ...store.get("art-2")!, latest: "rev-3", revisions: { "rev-3": "Approved body three" } });
+    const entries = [
+      ...approved,
+      { artifactId: "art-3", representationRevisionId: "rev-3", contactId: "c3", recipientEmail: "three@example.com", subject: "Bundle subject three" },
+    ];
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture({ store }),
+      { approvedBodies: entries },
+      "approved body 3 is for draft 3 of the bundle (contact c3), which has no address",
+      ["three@example.com"],
+    );
+  });
+
+  it("C9 the JSON text form with the address and the subject is sent and refused as the array form is", async () => {
+    expect((await makeFixture().start({ approvedBodies: JSON.stringify(approved) })).status).toBe("completed");
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, recipientEmail: "new-two@example.org" } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(
+      makeFixture({ drafts }),
+      { approvedBodies: JSON.stringify(approved) },
+      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      ["two@example.com", "new-two@example.org"],
+    );
   });
 });

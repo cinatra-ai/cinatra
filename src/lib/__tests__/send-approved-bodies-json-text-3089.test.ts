@@ -21,6 +21,8 @@ function entries(count: number) {
     artifactId: `art-${i}`,
     representationRevisionId: `rev-${i}`,
     contactId: `contact-${i}`,
+    recipientEmail: `p${i}@example.com`,
+    subject: `Subject ${i}`,
   }));
 }
 
@@ -36,7 +38,7 @@ describe("approvedBodies as JSON text (cinatra#3089)", () => {
     expect(fromArray.success).toBe(true);
     expect(fromText.success).toBe(true);
     expect(fromText.data).toEqual(fromArray.data);
-    // red-first-expect: expected undefined to deeply equal [ { artifactId: 'art-0', …(2) }, …(1) ]
+    // red-first-expect: expected undefined to deeply equal [ { artifactId: 'art-0', …(4) }, …(1) ]
     expect(fromText.data?.approvedBodies).toEqual(list);
   });
 
@@ -69,6 +71,11 @@ describe("approvedBodies as JSON text (cinatra#3089)", () => {
     const refused = [
       [{ ...entry, text: "x" }],
       [{ artifactId: "a", representationRevisionId: "r" }],
+      [{ artifactId: "a", representationRevisionId: "r", contactId: "c", subject: "S" }],
+      [{ artifactId: "a", representationRevisionId: "r", contactId: "c", recipientEmail: "p@example.com" }],
+      [entry, { artifactId: "a", representationRevisionId: "r", contactId: "c" }],
+      [{ ...entry, recipientEmail: 7 }],
+      [{ ...entry, subject: null }],
       [{ ...entry, artifactId: 7 }],
       [{ ...entry, contactId: "   " }],
       [{ ...entry, artifactId: "x".repeat(201) }],
@@ -78,7 +85,7 @@ describe("approvedBodies as JSON text (cinatra#3089)", () => {
     for (const list of refused) {
       const asArray = parseBodies(list);
       const asText = parseBodies(JSON.stringify(list));
-      // red-first-expect: array [{"artifactId":"art-0","representationRevisionId":"rev-0","contactId":"contact-0","text":"x"}]: expected true to be false
+      // red-first-expect: array [{"artifactId":"art-0","representationRevisionId":"rev-0","contactId":"contact-0","recipientEmail":"p0@example.com","subject":"Subject 0","text":"x"}]: expected true to be false
       expect(asArray.success, `array ${JSON.stringify(list)}`).toBe(false);
       expect(asText.success, `text ${JSON.stringify(list)}`).toBe(false);
       expect(asText.error?.issues.map((i) => i.message)).toEqual(asArray.error?.issues.map((i) => i.message));
@@ -94,7 +101,7 @@ describe("approvedBodies as JSON text (cinatra#3089)", () => {
 
   it("J7 the array form and the absent form are unchanged", () => {
     const list = entries(3);
-    // red-first-expect: expected undefined to deeply equal [ { artifactId: 'art-0', …(2) }, …(2) ]
+    // red-first-expect: expected undefined to deeply equal [ { artifactId: 'art-0', …(4) }, …(2) ]
     expect(parseBodies(list).data?.approvedBodies).toEqual(list);
     expect(serviceAndCampaignIdSchema.parse(base).approvedBodies).toBeUndefined();
     expect(parseBodies(entries(51)).success).toBe(false);

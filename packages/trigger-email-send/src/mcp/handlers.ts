@@ -2,7 +2,13 @@ import type { PrimitiveActorContext, PrimitiveInvocationRequest } from "@cinatra
 import * as schemas from "./schemas";
 
 /** One approved email body the send start mails (see `approvedBodySchema`). */
-export type ApprovedBody = { artifactId: string; representationRevisionId: string; contactId: string };
+export type ApprovedBody = {
+  artifactId: string;
+  representationRevisionId: string;
+  contactId: string;
+  recipientEmail: string;
+  subject: string;
+};
 
 export type AsyncOperationState = {
   operationId: string;

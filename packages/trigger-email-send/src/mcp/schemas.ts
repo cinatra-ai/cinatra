@@ -11,6 +11,12 @@ const approvedBodiesListSchema = z
         artifactId: z.string().min(1).max(200),
         representationRevisionId: z.string().min(1).max(200),
         contactId: z.string().trim().min(1).max(200),
+        // What the publish card showed for this message: the address the send
+        // resolves for its draft must equal it (trimmed, any letter case), and
+        // the subject the send mails must equal it exactly. Required, so every
+        // message the approved form mails is bound to both.
+        recipientEmail: z.string().min(1).max(320),
+        subject: z.string().max(2000),
       })
       .strict(),
   )
@@ -56,13 +62,14 @@ export const serviceAndCampaignIdSchema = z.object({
   approvedDraftBundleRef: z.string().uuid().optional(),
   confirmedRecipientsRef: z.string().uuid().optional(),
   senderEmail: z.string().email().optional(),
-  // The approved email bodies: each one an `email:body` artifact revision and
-  // the contact of the draft it is the body of (the draft's `contactId`, else
-  // its `recipientId`), which joins the body to its draft. When given, the send
+  // The approved email bodies: each one an `email:body` artifact revision, the
+  // contact of the draft it is the body of (the draft's `contactId`, else its
+  // `recipientId`), which joins the body to its draft, and the recipient
+  // address and subject the publish card showed for that message. When given, the send
   // mails, for each draft with an address, the text of ITS approved revision,
   // and refuses the whole send before any mail when a body is missing,
-  // unreadable, not the artifact's current revision, named twice or the body of
-  // no draft. At most 50: the cap of the publish card's artifacts row
+  // unreadable, not the artifact's current revision, named twice, the body of
+  // no draft, or when the message's address or subject is not the one shown. At most 50: the cap of the publish card's artifacts row
   // (PUBLISH_LIST_ROW_ITEMS_MAX), so every body the card showed fits one send.
   approvedBodies: approvedBodiesInputSchema.optional(),
 });
