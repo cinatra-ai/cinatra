@@ -103,6 +103,7 @@ import {
   isSetupGateTaskId,
   liftRendererApprovalNote,
   buildListStepRefreshPayload,
+  isListStepRefreshPayloadShape,
   listStepRefreshRequest,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -744,6 +745,12 @@ export function AgenticRunPanel({
   // dep array `[]` and reads at submit time, not on render — the panel owns
   // its own visible-state copy.
   const pendingAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
+  // cinatra#3562: the list step a Try again was sent from, while its refresh is
+  // under way. A refresh does not leave the step: the run pauses at the same
+  // step again as a new task, so what the person attached for it stays. Set
+  // before the refresh is sent, removed by any other answer and by the first
+  // pause after it (see the attachment clear below).
+  const listStepRefreshCarryRef = useRef<{ fromReviewTaskId: string; xRenderer: string } | null>(null);
   // State-backed so onApply merges trigger re-render, matching HitlApprovalCard.
   // Accumulates renderer-produced values (e.g. campaignId from recipients renderer)
   // so the Continue button can include them in the resume payload.
@@ -1310,6 +1317,8 @@ export function AgenticRunPanel({
     }) => {
       // Reported unsendable: nothing is sent and nothing is changed.
       if (args.holdKey !== undefined && gateValidity.isHeld(args.holdKey)) return;
+      // Any answer other than a list step's refresh leaves the step.
+      if (!isListStepRefreshPayloadShape(args.payload)) listStepRefreshCarryRef.current = null;
       if (args.trackApproving) setIsApproving(true);
       // This submit's own token: a failure below releases only what it added,
       // never the pair or the claim of another submit (cinatra#3080).
@@ -1709,9 +1718,22 @@ export function AgenticRunPanel({
   // branch, external (non-panel) gate resolution, renderer/gate transition.
   // Without this clear, files attached on one gate would silently ride along
   // into the next.
+  //
+  // A LIST STEP'S TRY AGAIN DOES NOT LEAVE THE STEP (cinatra#3562). While its
+  // refresh is under way the gate is hidden (no context), and the step then
+  // pauses again as a new task with the same renderer: neither clears the
+  // files. The first pause with another renderer is another step, and clears
+  // them as before.
   const currentReviewTaskId = effectiveHitlContext?.reviewTaskId ?? null;
   useEffect(() => {
+    const carry = listStepRefreshCarryRef.current;
+    if (carry !== null) {
+      if (currentReviewTaskId === null || currentReviewTaskId === carry.fromReviewTaskId) return;
+      listStepRefreshCarryRef.current = null;
+      if (currentXRenderer === carry.xRenderer) return;
+    }
     pendingAttachmentsRef.current = [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentReviewTaskId]);
   // React-idiomatic "derived state reset" pattern: when the tracked xRenderer
   // string changes, reset conversation state DURING render (no extra render
@@ -1802,6 +1824,7 @@ export function AgenticRunPanel({
       if (!isHitlGateOnScreen(forGate)) return;
       if (listStepRefreshInFlightRef.current === forGate) return;
       listStepRefreshInFlightRef.current = forGate;
+      listStepRefreshCarryRef.current = { fromReviewTaskId: gate.reviewTaskId, xRenderer: gate.xRenderer };
       try {
         await performGateSubmit({
           reviewTaskId: gate.reviewTaskId,

@@ -57,7 +57,7 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
  * The gate records: `rows` holds what the real park seam wrote (by review task
  * id), which the resume road reads first; `value` is the fallback a test sets.
  */
-const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown>, rows: new Map<string, Record<string, unknown>>() }));
+const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown>, rows: new Map<string, Record<string, unknown>>(), readFails: false }));
 /** The list step's binding as the process declares it now; a test can change it after a pause. */
 const listBinding = vi.hoisted(() => ({ params: { refreshValue: "refresh" } as Record<string, unknown> }));
 vi.mock("../field-renderer-bindings.server", async (orig) => ({
@@ -101,7 +101,11 @@ vi.mock("../publish-decision-store", async (orig) => ({
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async () => "captured-prompt",
-  readDurableHitlGateForContinue: async (_runId: string, reviewTaskId: string) => durableGate.rows.get(reviewTaskId) ?? durableGate.value,
+  readDurableHitlGateForContinue: async (_runId: string, reviewTaskId: string) => {
+    if (durableGate.readFails) throw new Error("gate record read failed");
+    const fallback = durableGate.value;
+    return durableGate.rows.get(reviewTaskId) ?? (fallback && fallback.reviewTaskId === reviewTaskId ? fallback : null);
+  },
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
@@ -1123,6 +1127,50 @@ describe("cinatra#3562 — a refresh note never outlives the answer to its step,
     expect(JSON.stringify(sendTask.mock.calls[0])).toContain('"refresh"');
     expect(JSON.stringify(sendTask.mock.calls[0])).not.toContain("reload");
     expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+  });
+
+  const reportPauseAgain = (taskId: string) =>
+    handleWayflowTaskState({ authority: TEST_AUTHORITY as never, runId: RUN.id, run: liveRun() as never, fromStatus: "pending_approval", task: pauseTask(taskId) as never });
+
+  it("a later report of the same pause keeps the refresh value recorded at its first record, whatever the binding declares now", async () => {
+    await firstPause("task-list-1");
+    listBinding.params = { refreshValue: "reload" };
+    await reportPauseAgain("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("reload")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(sendTask).not.toHaveBeenCalled();
+    sendTask.mockResolvedValueOnce(pauseTask("task-list-2"));
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(JSON.stringify(sendTask.mock.calls[0])).toContain('"refresh"');
+    expect(JSON.stringify(sendTask.mock.calls[0])).not.toContain("reload");
+  });
+
+  it("a later report of a pause first recorded without a refresh value records none, after a deployment declares one", async () => {
+    listBinding.params = {};
+    await firstPause("task-list-1");
+    listBinding.params = { refreshValue: "refresh" };
+    await reportPauseAgain("task-list-1");
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("takes no such list step refresh");
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a later report whose read of the first record fails records no refresh value, so no other value can be sent", async () => {
+    await firstPause("task-list-1");
+    listBinding.params = { refreshValue: "reload" };
+    durableGate.readFails = true;
+    try {
+      await reportPauseAgain("task-list-1");
+    } finally {
+      durableGate.readFails = false;
+    }
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("reload")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(sendTask).not.toHaveBeenCalled();
   });
 
   it("a pause recorded while no binding declared a refresh value takes no refresh, even after a deployment declares one", async () => {

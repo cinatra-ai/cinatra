@@ -552,6 +552,7 @@ import {
   rendererGateStepsOf,
   RENDERER_GATE_STEP_GATE_COUNT_LIMIT,
   LIST_STEP_REFRESH_VALUE_SCHEMA_KEY,
+  recordedListStepRefreshValue,
 } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
@@ -3150,12 +3151,26 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // key (the gate's pendingApproval when the step has no schema, or a pack's
     // own step schema) loses it, so a gate cannot withhold run inputs itself.
     const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
-    // cinatra#3562: the refresh value this pause's renderer binding declares now
-    // is recorded with the gate, and a refresh of this pause sends exactly that
-    // value (review-task-actions.ts), whatever a later deployment declares. Only
-    // the host writes the key: the gate's own schema loses it first. A binding
-    // that cannot be read records none, and the pause then takes no refresh.
-    const declaredRefreshValue: unknown = (() => {
+    const wayflowGateId = `wayflow-${task.id}`;
+    // cinatra#3562: the refresh value is recorded with the gate ONCE, at the
+    // first record of this task, and a refresh of this pause sends exactly that
+    // value (review-task-actions.ts), whatever a later deployment declares. A
+    // later report of the same task (a reconnect, a retry, a re-emit) keeps the
+    // value its record holds, or none when the first record held none; only a
+    // task with no record yet takes the value its renderer binding declares
+    // now. A record that cannot be read, or a binding that cannot be read,
+    // records none, and the pause then takes no refresh. Only the host writes
+    // the key: the gate's own schema loses it first. The rest of the record is
+    // still refreshed by a later report (the schema's resolved options, the
+    // values, the time), as the durable gate row intends.
+    const declaredRefreshValue: unknown = await (async () => {
+      try {
+        const { readDurableHitlGateForContinue } = await import("./agent-run-hitl-prompts");
+        const recorded = await readDurableHitlGateForContinue(runId, wayflowGateId);
+        if (recorded) return recordedListStepRefreshValue(recorded.inputSchema);
+      } catch {
+        return undefined;
+      }
       try {
         const binding = getMergedFieldRendererBindings().find((b) => b.id === wayflowXRenderer);
         return (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
@@ -3188,7 +3203,6 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // legal edge — but an unverified re-emit still fails the run: a gate that
     // lost its artifact strands the run exactly as hard on the second visit as
     // on the first.
-    const wayflowGateId = `wayflow-${task.id}`;
     const parkOutcome = await parkRunOnHumanGate({
       runId,
       gateLabel: `WayFlow gate ${wayflowGateId}`,
