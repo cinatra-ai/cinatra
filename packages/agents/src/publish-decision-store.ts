@@ -26,8 +26,8 @@ import { agentRunPublishDecisions, agentRuns, artifactReviewActionConsumptions }
 /** A decision of the run's current attempt: its run_generation equals the run's reset_generation, read in the same
  *  statement. A row with NO generation (written by code older than the column, e.g. an old node during a rolling deploy)
  *  is always current, so it always holds (fail closed); the reset that ends its attempt stamps it. False, never null,
- *  when the run row is gone. */
-const CURRENT_ATTEMPT = sql<boolean>`coalesce(coalesce(${agentRunPublishDecisions.runGeneration}, (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId})) = (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId}), false)`;
+ *  when the run row is gone. Exported so every reader of a run's decisions judges the attempt by this one predicate. */
+export const CURRENT_ATTEMPT = sql<boolean>`coalesce(coalesce(${agentRunPublishDecisions.runGeneration}, (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId})) = (select attempt_run.reset_generation from ${agentRuns} attempt_run where attempt_run.id = ${agentRunPublishDecisions.runId}), false)`;
 
 export const PUBLISH_DECISION_STATUSES = ["parked", "released", "declined", "expired", "run_ended"] as const;
 export type PublishDecisionStatus = (typeof PUBLISH_DECISION_STATUSES)[number];
@@ -115,6 +115,10 @@ function deserialize(row: StoredRow): PublishDecisionRow {
   }
   return { ...row, status: row.status, surfacedValues, declaredRows, runGeneration: row.runGeneration ?? null, releasedPauseGeneration };
 }
+
+/** The store's own decoder of a stored row, for a reader that selects the row itself (for example under a row lock in
+ *  its own transaction): throws a malformed-row PublishDecisionError for every row this module cannot read. */
+export const decodeStoredPublishDecision: (row: StoredRow) => PublishDecisionRow = deserialize;
 
 /** A declaration as plain rows in a shape the compiler writes (isPublishRowDeclaration: a text, list or artifacts row),
  *  each label and input within the caps; null for any other shape. A row is copied field by field, so the stored text
@@ -231,7 +235,11 @@ export async function insertParkedDecision(input: InsertParkedDecisionInput): Pr
       id: randomUUID(), orgId, runId, nodeId, gateTaskId, a2aContextId, status: "parked", surfacedValues: surfaced,
       declaredRows: declared,
       // The run's generation, read in this statement, only while the run is held at a gate; else -1 (an ended attempt).
-      runGeneration: sql`coalesce((select live_run.reset_generation from ${agentRuns} live_run where live_run.id = ${runId} and live_run.status in ('running', 'pending_approval')), -1)`,
+      // The read takes a KEY SHARE lock on the run row, held until this statement commits. It conflicts with the FOR
+      // UPDATE lock that the consumption of a decision holds for its whole transaction (cinatra#3745), so a new decision
+      // of the run commits either before that consumption reads the run's decisions or after the consumption commits;
+      // it never commits between the consumption's read and its write. It does not block a plain status update.
+      runGeneration: sql`coalesce((select case when live_run.status in ('running', 'pending_approval') then live_run.reset_generation end from ${agentRuns} live_run where live_run.id = ${runId} for key share), -1)`,
       expiresAt: sql`now() + (${ttlMs} || ' milliseconds')::interval`,
     })
     .onConflictDoNothing({
