@@ -169,6 +169,8 @@ beforeEach(() => {
   h.verifyRunExecutedSource.mockResolvedValue(VERIFIED_SOURCE);
   h.assertRunStepToolAllowed.mockReturnValue({ kind: "undeclared" });
   h.mintRunWriteAuthorityForMcp.mockResolvedValue(AUTHORITY);
+  // Queued one-time answers of an earlier test that stopped before using them must not reach the next test.
+  h.materializeToolArtifact.mockReset();
   let n = 0;
   h.materializeToolArtifact.mockImplementation(async () => {
     n += 1;
@@ -429,6 +431,100 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     });
   });
 
+  describe("typed data of list members (cinatra#3089)", () => {
+    const TYPED = [
+      { subject: "Hello Ada", body: "Dear Ada, ...", recipientId: "c-1" },
+      { subject: "Hello Bob", body: "Dear Bob, ...", recipientId: "c-2" },
+    ];
+    const DECLARATION_CODE = "materialize_list_data_declaration";
+    const typedCall = (inputOverrides?: Record<string, unknown>) =>
+      listBody({ content: JSON.stringify(TYPED), memberDataFields: ["recipientId"], ...inputOverrides });
+    const typedDataOf = (call: number) => (h.materializeToolArtifact.mock.calls[call]![0] as { typedData?: unknown }).typedData;
+
+    // red-first-expect: expected 400 to be 200
+    it("hands each member's declared fields, the call-wide values and the run's own id to the filing as typed data", async () => {
+      const res = await POST(
+        post(typedCall({ memberData: { campaignId: "camp-1" }, memberRunIdField: "runId" })),
+      );
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(2);
+      // The run id is the calling run's (the run the binding proved), stamped by the host.
+      expect(typedDataOf(0)).toStrictEqual({ recipientId: "c-1", campaignId: "camp-1", runId: "run-1" });
+      expect(typedDataOf(1)).toStrictEqual({ recipientId: "c-2", campaignId: "camp-1", runId: "run-1" });
+      // Title and content are unchanged by the typed fields.
+      expect(h.materializeToolArtifact.mock.calls[1]![0]).toMatchObject({ title: "Hello Bob", content: "Dear Bob, ..." });
+    });
+
+    // red-first-expect: expected 400 to be 200
+    it("passes no typed data for a list call that declares none", async () => {
+      const res = await POST(post(listBody()));
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact.mock.calls[0]![0]).not.toHaveProperty("typedData");
+    });
+
+    // red-first-expect: expected undefined to be 'materialize_list_data_declaration'
+    it.each([
+      ["a member field that is also the title field", { memberDataFields: ["subject"] }],
+      ["a writer-owned envelope field", { memberData: { latestDigest: "x" } }],
+      ["a run id field that is also a stamped call-wide key", { memberData: { runId: "run-9" }, memberRunIdField: "runId" }],
+      ["a run id field that is also a declared member field", { memberDataFields: ["runId"], memberRunIdField: "runId" }],
+      ["a call-wide value that is not a string", { memberData: { campaignId: 7 } }],
+    ])("refuses %s with the one declaration code, and files nothing", async (_n, overrides) => {
+      const res = await POST(post(typedCall(overrides)));
+      const body = await res.json();
+      expect(body.code).toBe(DECLARATION_CODE);
+      expect(res.status).toBe(400);
+      expect(body.error).toContain("nothing was filed");
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected undefined to be 'materialize_list_data_declaration'
+    it("does not accept typed-data inputs on a single call", async () => {
+      const res = await POST(
+        post({
+          tool: "artifact_materialize",
+          agent_run_id: "run-1",
+          input: {
+            extension: EXT, content: "# Hi", declaredMime: "text/markdown", title: "T", node_id: NODE,
+            memberData: { campaignId: "camp-1" },
+          },
+        }),
+      );
+      const body = await res.json();
+      expect(body.code).toBe(DECLARATION_CODE);
+      expect(res.status).toBe(400);
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: to contain 'member 1'
+    it.each([
+      ["a declared field is missing from a member", TYPED.map(({ recipientId: _r, ...m }) => m), {}],
+      ["a member carries its own value for a stamped key", TYPED.map((m) => ({ ...m, campaignId: "other" })), { memberData: { campaignId: "camp-1" } }],
+      ["a member carries its own run id", TYPED.map((m) => ({ ...m, runId: "run-9" })), { memberRunIdField: "runId" }],
+    ])("refuses the whole call, filing nothing, when %s", async (_n, members, extra) => {
+      const res = await POST(post(typedCall({ content: JSON.stringify(members), ...extra })));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toContain("member 1");
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected undefined to be 'materialize_list_input_too_large'
+    it("counts the typed fields in the shaped size: a call within the limit as received, over it once every member carries the stamped value", async () => {
+      const LIMIT = 256 * 1024;
+      const members = Array.from({ length: 50 }, (_, i) => ({ subject: `Draft ${i + 1}`, body: `${i + 1}:`, recipientId: `c-${i + 1}` }));
+      const build = () => (typedCall({ content: JSON.stringify(members), memberData: { campaignId: "k".repeat(512) } }) as { input: Record<string, unknown> }).input;
+      const extra = LIMIT - Buffer.byteLength(JSON.stringify(build()));
+      for (const [i, m] of members.entries()) m.body += "x".repeat(Math.floor(extra / 50) + (i === 0 ? extra % 50 : 0));
+      const input = build();
+      expect(Buffer.byteLength(JSON.stringify(input))).toBe(LIMIT);
+      const res = await POST(post({ tool: "artifact_materialize", agent_run_id: "run-1", input, result_input_passthrough: true }));
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_input_too_large");
+      expect(res.status).toBe(400);
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+  });
+
   // red-first-expect: expected { Object (error) } to deeply equal
   it("refuses a list call that names one result id field before anything is filed", async () => {
     const res = await POST(
@@ -466,7 +562,6 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(h.materializeToolArtifact).toHaveBeenCalledTimes(1);
   });
 
-  // red-first-expect: expected 400 to be 200
   it("keeps the single call as it was", async () => {
     const res = await POST(
       post({

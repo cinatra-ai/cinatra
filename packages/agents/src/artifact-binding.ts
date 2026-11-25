@@ -760,6 +760,127 @@ export function materializeListMemberFieldsEqualRefusal(
     : null;
 }
 
+// THE TYPED DATA OF LIST MEMBERS (cinatra#3089). A list call may store typed
+// data on every artifact it files, so that a body carries the correlation the
+// steps after it read (who it is for, which campaign it belongs to) in its
+// object's own data. Three literal inputs, ONE reading of them for the compile
+// check, the passthrough route and the shaper, and ONE refusal code:
+//   - `memberDataFields`: names of member fields, each copied into that
+//     member's data (the member supplies the value);
+//   - `memberData`: an object of call-wide values the HOST stamps on every
+//     member (a member that carries a field of the same name is refused, so a
+//     model-written member cannot set it);
+//   - `memberRunIdField`: the name of a field the host fills with the CALLING
+//     RUN's id, never one the caller supplies.
+// Names follow the rule of the title and content fields (a non-blank string with
+// no surrounding whitespace, never a template) and are refused when they are
+// `__proto__`, a writer-owned field of the stored object, a title or content
+// field, or used twice. At most 8 typed fields in all; a value is a non-blank
+// string of at most 512 characters.
+
+export const MATERIALIZE_LIST_DATA_CODE = "materialize_list_data_declaration";
+export const MATERIALIZE_LIST_DATA_MAX_FIELDS = 8;
+export const MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS = 512;
+
+/** The fields the creation path writes over a caller's typed data (`artifact-creation.ts`, the object's data
+ *  is `{ ...typedData, <these> }`): a caller can add to the object and never restate them. A drift test
+ *  compares this list with that block. */
+export const MATERIALIZE_LIST_ENVELOPE_FIELDS: readonly string[] = [
+  "artifactType",
+  "latestRepresentationRevisionId",
+  "latestDigest",
+  "mime",
+  "size",
+  "originKind",
+  "viewerHint",
+  "title",
+];
+
+export type MaterializeListDataDeclaration = {
+  /** Member fields copied into each member's data. */
+  fields: string[];
+  /** Call-wide values stamped on every member by the host. */
+  fixed: Record<string, string>;
+  /** The field the host fills with the calling run's id, or null. */
+  runIdField: string | null;
+  /** The bound of a value, for the member values the shaper reads. */
+  maxValueChars: number;
+};
+
+export type MaterializeListDataRead =
+  | ({ ok: true } & MaterializeListDataDeclaration)
+  | { ok: false; code: typeof MATERIALIZE_LIST_DATA_CODE; field: string; message: string };
+
+const MATERIALIZE_LIST_DATA_INPUTS = ["memberDataFields", "memberData", "memberRunIdField"] as const;
+
+/** Reads the typed-data inputs of an `artifact_materialize` input (as authored, or as the route receives it).
+ *  A call without them reads as an empty declaration; on a call that is not a list call they are refused. */
+export function readMaterializeListDataDeclaration(input: Record<string, unknown>): MaterializeListDataRead {
+  const refuse = (field: string, why: string): MaterializeListDataRead => ({
+    ok: false,
+    code: MATERIALIZE_LIST_DATA_CODE,
+    field,
+    message: `artifact_materialize: ${field} is not valid (${why}); nothing was filed`,
+  });
+  const empty: MaterializeListDataRead = { ok: true, fields: [], fixed: {}, runIdField: null, maxValueChars: MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS };
+  const present = MATERIALIZE_LIST_DATA_INPUTS.filter((k) => input[k] !== undefined);
+  if (present.length === 0) return empty;
+  if (!isArtifactMaterializeListInput(input)) {
+    return refuse(present[0]!, "only a list call (memberContentField + memberTitleField) takes typed member data");
+  }
+  const titleField = input.memberTitleField;
+  const contentField = input.memberContentField;
+  const used = new Set<string>();
+  const nameProblem = (name: unknown): string | null => {
+    if (typeof name !== "string" || name.trim().length === 0 || name !== name.trim() || isTemplated(name)) {
+      return "a name must be a literal field name with no surrounding whitespace";
+    }
+    if (name === "__proto__") return "a name may not be __proto__";
+    if (MATERIALIZE_LIST_ENVELOPE_FIELDS.includes(name)) return "a name may not be a field the writer owns";
+    if (name === titleField || name === contentField) return "a name may not be the title field or the content field";
+    if (used.has(name)) return "a name may be used once";
+    used.add(name);
+    return null;
+  };
+
+  const fields: string[] = [];
+  const rawFields = input.memberDataFields;
+  if (rawFields !== undefined) {
+    if (!Array.isArray(rawFields)) return refuse("memberDataFields", "must be an array of field names");
+    for (const name of rawFields) {
+      const problem = nameProblem(name);
+      if (problem !== null) return refuse("memberDataFields", problem);
+      fields.push(name as string);
+    }
+  }
+
+  const fixed: Record<string, string> = {};
+  const rawFixed = input.memberData;
+  if (rawFixed !== undefined) {
+    if (!isPlainObject(rawFixed)) return refuse("memberData", "must be an object of field names and string values");
+    for (const [name, value] of Object.entries(rawFixed)) {
+      const problem = nameProblem(name);
+      if (problem !== null) return refuse("memberData", problem);
+      if (typeof value !== "string" || value.trim().length === 0 || value.length > MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS) {
+        return refuse("memberData", `a value must be a non-blank string of at most ${MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS} characters`);
+      }
+      fixed[name] = value;
+    }
+  }
+
+  let runIdField: string | null = null;
+  if (input.memberRunIdField !== undefined) {
+    const problem = nameProblem(input.memberRunIdField);
+    if (problem !== null) return refuse("memberRunIdField", problem);
+    runIdField = input.memberRunIdField as string;
+  }
+
+  if (used.size > MATERIALIZE_LIST_DATA_MAX_FIELDS) {
+    return refuse(present[0]!, `at most ${MATERIALIZE_LIST_DATA_MAX_FIELDS} typed fields in all`);
+  }
+  return { ok: true, fields, fixed, runIdField, maxValueChars: MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS };
+}
+
 /** Whether an `artifact_materialize` input (as authored, or as the route receives it) is a list call. */
 export function isArtifactMaterializeListInput(input: Record<string, unknown>): boolean {
   return input.memberContentField !== undefined || input.memberTitleField !== undefined;
@@ -1040,6 +1161,8 @@ export function collectArtifactMaterializeNodesFromOasDocument(
     }
     const equalNames = materializeListMemberFieldsEqualRefusal(input);
     if (equalNames !== null) fieldError("memberTitleField", equalNames.message);
+    const typedData = readMaterializeListDataDeclaration(input);
+    if (!typedData.ok) fieldError(typedData.field, typedData.message);
     if (isList) {
       for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
         if (input[field] !== undefined) {

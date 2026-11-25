@@ -9,7 +9,10 @@
 import { describe, expect, it } from "vitest";
 
 import { shapeArtifactMaterializeInput } from "../app/api/agents/passthrough/artifact-materialize-shaper";
-import { isArtifactMaterializeListInput } from "../../packages/agents/src/artifact-binding";
+import {
+  isArtifactMaterializeListInput,
+  readMaterializeListDataDeclaration,
+} from "../../packages/agents/src/artifact-binding";
 
 const EXT = "@cinatra-ai/email-artifacts";
 const DRAFTS = [
@@ -172,5 +175,144 @@ describe("the shaper and the package read 'a list call' alike (cinatra#3089)", (
       members = "refused";
     }
     expect(members === undefined).toBe(!isList);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3089 — typed data on list-filed members. `memberDataFields` names
+// member fields stored as the member's typed data; `memberData` stamps
+// call-wide values on every member; `memberRunIdField` names the field the host
+// fills with the calling run's id. The declaration is read by ONE function
+// (the package's, also used by the route and the compile check) and handed to
+// the shaper, which keeps no project imports.
+// ---------------------------------------------------------------------------
+
+const TYPED = [
+  { subject: "Hello Ada", body: "Dear Ada", recipientId: "c-1" },
+  { subject: "Hello Bob", body: "Dear Bob", recipientId: "c-2" },
+];
+
+/** The shaper as the route drives it: the declaration is read by the package's reader first. */
+function shapeTyped(raw: Record<string, unknown>) {
+  const declaration = readMaterializeListDataDeclaration(raw);
+  if (!declaration.ok) throw new Error(declaration.message);
+  return shapeArtifactMaterializeInput(raw, declaration);
+}
+
+const typedRaw = (overrides?: Record<string, unknown>) =>
+  listRaw({ content: JSON.stringify(TYPED), memberDataFields: ["recipientId"], ...overrides });
+
+describe("typed data of list members (cinatra#3089)", () => {
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it("copies each declared member field into that member's data, and stamps the call-wide values", () => {
+    const shaped = shapeTyped(
+      typedRaw({ memberData: { campaignId: "camp-1", region: "eu" }, memberRunIdField: "runId" }),
+    );
+    expect(shaped.runIdField).toBe("runId");
+    expect(shaped.members).toStrictEqual([
+      { title: "Hello Ada", content: "Dear Ada", data: { recipientId: "c-1", campaignId: "camp-1", region: "eu" } },
+      { title: "Hello Bob", content: "Dear Bob", data: { recipientId: "c-2", campaignId: "camp-1", region: "eu" } },
+    ]);
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it("gives a member no data property when the call declares none", () => {
+    const shaped = shapeTyped(listRaw());
+    expect(shaped.members!.every((m) => !("data" in m))).toBe(true);
+    expect(shaped).not.toHaveProperty("runIdField");
+  });
+
+  // red-first-expect: to contain 'member 2'
+  it.each([
+    ["is missing", (m: Record<string, unknown>) => delete m.recipientId, 2, "recipientId"],
+    ["is blank", (m: Record<string, unknown>) => { m.recipientId = "  "; }, 2, "recipientId"],
+    ["is not a string", (m: Record<string, unknown>) => { m.recipientId = 7; }, 2, "recipientId"],
+    ["is longer than 512 characters", (m: Record<string, unknown>) => { m.recipientId = "x".repeat(513); }, 2, "recipientId"],
+  ])("refuses the whole call when a member's declared field %s, naming the member and the field only", (_n, edit, index, field) => {
+    const list = TYPED.map((m) => ({ ...m }));
+    edit(list[index - 1]!);
+    let message = "";
+    try {
+      shapeTyped(typedRaw({ content: JSON.stringify(list) }));
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(`member ${index}`);
+    expect(message).toContain(`"${field}"`);
+    // The value is never echoed.
+    expect(message).not.toContain("xxxxxxxx");
+  });
+
+  // red-first-expect: to throw error including 'member 1 must not carry the field
+  it.each([
+    ["a stamped call-wide key", { memberData: { campaignId: "camp-1" } }, "campaignId"],
+    ["the host-stamped run id field", { memberRunIdField: "runId" }, "runId"],
+  ])("refuses a member that carries its own value for %s", (_n, extra, key) => {
+    const list = TYPED.map((m) => ({ ...m, [key]: "member-written" }));
+    expect(() => shapeTyped(typedRaw({ content: JSON.stringify(list), ...extra }))).toThrow(
+      `member 1 must not carry the field "${key}"`,
+    );
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it("refuses typed-data inputs on a single call, which keeps today's behaviour", () => {
+    const raw = typedRaw();
+    delete raw.memberContentField;
+    delete raw.memberTitleField;
+    const declaration = readMaterializeListDataDeclaration(raw);
+    expect(declaration).toMatchObject({ ok: false, code: "materialize_list_data_declaration" });
+  });
+
+  // red-first-expect: expected [Function] to throw
+  it("does not shape typed-data inputs it was not handed a declaration for", () => {
+    expect(() => shapeArtifactMaterializeInput(typedRaw())).toThrow("declaration");
+  });
+});
+
+describe("readMaterializeListDataDeclaration (cinatra#3089)", () => {
+  const bad = (overrides: Record<string, unknown>) => readMaterializeListDataDeclaration(typedRaw(overrides));
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it("reads a valid declaration and the absence of one", () => {
+    expect(bad({ memberData: { campaignId: "c" }, memberRunIdField: "runId" })).toEqual({
+      ok: true, fields: ["recipientId"], fixed: { campaignId: "c" }, runIdField: "runId", maxValueChars: 512,
+    });
+    expect(readMaterializeListDataDeclaration(listRaw())).toEqual({
+      ok: true, fields: [], fixed: {}, runIdField: null, maxValueChars: 512,
+    });
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it.each([
+    ["memberDataFields that is not an array", { memberDataFields: "recipientId" }],
+    ["memberDataFields that is null", { memberDataFields: null }],
+    ["a member data field that is not a string", { memberDataFields: [3] }],
+    ["a blank member data field", { memberDataFields: [" "] }],
+    ["a padded member data field", { memberDataFields: [" recipientId "] }],
+    ["a templated member data field", { memberDataFields: ["{{ f }}"] }],
+    ["a member data field named __proto__", { memberDataFields: ["__proto__"] }],
+    ["a duplicate member data field", { memberDataFields: ["recipientId", "recipientId"] }],
+    ["a member data field equal to the title field", { memberDataFields: ["subject"] }],
+    ["a member data field equal to the content field", { memberDataFields: ["body"] }],
+    ["more than 8 typed fields", { memberDataFields: Array.from({ length: 9 }, (_, i) => `f${i}`) }],
+    ["memberData that is an array", { memberData: ["a"] }],
+    ["memberData that is null", { memberData: null }],
+    ["a memberData value that is not a string", { memberData: { campaignId: 3 } }],
+    ["a blank memberData value", { memberData: { campaignId: " " } }],
+    ["a memberData value longer than 512 characters", { memberData: { campaignId: "x".repeat(513) } }],
+    ["a memberData key that is also a member data field", { memberData: { recipientId: "c" } }],
+    ["a memberData key equal to the title field", { memberData: { subject: "c" } }],
+    ["a padded memberData key", { memberData: { " campaignId": "c" } }],
+    ["memberRunIdField that is not a string", { memberRunIdField: 4 }],
+    ["memberRunIdField that is blank", { memberRunIdField: "" }],
+    ["memberRunIdField that is also a member data field", { memberRunIdField: "recipientId" }],
+    ["memberRunIdField that is also a memberData key", { memberData: { runId: "r" }, memberRunIdField: "runId" }],
+    ["a field named as a writer-owned envelope field", { memberDataFields: ["latestDigest"] }],
+    ["a memberData key named as a writer-owned envelope field", { memberData: { originKind: "x" } }],
+    ["the run id field named as a writer-owned envelope field", { memberRunIdField: "title" }],
+  ])("refuses %s with the one declaration code", (_n, overrides) => {
+    const result = bad(overrides);
+    expect(result).toMatchObject({ ok: false, code: "materialize_list_data_declaration" });
+    expect((result as { message: string }).message).toContain("nothing was filed");
   });
 });

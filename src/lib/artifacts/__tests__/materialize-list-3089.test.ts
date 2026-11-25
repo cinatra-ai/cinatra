@@ -14,9 +14,12 @@
  *   L3 a marked gate fed by the list node reviews every member's write, and
  *      plans one review leg per artifact, in order
  *   L4 the send fan-out reuses each list-filed body by its bytes
- *   L5 a list-filed body is stored with the same fields as a single filing of
- *      the same body (neither carries typed data: the send records the
- *      correlation of a body it reuses, not the filing)
+ *   L5 a list-filed body that declares no typed data is stored with the same
+ *      fields as a single filing of the same body (a single filing takes no
+ *      typed data; the send records the correlation of a body it reuses)
+ *   L6 a list-filed body stores the typed data its call declares (member
+ *      fields, call-wide values, the run's own id) beside the writer's fields,
+ *      and the campaign body query's filter matches it
  *
  *   npx vitest run src/lib/artifacts/__tests__/materialize-list-3089.test.ts
  */
@@ -101,6 +104,11 @@ import {
   resolveDeclaredReviewTargets,
 } from "../artifact-review-target";
 import { shapeArtifactMaterializeInput } from "@/app/api/agents/passthrough/artifact-materialize-shaper";
+import {
+  MATERIALIZE_LIST_ENVELOPE_FIELDS,
+  readMaterializeListDataDeclaration,
+} from "../../../../packages/agents/src/artifact-binding";
+import { compileDataEqualsClause } from "@/lib/objects-store";
 
 const EXT = "@cinatra-ai/email-artifacts";
 const BODY_TYPE = "@cinatra-ai/email:body";
@@ -403,7 +411,7 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
     expect(ledger.filter((r) => r.path === "email_fanout").map((r) => r.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
   });
   // red-first-expect: input.title must be a non-empty string
-  it("L5 a list-filed body is stored with the same fields as a single filing of the same body", async () => {
+  it("L5 a list-filed body that declares no typed data is stored with the same fields as a single filing of the same body", async () => {
     const stored = (call: unknown[]) => {
       const { stream: _stream, additionalTx2Queries: _tx2, ...fields } = call[0] as Record<string, unknown>;
       return fields;
@@ -441,6 +449,90 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
 
     expect(fromList).toEqual(fromSingle);
     expect(fromList).not.toHaveProperty("typedData");
+  });
+});
+
+describe("cinatra#3089 — typed data of a list-filed body", () => {
+  /** The list filing as the route wires it, with the typed data the call declares. */
+  async function fileTypedList(extra: Record<string, unknown>) {
+    const raw = {
+      extension: EXT,
+      objectTypeId: BODY_TYPE,
+      content: JSON.stringify(DRAFTS),
+      memberContentField: "body",
+      memberTitleField: "subject",
+      declaredMime: "text/markdown",
+      node_id: NODE,
+      ...extra,
+    };
+    const declaration = readMaterializeListDataDeclaration(raw);
+    if (!declaration.ok) throw new Error(declaration.message);
+    const shaped = shapeArtifactMaterializeInput(raw, declaration);
+    const { materializeArtifactList } = await listModule();
+    return materializeArtifactList(shaped.members!, (member) =>
+      materializeToolArtifact({
+        runId: "run-1",
+        orgId: "org-a",
+        templateId: "tpl-1",
+        packageVersion: "1.0.0",
+        createdBy: "user-1",
+        nodeId: shaped.nodeId,
+        verifiedStepId: NODE,
+        extension: shaped.extension,
+        objectTypeId: shaped.objectTypeId,
+        title: member.title,
+        mime: shaped.declaredMime,
+        content: member.content,
+        ...(member.data || shaped.runIdField
+          ? { typedData: { ...member.data, ...(shaped.runIdField ? { [shaped.runIdField]: "run-1" } : {}) } }
+          : {}),
+      }),
+    );
+  }
+
+  // red-first-expect: readMaterializeListDataDeclaration is not a function
+  it("L6 stores each member's declared fields, the call-wide values and the run's id beside the writer's fields", async () => {
+    const listed = await fileTypedList({
+      memberDataFields: ["id"],
+      memberData: { campaignId: "camp-1" },
+      memberRunIdField: "runId",
+    });
+    if (!listed.ok) throw new Error(listed.error);
+    const typed = createSemanticArtifactMock.mock.calls.map((c) => c[0].typedData);
+    expect(typed).toEqual(
+      DRAFTS.map((d) => ({ id: d.id, campaignId: "camp-1", runId: "run-1" })),
+    );
+
+    // The campaign body query filters `data.campaignId` (the indexed dataEquals
+    // clause): the stored data of every list-filed body satisfies it.
+    const values: unknown[] = [];
+    const { clauses } = compileDataEqualsClause([{ key: "campaignId", value: "camp-1" }], values, 1);
+    expect(clauses).toEqual(["data->>'campaignId' = $1"]);
+    for (const call of createSemanticArtifactMock.mock.calls) {
+      const stored = { ...call[0].typedData, title: call[0].title } as Record<string, unknown>;
+      expect(stored.campaignId).toBe(values[0]);
+    }
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration is not a function
+  it("files the same body, with no typed data, when the call declares none", async () => {
+    const listed = await fileTypedList({});
+    if (!listed.ok) throw new Error(listed.error);
+    for (const call of createSemanticArtifactMock.mock.calls) expect(call[0]).not.toHaveProperty("typedData");
+  });
+
+  // red-first-expect: MATERIALIZE_LIST_ENVELOPE_FIELDS
+  it("keeps the writer-owned fields the creation path puts over a caller's typed data in step with the refused names", async () => {
+    // The creation path composes `{ ...typedData, <the writer's own fields> }`: a caller's
+    // typed data can add to the object and can never restate those fields. The names a
+    // declaration may not use are exactly them.
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(new URL("../artifact-creation.ts", import.meta.url), "utf8");
+    const block = source.slice(source.indexOf("const objectData = {"), source.indexOf("} as ArtifactObjectData;", source.indexOf("const objectData = {")));
+    const owned = [...block.matchAll(/^\s+(\w+)\s*[:,]/gm)].map((m) => m[1]!).sort();
+    expect(owned.length).toBeGreaterThan(0);
+    expect([...MATERIALIZE_LIST_ENVELOPE_FIELDS].sort()).toEqual(owned);
+    expect(block.indexOf("...(input.typedData ?? {})")).toBeLessThan(block.indexOf("artifactType:"));
   });
 });
 

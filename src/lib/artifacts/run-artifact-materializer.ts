@@ -1648,6 +1648,9 @@ export async function materializeToolArtifact(input: {
   title: string;
   mime: string;
   content: string;
+  /** OPTIONAL typed data for the object's own declared fields (cinatra#3089):
+   *  stored beside the writer's own fields, which the creation path puts over it. */
+  typedData?: Record<string, unknown>;
 }): Promise<ToolArtifactMaterialization> {
   try {
     // The SHARED write authorization (produces, text-authorable form, the cap
@@ -1695,6 +1698,7 @@ export async function materializeToolArtifact(input: {
       ownership,
       resolvedTarget: resolved.target,
       mimeDescription: "the call declared MIME",
+      ...(input.typedData ? { typedData: input.typedData } : {}),
       // cinatra#3035: a mid-run write an executed marked gate reviews carries
       // the intermediate origin; that gate is the review of it.
       ...(resolved.reviewed ? { originKind: "live_generator" as const } : {}),

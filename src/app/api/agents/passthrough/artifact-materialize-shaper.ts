@@ -45,10 +45,31 @@ export type ShapedArtifactMaterializeInput = {
    * request itself carried within that limit.
    */
   members?: ShapedArtifactMaterializeMember[];
+  /**
+   * The name of the typed field the HOST fills with the calling run's id on
+   * every member (cinatra#3089), when the call declares one. The run id is never
+   * read from the call: the route stamps the id of the run it proved.
+   */
+  runIdField?: string;
 };
 
-/** One member of a list-mode call: its own title and its own content bytes. */
-export type ShapedArtifactMaterializeMember = { title: string; content: string };
+/** One member of a list-mode call: its own title and its own content bytes, and
+ *  the typed data it stores (its declared member fields and the call-wide values
+ *  the host stamps), when the call declares any. */
+export type ShapedArtifactMaterializeMember = { title: string; content: string; data?: Record<string, string> };
+
+/**
+ * The typed-data declaration of a list call, as the package reads it
+ * (`readMaterializeListDataDeclaration`, the one reading used by the compile
+ * check and the route). This module keeps no project imports, so the route
+ * hands the declaration it read in; the shape is the reading's own.
+ */
+export type ListDataDeclaration = {
+  fields: readonly string[];
+  fixed: Readonly<Record<string, string>>;
+  runIdField: string | null;
+  maxValueChars: number;
+};
 
 /** The list mode's member bound — the review plan's own target bound
  *  (`MAX_REVIEW_TARGETS`), restated because this module has zero deps. */
@@ -120,6 +141,7 @@ function requireNonEmptyString(
  */
 export function shapeArtifactMaterializeInput(
   raw: Record<string, unknown>,
+  listData?: ListDataDeclaration,
 ): ShapedArtifactMaterializeInput {
   const extension = requireNonEmptyString(raw, "extension");
   const declaredMime = requireNonEmptyString(raw, "declaredMime");
@@ -160,6 +182,15 @@ export function shapeArtifactMaterializeInput(
   const contentRaw = raw.content;
   const hasMemberContentField = raw.memberContentField !== undefined;
   const hasMemberTitleField = raw.memberTitleField !== undefined;
+  const hasTypedDataInput =
+    raw.memberDataFields !== undefined || raw.memberData !== undefined || raw.memberRunIdField !== undefined;
+  if (hasTypedDataInput && listData === undefined) {
+    // The declaration is read by the package's reader and handed in; a call that
+    // names typed data without one is never shaped as if it had named none.
+    throw new Error(
+      "artifact_materialize typed member data (memberDataFields, memberData, memberRunIdField) needs its declaration read first",
+    );
+  }
   if (hasMemberContentField || hasMemberTitleField) {
     return {
       extension,
@@ -168,7 +199,8 @@ export function shapeArtifactMaterializeInput(
       title: "",
       nodeId,
       ...(objectTypeId ? { objectTypeId } : {}),
-      members: shapeListMembers(raw, hasMemberContentField, hasMemberTitleField),
+      members: shapeListMembers(raw, hasMemberContentField, hasMemberTitleField, listData),
+      ...(listData?.runIdField ? { runIdField: listData.runIdField } : {}),
     };
   }
   if (typeof contentRaw !== "string") {
@@ -254,6 +286,7 @@ function shapeListMembers(
   raw: Record<string, unknown>,
   hasMemberContentField: boolean,
   hasMemberTitleField: boolean,
+  listData: ListDataDeclaration | undefined,
 ): ShapedArtifactMaterializeMember[] {
   if (!hasMemberContentField || !hasMemberTitleField) {
     throw new Error(
@@ -322,6 +355,29 @@ function shapeListMembers(
     if (typeof title !== "string" || title.trim().length === 0) {
       throw new Error(`${where} field "${titleField}" must be a non-empty string (got ${JSON.stringify(title)})`);
     }
+    let data: Record<string, string> | undefined;
+    if (listData !== undefined && (listData.fields.length > 0 || Object.keys(listData.fixed).length > 0)) {
+      data = {};
+      // A call-wide value and the run id are the host's: a member that carries
+      // a field of that name is refused, never overridden or trusted.
+      for (const reserved of [...Object.keys(listData.fixed), ...(listData.runIdField ? [listData.runIdField] : [])]) {
+        if (Object.prototype.hasOwnProperty.call(record, reserved)) {
+          throw new Error(`${where} must not carry the field "${reserved}" (its value is stamped by the call)`);
+        }
+      }
+      for (const field of listData.fields) {
+        const value = record[field];
+        if (typeof value !== "string" || value.trim().length === 0 || value.length > listData.maxValueChars) {
+          throw new Error(
+            `${where} field "${field}" must be a non-blank string of at most ${listData.maxValueChars} characters`,
+          );
+        }
+        data[field] = value;
+      }
+      Object.assign(data, listData.fixed);
+    } else if (listData?.runIdField && Object.prototype.hasOwnProperty.call(record, listData.runIdField)) {
+      throw new Error(`${where} must not carry the field "${listData.runIdField}" (its value is stamped by the call)`);
+    }
     const key = utf8Key(content);
     const earlier = seen.get(key);
     if (earlier !== undefined) {
@@ -331,6 +387,6 @@ function shapeListMembers(
       );
     }
     seen.set(key, index);
-    return { title: title.trim(), content };
+    return { title: title.trim(), content, ...(data ? { data } : {}) };
   });
 }

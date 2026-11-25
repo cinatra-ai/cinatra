@@ -4,6 +4,7 @@ import {
   isArtifactMaterializeListInput,
   materializeListMemberFieldsEqualRefusal,
   materializeListResultIdFieldRefusal,
+  readMaterializeListDataDeclaration,
 } from "@cinatra-ai/agents/artifact-binding";
 import "server-only";
 import { NextResponse } from "next/server";
@@ -351,8 +352,15 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
 // straight to {extension, content, declaredMime, title, node_id}
 // (+ optional contentJsonField parse-then-project). A shaper throw
 // surfaces as a 400 via the existing shaper-throw contract.
-TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
-  shapeArtifactMaterializeInput(raw);
+TOOL_INPUT_SHAPERS.artifact_materialize = (raw) => {
+  // The typed-data declaration (cinatra#3089) is read by the package's one reader
+  // (the compile check reads it too) and handed to the shaper, which keeps no
+  // project imports. The route refuses a malformed one, with its code, before
+  // this runs; a throw here is the same refusal reached by another caller.
+  const declaration = readMaterializeListDataDeclaration(raw);
+  if (!declaration.ok) throw new Error(declaration.message);
+  return shapeArtifactMaterializeInput(raw, declaration);
+};
 
 // The image tool's seam shaper (cinatra#3032) — pure module in
 // ./artifact-image-shaper, same generic posture: flow variables wire straight to
@@ -506,6 +514,17 @@ export async function POST(req: Request): Promise<Response> {
     const sameField = materializeListMemberFieldsEqualRefusal(rawInput);
     if (sameField !== null) {
       return NextResponse.json({ error: sameField.message, code: sameField.code }, { status: 400 });
+    }
+  }
+
+  // The typed member data a call declares (cinatra#3089) is read by the one
+  // reader the compile check uses; a malformed declaration, or typed data on a
+  // call that is not a list call, is refused here with ONE code before anything
+  // is shaped or filed.
+  if (tool === "artifact_materialize") {
+    const typedData = readMaterializeListDataDeclaration(rawInput);
+    if (!typedData.ok) {
+      return NextResponse.json({ error: typedData.message, code: typedData.code }, { status: 400 });
     }
   }
 
@@ -690,6 +709,17 @@ export async function POST(req: Request): Promise<Response> {
             title: member.title,
             mime: shaped.declaredMime,
             content: member.content,
+            // The member's typed data, and the id of THIS run under the field the
+            // call names for it: the run is the one the binding proved, never a
+            // value the call carries.
+            ...(member.data !== undefined || shaped.runIdField !== undefined
+              ? {
+                  typedData: {
+                    ...member.data,
+                    ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}),
+                  },
+                }
+              : {}),
           }),
         );
         if (!listed.ok) {

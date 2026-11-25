@@ -8,6 +8,7 @@ import {
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactMaterializeNodesFromOasDocument,
   readApiNodeDataObject,
+  readMaterializeListDataDeclaration,
 } from "../artifact-binding";
 import { compileOasAgentJson } from "../oas-compiler";
 import { checkRegenerateDeclaration } from "../verdaccio/package-contract";
@@ -117,6 +118,43 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
         "data.input.memberTitleField: artifact_materialize: memberContentField and memberTitleField name the same member field",
       ),
     ]);
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("refuses a typed-data declaration the route refuses, with the same message, in %s", (_name, dataAsText) => {
+    const input = listInput({ memberDataFields: ["subject"] });
+    const refusal = readMaterializeListDataDeclaration(input);
+    expect(refusal).toMatchObject({ ok: false, code: "materialize_list_data_declaration" });
+    const result = collect(input, {}, dataAsText);
+    expect(result.nodes).toEqual([]);
+    expect(result.errors).toEqual([
+      expect.stringContaining(`data.input.memberDataFields: ${(refusal as { message: string }).message}`),
+    ]);
+  });
+
+  // red-first-expect: expected [ Array(1) ] to deeply equal []
+  it("accepts a valid typed-data declaration, with a call-wide value that is a flow variable", () => {
+    const result = collect(
+      listInput({
+        memberDataFields: ["recipientId"],
+        memberData: { campaignId: "{{ campaign_id }}" },
+        memberRunIdField: "runId",
+      }),
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.nodes).toHaveLength(1);
+  });
+
+  // red-first-expect: expected [] to deeply equal [ StringContaining
+  it("refuses typed-data inputs on a single call", () => {
+    const input = listInput({ title: "{{ title }}", memberData: { campaignId: "c" } });
+    delete input.memberContentField;
+    delete input.memberTitleField;
+    const result = collect(input);
+    expect(result.errors).toEqual([expect.stringContaining("data.input.memberData: ")]);
   });
 
   // red-first-expect: to contain 'data.input.
