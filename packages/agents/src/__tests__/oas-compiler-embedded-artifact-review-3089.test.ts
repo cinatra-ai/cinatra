@@ -102,6 +102,8 @@ type Parts = {
   draftsInline?: boolean;
   // Extra components of the whole flow's $referenced_components.
   extraRefs?: Record<string, unknown>;
+  // Data edges of the whole (parent) flow.
+  parentEdges?: Array<Record<string, unknown>>;
   draftsGateSteps?: unknown[] | undefined;
   startInputs?: string[];
 };
@@ -120,6 +122,7 @@ function buildAgentJson(parts: Parts = {}): Record<string, unknown> {
     metadata: { cinatra: { type: "orchestrator" } },
     inputs: startInputs,
     outputs: [],
+    ...(parts.parentEdges ? { data_flow_connections: parts.parentEdges } : {}),
     start_node: { $component_ref: "startNode" },
     nodes: order.map((id) => ({ $component_ref: id })),
     control_flow_connections: order.slice(1).map((to, i) => ({
@@ -586,5 +589,190 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     delete doc.start_node;
     const error = await compileError({ draftsFlow: doc });
     expect(error).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+  });
+
+  // ----- provenance: the targets input is the child's own -----
+
+  const dataEdge = (from: string, out: string, to: string, input: string) => ({
+    component_type: "DataFlowEdge",
+    name: `${from}_${out}_to_${to}_${input}`,
+    source_node: { $component_ref: from },
+    source_output: out,
+    destination_node: { $component_ref: to },
+    destination_input: input,
+  });
+  const ctl = (from: string, to: string, branch?: string) => ({
+    component_type: "ControlFlowEdge",
+    name: `${from}_${to}${branch ? `_${branch}` : ""}`,
+    from_node: { $component_ref: from },
+    to_node: { $component_ref: to },
+    ...(branch ? { from_branch: branch } : {}),
+  });
+  const startNode = (id: string, titles: string[]) => ({
+    component_type: "StartNode",
+    id,
+    name: id,
+    inputs: titles.map((title) => ({ title, type: "string", default: "[]" })),
+    outputs: titles.map((title) => ({ title, type: "string", default: "[]" })),
+  });
+  const mintNode = (id: string) => ({
+    component_type: "ApiNode",
+    id,
+    name: id,
+    url: "http://localhost/mint",
+    http_method: "POST",
+    inputs: [],
+    outputs: [{ title: "reviewTargets", type: "string" }],
+  });
+  const endNode = (id: string, titles: string[] = []) => ({
+    component_type: "EndNode",
+    id,
+    name: id,
+    inputs: titles.map((title) => ({ title, type: "string" })),
+    outputs: titles.map((title) => ({ title, type: "string" })),
+  });
+  function flowDoc(
+    id: string,
+    start: string,
+    comps: Array<Record<string, unknown>>,
+    control: Array<Record<string, unknown>>,
+    data: Array<Record<string, unknown>> = [],
+  ): Record<string, unknown> {
+    const refs: Record<string, unknown> = {};
+    for (const c of comps) refs[c.id as string] = c;
+    return {
+      agentspec_version: "26.1.0",
+      component_type: "Flow",
+      id,
+      name: id,
+      metadata: { cinatra: { type: "leaf" } },
+      inputs: [],
+      outputs: [],
+      start_node: { $component_ref: start },
+      nodes: comps.map((c) => ({ $component_ref: c.id })),
+      control_flow_connections: control,
+      data_flow_connections: data,
+      $referenced_components: refs,
+    };
+  }
+  const G = "drafts-approval_gate";
+  const CALLER = "ARTIFACT_REVIEW_GATE_INPUT_FROM_CALLER";
+
+  it("a marked gate whose targets input is fed by a node of the child is carried", async () => {
+    const doc = flowDoc("drafts-subflow", "cs", [startNode("cs", ["campaignId"]), mintNode("mint"), markedGate(), endNode("ce")],
+      [ctl("cs", "mint"), ctl("mint", G), ctl(G, "ce")], [dataEdge("mint", "reviewTargets", G, "reviewTargets")]);
+    const steps = await compileSteps({ draftsFlow: doc });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("refuses a marked gate whose targets input is fed from the child's start, whatever its name there", async () => {
+    for (const startOut of ["reviewTargets", "pickedByCaller"]) {
+      const doc = flowDoc("drafts-subflow", "cs", [startNode("cs", [startOut]), markedGate(), endNode("ce")],
+        [ctl("cs", G), ctl(G, "ce")], [dataEdge("cs", startOut, G, "reviewTargets")]);
+      const error = await compileError({ draftsFlow: doc });
+      expect(error).toContain(CALLER);
+      expect(error).toContain('"drafts_flow"');
+    }
+  });
+
+  it("refuses a targets input that reaches the gate from the child's start through a nested flow", async () => {
+    const passThrough = (fed: "start" | "mint") =>
+      flowDoc("inner", "is", [startNode("is", ["reviewTargets"]), mintNode("imint"), endNode("ie", ["reviewTargets"])],
+        [ctl("is", "imint"), ctl("imint", "ie")],
+        [dataEdge(fed === "start" ? "is" : "imint", "reviewTargets", "ie", "reviewTargets")]);
+    const outer = (fed: "start" | "mint") =>
+      flowDoc("drafts-subflow", "cs", [
+        startNode("cs", ["reviewTargets"]),
+        { component_type: "FlowNode", id: "inner_node", name: "inner_node", subflow: passThrough(fed) },
+        markedGate(),
+        endNode("ce"),
+      ], [ctl("cs", "inner_node"), ctl("inner_node", G), ctl(G, "ce")],
+      [dataEdge("cs", "reviewTargets", "inner_node", "reviewTargets"), dataEdge("inner_node", "reviewTargets", G, "reviewTargets")]);
+    expect(await compileError({ draftsFlow: outer("start") })).toContain(CALLER);
+    const steps = await compileSteps({ draftsFlow: outer("mint") });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("refuses a marked gate whose unfed targets input is handed in by the embedding flow, but not one handed another input", async () => {
+    const handed = (input: string) => [dataEdge("startNode", "senderName", "drafts_flow", input)];
+    expect(await compileError({ parentEdges: handed("reviewTargets") })).toContain(CALLER);
+    const steps = await compileSteps({ parentEdges: handed("campaignId") });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  // ----- control flow: exactly one pause -----
+
+  it("refuses a marked gate on a control-flow loop, however the loop closes", async () => {
+    const loops: Array<[string, Array<Record<string, unknown>>]> = [
+      ["gate to node and back", [ctl(G, "n1"), ctl("n1", G)]],
+      ["a loop through an earlier node", [ctl("n0", G), ctl(G, "n1"), ctl("n1", "n0")]],
+      ["a branch back to the gate", [ctl(G, "n1"), ctl("n1", "ce", "done"), ctl("n1", G, "again")]],
+    ];
+    for (const [label, edges] of loops) {
+      const doc = flowDoc("drafts-subflow", label.startsWith("a loop") ? "n0" : G,
+        [mintNode("n0"), markedGate(), mintNode("n1"), endNode("ce")], edges);
+      const error = await compileError({ draftsFlow: doc });
+      expect(error, label).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+    }
+  });
+
+  it("a loop after the marked gate that never returns to it does not refuse the gate", async () => {
+    const doc = flowDoc("drafts-subflow", G, [markedGate(), mintNode("n0"), mintNode("n1")], [ctl(G, "n0"), ctl("n0", "n1"), ctl("n1", "n0")]);
+    const steps = await compileSteps({ draftsFlow: doc });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("refuses a marked gate in a nested flow whose node sits on a loop of the enclosing flow", async () => {
+    const inner = flowDoc("inner", G, [markedGate()], []);
+    const doc = flowDoc("drafts-subflow", "n0", [
+      mintNode("n0"),
+      { component_type: "FlowNode", id: "inner_node", name: "inner_node", subflow: inner },
+      mintNode("n1"),
+    ], [ctl("n0", "inner_node"), ctl("inner_node", "n1"), ctl("n1", "n0")]);
+    expect(await compileError({ draftsFlow: doc })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+  });
+
+  it("refuses a marked gate that a branch lets the run skip, and one inside a repeating node", async () => {
+    const skip = flowDoc("drafts-subflow", "n0", [mintNode("n0"), markedGate(), endNode("ce")],
+      [ctl("n0", G, "yes"), ctl("n0", "ce", "no"), ctl(G, "ce")]);
+    expect(await compileError({ draftsFlow: skip })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+    const each = flowDoc("drafts-subflow", "m", [
+      { component_type: "MapNode", id: "m", name: "m", subflow: flowDoc("per-item", G, [markedGate()], []) },
+    ], []);
+    expect(await compileError({ draftsFlow: each })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
+  });
+
+  it("a marked gate that every path crosses once, after a branch that rejoins, is carried", async () => {
+    const doc = flowDoc("drafts-subflow", "n0", [mintNode("n0"), mintNode("a"), mintNode("b"), markedGate(), endNode("ce")],
+      [ctl("n0", "a", "x"), ctl("n0", "b", "y"), ctl("a", G), ctl("b", G), ctl(G, "ce")]);
+    const steps = await compileSteps({ draftsFlow: doc });
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("the step of a carried gate is a reviewer pause the flow owns, whatever its gateStep declares", async () => {
+    const steps = await compileSteps({ draftsGateSteps: [{ ...DRAFTS_STEP, requiresApproval: false, hitlOwnedBy: "childAgent" }] });
+    const drafts = byName(steps, "Review drafts");
+    // red-first-expect: expected false to be true
+    expect(drafts.requiresApproval).toBe(true);
+    expect(drafts.hitlOwnedBy).toBe("self");
+  });
+
+  // ----- one reading of a gate's renderer -----
+
+  it("an unmarked gate is judged by its field renderer first, whether the subflow is referenced or inline", async () => {
+    const cases: Array<[Record<string, unknown>, boolean | undefined]> = [
+      [{ renderer: "@test/c:context-selector", inputRenderers: { userResponse: "@test/c:review" } }, undefined],
+      [{ renderer: "@test/c:review", inputRenderers: { userResponse: "@test/c:context-selector" } }, false],
+    ];
+    for (const inline of [false, true]) {
+      for (const [cinatra, expected] of cases) {
+        const steps = await compileSteps({
+          draftsInline: inline,
+          draftsGates: [gate("drafts-approval_gate", cinatra, [])],
+        });
+        // red-first-expect: expected false to be undefined
+        expect(byName(steps, "Review drafts").firesRendererGate, JSON.stringify([inline, cinatra])).toBe(expected);
+      }
+    }
   });
 });

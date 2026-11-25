@@ -696,7 +696,9 @@ function readChildOasRendererInfo(
         if (comp.component_type !== "InputMessageNode") continue;
         const cinatra = ((comp.metadata as Record<string, unknown> | undefined)?.cinatra ?? {}) as Record<string, unknown>;
         if (cinatra.requiresApproval !== true) continue;
-        const renderer = cinatra.renderer as string | undefined;
+        // The renderer of the gate, read as the compiled gate step reads it.
+        const view = readInputMessageGateView(comp as InputMessageGateComponent, "");
+        const renderer = view.declaresRenderer ? view.renderer : undefined;
         const riskClass = cinatra.riskClass as string | undefined;
         if (renderer) return { renderer, riskClass };
       }
@@ -1470,8 +1472,9 @@ function subflowFiresNonContextRuntimeGate(
         ((node["metadata"] as { cinatra?: Record<string, unknown> } | undefined)?.cinatra) ??
         {};
       const requiresApproval = cin["requiresApproval"] === true;
-      const renderer = typeof cin["renderer"] === "string" ? (cin["renderer"] as string) : "";
       const nodeId = typeof node["id"] === "string" ? (node["id"] as string) : "";
+      // The renderer of the gate is read as the compiled step reads it.
+      const renderer = readInputMessageGateView(node as InputMessageGateComponent, nodeId).renderer;
       if (requiresApproval && !isContextGateRenderer(nodeId, renderer)) {
         fires = true;
         return;
@@ -1496,7 +1499,7 @@ type InputMessageGateComponent = {
 function readInputMessageGateView(
   ime: InputMessageGateComponent,
   id: string,
-): { field: string; inputSchema: Record<string, unknown>; renderer: string } {
+): { field: string; inputSchema: Record<string, unknown>; renderer: string; declaresRenderer: boolean } {
   // Every field is read by its type: a value of another shape is as absent as a
   // missing one, and a map is indexed only at its own keys.
   const outputs: unknown = ime.outputs;
@@ -1519,7 +1522,7 @@ function readInputMessageGateView(
       : typeof cin["renderer"] === "string"
         ? cin["renderer"]
         : SCHEMA_FIELD_FALLBACK_RENDERER_ID;
-  return { field, inputSchema, renderer };
+  return { field, inputSchema, renderer, declaresRenderer: typeof fieldRenderer === "string" || typeof cin["renderer"] === "string" };
 }
 
 // A marked embedded gate is a reviewer pause when it requires approval and is
@@ -1532,23 +1535,37 @@ function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: st
 // The InputMessageNodes a flow can execute: the nodes reachable from its start
 // along its control edges (readFlowControlTopology, the reading the binding and
 // the step numbering take), and, inside them, the flows that run within them (a
-// FlowNode's subflow, the branches of a parallel node), to any depth. Written
-// as a loop over a work list, so no depth of nesting exhausts the stack. Each
-// flow is read once; reaching one a second time (a shared or cyclic reference)
-// sets `repeated`, because a gate in it could then pause more than once.
-// `unreadableMarked` is set when a flow has no start the topology can follow
-// yet lists a marked gate of its own: what runs there cannot be told.
+// FlowNode's subflow, the branches of a parallel node, the body of any other
+// container), to any depth. Written as a loop over a work list, so no depth of
+// nesting exhausts the stack. Each flow is read once; reaching one a second time
+// (a shared or cyclic reference) sets `repeated`, because a gate in it could
+// then pause more than once. `unreadableMarked` is set when a flow has no start
+// the topology can follow yet lists a marked gate of its own: what runs there
+// cannot be told. Each gate comes with where it sits (`flow`, the flows around
+// it up to the root as a chain, `iterated` when a repeating container holds it).
+type FlowLink = { flow: Record<string, unknown>; outer: Record<string, unknown>; nodeId: string; parent: FlowLink | null };
+type ReachableGate = {
+  node: Record<string, unknown>;
+  id: string;
+  flow: Record<string, unknown>;
+  outer: Record<string, unknown>;
+  up: FlowLink | null;
+  iterated: boolean;
+};
+const SINGLE_RUN_CONTAINERS = new Set(["FlowNode", "ParallelFlowNode"]);
 function readReachableInputMessageNodes(
   root: Record<string, unknown>,
   outerRefs: Record<string, unknown>,
-): { gates: Array<Record<string, unknown>>; repeated: boolean; unreadableMarked: boolean } {
-  const gates: Array<Record<string, unknown>> = [];
+): { gates: ReachableGate[]; repeated: boolean; unreadableMarked: boolean } {
+  const gates: ReachableGate[] = [];
   let repeated = false;
   let unreadableMarked = false;
   const seen = new Set<Record<string, unknown>>();
-  const work: Array<{ flow: Record<string, unknown>; outer: Record<string, unknown> }> = [{ flow: root, outer: outerRefs }];
+  const work: Array<{ flow: Record<string, unknown>; outer: Record<string, unknown>; up: FlowLink | null; iterated: boolean }> = [
+    { flow: root, outer: outerRefs, up: null, iterated: false },
+  ];
   while (work.length > 0) {
-    const { flow, outer } = work.pop()!;
+    const { flow, outer, up, iterated } = work.pop()!;
     if (seen.has(flow)) {
       repeated = true;
       continue;
@@ -1568,19 +1585,161 @@ function readReachableInputMessageNodes(
       const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
       if (!isRecord(comp)) continue;
       if (comp["component_type"] === "InputMessageNode") {
-        gates.push(comp);
+        gates.push({ node: comp, id, flow, outer, up, iterated });
         continue;
       }
       // A flow that runs inside this one: its reachable gates pause too.
+      const once = typeof comp["component_type"] === "string" && SINGLE_RUN_CONTAINERS.has(comp["component_type"]);
       const inner = [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])];
       for (const value of inner) {
         const child = resolveSubflowValue(value, refs, outer);
-        if (child) work.push({ flow: child, outer: scope });
+        if (child) work.push({ flow: child, outer: scope, up: { flow, outer, nodeId: id, parent: up }, iterated: iterated || !once });
       }
     }
   }
   return { gates, repeated, unreadableMarked };
 }
+
+// Control flow: does the run reach `nodeId` of `flow` exactly once on every
+// path? Not when a control edge leads back to it (a loop, a branch back, any
+// edge from a later node to an earlier one: all are edges of the adjacency, so
+// the gate is reached again from its own successors), and not when a path from
+// the start to an end avoids it (a branch can skip it).
+function nodeOnControlCycle(flow: Record<string, unknown>, nodeId: string): boolean {
+  const { adjacency } = readFlowControlTopology(flow);
+  const visited = new Set<string>();
+  const stack = [...(adjacency.get(nodeId) ?? [])];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (id === nodeId) return true;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    for (const n of adjacency.get(id) ?? []) stack.push(n);
+  }
+  return false;
+}
+function pathAvoidsNode(flow: Record<string, unknown>, outer: Record<string, unknown>, nodeId: string): boolean {
+  const { adjacency, reachable } = readFlowControlTopology(flow);
+  const start = reachable[0];
+  if (start === undefined || start === nodeId) return false;
+  const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
+  const isEnd = (id: string): boolean => {
+    const comp = ownEntry(refs, id) ?? ownEntry(outer, id);
+    return (adjacency.get(id) ?? []).length === 0 || (isRecord(comp) && comp["component_type"] === "EndNode");
+  };
+  const visited = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (isEnd(id)) return true;
+    for (const n of adjacency.get(id) ?? []) {
+      if (n !== nodeId && !visited.has(n)) {
+        visited.add(n);
+        queue.push(n);
+      }
+    }
+  }
+  return false;
+}
+// The gate, and each node that holds the flow it sits in (up to the embedded
+// root), must be crossed exactly once by every run of the child.
+function gatePausesOnce(g: ReachableGate): boolean {
+  if (g.iterated) return false;
+  if (nodeOnControlCycle(g.flow, g.id) || pathAvoidsNode(g.flow, g.outer, g.id)) return false;
+  for (let link = g.up; link; link = link.parent) {
+    if (nodeOnControlCycle(link.flow, link.nodeId) || pathAvoidsNode(link.flow, link.outer, link.nodeId)) return false;
+  }
+  return true;
+}
+
+// Provenance: is the value that reaches `input` of `nodeId` handed in by the
+// flow that embeds the child, rather than produced by a node of the child? The
+// data edges into the input are followed back through the child: the child's
+// own start (the root child's start inputs are what the embedding flow hands
+// in), a nested flow's end (and, inside it, its own edges), and a nested flow's
+// start (its inputs are what the node holding it receives). A node of any
+// other kind produces its outputs itself. An input no edge feeds is an input of
+// its flow under that name. A source that cannot be read counts as handed in.
+function dataEdgesInto(flow: Record<string, unknown>, nodeId: string, input: string): Array<{ srcId: string | undefined; srcOutput: string | undefined }> {
+  const edges = flow["data_flow_connections"];
+  const found: Array<{ srcId: string | undefined; srcOutput: string | undefined }> = [];
+  if (!Array.isArray(edges)) return found;
+  for (const e of edges) {
+    if (!isRecord(e)) continue;
+    const dest = isRecord(e["destination_node"]) ? e["destination_node"]["$component_ref"] : undefined;
+    if (dest !== nodeId || e["destination_input"] !== input) continue;
+    const src = isRecord(e["source_node"]) ? e["source_node"]["$component_ref"] : undefined;
+    found.push({
+      srcId: typeof src === "string" ? src : undefined,
+      srcOutput: typeof e["source_output"] === "string" ? e["source_output"] : undefined,
+    });
+  }
+  return found;
+}
+function inputHandedInByEmbeddingFlow(
+  g: ReachableGate,
+  input: string,
+  embeddingEdges: unknown,
+  flowNodeId: string,
+): boolean {
+  const seen = new Map<Record<string, unknown>, Set<string>>();
+  const mark = (flow: Record<string, unknown>, key: string): boolean => {
+    let set = seen.get(flow);
+    if (!set) seen.set(flow, (set = new Set()));
+    if (set.has(key)) return false;
+    set.add(key);
+    return true;
+  };
+  // The input `name` of the flow below `up` (null: the root child), as it is fed.
+  const flowInput = (up: FlowLink | null, name: string): boolean => {
+    if (up === null) {
+      return dataEdgesInto({ data_flow_connections: embeddingEdges }, flowNodeId, name).length > 0;
+    }
+    return valueAt(up.flow, up.outer, up.parent, up.nodeId, name, true);
+  };
+  const sourceHandedIn = (
+    flow: Record<string, unknown>,
+    outer: Record<string, unknown>,
+    up: FlowLink | null,
+    src: { srcId: string | undefined; srcOutput: string | undefined },
+  ): boolean => {
+    if (src.srcId === undefined || src.srcOutput === undefined) return true;
+    const refs = isRecord(flow["$referenced_components"]) ? flow["$referenced_components"] : {};
+    const comp = ownEntry(refs, src.srcId) ?? ownEntry(outer, src.srcId);
+    if (!isRecord(comp)) return true;
+    if (comp["component_type"] === "StartNode") {
+      return up === null ? true : flowInput(up, src.srcOutput);
+    }
+    if (comp["component_type"] === "FlowNode") {
+      const sub = resolveSubflowValue(comp["subflow"], refs, outer);
+      if (!sub) return true;
+      const subRefs = isRecord(sub["$referenced_components"]) ? sub["$referenced_components"] : {};
+      const subScope = { ...outer, ...refs };
+      const link: FlowLink = { flow, outer, nodeId: src.srcId, parent: up };
+      for (const [endId, end] of Object.entries(subRefs)) {
+        if (!isRecord(end) || end["component_type"] !== "EndNode") continue;
+        if (valueAt(sub, subScope, link, endId, src.srcOutput, false)) return true;
+      }
+      return false;
+    }
+    return false;
+  };
+  function valueAt(
+    flow: Record<string, unknown>,
+    outer: Record<string, unknown>,
+    up: FlowLink | null,
+    nodeId: string,
+    name: string,
+    unfedIsFlowInput: boolean,
+  ): boolean {
+    if (!mark(flow, `${nodeId}\u0000${name}`)) return false;
+    const into = dataEdgesInto(flow, nodeId, name);
+    if (into.length === 0) return unfedIsFlowInput ? flowInput(up, name) : false;
+    return into.some((e) => sourceHandedIn(flow, outer, up, e));
+  }
+  return valueAt(g.flow, g.outer, g.up, g.id, input, true);
+}
+
 // cinatra#3089: the artifact-review gate of an EMBEDDED child flow. A gate in a
 // FlowNode's inlined subflow reaches the approval policy only as a step of its
 // FlowNode, and the runtime reads the review marker only from the compiled step.
@@ -1607,6 +1766,7 @@ function readEmbeddedArtifactReviewGate(
   flowNode: { subflow?: unknown; metadata?: { cinatra?: { gateSteps?: unknown } } },
   localRefs: Record<string, unknown>,
   parentRunInputTitles: ReadonlySet<string>,
+  embeddingEdges: unknown,
 ): { ok: true; found: EmbeddedArtifactReviewGate | null } | { ok: false; error: string } {
   const subflow = resolveSubflowValue(flowNode.subflow, localRefs);
   if (!subflow) return { ok: true, found: null };
@@ -1616,9 +1776,10 @@ function readEmbeddedArtifactReviewGate(
   // reaches never pauses, so it takes no marker and counts for nothing.
   const reading = readReachableInputMessageNodes(subflow, localRefs);
   const gates = reading.gates;
-  const marked = gates.filter((g) => readArtifactReviewTargetsInput(g) !== undefined);
+  const marked = gates.map((g) => g.node).filter((g) => readArtifactReviewTargetsInput(g) !== undefined);
   if (marked.length === 0 && !reading.unreadableMarked) return { ok: true, found: null };
   const where = `FlowNode ${quoteNodeId(flowNodeId)}`;
+  const only: ReachableGate | undefined = gates.length === 1 ? gates[0] : undefined;
   const gate: Record<string, unknown> = marked[0] ?? {};
   const gateId = typeof gate["id"] === "string" ? (gate["id"] as string) : "";
   const gateSteps = flowNode.metadata?.cinatra?.gateSteps;
@@ -1631,6 +1792,8 @@ function readEmbeddedArtifactReviewGate(
     gates.length !== 1 ||
     reading.repeated ||
     reading.unreadableMarked ||
+    !only ||
+    !gatePausesOnce(only) ||
     !Array.isArray(gateSteps) ||
     gateSteps.length !== 1 ||
     !gateStepIsObject ||
@@ -1676,6 +1839,14 @@ function readEmbeddedArtifactReviewGate(
       error:
         `ARTIFACT_REVIEW_GATE_INPUT_SHADOWED: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
         `and a run input of the flow has the name of the input its marker names`,
+    };
+  }
+  if (inputHandedInByEmbeddingFlow(only!, targetsInput, embeddingEdges, flowNodeId)) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_INPUT_FROM_CALLER: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `whose targets input must be produced by a node of the child flow and not handed in by the flow that embeds it`,
     };
   }
   return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId } };
@@ -2252,7 +2423,7 @@ export async function compileOasAgentJson(opts: {
   for (const id of steppableNodeIds) {
     const comp = localRefs[id] as { component_type?: string } | undefined;
     if (comp?.component_type !== "FlowNode") continue;
-    const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles);
+    const read = readEmbeddedArtifactReviewGate(id, comp as Parameters<typeof readEmbeddedArtifactReviewGate>[1], localRefs, parentRunInputTitles, dataFlowEdges);
     if (!read.ok) return { ok: false, error: read.error };
     if (read.found) embeddedReviewGates.set(id, read.found);
   }
@@ -2476,6 +2647,10 @@ export async function compileOasAgentJson(opts: {
         if (embeddedReview) {
           const view = readInputMessageGateView(embeddedReview.gate, embeddedReview.gateId);
           step.artifactReviewTargetsInput = embeddedReview.targetsInput;
+          // As the standalone gate's own step: a reviewer pause the flow owns,
+          // whatever the gateStep says about approval or ownership.
+          step.requiresApproval = true;
+          step.hitlOwnedBy = "self";
           step.xRenderer = view.renderer;
           step.inputMessageSchema = view.inputSchema;
         }
@@ -2653,7 +2828,8 @@ export async function compileOasAgentJson(opts: {
         if (hintKey.startsWith("x-")) propShape[hintKey] = hintValue;
       }
     }
-    if (startRenderers[title]) propShape["x-renderer"] = startRenderers[title];
+    const startRenderer = ownEntry(startRenderers, title);
+    if (typeof startRenderer === "string" && startRenderer) propShape["x-renderer"] = startRenderer;
     if (startDataSources[title]) propShape["x-data-source"] = startDataSources[title];
     if (startHidden.includes(title)) propShape["x-hidden"] = true;
     // `default` decides whether the RUNTIME accepts a start message that omits
