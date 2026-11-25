@@ -1094,32 +1094,16 @@ export function collectArtifactMaterializeNodesFromOasDocument(
 }
 
 /**
- * cinatra#3089: the ids of every ApiNode of an OAS document whose `data` (an
- * object, or JSON text of one) is an `artifact_materialize` call in the LIST
- * MODE, so that one call files one artifact per member. A node counts when it
- * carries `memberContentField` OR `memberTitleField` (the collector above
- * refuses one without the other; this reading fails closed on either), and
- * whatever its `url`. Walked over top-level and nested `$referenced_components`,
- * FlowNode subflows and inline `nodes`; each node is named by its ref key AND
- * its own `id`, so every way an id can reach it finds it.
+ * cinatra#3089: whether ONE component is an ApiNode whose `data` (an object, or
+ * JSON text of one) is an `artifact_materialize` call in the LIST MODE, so that
+ * one call files one artifact per member. It counts when it carries
+ * `memberContentField` OR `memberTitleField` (the collector above refuses one
+ * without the other; this reading fails closed on either), and whatever its
+ * `url`. It reads the one component it is given, so the caller decides which
+ * scope the component came from.
  */
-export function collectArtifactMaterializeListNodeIds(doc: unknown): Set<string> {
-  const ids = new Set<string>();
-  const seen = new Set<object>();
-  function go(value: unknown, refKey: string | null): void {
-    if (!isPlainObject(value) || seen.has(value)) return;
-    seen.add(value);
-    if (value.component_type === "ApiNode" && isArtifactMaterializeListData(value.data)) {
-      if (refKey !== null) ids.add(refKey);
-      if (typeof value.id === "string" && value.id.length > 0) ids.add(value.id);
-    }
-    const refs = value.$referenced_components;
-    if (isPlainObject(refs)) for (const [k, v] of Object.entries(refs)) go(v, k);
-    if (isPlainObject(value.subflow)) go(value.subflow, null);
-    if (Array.isArray(value.nodes)) for (const n of value.nodes) go(n, null);
-  }
-  go(doc, null);
-  return ids;
+export function isArtifactMaterializeListNode(node: unknown): boolean {
+  return isPlainObject(node) && node.component_type === "ApiNode" && isArtifactMaterializeListData(node.data);
 }
 
 function isArtifactMaterializeListData(raw: unknown): boolean {

@@ -256,6 +256,44 @@ function fixtureWithFiling(
   return oas;
 }
 
+const NESTED_FLOW_NODE = "side_lane";
+
+/** Adds a FlowNode whose inline subflow holds its OWN node under the id
+ *  `FILE_NODE` (a list filing or a single filing). Ids inside a nested flow are
+ *  local to that flow; they are never the root target of the same name. */
+function withNestedFiling(oas: Record<string, unknown>, list: boolean): Record<string, unknown> {
+  const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
+  const input: Record<string, unknown> = {
+    extension: EXT,
+    content: "{{ user }}",
+    declaredMime: "text/markdown",
+    node_id: FILE_NODE,
+    ...(list ? { memberContentField: "body", memberTitleField: "subject" } : { title: "{{ user }}" }),
+  };
+  const nested = {
+    ...(refs[FILE_NODE] as object),
+    id: FILE_NODE,
+    data: { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input },
+  };
+  refs[NESTED_FLOW_NODE] = {
+    component_type: "FlowNode",
+    id: NESTED_FLOW_NODE,
+    name: "Side lane",
+    subflow: {
+      component_type: "Flow",
+      id: "side-lane-flow",
+      name: "Side lane flow",
+      start_node: { $component_ref: "side_start" },
+      nodes: [{ $component_ref: "side_start" }, { $component_ref: FILE_NODE }],
+      $referenced_components: {
+        side_start: { component_type: "StartNode", id: "side_start", name: "Start", inputs: [] },
+        [FILE_NODE]: nested,
+      },
+    },
+  };
+  return oas;
+}
+
 function stageOas(oas: Record<string, unknown>): string {
   const dir = mkdtempSync(join(tmpdir(), "list-regen-3089-"));
   mkdirSync(join(dir, "cinatra"));
@@ -323,5 +361,39 @@ describe("a regenerate entry and a list filing (cinatra#3089)", () => {
 
   it("accepts a single filing node in the check", () => {
     expect(checkRegenerateDeclaration(fixtureWithFiling(false), SELF_FILING)).toEqual({ ok: true });
+  });
+
+  it("judges the root target by the root node, whatever a nested flow's node of the same id files", () => {
+    const oas = withNestedFiling(fixtureWithFiling(false), true);
+    expect(checkRegenerateDeclaration(oas, SELF_FILING)).toEqual({ ok: true });
+  });
+
+  // red-first-expect: expected { ok: false, …(1) } to match object { ok: true }
+  it("a flow whose root target files one result compiles although a nested flow lists under the same id", async () => {
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(withNestedFiling(fixtureWithFiling(false), true)),
+      retainedRegenerate: SELF_FILING,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  // red-first-expect: expected { ok: true } to match object { ok: false }
+  it("still refuses a root list target when a nested flow's node of the same id files one result", () => {
+    const oas = withNestedFiling(fixtureWithFiling(true), false);
+    const check = checkRegenerateDeclaration(oas, SELF_FILING);
+    expect(check).toMatchObject({ ok: false });
+    expect((check as { error: string }).error).toContain(LIST_REFUSAL);
+  });
+
+  it("names no nested node as a target: an id found only inside a nested flow is not a top-level node", () => {
+    const oas = withNestedFiling(fixtureWithFiling(false), true);
+    const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const nestedRefs = (refs[NESTED_FLOW_NODE]!.subflow as Record<string, Record<string, unknown>>)
+      .$referenced_components!;
+    nestedRefs.only_nested = { ...(nestedRefs[FILE_NODE] as object), id: "only_nested" };
+    const check = checkRegenerateDeclaration(oas, [{ artifactNode: "only_nested", step: FILE_NODE, noteInput: "user" }]);
+    expect(check).toMatchObject({ ok: false });
+    expect((check as { error: string }).error).toContain('"only_nested" is not a top-level node of the flow');
   });
 });

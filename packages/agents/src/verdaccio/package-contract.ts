@@ -4,8 +4,8 @@ import type { ReviewFinding } from "../validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactImageNodesFromOasDocument,
-  collectArtifactMaterializeListNodeIds,
   collectArtifactMaterializeNodesFromOasDocument,
+  isArtifactMaterializeListNode,
 } from "../artifact-binding";
 
 export const CINATRA_AGENT_PACKAGE_TYPE = "agent" as const;
@@ -277,8 +277,8 @@ function regenerateListProblem(node: RegenerateRec, where: string): string | nul
  *   6. exactly one edge ends at (`step`, `noteInput`); it starts at the flow's
  *      StartNode on a canonical string output that the root `inputs` declare,
  *      and that output feeds nothing else.
- * And (cinatra#3089) `artifactNode` is not a list filing
- * (`collectArtifactMaterializeListNodeIds`): a list files one artifact per
+ * And (cinatra#3089) `artifactNode`, the top-level node of check 2, is not a
+ * list filing (`isArtifactMaterializeListNode`): a list files one artifact per
  * member, and a Regenerate takes exactly one production.
  */
 export function checkRegenerateDeclaration(
@@ -296,7 +296,6 @@ export function checkRegenerateDeclaration(
   const edges = (Array.isArray(oas.data_flow_connections) ? oas.data_flow_connections : []).filter(isRegenerateRec);
   const startId = regenerateRefId(oas.start_node);
   const start = startId !== null ? refs[startId] : undefined;
-  const listFilings = collectArtifactMaterializeListNodeIds(oas);
 
   for (const entry of schema.data) {
     const { artifactNode, step, noteInput } = entry;
@@ -319,7 +318,7 @@ export function checkRegenerateDeclaration(
     // cinatra#3089: a plain entry (one with no member-specific keys) never names
     // a list filing. Re-running it would file every member again, and the run
     // that takes the repair accepts exactly one production.
-    if (listFilings.has(artifactNode) && !("memberKeyInput" in entry)) {
+    if (isArtifactMaterializeListNode(refs[artifactNode]) && !("memberKeyInput" in entry)) {
       return refuse(REGENERATE_LIST_FILING_REFUSAL);
     }
     const linked = edges.some(
