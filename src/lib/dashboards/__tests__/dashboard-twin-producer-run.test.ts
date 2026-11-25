@@ -109,6 +109,53 @@ describe("(a) the builder records a validated producing run (cinatra#3092)", () 
   });
 });
 
+describe("cinatra#4762: the twin takes the producing run's row before its first write", () => {
+  const isRunLock = (q: Op) => /"agent_runs"[\s\S]*FOR KEY SHARE/.test(q.text) && !q.text.includes('"artifact_produced_outbox"');
+
+  it("a run's twin locks the run row FOR KEY SHARE right after the advisory lock, before any write", () => {
+    const ops = buildDashboardTwinQueries(ctx, "run-1");
+    expect(ops.findIndex(isRunLock)).toBe(1);
+    expect(ops[1].values).toEqual(["run-1"]);
+    expect(ops[0].text).toContain("pg_advisory_xact_lock");
+  });
+
+  it("no run, or the review orchestration switched off, takes no run lock", () => {
+    expect(buildDashboardTwinQueries(ctx).some(isRunLock)).toBe(false);
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
+    expect(buildDashboardTwinQueries(ctx, "run-1").some(isRunLock)).toBe(false);
+  });
+});
+
+describe("cinatra#4762: the host lock a content writer takes before its first dashboards write", () => {
+  function recordingTx(): { tx: TwinTx; rendered: Array<{ sql: string; params: unknown[] }> } {
+    const rendered: Array<{ sql: string; params: unknown[] }> = [];
+    return {
+      tx: { execute: async (q: SQL) => { const { sql, params } = dialect.sqlToQuery(q); rendered.push({ sql, params }); return { rows: [] }; } },
+      rendered,
+    };
+  }
+  // The seam's port, as the dashboards mutation service reaches it; importing the host writer registers the lock.
+  const port = () => (globalThis as { __cinatraDashboardArtifactTwinRunLock?: (tx: TwinTx, runId: string | null | undefined) => Promise<void> })
+    .__cinatraDashboardArtifactTwinRunLock;
+
+  it("locks the named run's row FOR KEY SHARE through the seam's port", async () => {
+    const { tx, rendered } = recordingTx();
+    await port()?.(tx, "run-1");
+    expect(rendered).toEqual([
+      { sql: 'SELECT 1 FROM "cinatra"."agent_runs" WHERE id = $1::text FOR KEY SHARE', params: ["run-1"] },
+    ]);
+  });
+
+  it("no run, or the review orchestration switched off, takes no lock", async () => {
+    const { tx, rendered } = recordingTx();
+    await port()?.(tx, null);
+    await port()?.(tx, "");
+    process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV] = "off";
+    await port()?.(tx, "run-1");
+    expect(rendered).toEqual([]);
+  });
+});
+
 describe("(b) the writer trusts a run only in the same organization (cinatra#3092)", () => {
   function fakeTx(runRows: unknown[]): { tx: TwinTx; rendered: Array<{ sql: string; params: unknown[] }> } {
     const rendered: Array<{ sql: string; params: unknown[] }> = [];
@@ -150,6 +197,27 @@ describe("(b) the writer trusts a run only in the same organization (cinatra#309
     const produced = rendered.find((r) => r.sql.includes('"artifact_produced_outbox"'));
     expect(produced?.params).toContain("run-1");
     expect(produced?.params).toContain("agent_produced");
+  });
+
+  it("the registered writer surfaces the in-flight fence of its event as the typed publishing-call refusal (cinatra#4762)", async () => {
+    // A publishing call of the run holds its decision: Postgres aborts the event's cast of the fence's sentinel, and
+    // the query builder wraps the database error as its cause.
+    const rendered: string[] = [];
+    const tx: TwinTx = {
+      execute: async (q: SQL) => {
+        const { sql } = dialect.sqlToQuery(q);
+        rendered.push(sql);
+        const fence = /THEN '([^']+)' ELSE '1' END\)::integer = 1/.exec(sql);
+        if (fence) {
+          const cause = Object.assign(new Error(`invalid input syntax for type integer: "${fence[1]}"`), { code: "22P02" });
+          throw new Error(`Failed query: ${sql}`, { cause });
+        }
+        if (sql.includes('"agent_runs"') && sql.includes("org_id")) return { rows: [{ id: "run-1" }] };
+        return { rows: [] };
+      },
+    };
+    await expect(dashboardArtifactTwinWriter(tx, runCtx)).rejects.toMatchObject({ name: "PublishCallInFlightError", code: "publish_call_in_flight", retryable: true });
+    expect(rendered.some((sql) => sql.includes('"artifact_produced_outbox"'))).toBe(true);
   });
 
   it("the registered writer drops a cross-organization run: the event names none", async () => {

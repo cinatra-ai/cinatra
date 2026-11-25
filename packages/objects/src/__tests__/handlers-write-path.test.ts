@@ -169,6 +169,34 @@ describe("objects_update handler — Postgres-primary", () => {
     expect(mockDel).not.toHaveBeenCalled();
     expect(mockShadow).not.toHaveBeenCalled();
   });
+
+  // An empty patch changes nothing, so it writes nothing: the store upsert is
+  // what bumps the version and appends the history and outbox rows, and it is
+  // never reached. The answer is the no-write answer, with no change-set.
+  it("an empty patch writes no revision and answers that nothing changed", async () => {
+    const handlers = createObjectsPrimitiveHandlers();
+    const res = await handlers.objects_update({
+      primitiveName: "objects_update",
+      input: { objectId: "obj-1", data: {} },
+      actor: ACTOR,
+      mode: "agentic",
+    });
+    expect(mockUpsert).not.toHaveBeenCalled();
+    expect(res).toEqual({ ok: true });
+  });
+
+  it("a patch with a member still writes its revision", async () => {
+    const handlers = createObjectsPrimitiveHandlers();
+    const res = await handlers.objects_update({
+      primitiveName: "objects_update",
+      input: { objectId: "obj-1", data: { name: "" } },
+      actor: ACTOR,
+      mode: "agentic",
+    });
+    expect(mockUpsert).toHaveBeenCalledOnce();
+    expect(mockUpsert.mock.calls[0][0].upsertInput.data).toEqual({ name: "" });
+    expect(res).toHaveProperty("changeSetId");
+  });
 });
 
 describe("objects_delete handler — Postgres-primary", () => {

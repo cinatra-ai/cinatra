@@ -313,6 +313,22 @@ describe("the model bridge refuses a publish the decision does not let through",
     }
   });
 
+  it("a served publishing call answers only after the release of its claim is written (cinatra#4762)", async () => {
+    const order: string[] = [];
+    let writeRelease!: () => void;
+    const releaseWritten = new Promise<void>((resolve) => { writeRelease = resolve; });
+    publishCallAllowedMock.mockImplementation((async (_run: unknown, _step: unknown, hold?: unknown) => {
+      if (typeof hold === "function") hold(async () => { await releaseWritten; order.push("released"); });
+      return true;
+    }) as never);
+    const answered = POST(makeReq({ user: "hi" }, headers(stepHeaders()))).then((res) => { order.push("answered"); return res; });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(order).toEqual([]);
+    writeRelease();
+    expect((await answered).status).toBe(200);
+    expect(order).toEqual(["released", "answered"]);
+  });
+
   it("a call the decision lets through is served as before", async () => {
     const res = await POST(makeReq({ user: "hi" }, headers(stepHeaders())));
     expect(res.status).toBe(200);

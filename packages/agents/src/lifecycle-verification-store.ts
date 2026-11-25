@@ -311,6 +311,8 @@ async function writeVerificationRecordAndMaybeReopen(
           },
         ],
         expiresAt: input.expiresAt ?? null,
+        // cinatra#4762: the reopen continues the review of the attempt that raised the verified gate.
+        successorOfGateId: input.gateId,
       }, tx);
     } catch (err) {
       if (err instanceof ArtifactReviewGateError) return { conflict: err.message };

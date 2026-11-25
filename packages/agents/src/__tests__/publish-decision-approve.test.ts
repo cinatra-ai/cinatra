@@ -3,7 +3,7 @@
 // double, so these cases pin the order: the authority, the claim, the gate read under it, ONE released decision, the
 // preparation, the fence, then ONE send. Since cinatra#4245 the claim is the pause claim (a double here: its rules are
 // pinned by run-pause-claim's own suites) and the fence is the one move pending_approval -> running.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthzError } from "@/lib/authz/errors";
 
@@ -15,16 +15,41 @@ const storeMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeMock);
 
+// cinatra#4762: the run-row lock's transaction, as the store hands it to its callback; the locked run is at generation 0.
+const TX = "the run-row lock's transaction";
 const decisions = vi.hoisted(() => ({
   insertParkedDecision: vi.fn(),
+  withRunRowLock: vi.fn(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+    fn("the run-row lock's transaction", { orgId: "org-1", resetGeneration: 0 })),
   decide: vi.fn(),
   readDecisionForRunNode: vi.fn(),
   readLatestDecisionForRun: vi.fn(),
   readOpenDecisionForRun: vi.fn(),
   listDueParked: vi.fn(async () => [] as unknown[]),
   listSettledWithWaitingRun: vi.fn(async () => [] as unknown[]),
+  readRunBoundGraph: vi.fn(async (_runId: string): Promise<string | null> => null),
 }));
 vi.mock("../publish-decision-store", () => decisions);
+
+// cinatra#4762: the graph a run is bound to execute (its step tool policy's source), as the loader composed it: a publish
+// gate in front of a publishing ParallelFlowNode whose branches call `urls`. By default every call goes to a checked host
+// route, so the Publish cases below pass the route check.
+const boundGraph = (urls: string[]) => JSON.stringify({
+  component_type: "Flow", id: "pack", name: "pack", start_node: { $component_ref: "start" },
+  nodes: ["start", "cinatra_publish_gate__publish", "publish", "end"].map((id) => ({ $component_ref: id })),
+  control_flow_connections: [], data_flow_connections: [],
+  $referenced_components: {
+    start: { component_type: "StartNode", id: "start", name: "start" },
+    cinatra_publish_gate__publish: { component_type: "InputMessageNode", id: "cinatra_publish_gate__publish", name: "gate" },
+    publish: { component_type: "ParallelFlowNode", id: "publish", name: "publish", metadata: { cinatra: { publishes: true } },
+      subflows: urls.map((url, i) => ({ component_type: "Flow", id: `b${i}`, name: `b${i}`, start_node: { $component_ref: "s" },
+        nodes: [{ $component_ref: "s" }, { $component_ref: `call_${i}` }],
+        $referenced_components: { s: { component_type: "StartNode", id: "s", name: "s" },
+          [`call_${i}`]: { component_type: "ApiNode", id: `call_${i}`, name: `call_${i}`, url, http_method: "POST", data: {} } } })) },
+    end: { component_type: "EndNode", id: "end", name: "end" },
+  },
+});
+const CHECKED_GRAPH = boundGraph(["{{CINATRA_BASE_URL}}/api/agents/passthrough", "{{CINATRA_BASE_URL}}/api/llm-bridge"]);
 
 const enforceRunAccess = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../auth-policy", () => ({ enforceRunAccess, resolveEffectivePolicy: () => "owner-only" }));
@@ -69,6 +94,25 @@ import {
   declinePublishDecision,
 } from "../publish-decision-actions";
 
+// cinatra#4762: the review store, as the boot-bound gate seam answers it. By default the attempt holds a review a person
+// approved and no output of it waits for the review orchestration, so the Publish cases below pass the review fence.
+const reviewSeam = {
+  listReviews: vi.fn(),
+  hasPendingProducedReview: vi.fn(),
+};
+const APPROVED_REVIEW = { id: "gate-1", status: "resolved", disposition: "approve", createdAt: new Date("2026-11-01T00:00:00Z"),
+  runGeneration: 0, fingerprint: "e".repeat(64), resolvedBy: "user-reviewer", successorGateId: null };
+const seamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: unknown };
+const previousSeam = seamSlot.__cinatraArtifactReviewGateSeam;
+beforeAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = reviewSeam; });
+afterAll(() => { seamSlot.__cinatraArtifactReviewGateSeam = previousSeam; });
+beforeEach(() => {
+  reviewSeam.listReviews.mockReset();
+  reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW]);
+  reviewSeam.hasPendingProducedReview.mockReset();
+  reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+});
+
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
 const ROLE_HINTS = { actorOrganizationId: "org-9" };
 
@@ -95,7 +139,8 @@ beforeEach(() => {
   for (const m of [storeMock.readAgentRunById, storeMock.readAgentTemplateById, storeMock.transitionRunStatus,
     decisions.decide, decisions.readOpenDecisionForRun, decisions.readLatestDecisionForRun, sendWayflowResume,
     enforceRunAccess, resolveOrgRoleForUser, assertAgentRunDispatchAuthorized, resolveLatestWayflowGateTaskId,
-    prepareWayflowResume, claims.claimPause, claims.releasePauseClaim, claims.settlePauseSend]) m.mockReset();
+    prepareWayflowResume, claims.claimPause, claims.releasePauseClaim, claims.settlePauseSend, decisions.readRunBoundGraph]) m.mockReset();
+  decisions.readRunBoundGraph.mockResolvedValue(CHECKED_GRAPH);
   storeMock.readAgentRunById.mockResolvedValue(run());
   storeMock.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", packageName: "@acme/poster", sourceType: "internal", agentAuthPolicy: null });
   storeMock.readRunCoOwners.mockResolvedValue([]);
@@ -133,7 +178,7 @@ describe("Allow from the site widget (cinatra#4758)", () => {
   it("releases the decision as the widget's person and resumes the run to its publishing step, once", async () => {
     expect(await approveAsWidget({ runId: "run-1", actorContext: WIDGET })).toEqual({ ok: true, resumed: true });
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
   });
 
@@ -172,7 +217,7 @@ describe("a stale card never approves a newer gate", () => {
     decisions.readOpenDecisionForRun.mockResolvedValue(decision());
     resolveLatestWayflowGateTaskId.mockResolvedValue("task-1");
     expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR, decisionId: "d1" } as never)).toEqual({ ok: true, resumed: true });
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4, ofRun: "run-1", newestOnly: true });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4, ofRun: "run-1", newestOnly: true }, TX);
   });
 
   it("a stale card never resumes another decision released earlier", async () => {
@@ -193,12 +238,13 @@ describe("Publish (A7)", () => {
     expect(enforceRunAccess.mock.calls.map((c) => (c as unknown[])[2])).toEqual(["execute", "approveHitl"]);
     expect(assertAgentRunDispatchAuthorized).toHaveBeenCalledWith({ runId: "run-1", stage: "dispatch", actingUserId: "user-a" });
     expect(decisions.decide).toHaveBeenCalledTimes(1);
-    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
     expect(claims.claimPause).toHaveBeenCalledTimes(1);
     expect((claims.claimPause.mock.calls[0] as unknown[])[0]).toEqual({ runId: "run-1", orgId: "org-1", generation: 3, taskId: "task-1" });
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect((storeMock.transitionRunStatus.mock.calls[0] as unknown[])[3]).toEqual({ pauseFence: { token: "tok-1", generation: 4 } });
-    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster");
+    // cinatra#3745: the resume names the decision it released, for the calls of this visit.
+    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster", { publishDecisionId: "d1" });
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
     const args = sendWayflowResume.mock.calls[0]![0] as Record<string, unknown> & { authority: { orgId: string } };
     expect(args.contextId).toBe("ctx-1");
@@ -342,6 +388,8 @@ describe("Publish (A7)", () => {
     expect(decisions.decide).not.toHaveBeenCalled();
     expect(moves()).toEqual([["run-1", "pending_approval", "running"]]);
     expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    // The resume of an already released decision names that decision.
+    expect(prepareWayflowResume).toHaveBeenCalledWith("run-1", "http://wayflow.test/@acme/poster", { publishDecisionId: "d1" });
   });
 
   // The latest-task key lives seven days and can be lost, and the run row's task can still name an earlier gate visit
@@ -680,6 +728,176 @@ describe("Publish (A7)", () => {
     expect(err.code).toBe("publish_decision_unavailable");
     expect(err.message).not.toMatch(/db down|d1|run-1/);
     expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+});
+
+describe("the review fence, read again at Publish (cinatra#4762)", () => {
+  /** Nothing was released, moved or sent, and the claim was given back. */
+  function expectNothingReleased() {
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(moves()).toEqual([]);
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
+  }
+
+  it("an output of the attempt the drain reached only after the park refuses the Publish until its review is approved", async () => {
+    // The card opened on one approved review; another produced event of the same attempt still waits for the drain.
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(true);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expect(reviewSeam.hasPendingProducedReview).toHaveBeenCalledWith({ orgId: "org-1", runId: "run-1", generation: 0 }, TX);
+    expectNothingReleased();
+    // The drain raised its review, still open: refused again, and the fence is read under the claim.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    const raised = { ...APPROVED_REVIEW, id: "gate-2", status: "pending", disposition: null, fingerprint: null };
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, raised]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    expect(claims.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(reviewSeam.listReviews.mock.invocationCallOrder[0]!);
+    // A person approves that review: the Publish goes on, ONE release and ONE send.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW, { ...APPROVED_REVIEW, id: "gate-2" }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.decide).toHaveBeenCalledTimes(1);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+  });
+
+  it("a review of the attempt settled changes requested since the park, with no successor approved, refuses the Publish", async () => {
+    reviewSeam.listReviews.mockResolvedValue([APPROVED_REVIEW,
+      { ...APPROVED_REVIEW, id: "gate-2", disposition: "changes_requested" }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    // A released decision (a resume that failed before its send) is read again the same way before its send.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  it("a decision of an attempt other than the run's current one is refused", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ resetGeneration: 1 }));
+    reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  it("a decision written with no generation is the current attempt's, and is approved under the run's own generation", async () => {
+    storeMock.readAgentRunById.mockResolvedValue(run({ resetGeneration: 1 }));
+    decisions.readOpenDecisionForRun.mockResolvedValue(decision({ runGeneration: null }));
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    reviewSeam.listReviews.mockResolvedValue([{ ...APPROVED_REVIEW, runGeneration: 1 }]);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
+  });
+
+  it("the release is written in the transaction that reads the fence under the run row's lock, so an output in flight is seen", async () => {
+    // A writer of the attempt inserted an output that commits before the lock is granted: only the reads made in the
+    // lock's transaction see it, as on Postgres (the insert holds the row FOR KEY SHARE until it commits).
+    reviewSeam.hasPendingProducedReview.mockImplementation(async (_input: unknown, executor?: unknown) => executor === TX);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+    // With no output in flight the fence and the release share that transaction: both reviews' reads and the one write.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    reviewSeam.hasPendingProducedReview.mockResolvedValue(false);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.withRunRowLock).toHaveBeenCalledTimes(1);
+    expect(decisions.withRunRowLock.mock.calls[0]![0]).toBe("run-1");
+    expect(reviewSeam.listReviews).toHaveBeenCalledWith("run-1", TX);
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    // The run's locked row has left the decision's attempt (a reset since the run was read): refused, nothing written.
+    vi.clearAllMocks();
+    claims.claimPause.mockResolvedValue(CLAIMED);
+    decisions.withRunRowLock.mockImplementationOnce(async (_runId: string, fn: (tx: unknown, run: unknown) => Promise<unknown>) =>
+      fn(TX, { orgId: "org-1", resetGeneration: 1 }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: "publish_review_not_approved" });
+    expectNothingReleased();
+  });
+
+  it("a fence that cannot be read gives the claim back and answers the fixed text; nothing is sent", async () => {
+    reviewSeam.listReviews.mockRejectedValue(new Error("db down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/db down|run-1/);
+    expectNothingReleased();
+  });
+});
+
+// cinatra#4762: a run first dispatched before the route check, parked at its publish gate, keeps the graph it bound then,
+// and no resume road selects a source again. Its Allow checks that bound graph as the first dispatch does.
+describe("the bound graph's publishing calls, checked at Publish (cinatra#4762)", () => {
+  const failedMoves = () => (storeMock.transitionRunStatus.mock.calls as unknown as Array<[string, string, string, Record<string, unknown>]>)
+    .filter(([, from, to]) => from === "pending_approval" && to === "failed").map(([, , , patch]) => patch);
+
+  it("a run bound to a publishing step with a direct external call is not released, and ends failed with the fixed text", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["{{CINATRA_BASE_URL}}/api/agents/passthrough", "https://api.example.invalid/v2/posts"]));
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "run_ended" });
+    expect(decisions.readRunBoundGraph).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(decisions.withRunRowLock).not.toHaveBeenCalled();
+    expect(prepareWayflowResume).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
+    const [patch] = failedMoves();
+    expect(patch).toMatchObject({ attemptGeneration: 0, endParkedDecisions: true });
+    expect(patch?.error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "call_1" of publishing step "publish" calls a URL /);
+    expect(patch?.error).not.toContain("example.invalid");
+    // The failed move clears the claim with the status; the claim is read under it before any release.
+    expect(claims.claimPause.mock.invocationCallOrder[0]!).toBeLessThan(decisions.readRunBoundGraph.mock.invocationCallOrder[0]!);
+    expect(claims.releasePauseClaim).not.toHaveBeenCalled();
+  });
+
+  it("a released decision whose resume failed before its send is checked again the same way, and nothing is sent", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["https://api.example.invalid/v2/posts"]));
+    decisions.readOpenDecisionForRun.mockResolvedValue(null);
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "released" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "released" });
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(moves()).toEqual([["run-1", "pending_approval", "failed"]]);
+  });
+
+  it("a run with no readable bound graph is refused the same way: its publishing calls cannot be checked", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(null);
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toMatchObject({ ok: false, code: PUBLISH_DECISION_NOT_OPEN });
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+    expect(failedMoves().map((p) => p.error)).toEqual([expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: the executed source cannot be read/)]);
+  });
+
+  it("a failed move that loses to a stop gives the claim back and resumes nothing", async () => {
+    decisions.readRunBoundGraph.mockResolvedValue(boundGraph(["https://api.example.invalid/v2/posts"]));
+    storeMock.transitionRunStatus.mockRejectedValue(stale());
+    decisions.readLatestDecisionForRun.mockResolvedValue(decision({ status: "run_ended" }));
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: false, code: PUBLISH_DECISION_NOT_OPEN, currentStatus: "run_ended" });
+    expect(claims.releasePauseClaim).toHaveBeenCalledWith({ runId: "run-1", orgId: "org-1", token: "tok-1" }, expect.anything());
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a bound graph that cannot be read gives the claim back and answers the fixed text; nothing is sent", async () => {
+    decisions.readRunBoundGraph.mockRejectedValue(new Error("db down: run-1"));
+    const err = (await approvePublishDecision({ runId: "run-1", actorContext: ACTOR }).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(err.code).toBe("publish_decision_unavailable");
+    expect(err.message).not.toMatch(/db down|run-1/);
+    expect(claims.releasePauseClaim).toHaveBeenCalledTimes(1);
+    expect(decisions.decide).not.toHaveBeenCalled();
+    expect(sendWayflowResume).not.toHaveBeenCalled();
+  });
+
+  it("a run bound to a graph whose publishing calls all go to checked host routes is released as before", async () => {
+    expect(await approvePublishDecision({ runId: "run-1", actorContext: ACTOR })).toEqual({ ok: true, resumed: true });
+    expect(decisions.readRunBoundGraph).toHaveBeenCalledWith("run-1");
+    expect(decisions.decide).toHaveBeenCalledWith("d1", { from: "parked", to: "released", actor: "user-a", pauseGeneration: 4 }, TX);
+    expect(sendWayflowResume).toHaveBeenCalledTimes(1);
+    expect(failedMoves()).toEqual([]);
   });
 });
 

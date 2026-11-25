@@ -221,6 +221,7 @@ describe.skipIf(!HAS_DB)("cinatra#2047 — dashboard-twin produced event is SAME
       representationRevisionId: revisionId as string,
       emitter: "dashboard_twin_writer",
       originKind: "agent_generated",
+      producerAttempt: null,
     });
     await client.query(emitOp.text, emitOp.values as unknown[]);
     expect(await outboxCount(ctx.dashboardId)).toBe(1);

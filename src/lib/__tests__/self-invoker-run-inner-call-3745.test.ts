@@ -44,10 +44,6 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 }));
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
 import type * as RunActionRefusal from "@/lib/run-action-refusal";
-// The module the fix adds is loaded inside each test, not at the top of the
-// file: before the fix the file still loads and each test fails on the
-// missing module.
-// red-first-expect: Cannot find package '@/lib/run-action-refusal'
 let runActionRefusalCode!: typeof RunActionRefusal.runActionRefusalCode;
 async function loadRunActionRefusal(): Promise<void> {
   ({ runActionRefusalCode } = await import("@/lib/run-action-refusal"));

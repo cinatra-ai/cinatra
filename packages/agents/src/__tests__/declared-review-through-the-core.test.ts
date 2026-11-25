@@ -332,6 +332,7 @@ describe("the declared review asks the one core before it pins anything", () => 
       orgId: "org-rev",
       reviewTaskId: "wayflow-task-rev-1",
       targets: [TARGETS[1]],
+      runGeneration: 0,
     });
     const [, , values] = onInterruptSpy.mock.calls[0]!;
     expect((values as Record<string, unknown>).targetCount).toBe(1);

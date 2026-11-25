@@ -96,13 +96,14 @@ describe("agent_run_publish_decisions — DDL parity", () => {
       name: line.split(" ")[0],
       notNull: /NOT NULL|PRIMARY KEY/.test(line),
     }));
-    // core__0133 adds declared_rows and run_generation, and core__0134 released_pause_generation, after the table's
-    // creation: last, and nullable.
+    // core__0133 adds declared_rows and run_generation, core__0134 released_pause_generation and core__0135
+    // calls_in_flight (cinatra#4762), after the table's creation: last, and nullable.
     expect(config.columns.map((c) => ({ name: c.name, notNull: c.notNull }))).toEqual([
       ...ddlColumns,
       { name: "declared_rows", notNull: false },
       { name: "run_generation", notNull: false },
       { name: "released_pause_generation", notNull: false },
+      { name: "calls_in_flight", notNull: false },
     ]);
     const indexes = config.indexes.map((i) => ({ name: i.config.name, unique: i.config.unique }));
     expect(indexes).toEqual([
@@ -155,7 +156,7 @@ describe("agent_run_publish_decisions.declared_rows — DDL parity (core__0133)"
 
   it("the bootstrap leaf adds the column, idempotently, once, after the table and its indexes, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-3)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
+    expect(leaf.at(-4)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS declared_rows text');
     const all = buildCreateStoreSchemaQueries("cinatra").map((q) => q.text);
     expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS declared_rows text/.test(t))).toHaveLength(1);
   });
@@ -218,7 +219,9 @@ describe("agent_run_publish_decisions.run_generation, agent_runs.reset_generatio
 
   it("the bootstrap adds each column, idempotently, exactly once, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-2)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer');
+    expect(leaf.at(-3)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS run_generation integer');
+    // cinatra#4762 (core__0135): the publishing calls in flight, last.
+    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS calls_in_flight integer');
     const all = buildCreateStoreSchemaQueries('we"ird').map((q) => q.text);
     expect(all.filter((t) => t.includes("superseded_at") && t.includes("agent_run_publish_decisions"))).toEqual([]);
     expect(all.filter((t) => /agent_run_publish_decisions.* ADD COLUMN IF NOT EXISTS run_generation/.test(t))).toHaveLength(1);
@@ -270,9 +273,10 @@ describe("agent_run_publish_decisions.released_pause_generation — DDL parity (
     return out;
   };
 
-  it("the bootstrap leaf adds the column last, idempotently, exactly once, with the schema quoted", () => {
+  it("the bootstrap leaf adds the column after run_generation, idempotently, exactly once, with the schema quoted", () => {
     const leaf = publishDecisionSchemaQueries('we"ird').map((q) => q.text);
-    expect(leaf.at(-1)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS released_pause_generation bigint');
+    // core__0135 (cinatra#4762) adds calls_in_flight after it.
+    expect(leaf.at(-2)).toBe('ALTER TABLE "we""ird"."agent_run_publish_decisions" ADD COLUMN IF NOT EXISTS released_pause_generation bigint');
     const all = buildCreateStoreSchemaQueries("cinatra").map((q) => q.text);
     expect(all.filter((t) => t.includes("released_pause_generation"))).toHaveLength(1);
   });

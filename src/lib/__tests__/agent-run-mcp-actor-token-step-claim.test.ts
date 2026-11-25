@@ -135,3 +135,39 @@ describe("source-bound actor token",()=>{
   expect(verify(issueAgentRunMcpActorToken(ACTOR))?.verifiedExecutedSource).toBeUndefined();
  });
 });
+
+describe("the token's publish decision claim (cinatra#3745)", () => {
+  const proof = { contextId: "ctx", stepId: "step", executionAttemptId: "attempt", sourceSha256: "a".repeat(64),
+    executedSourceSha256: "b".repeat(64), declarationSourceSha256: "c".repeat(64) };
+  const actor = (over: Record<string, unknown> = {}) => ({ ...ACTOR, verifiedStepId: "step", executionAttemptId: "attempt",
+    verifiedExecutedSource: proof, ...over }) as AgentRunMcpActor;
+
+  it("a source-bound actor with a publish decision verifies back with that decision as the pdc claim", () => {
+    const token = issueAgentRunMcpActorToken(actor({ verifiedPublishDecisionId: "decision-2" }));
+    expect(decodePayload(token).pdc).toBe("decision-2");
+    expect((verify(token) as { verifiedPublishDecisionId?: unknown } | null)?.verifiedPublishDecisionId).toBe("decision-2");
+  });
+
+  it("an actor without a decision mints no claim and verifies with none", () => {
+    const token = issueAgentRunMcpActorToken(actor());
+    expect(decodePayload(token).pdc).toBeUndefined();
+    const verified = verify(token);
+    expect(verified?.verifiedExecutedSource).toEqual(proof);
+    expect(verified && "verifiedPublishDecisionId" in verified).toBe(false);
+  });
+
+  it("the issuer refuses a decision without a source proof, or a malformed one", () => {
+    expect(() => issueAgentRunMcpActorToken({ ...ACTOR, verifiedPublishDecisionId: "decision-2" } as AgentRunMcpActor))
+      .toThrow("agent_run_decision_claim_mismatch");
+    for (const bad of ["", "d\nx", "d".repeat(513)]) {
+      expect(() => issueAgentRunMcpActorToken(actor({ verifiedPublishDecisionId: bad }))).toThrow("agent_run_decision_claim_mismatch");
+    }
+  });
+
+  it("a signed pdc claim that is malformed, or present without a source proof, refuses the whole token", () => {
+    const base = decodePayload(issueAgentRunMcpActorToken(actor()));
+    for (const pdc of [7, "", null, "d\nx", "d".repeat(513), { id: "x" }]) expect(verify(signPayload({ ...base, pdc }))).toBeNull();
+    const plain = decodePayload(issueAgentRunMcpActorToken(ACTOR));
+    expect(verify(signPayload({ ...plain, pdc: "decision-2" }))).toBeNull();
+  });
+});

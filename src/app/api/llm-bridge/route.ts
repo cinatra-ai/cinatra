@@ -98,6 +98,8 @@ import {
   RUN_TOKEN_HEADER,
   verifyRunStepAttestation,
   verifySourceBoundRunStep,
+  verifyRunStepPublishDecision,
+  RUN_PUBLISH_DECISION_HEADER, RUN_PUBLISH_DECISION_ATTESTATION_HEADER,
   RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
@@ -973,7 +975,20 @@ async function readRunPolicyBeforeProvider(
   }
 }
 
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    return await handleBridge(req, (release) => { releases.push(release); });
+  } finally {
+    for (const release of releases) await release();
+  }
+}
+
+async function handleBridge(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   // Dual auth: bridge token (WayFlow TS) OR Bearer JWT (Python containers).
   let bridgeActorContext: ActorContext | undefined;
   const isBridgeAuthorized = isAuthorizedBridgeRequest(req);
@@ -1200,6 +1215,8 @@ export async function POST(req: Request): Promise<Response> {
       : undefined;
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  // cinatra#3745: the publish decision the call was made under, signed beside the source-bound pair (s3).
+  let verifiedPublishDecisionId: string | undefined;
   if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
       req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const sourceAttestation = verifySourceBoundRunStep({ key: stepAttestKey,
@@ -1213,16 +1230,30 @@ export async function POST(req: Request): Promise<Response> {
       if (!runFromToken || !sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
       verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
       verifiedStepId = verifiedExecutedSource.stepId;
+      // A call that names a publish decision must carry its valid signature over this same pair; else it is refused.
+      if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null || req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+        const decision = verifyRunStepPublishDecision({ key: stepAttestKey, proof: sourceAttestation,
+          publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
+        if (decision === null) throw new Error("publish_decision_invalid");
+        verifiedPublishDecisionId = decision;
+      }
     } catch {
       return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
     }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair; a call that names one without that pair cannot prove it,
+    // and is refused as a bad signature is, never served as a call that names none.
+    return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
   }
 
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any provider is reached. The run is the one the token proved, else the
   // one the context-id header names; the step is the verified step above, or none.
   const publishRun = runFromToken ?? runFromContextId;
-  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId))) {
+  if (publishRun && !(await publishCallAllowed(publishRun, verifiedStepId, holdRelease))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },
@@ -2140,6 +2171,8 @@ export async function POST(req: Request): Promise<Response> {
                     ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
                     : {}),
                   ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+                  // `pdc` claim (cinatra#3745): the call's verified publish decision, only beside its proof.
+                  ...(verifiedExecutedSource && verifiedPublishDecisionId ? { verifiedPublishDecisionId } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,

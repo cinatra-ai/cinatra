@@ -178,6 +178,7 @@ import {
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
+  type LifecycleTargetDisplay,
   type LifecycleTargetHeader,
   type ReviewTargetIslandAddresses,
   type ReviewTargetKey,
@@ -1424,7 +1425,23 @@ export function ReviewGateCard({
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
   if (body === null) return null;
+  const reading = reviewStateAnchor({
+    host,
+    insideConversation,
+    state: state.state,
+    targetCount: targetHeaders?.length ?? 0,
+    targetDisplay: resolved?.targetDisplay ?? null,
+    recordedPrompt: resolved?.recordedPrompt ?? null,
+  });
 
+  // THE READING'S ANCHOR HOLDS THE WHOLE READING (cinatra#3033). The drawing
+  // puts each reading's id on the element that holds the gate header, the
+  // target and the decision floor together, so the grader reads them beneath
+  // it. The root already carries `review-gate-card`, so the reading rides one
+  // inner element that is ALWAYS drawn, in the same place, on every reading:
+  // a gate that settles changes one attribute and remounts nothing, the island
+  // included. It draws no box of its own (`contents`): the card's column lays
+  // out exactly the children it laid out before.
   return (
     <div
       className={frame}
@@ -1433,9 +1450,67 @@ export function ReviewGateCard({
       data-lifecycle-card-host={host}
       data-conformance-id="review-gate-card"
     >
-      <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      <div className="contents" data-conformance-id={reading ?? undefined}>
+        <IslandFramingContext.Provider value={islandFraming}>{body}</IslandFramingContext.Provider>
+      </div>
     </div>
   );
+}
+
+/** The design anchors of the two review readings (cinatra#3033). */
+export type ReviewStateAnchorId =
+  | "run-review-step-post"
+  | "run-review-step-picture"
+  | "review-card-post-with-featured-image";
+
+/**
+ * WHICH DRAWN READING THIS CARD IS (cinatra#3033), for the design grader.
+ *
+ * `app-artifact-review.html` §I.3 draws the run page's review step twice: on
+ * the post, "drawn by the markdown display", and on the featured image, "the
+ * picture drawn by the image display". `app-lifecycle-cards.html` §II.1 draws
+ * the featured image's card in the chat thread. What tells the two apart is
+ * the DISPLAY THAT DRAWS THE TARGET: one artifact per gate, drawn by the display
+ * the dispatch selects for it. The card reads that display from the resolve
+ * answer (`targetDisplay`), which the server decides with the same display
+ * resolution the target's preview mounts. It never reads a media type or an
+ * artifact type id: the media type alone does not decide the display (an
+ * extension artifact's own detail renderer comes first), and core names no
+ * type. On the picture the note field also opens carrying the prompt that made
+ * it, so the picture needs that prompt as well; on the post it is empty.
+ *
+ * FAIL CLOSED. A gate that pins several targets, an answer that names no
+ * display, any display other than the host's markdown or image display (a
+ * pack's own renderer, a floor), a picture with no recorded prompt and a post
+ * that carries one all claim NO reading: an absent anchor is honest, a wrong
+ * one is not. While the answer is loading, and on a settled or absent gate,
+ * nothing is claimed either: the answer carries the display and the prompt only
+ * for a `pending` or `restricted` gate.
+ *
+ * THE PLACE, NOT THE NEAREST PROP. The chat reading is any card drawn inside a
+ * conversation (the inline run panel included, as for the prompt window). The
+ * run page reading is a `run_card` outside one. The review page and the site
+ * widget draw neither.
+ */
+export function reviewStateAnchor(input: {
+  host: LifecycleCardHost | null;
+  insideConversation: boolean;
+  state: LifecycleCardState["state"];
+  /** How many target headers the answer carried. */
+  targetCount: number;
+  /** The display that draws the one target, as the answer names it. */
+  targetDisplay: LifecycleTargetDisplay | null;
+  recordedPrompt: string | null;
+}): ReviewStateAnchorId | null {
+  if (input.state !== "pending" && input.state !== "restricted") return null;
+  if (input.targetCount !== 1 || input.targetDisplay === null) return null;
+  const prompted = input.recordedPrompt !== null && input.recordedPrompt.trim() !== "";
+  const picture = input.targetDisplay === "image" && prompted;
+  const post = input.targetDisplay === "markdown" && !prompted;
+  if (input.insideConversation) return picture ? "review-card-post-with-featured-image" : null;
+  if (input.host !== "run_card") return null;
+  if (picture) return "run-review-step-picture";
+  return post ? "run-review-step-post" : null;
 }
 
 /**
