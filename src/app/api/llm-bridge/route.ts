@@ -98,6 +98,8 @@ import {
   RUN_TOKEN_HEADER,
   verifyRunStepAttestation,
   verifySourceBoundRunStep,
+  verifyRunStepPublishDecision,
+  RUN_PUBLISH_DECISION_HEADER, RUN_PUBLISH_DECISION_ATTESTATION_HEADER,
   RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
@@ -1213,6 +1215,8 @@ async function handleBridge(req: Request, holdRelease: (release: () => Promise<v
       : undefined;
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  // cinatra#3745: the publish decision the call was made under, signed beside the source-bound pair (s3).
+  let verifiedPublishDecisionId: string | undefined;
   if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
       req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const sourceAttestation = verifySourceBoundRunStep({ key: stepAttestKey,
@@ -1226,9 +1230,23 @@ async function handleBridge(req: Request, holdRelease: (release: () => Promise<v
       if (!runFromToken || !sourceAttestation || !runFromToken.orgId || runFromContextId?.id !== runFromToken.id) throw new Error("source_binding_invalid");
       verifiedExecutedSource = await verifyRunExecutedSource(runFromToken.id, runFromToken.orgId, sourceAttestation);
       verifiedStepId = verifiedExecutedSource.stepId;
+      // A call that names a publish decision must carry its valid signature over this same pair; else it is refused.
+      if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null || req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+        const decision = verifyRunStepPublishDecision({ key: stepAttestKey, proof: sourceAttestation,
+          publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
+        if (decision === null) throw new Error("publish_decision_invalid");
+        verifiedPublishDecisionId = decision;
+      }
     } catch {
       return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
     }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair; a call that names one without that pair cannot prove it,
+    // and is refused as a bad signature is, never served as a call that names none.
+    return NextResponse.json({ error: "Executing source could not be verified", code: "run_source_mismatch" }, { status: 403 });
   }
 
   // cinatra#4150 — no publish without a released decision, enforced at the call,
@@ -2153,6 +2171,8 @@ async function handleBridge(req: Request, holdRelease: (release: () => Promise<v
                     ? { connectorInstancePin: runForPorts.connectorInstanceBinding }
                     : {}),
                   ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+                  // `pdc` claim (cinatra#3745): the call's verified publish decision, only beside its proof.
+                  ...(verifiedExecutedSource && verifiedPublishDecisionId ? { verifiedPublishDecisionId } : {}),
                 },
                 issueAgentRunMcpActorToken,
                 cinatraMcpAllowedTools,
