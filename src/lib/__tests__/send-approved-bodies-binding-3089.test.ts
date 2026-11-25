@@ -39,6 +39,8 @@
  *      recipient two in doubt (by draft, message and contact, no address) with
  *      the manual check; a new approval mails recipient three only: recipient
  *      one is skipped, recipient two is not mailed again
+ *   L1 a provider error, or a mailbox status, that quotes an address reaches
+ *      neither the answer nor any log line: each failure answers a fixed code
  *   P1 no request routes a publishing-step call (a decision governs its step)
  *      into the reference-only form: a decision with no approved list, one not
  *      released, or a signed call with no decision is refused before any mail
@@ -458,7 +460,6 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const first = makeFixture({ ledger, sendLedger, sent, failMailAt: 2 });
     const failed = await first.start({ releasedList: approved });
     expect(failed.status).toBe("failed");
-    expect(failed.errorMessage).toContain("the mail transport failed");
     // Every binding was written before the first mail.
     // red-first-expect: expected "vi.fn()" to be called 3 times, but got 0 times
     expect(first.bindBody).toHaveBeenCalledTimes(3);
@@ -466,6 +467,9 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect([...written.values()].map((v) => v.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
     // The answer counts the mail this call handed over.
     expect(failed.sentCount).toBe(1);
+    // A fixed code, never the provider's own text (cinatra#3089).
+    expect(failed.errorMessage).toContain("may or may not have gone out (provider_error)");
+    expect(failed.errorMessage).not.toContain("the mail transport failed");
 
     const retry = makeFixture({ ledger, sendLedger, sent });
     const done = await retry.start({ releasedList: approved });
@@ -547,7 +551,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     // red-first-expect: createDefaultSendEmail is not a function
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
     expect(stopped.errorMessage).toContain("no mail provider was reached");
-    expect(stopped.errorMessage).toContain("Mailbox A is not connected");
+    expect(stopped.errorMessage).toContain("no mail provider was reached (provider_not_reached)");
+    expect(stopped.errorMessage).not.toContain("Mailbox A is not connected");
     expect(transportMock).not.toHaveBeenCalled();
     mailboxes.list = [connectedMailbox()];
     const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
@@ -571,7 +576,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     });
     // red-first-expect: createDefaultSendEmail is not a function
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
-    expect(stopped.errorMessage).toContain("No connected email connector is available.");
+    expect(stopped.errorMessage).toContain("no mail provider was reached (provider_not_reached)");
+    expect(stopped.errorMessage).not.toContain("No connected email connector is available.");
     expect(transportMock).not.toHaveBeenCalled();
     expect([...sendLedger.rows.values()]).toEqual([]);
   });
@@ -586,7 +592,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     });
     // red-first-expect: createDefaultSendEmail is not a function
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
-    expect(stopped.errorMessage).toContain("no override recipient email is configured");
+    expect(stopped.errorMessage).toContain("no mail provider was reached (provider_not_reached)");
+    expect(stopped.errorMessage).not.toContain("no override recipient email is configured");
     expect(transportMock).not.toHaveBeenCalled();
     routing.redirectTo = "dev@example.com";
     const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
@@ -607,7 +614,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     });
     // red-first-expect: createDefaultSendEmail is not a function
     expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
-    expect(first.errorMessage).toContain("may or may not have gone out: socket hang up");
+    expect(first.errorMessage).toContain("may or may not have gone out (provider_error)");
+    expect(first.errorMessage).not.toContain("socket hang up");
     const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
       releasedList: approved,
     });
@@ -627,7 +635,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     });
     // red-first-expect: createDefaultSendEmail is not a function
     expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
-    expect(first.errorMessage).toContain("Resend send failed: Invalid `to` field.");
+    expect(first.errorMessage).toContain("may or may not have gone out (provider_error)");
+    expect(first.errorMessage).not.toContain("Resend send failed");
     expect([...sendLedger.rows.values()][0]).toMatchObject({ phase: "claimed" });
   });
 
@@ -668,7 +677,8 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const first = await makeFixture({ sendLedger, sent }).start({ releasedList: approved });
     // red-first-expect: expected { …(7) } to match object { Object (status, sentCount, ...) }
     expect(first).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
-    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written: connection reset");
+    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written (send_record_write_failed)");
+    expect(first.errorMessage).not.toContain("connection reset");
     expect(markDone).toHaveBeenCalledTimes(5);
     const retry = await makeFixture({ sendLedger, sent }).start({ releasedList: approved });
     expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p2@example.com", "p3@example.com"]);
@@ -730,6 +740,41 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
     const attempts = [...first.sendEmail.mock.calls, ...second.sendEmail.mock.calls].map((c) => (c[0] as { to: string[] }).to[0]);
     expect(["p1@example.com", "p2@example.com", "p3@example.com"].map((to) => attempts.filter((a) => a === to).length)).toEqual([1, 1, 1]);
     expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p3@example.com"]);
+  });
+
+  it("L1 a provider error that quotes the recipient's address reaches neither the answer nor any log line", async () => {
+    const lines: string[] = [];
+    const record = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) => vi.spyOn(console, level).mockImplementation(record));
+    try {
+      const sendLedger = memorySendLedger();
+      const ledger: Ledger = new Map();
+      // At the hand-over: the provider rejects the recipient, naming the address.
+      const rejecting = vi.fn(async (message: { to: string[] }) => {
+        if (message.to[0] === "p2@example.com") throw new Error(`550 mailbox unavailable: <${message.to[0]}> rejected`);
+        return { providerId: "p", providerMessageId: "m", sentAt: "2026-11-25T00:00:00Z" };
+      });
+      const first = await makeFixture({ sendLedger, ledger, sendEmail: rejecting as unknown as TriggerEmailSendDeps["sendEmail"] })
+        .start({ releasedList: approved });
+      // Before the hand-over: a mailbox status that names the mailbox's address.
+      const { EffectNotStartedError } = await import("../artifacts/materialization-ledger");
+      const notReached = vi.fn(async () => {
+        throw new EffectNotStartedError("The mailbox of p3@example.com is not connected: token for p3@example.com expired");
+      });
+      const second = await makeFixture({ sendEmail: notReached as unknown as TriggerEmailSendDeps["sendEmail"] })
+        .start({ releasedList: approved });
+      // red-first-expect: not to contain 'p2@example.com'
+      expect(first.errorMessage).not.toContain("p2@example.com");
+      expect(first.errorMessage).toContain("may or may not have gone out (provider_error)");
+      expect(second.errorMessage).not.toContain("p3@example.com");
+      expect(second.errorMessage).toContain("no mail provider was reached (provider_not_reached)");
+      expect(lines.length).toBeGreaterThan(0);
+      for (const line of lines) {
+        expect(line).not.toMatch(/p[123]@example\.com/);
+      }
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   it("P1 no request routes a publishing-step call into the reference-only form, which keeps no send record", async () => {

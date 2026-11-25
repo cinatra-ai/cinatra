@@ -526,11 +526,13 @@ function StreamedReviewTarget({
   const target = use(prepared);
   const pair = use(capturePair);
   return (
-    <>
+    // The card's idle-progress bound restarts as this mounts: a gate that is
+    // still streaming panels is never painted over with a failure plate. It
+    // reports the panel drawn only once every item in it has loaded (its
+    // images and captures included), and a failed item as a failure
+    // (cinatra#3089).
+    <IslandPanelMountedSignal>
       <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} framed={framed} />
-      {/* The card's idle-progress bound restarts on this: a gate that is still
-          streaming panels is never painted over with a failure plate. */}
-      <IslandPanelMountedSignal />
-    </>
+    </IslandPanelMountedSignal>
   );
 }

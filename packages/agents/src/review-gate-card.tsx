@@ -597,7 +597,7 @@ function reviewIslandFrameName(attempt: number): string {
  */
 function readIslandProgress(
   data: unknown,
-): { type: "island-ready" | "panel-mounted"; attempt: number } | { type: "island-drawn"; attempt: number; count: number } | null {
+): { type: "island-ready" | "panel-mounted" | "island-failed"; attempt: number } | { type: "island-drawn"; attempt: number; count: number } | null {
   if (typeof data !== "object" || data === null) return null;
   const keys = Object.keys(data);
   // THE DRAWN REPORT (cinatra#3089): the same channel and attempt, plus how many
@@ -617,7 +617,8 @@ function readIslandProgress(
     attempt?: unknown;
   };
   if (channel !== REVIEW_ISLAND_PROGRESS_CHANNEL) return null;
-  if (type !== "island-ready" && type !== "panel-mounted") return null;
+  // `island-failed` (cinatra#3089): an item's own content failed to load, so no drawn report follows.
+  if (type !== "island-ready" && type !== "panel-mounted" && type !== "island-failed") return null;
   if (typeof attempt !== "number" || !Number.isSafeInteger(attempt) || attempt < 0) return null;
   return { type, attempt };
 }
@@ -2411,6 +2412,15 @@ function ReviewTargetIsland({
       if (!frame || event.source !== frame.contentWindow) return;
       const progress = readIslandProgress(event.data);
       if (!progress || progress.attempt !== load.attempt) return;
+      if (progress.type === "island-failed") {
+        // Only a strict host reads it (cinatra#3089): the failed reading at once, the "could not be shown" state with
+        // Try again; the island posts no drawn report after it, so nothing heals it but a new attempt.
+        if (!strict) return;
+        setLoad((current) =>
+          current.loaded || current.attempt !== progress.attempt ? current : { ...current, timedOut: true },
+        );
+        return;
+      }
       if (progress.type === "island-drawn") {
         // Only a strict host reads it; it also heals a plate already painted.
         if (!strict) return;

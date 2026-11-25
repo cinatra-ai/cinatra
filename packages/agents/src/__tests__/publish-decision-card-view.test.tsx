@@ -1343,6 +1343,35 @@ describe("XV.1: Allow waits for the items", () => {
     expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
   });
 
+  it("an island that reports an item failed to load reads failed at once: Allow unavailable, Try again shown", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    // Before any load: the report alone decides (jsdom's own blank document would read as foreign on load).
+    const frame = await frameOf(root);
+    const failed = async (opts: { from?: Window | null; attempt?: number } = {}) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: { channel: "cinatra-review-island-progress", type: "island-failed", attempt: opts.attempt ?? Number(frame.name.split(":")[1] ?? 0) },
+          origin: window.location.origin,
+          source: opts.from === undefined ? frame.contentWindow : opts.from,
+        }));
+      });
+      await settle();
+    };
+    // From another window or attempt: ignored.
+    await failed({ from: window });
+    await failed({ attempt: 9 });
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+    await failed();
+    // red-first-expect: expected null not to be null
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    expect(allowOf(root).disabled).toBe(true);
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+    expect(root.querySelector('[data-conformance-id="publish-card-items-failed"]')).not.toBeNull();
+    expect(root.querySelector("button")?.ownerDocument.body.textContent).toMatch(/Try again/);
+  });
+
   it("a drawn report from another window, another origin or another attempt is ignored", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
     const root = await rootOf(mountOn("chat_thread", okDoor()));

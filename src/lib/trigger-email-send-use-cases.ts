@@ -23,6 +23,12 @@
  * `@cinatra-ai/gmail-connector`) are loaded lazily so vitest can run the unit
  * tests without resolving them — tests pass mocked deps via the factory.
  *
+ * NO RUN REACHES THE APPROVED SEND THROUGH MCP: the MCP boundary refuses every
+ * call of this tool made on a run's frame (src/lib/authz/mcp-boundary.ts, the
+ * outward-effect set). A run reaches it only through the declared publishing
+ * step's call on the passthrough route (cinatra#3089, the change that follows
+ * this one), in the run's frame with its verified run, step and decision.
+ *
  * THE INVARIANT OF THE APPROVED SEND (cinatra#3089): a released publish decision
  * starts at most one send call (the caller consumes it once, before the send),
  * and an approved body is handed to a recipient at most once across all calls
@@ -462,6 +468,22 @@ type InitialSendStateRow = {
 };
 const sendStateByCampaign = new Map<string, InitialSendStateRow>();
 
+/**
+ * THE FIXED REASONS OF THE APPROVED SEND (cinatra#3089). No text from the mail connector, the provider or the send
+ * record's store reaches the answer or the log: a provider's error can quote the recipient's address (a rejected
+ * recipient) and a mailbox status can name the mailbox, so each failure stage answers one of these codes, and the
+ * raw text is dropped (it is kept nowhere). The one reason passed on is a refusal under the revision's lock
+ * (`refused`), whose text is the host's own decision-state reading of the body.
+ */
+const SEND_FAILURE_CODE = {
+  claim: "send_record_claim_failed",
+  refused: "body_refused",
+  not_started: "provider_not_reached",
+  act: "provider_error",
+  release: "send_record_release_failed",
+  mark: "send_record_write_failed",
+} as const;
+
 /** What the answer of an approved send tells a person about a message in doubt (cinatra#3089). No tool or route clears
  *  an in-doubt mark: it is a manual check. */
 const IN_DOUBT_MANUAL_CHECK =
@@ -765,10 +787,9 @@ export async function materializeEmailFanout(
             artifactId: approved.artifactId,
             representationRevisionId: approved.representationRevisionId,
           });
-        } catch (err) {
-          throw new EmailBodyRefusedError(
-            `the email body ${externalId} could not be bound: ${err instanceof Error ? err.message : String(err)}`,
-          );
+        } catch {
+          // The binder's thrown text is never passed on (a store error may quote stored data): a fixed reason.
+          throw new EmailBodyRefusedError(`the email body ${externalId} could not be bound (bind_failed)`);
         }
         if (!bound.ok) {
           throw new EmailBodyRefusedError(`the email body ${externalId} was refused: ${bound.error}`);
@@ -1443,7 +1464,9 @@ async function runInitialSend(args: {
     // written is counted in `sentCount` AND in `inDoubtCount`. A message in doubt
     // is mailed by no later call, under any decision: nothing clears the mark
     // (IN_DOUBT_MANUAL_CHECK). The answer names it by draft, message and
-    // contact; the log names it by draft and message, never by address.
+    // contact; the log names it by draft and message, never by address. A
+    // failure answers a fixed code (SEND_FAILURE_CODE): no provider, connector
+    // or store text reaches the answer or the log.
     if (approvedByIndex && runScopeId) {
       let sentCount = 0;
       let alreadySentCount = 0;
@@ -1505,8 +1528,9 @@ async function runInitialSend(args: {
                 },
                 actor,
               );
-            } catch (err) {
-              now = { ok: false, error: err instanceof Error ? err.message : String(err) };
+            } catch {
+              // The reader's thrown text is never passed on (it may quote stored data): a fixed reason.
+              now = { ok: false, error: "its body could not be read at its send time (body_read_failed)" };
             }
             if (!now.ok || now.text !== approved.text) {
               notDecidedNow = now.ok ? "its revision read another text at its send time than the one checked" : now.error;
@@ -1555,24 +1579,22 @@ async function runInitialSend(args: {
           continue;
         }
         if (failure.stage === "mark") {
-          unrecorded.push(`${name} was mailed, but its sent record could not be written: ${failure.reason} (contact ${approved.contactId})`);
+          unrecorded.push(`${name} was mailed, but its sent record could not be written (${SEND_FAILURE_CODE.mark}) (contact ${approved.contactId})`);
           console.warn(
-            `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; it is in doubt: ${failure.reason}`,
+            `[trigger-email-send] ${name} of run ${runScopeId} was mailed but could not be recorded as sent; it is in doubt (${SEND_FAILURE_CODE.mark})`,
           );
           continue;
         }
         if (outcome.inDoubt) inDoubt.push(`${name} for contact ${approved.contactId}`);
         stopped =
           failure.stage === "claim"
-            ? `the mail of ${name} could not be claimed, so it was not sent: ${failure.reason}`
+            ? `the mail of ${name} could not be claimed, so it was not sent (${SEND_FAILURE_CODE.claim})`
             : failure.stage === "not_started"
-              ? `${name} was not sent, no mail provider was reached: ${failure.reason}`
+              ? `${name} was not sent, no mail provider was reached (${SEND_FAILURE_CODE.not_started})`
               : failure.stage === "release"
-                ? `${name} was not sent, and its claim could not be given back: ${failure.reason}`
-                : `the mail provider failed on ${name}, which may or may not have gone out: ${failure.reason}`;
-        if (failure.stage === "act") {
-          console.warn(`[trigger-email-send] ${name} of run ${runScopeId} is in doubt: ${failure.reason}`);
-        }
+                ? `${name} was not sent, and its claim could not be given back (${SEND_FAILURE_CODE.release})`
+                : `the mail provider failed on ${name}, which may or may not have gone out (${SEND_FAILURE_CODE.act})`;
+        console.warn(`[trigger-email-send] ${name} of run ${runScopeId} stopped the send (${SEND_FAILURE_CODE[failure.stage]})`);
         break;
       }
       const problems = [

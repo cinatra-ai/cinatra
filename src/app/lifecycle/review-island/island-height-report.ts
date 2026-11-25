@@ -136,8 +136,10 @@ export const REVIEW_ISLAND_PROGRESS_CHANNEL = "cinatra-review-island-progress";
 /** The prefix of the frame name the card stamps its attempt into. */
 export const REVIEW_ISLAND_FRAME_NAME_PREFIX = "cinatra-review-island";
 
-/** The two progress events; `island-drawn` (below) is the third message. */
-export type ReviewIslandProgressType = "island-ready" | "panel-mounted";
+/** The progress events; `island-drawn` (below) is the drawn report. `island-failed` (cinatra#3089): an item's own
+ *  content failed to load (an image or a capture whose request failed, or a display that fell to its floor), so the
+ *  island will never report drawn on this attempt. */
+export type ReviewIslandProgressType = "island-ready" | "panel-mounted" | "island-failed";
 
 /** One progress message — the closed shape, with nothing else in it. */
 export interface ReviewIslandProgressMessage {

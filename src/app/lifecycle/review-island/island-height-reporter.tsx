@@ -14,7 +14,7 @@
 // it, at its own origin, and offers the host nothing to call.
 
 import { useEffect, useId, useRef } from "react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 
 import { islandContentHeight, reviewIslandHeightMessage, parseReviewIslandFrameName, reviewIslandDrawnMessage, reviewIslandProgressMessage, type ReviewIslandProgressType } from "./island-height-report";
 import { islandPaletteClass } from "./island-color-scheme";
@@ -158,14 +158,116 @@ export function IslandReadySignal({ panels }: { panels?: number } = {}): null {
   return null;
 }
 
-/** "A panel arrived." Posted as each target's panel mounts, which restarts the
- *  card's idle-progress bound: a gate that is still streaming is never plated. */
-export function IslandPanelMountedSignal(): null {
+/** Posts `island-failed` once per document (cinatra#3089); no drawn report follows it. */
+function postFailedOnce(): void {
+  if (drawnState.posted) return;
+  drawnState.posted = true;
+  postProgress("island-failed");
+}
+
+/** The marks a display leaves when it fell to its floor instead of drawing the item: the review mount's floor, the
+ *  runtime loader's floor and the build-map slot's degraded notice. */
+const PANEL_FLOOR_SELECTOR = "[data-review-target-floor],[data-dynamic-renderer-floor],[data-render-failure-class]";
+
+type MediaReading = "loading" | "loaded" | "failed";
+
+/**
+ * WHAT ONE PANEL'S OWN CONTENT READS (cinatra#3089): drawn only once every item of it has finished loading
+ * successfully. One rule for every kind the panel can hold:
+ *   - a display that fell to its floor: failed (the item itself is not on screen);
+ *   - a display still loading (the runtime loader's skeleton, or anything marked `aria-busy="true"`): loading;
+ *   - an image (an image representation's preview, a pinned capture, an image a display draws): its own decode
+ *     promise answers, `img.decode()`, which settles once the bytes loaded and decoded, and rejects on a failed
+ *     request; a failed image is failed;
+ *   - a video: loaded at `readyState >= HAVE_CURRENT_DATA`, failed when it carries an `error`;
+ *   - text, a structured-data view, a table: drawn once mounted (React committed it before this effect runs).
+ * `media` holds each image's and video's settled reading.
+ */
+function readPanelContent(root: Element, media: WeakMap<Element, MediaReading>): "loading" | "drawn" | "failed" {
+  if (root.querySelector(PANEL_FLOOR_SELECTOR)) return "failed";
+  let loading = root.querySelector('[aria-busy="true"]') !== null;
+  for (const element of root.querySelectorAll("img, video")) {
+    const reading = media.get(element) ?? "loading";
+    if (reading === "failed") return "failed";
+    if (reading === "loading") loading = true;
+  }
+  return loading ? "loading" : "drawn";
+}
+
+/** Start reading each image and video under `root` once, recording its settled reading in `media`; `changed` runs
+ *  whenever one settles. */
+function watchMedia(root: Element, media: WeakMap<Element, MediaReading>, changed: () => void): void {
+  for (const element of root.querySelectorAll("img, video")) {
+    if (media.has(element)) continue;
+    media.set(element, "loading");
+    const settle = (reading: MediaReading) => {
+      if (media.get(element) !== "loading") return;
+      media.set(element, reading);
+      changed();
+    };
+    if (element instanceof HTMLImageElement) {
+      if (typeof element.decode === "function") {
+        element.decode().then(() => settle("loaded"), () => settle("failed"));
+      } else {
+        // No decode (an old engine): the image's own events, or its state when it already settled.
+        if (element.complete) settle(element.naturalWidth > 0 ? "loaded" : "failed");
+        element.addEventListener("load", () => settle("loaded"), { once: true });
+        element.addEventListener("error", () => settle("failed"), { once: true });
+      }
+    } else if (element instanceof HTMLVideoElement) {
+      if (element.error) settle("failed");
+      else if (element.readyState >= 2) settle("loaded");
+      element.addEventListener("loadeddata", () => settle("loaded"), { once: true });
+      element.addEventListener("error", () => settle("failed"), { once: true });
+    }
+  }
+}
+
+/**
+ * "A panel arrived", and later "its items are drawn". Wraps one target's panel (a `display: contents` box, so the
+ * island body's layout is unchanged). On mount it posts `panel-mounted`, which restarts the card's idle-progress
+ * bound: a gate that is still streaming is never plated. The panel counts as drawn only when its own content reads
+ * drawn (`readPanelContent`): a display still loading, or an image or capture still on its way, holds the drawn report
+ * back, and the card's bound still runs. A failed item posts `island-failed` and no drawn report ever follows on this
+ * document: the card shows its "could not be shown" state, with Try again.
+ */
+export function IslandPanelMountedSignal({ children }: { children?: ReactNode } = {}): ReactElement {
   const id = useId();
+  const rootRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     postProgress("panel-mounted");
-    drawnState.mounted.add(id);
-    postDrawnWhenComplete();
+    const root = rootRef.current;
+    if (!root) return;
+    const media = new WeakMap<Element, MediaReading>();
+    let done = false;
+    const check = () => {
+      if (done) return;
+      watchMedia(root, media, check);
+      const reading = readPanelContent(root, media);
+      if (reading === "loading") return;
+      done = true;
+      observer?.disconnect();
+      if (reading === "failed") {
+        postFailedOnce();
+        return;
+      }
+      drawnState.mounted.add(id);
+      postDrawnWhenComplete();
+    };
+    // A display that mounts later (the runtime loader's import) or swaps an image in is read again.
+    const observer = typeof MutationObserver === "function"
+      ? new MutationObserver(check)
+      : null;
+    observer?.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["aria-busy", "src"] });
+    check();
+    return () => {
+      done = true;
+      observer?.disconnect();
+    };
   }, [id]);
-  return null;
+  return (
+    <div ref={rootRef} style={{ display: "contents" }} data-island-panel="">
+      {children}
+    </div>
+  );
 }

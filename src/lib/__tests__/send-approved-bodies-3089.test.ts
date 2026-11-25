@@ -12,6 +12,16 @@
  * revision instead of filing a new body. Without a released list the send
  * reads the bundle exactly as before, unless the run filed bodies for review.
  *
+ * NO RUN REACHES THIS SEND YET. The MCP boundary refuses every call of
+ * `email_outreach_send_initial_start` made on a run's frame (the outward-effect
+ * set in src/lib/authz/mcp-boundary.ts, on main since cinatra#3757), so on main
+ * a run sends no initial email at all, and this change closes no road that
+ * works there. The road a run will take is the declared publishing step's call
+ * on the passthrough route (pull request #4788, merged after this one), which
+ * runs this use case in the run's frame with the verified run, step and
+ * decision. These tests make the send exact and safe for that road; they drive
+ * the use case directly.
+ *
  * The send is driven through `createTriggerEmailSendHandlers` and
  * `createTriggerEmailSendUseCases` with injected seams: the objects reads, the
  * transport, the approved-body reader (a fake artifact store that answers only
