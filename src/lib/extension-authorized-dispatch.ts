@@ -1,7 +1,8 @@
 import "server-only";
 
 import type { PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
-import { listExtensionMcpTools, UNRESOLVED_EXTENSION_VERSION } from "@/lib/extension-mcp-registry";
+import { UNRESOLVED_EXTENSION_VERSION, type RegisteredExtensionMcpTool } from "@/lib/extension-mcp-registry";
+import type { RetainedVersionKeyedMcpTool } from "@/lib/extension-version-keyed-serving";
 import { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } from "@/lib/extension-edge-bound-serving";
 
 // ---------------------------------------------------------------------------
@@ -25,7 +26,8 @@ import { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } from "@/lib/
 //
 // UNRESTRICTED callers keep the captured wrapper untouched: their reach is not
 // version-bound in the first place, so re-pointing them at a stricter dispatch
-// would refuse calls that are legitimately served across an edge change.
+// would refuse calls that are legitimately served across an edge change. A call
+// on an agent run's frame (cinatra#3745) takes this pinned dispatch as well.
 // ---------------------------------------------------------------------------
 
 /**
@@ -37,41 +39,45 @@ export async function dispatchAuthorizedExtensionPrimitive(
   target: PrimitiveDispatchTarget,
   input: unknown,
 ): Promise<unknown> {
+  // cinatra#3745: WHAT IS AUTHORIZED IS WHAT RUNS. The target carries the
+  // registration object whose declaration was planned (and, for an extension,
+  // whose loaded identity rides beside its handler). That object's handler is
+  // the one that may run; it is never looked up again by name and version, so a
+  // same-version replacement (a hot update, which may change the declaration)
+  // between the authorization and this call can never run instead. A target
+  // without its registration is refused.
+  const registration = target.registration as
+    | (RegisteredExtensionMcpTool | RetainedVersionKeyedMcpTool) | undefined;
+  if (!registration || typeof registration.handler !== "function" ||
+      registration.packageName !== target.packageName || registration.name.toLowerCase() !== target.name) {
+    throw new Error(
+      `[mcp] "${target.name}" of ${target.packageName} carries no authorized registration; refusing ` +
+        "rather than dispatching a registration looked up again",
+    );
+  }
   if (target.kind === "extension-versioned") {
     // No global handler to fall back to and none wanted: the point lookup is
-    // keyed on the authorized version, and a drifted edge throws.
+    // keyed on the authorized version, a drifted edge throws, and the retained
+    // entry served must be the authorized object itself.
     const raw = await dispatchPlannedExtensionMcpTool(
       {
         expected: "versioned",
         packageName: target.packageName,
-        name: target.name,
+        name: registration.name,
         version: target.version,
+        registration: registration as RetainedVersionKeyedMcpTool,
       },
       input,
     );
     return wrapExtensionToolResult(raw);
   }
   // `extension-default`: the authorized identity is the DEFAULT registration, so
-  // the raw default handler is the one that may run. It is read from the
-  // registry here rather than taken from the captured map, because the captured
-  // entry holds the drift-tolerant WRAPPER, not the handler underneath it.
-  const tool = listExtensionMcpTools().find(
-    (t) => t.packageName === target.packageName && t.name.toLowerCase() === target.name,
-  );
-  if (!tool) {
-    // The default registration disappeared between capture and dispatch (a
-    // teardown landed). Refuse — never fall back to another version.
-    throw new Error(
-      `[mcp] "${target.name}" is no longer registered by ${target.packageName}; refusing rather ` +
-        "than dispatching across versions",
-    );
-  }
-  // THE DEFAULT CAN MOVE UNDER ITS OWN NAME (codex round-2 #1). A hot update
-  // replaces the default registration in place, so the entry found above may be
-  // a DIFFERENT version than the one that was authorized — and the edge is still
-  // unpinned, so the drift check inside `dispatchPlannedExtensionMcpTool` (which
-  // only compares pinned-vs-unpinned) would not catch it. The authorized version
-  // is therefore compared here, against the registry's own resolution.
+  // the raw default handler of THAT registration is the one that may run (the
+  // captured map holds the drift-tolerant wrapper, not the handler underneath).
+  const tool = registration as RegisteredExtensionMcpTool;
+  // THE DEFAULT CAN MOVE UNDER ITS OWN NAME (codex round-2 #1). The authorized
+  // registration's own resolved version must still be the authorized version
+  // (a defensive check: the target was stamped from this object).
   const servingVersion = tool.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION;
   if (servingVersion !== target.version) {
     throw new Error(

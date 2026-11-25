@@ -60,50 +60,62 @@ describe("dispatchAuthorizedExtensionPrimitive", () => {
     planned.length = 0;
   });
 
-  it("dispatches a VERSIONED identity through the drift-refusing planned dispatch", async () => {
-    const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
-    await dispatchAuthorizedExtensionPrimitive(
-      { kind: "extension-versioned", packageName: PKG, version: "2.4.0", name: "acme_thing_list" },
-      {},
-    );
-    // The AUTHORIZED version is carried in, not re-derived — that is what makes
-    // the downstream drift check a check and not a re-decision.
-    expect(planned).toEqual([
-      { expected: "versioned", packageName: PKG, name: "acme_thing_list", version: "2.4.0" },
-    ]);
+  const registration = (resolvedVersion: string | null, tag = "a") => ({
+    packageName: PKG, name: "acme_thing_list", resolvedVersion, handler: () => tag,
   });
 
-  it("REFUSES when the DEFAULT registration moved to another version", async () => {
-    // Authorized at 2.4.0; a hot update replaced the default with 2.5.0 under
-    // the same name. The edge is still unpinned, so nothing else would notice.
-    listed.push({ packageName: PKG, name: "acme_thing_list", resolvedVersion: "2.5.0", handler: () => null });
+  it("dispatches a VERSIONED identity through the drift-refusing planned dispatch, with the authorized entry", async () => {
+    const authorized = registration("2.4.0");
+    const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
+    await dispatchAuthorizedExtensionPrimitive(
+      { kind: "extension-versioned", packageName: PKG, version: "2.4.0", name: "acme_thing_list",
+        registration: authorized },
+      {},
+    );
+    // The AUTHORIZED version and entry are carried in, not re-derived — that is what makes
+    // the downstream drift check a check and not a re-decision.
+    expect(planned).toEqual([
+      { expected: "versioned", packageName: PKG, name: "acme_thing_list", version: "2.4.0", registration: authorized },
+    ]);
+    expect((planned[0] as { registration: unknown }).registration).toBe(authorized);
+  });
+
+  it("REFUSES when the authorized DEFAULT registration resolves to another version than the target", async () => {
     const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
     await expect(
       dispatchAuthorizedExtensionPrimitive(
-        { kind: "extension-default", packageName: PKG, version: "2.4.0", name: "acme_thing_list" },
+        { kind: "extension-default", packageName: PKG, version: "2.4.0", name: "acme_thing_list",
+          registration: registration("2.5.0") },
         {},
       ),
     ).rejects.toThrow(/admitted at .*2\.4\.0 but the default registration now resolves to 2\.5\.0/);
     expect(planned).toEqual([]); // refused BEFORE anything could run
   });
 
-  it("dispatches the DEFAULT when the version still matches", async () => {
-    listed.push({ packageName: PKG, name: "acme_thing_list", resolvedVersion: "2.4.0", handler: () => null });
+  // cinatra#3745: the registration that was authorized is the one that runs; a same-version replacement in the
+  // registry is never looked up.
+  it("dispatches the authorized DEFAULT registration, never a same-version replacement in the registry", async () => {
+    const authorized = registration("2.4.0", "a");
+    listed.push(registration("2.4.0", "b"));
     const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
     await dispatchAuthorizedExtensionPrimitive(
-      { kind: "extension-default", packageName: PKG, version: "2.4.0", name: "acme_thing_list" },
+      { kind: "extension-default", packageName: PKG, version: "2.4.0", name: "acme_thing_list", registration: authorized },
       {},
     );
     expect(planned).toHaveLength(1);
+    // red-first-expect: expected { …(4) } to be { …(4) }
+    expect((planned[0] as { tool: unknown }).tool).toBe(authorized);
   });
 
-  it("REFUSES when the default registration is gone entirely", async () => {
+  it("REFUSES a target that carries no authorized registration (it never looks one up)", async () => {
+    listed.push(registration("2.4.0"));
     const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
     await expect(
       dispatchAuthorizedExtensionPrimitive(
         { kind: "extension-default", packageName: PKG, version: "2.4.0", name: "acme_thing_list" },
         {},
       ),
-    ).rejects.toThrow(/no longer registered/);
+    ).rejects.toThrow(/carries no authorized registration/);
+    expect(planned).toEqual([]);
   });
 });

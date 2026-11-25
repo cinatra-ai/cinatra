@@ -382,7 +382,8 @@ describe("the retained-version self-invoker road holds a declared outward tool o
     });
     sink.commit();
 
-    const union = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+    const servable = listServableVersionKeyedMcpTools();
+    const union = planSelfInvokerRetainedUnion(servable, {
       hostClaimedNames: new Set<string>(),
       extensionClaimedNames: new Set<string>(),
     });
@@ -391,11 +392,14 @@ describe("the retained-version self-invoker road holds a declared outward tool o
 
     const handlers = new Map<string, CapturedHostPrimitive>();
     const recording = createSelfPrimitiveRecordingServer(handlers);
+    // The retained entry itself, as the self-invoker build passes it (its declaration and its handler are one object).
+    const retained = servable.find((r) => r.packageName === entry.packageName && r.version === entry.version &&
+      r.tool.name === entry.name)?.tool;
     (recording.registerTool as (...a: unknown[]) => unknown)(
       entry.name,
       buildReplayedExtensionToolConfig(
         entry.name,
-        { delegatedChat: entry.delegatedChat, outward: entry.outward },
+        retained ?? { delegatedChat: entry.delegatedChat, outward: entry.outward },
         {
           ownerPackage: entry.packageName,
           resolvedVersion: entry.version,

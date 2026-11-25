@@ -288,6 +288,8 @@ export type ReplayedExtensionRegistration = {
   outward?: HostMcpToolRegistration["outward"];
   /** The loaded identity the registry keeps beside this registration's handler (cinatra#3745). */
   loadedIdentity?: LoadedExtensionIdentity | null;
+  /** The registration's handler, present when `registration` is the registry or retained entry itself. */
+  handler?: (input: unknown) => unknown | Promise<unknown>;
 };
 
 /**
@@ -343,13 +345,20 @@ export function buildReplayedExtensionToolConfig(
       ? primitiveProvenanceStamp({
           ownerPackage: provenance.ownerPackage,
           resolvedVersion: provenance.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION,
-          // cinatra#3745: an extension dispatch target carries the loaded identity
-          // the registry keeps beside THIS registration's handler, so the outward
-          // check reads the identity of the handler the dispatch invokes.
+          // cinatra#3745: WHAT IS AUTHORIZED IS WHAT RUNS. An extension dispatch
+          // target carries THIS registration object (when it is the registry or
+          // retained entry itself, i.e. it has a handler) and the loaded identity
+          // kept beside its handler. The declaration planned from this config,
+          // the identity the outward check reads and the handler the host's
+          // pinned dispatch invokes then all come from one object.
           ...(provenance.dispatchTarget
-            ? { dispatchTarget: provenance.dispatchTarget.kind !== "host" && registration.loadedIdentity
-                ? { ...provenance.dispatchTarget, loadedIdentity: registration.loadedIdentity }
-                : provenance.dispatchTarget }
+            ? { dispatchTarget: provenance.dispatchTarget.kind === "host"
+                ? provenance.dispatchTarget
+                : {
+                    ...provenance.dispatchTarget,
+                    ...(registration.loadedIdentity ? { loadedIdentity: registration.loadedIdentity } : {}),
+                    ...(typeof registration.handler === "function" ? { registration } : {}),
+                  } }
             : {}),
         })
       : {}),

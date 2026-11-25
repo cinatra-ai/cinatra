@@ -640,10 +640,10 @@ export async function dispatchPlannedExtensionMcpTool(
         packageName: string;
         name: string;
         version: string;
-        /** cinatra#3745: given, the retained handler served must carry exactly
-         * this loaded identity (the one the plan read beside it); a same-version
-         * re-activation since the plan refuses as drift. */
-        loadedIdentity?: LoadedExtensionIdentity | null;
+        /** cinatra#3745: given, the retained entry served must be exactly this
+         * object (the one whose declaration and loaded identity were planned
+         * and checked); a same-version re-registration since refuses as drift. */
+        registration?: RetainedVersionKeyedMcpTool | null;
       },
   input: unknown,
   deps: ResolveEdgeBoundExtensionDeps = {},
@@ -686,7 +686,7 @@ export async function dispatchPlannedExtensionMcpTool(
       `edge-bound serving refused for MCP tool "${name}" — ${served.message}`,
     );
   }
-  if ("loadedIdentity" in planned && (served.value.loadedIdentity ?? null) !== (planned.loadedIdentity ?? null)) {
+  if ("registration" in planned && served.value !== planned.registration) {
     throw new EdgeBoundMcpServeRefusal(
       "EDGE_BOUND_PLAN_DRIFT",
       `edge-bound serving refused — MCP tool "${name}" of ${packageName}@${planned.version} was ` +

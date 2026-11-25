@@ -407,6 +407,13 @@ export type PrimitiveDispatchTarget = {
    * object. Absent for a registration the loader stamped no identity for.
    */
   readonly loadedIdentity?: object;
+  /**
+   * cinatra#3745: the registration object (the registry or retained entry)
+   * whose declaration was planned and whose handler the host's pinned
+   * dispatch invokes, carried by reference so the dispatch never looks the
+   * registration up again by name and version. Never read here.
+   */
+  readonly registration?: object;
 };
 
 /** Why a registration could not be given a trustworthy identity. */
@@ -614,7 +621,8 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
     const ver = readGuarded(target.value, "version");
     const nm = readGuarded(target.value, "name");
     const loaded = readGuarded(target.value, "loadedIdentity");
-    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok || !loaded.ok) {
+    const reg = readGuarded(target.value, "registration");
+    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok || !loaded.ok || !reg.ok) {
       return { kind: "failed", failure: "provenance_unreadable" };
     }
     if (
@@ -623,7 +631,8 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       !nonEmptyString(pkg.value) ||
       !nonEmptyString(ver.value) ||
       !nonEmptyString(nm.value) ||
-      (loaded.value !== undefined && loaded.value !== null && typeof loaded.value !== "object")
+      (loaded.value !== undefined && loaded.value !== null && typeof loaded.value !== "object") ||
+      (reg.value !== undefined && reg.value !== null && typeof reg.value !== "object")
     ) {
       return { kind: "failed", failure: "provenance_malformed" };
     }
@@ -633,6 +642,7 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       version: ver.value,
       name: nm.value.toLowerCase(),
       ...(typeof loaded.value === "object" && loaded.value !== null ? { loadedIdentity: loaded.value } : {}),
+      ...(typeof reg.value === "object" && reg.value !== null ? { registration: reg.value } : {}),
     };
   }
 

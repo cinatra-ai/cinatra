@@ -365,20 +365,18 @@ export async function registerAllCapabilities(
     // (convergence round 0 #3 — input validated against one version's schema must
     // never reach another version's handler).
     const registration = entry.tool;
-    // cinatra#3745: the loaded identity kept beside THIS entry's handler. The
-    // default dispatch invokes this very entry's handler; the versioned dispatch
-    // re-reads the retained entry and refuses when it no longer carries this
-    // identity. The replayed config stamps the same identity, read off the same
-    // `registration`, into the dispatch target the outward check reads, so that
-    // check always names the bytes that run.
-    const loadedIdentity = entry.tool.loadedIdentity ?? null;
+    // cinatra#3745: WHAT IS AUTHORIZED IS WHAT RUNS. The default dispatch invokes
+    // this very entry's handler; the versioned dispatch re-reads the retained
+    // entry and refuses unless it is this very object. The replayed config plans
+    // the declaration and stamps the loaded identity from the same object.
     const dispatchPlanned =
       entry.mode === "default"
         ? (input: unknown) =>
             dispatchPlannedExtensionMcpTool({ expected: "default", tool: entry.tool }, input)
         : (input: unknown) =>
             dispatchPlannedExtensionMcpTool(
-              { expected: "versioned", packageName: entry.packageName, name, version: entry.version, loadedIdentity },
+              { expected: "versioned", packageName: entry.packageName, name, version: entry.version,
+                registration: entry.tool },
               input,
             );
     // cinatra#2817 slice 1 — the PROVENANCE the choke point plans this
@@ -605,17 +603,22 @@ export async function buildHostSelfPrimitiveHandlers(): Promise<Map<string, Capt
   // #3 — a stale attribution must not survive it); an extension-extension
   // dedupe (the default replay or an earlier retained sibling already serves
   // the name) preserves the WINNING registration + attribution.
-  const retainedUnion = planSelfInvokerRetainedUnion(listServableVersionKeyedMcpTools(), {
+  const servableRetained = listServableVersionKeyedMcpTools();
+  const retainedUnion = planSelfInvokerRetainedUnion(servableRetained, {
     hostClaimedNames,
     extensionClaimedNames: new Set(unionEffective.map((t) => t.name)),
   });
   for (const entry of retainedUnion.register) {
     const target = { packageName: entry.packageName, name: entry.name };
+    // cinatra#3745: the retained entry itself (same object the union read), so
+    // the pinned dispatch runs the handler whose declaration was planned.
+    const retained = servableRetained.find((r) =>
+      r.packageName === entry.packageName && r.version === entry.version && r.tool.name === entry.name)?.tool;
     (recordingServer.registerTool as (...a: unknown[]) => unknown)(
       entry.name,
       buildReplayedExtensionToolConfig(
         entry.name,
-        { delegatedChat: entry.delegatedChat, outward: entry.outward },
+        retained ?? { delegatedChat: entry.delegatedChat, outward: entry.outward },
         {
           ownerPackage: entry.packageName,
           resolvedVersion: entry.version,

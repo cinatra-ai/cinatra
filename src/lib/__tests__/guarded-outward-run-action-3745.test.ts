@@ -32,7 +32,18 @@ import {
   retireLoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
-import { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } from "@/lib/extension-edge-bound-serving";
+import {
+  dispatchExtensionMcpToolEdgeBound,
+  dispatchPlannedExtensionMcpTool,
+  dispatchVersionedOnlyExtensionMcpTool,
+  wrapExtensionToolResult,
+} from "@/lib/extension-edge-bound-serving";
+import {
+  beginVersionKeyedRegistration,
+  resolveVersionKeyedMcpTool,
+  __resetVersionKeyedServingForTests,
+} from "@/lib/extension-version-keyed-serving";
+import { withActorContext } from "@cinatra-ai/llm/actor-context";
 import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
 import type { CapturedHostPrimitive } from "@/lib/extension-mcp-registry";
 import { createMcpRuntimeServer } from "../../../packages/mcp-server/src/runtime-server";
@@ -57,6 +68,13 @@ const store = vi.hoisted(() => {
 // The host's in-process primitive map (the self-invoker's), captured per case through the real recording server.
 const selfInvoker = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }));
 vi.mock("@/lib/mcp-server", () => ({ buildHostSelfPrimitiveHandlers: async () => selfInvoker.handlers }));
+
+// The install rows the edge-bound resolution reads (the real resolution runs; only its row store is in memory).
+const installs = vi.hoisted(() => ({ rows: new Map<string, unknown>() }));
+vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
+  readInstalledExtensionById: async (id: string) => installs.rows.get(id) ?? null,
+  readInstalledExtensionsByPackageName: async () => [],
+}));
 
 vi.mock("@cinatra-ai/agents/store", () => ({
   readCurrentRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
@@ -655,6 +673,166 @@ describe("the guarded outward run action", () => {
       expect(w.errors).toEqual([]);
       expect(w.ran).toEqual([PLAIN_WRAPPER, INNER_READ]);
       expect(store.consume).not.toHaveBeenCalled();
+    });
+  });
+
+  // cinatra#3745: WHAT IS AUTHORIZED IS WHAT RUNS, on every dispatch path. Registration A (not outward) is planned and
+  // authorized; a same-version registration B that declares itself outward replaces it before the handler is taken.
+  // A's handler may run (it is what was checked), or the call is refused; B's handler never runs. These cases use the
+  // real host ctx and registries, the real replayed config and recording server, the real edge-bound resolution, the
+  // real pinned dispatch, the real self-invoker and the real boundary.
+  describe("what is authorized is what runs", () => {
+    const SWAPPED = "example_swapped_tool";
+    const RETAINED_VERSION = "2.0.0";
+    const DEPENDENT = "install-dependent";
+
+    /** Registration of the DEFAULT version through the real host ctx (the registry entry). */
+    function registerDefault(tag: string, ran: string[], outward: boolean) {
+      const ctx = createExtensionHostContext(PACKAGE, ["mcp"], {}, { installId: `install-${tag}`, version: VERSION, isDefault: true });
+      ctx.mcp.registerTool({ name: SWAPPED, description: SWAPPED, ...(outward ? { outward: {} } : {}),
+        handler: async () => { ran.push(tag); return { ran: tag }; } } as Parameters<typeof ctx.mcp.registerTool>[0]);
+      const entry = extensionRegistryModule.listExtensionMcpTools().find((t) => t.name === SWAPPED);
+      if (!entry) throw new Error("not registered");
+      return entry;
+    }
+    /** A retained (non-default, pinned) version's registration, committed as a successful load attempt does. */
+    function retain(tag: string, ran: string[], outward: boolean) {
+      const sink = beginVersionKeyedRegistration(PACKAGE, RETAINED_VERSION);
+      sink.retainMcpTool({ name: SWAPPED, packageName: PACKAGE, ...(outward ? { outward: {} } : {}),
+        handler: async () => { ran.push(tag); return { ran: tag }; } });
+      sink.commit();
+      const served = resolveVersionKeyedMcpTool(PACKAGE, RETAINED_VERSION, SWAPPED);
+      if (served.kind !== "serve") throw new Error("not retained");
+      return served.value;
+    }
+    const config = (registration: object, kind: "extension-default" | "extension-versioned", version: string) =>
+      extensionRegistryModule.buildReplayedExtensionToolConfig(SWAPPED, registration, {
+        ownerPackage: PACKAGE, resolvedVersion: version,
+        dispatchTarget: { kind, packageName: PACKAGE, version, name: SWAPPED },
+      });
+    /** The run's edge pins the retained version (the dependent's install row and its resolved edge). */
+    function pinRetained<T>(fn: () => Promise<T>): Promise<T> {
+      installs.rows.set(DEPENDENT, { id: DEPENDENT, packageName: "@acme/dependent", status: "active",
+        organizationId: "org-1", ownerLevel: "organization", ownerId: null, isDefault: true,
+        dependencyEdges: [{ packageName: PACKAGE, edgeType: "runtime", requirement: "required",
+          versionConstraint: { kind: "exact", version: RETAINED_VERSION }, resolvedInstallId: "install-retained",
+          resolutionReason: "test" }] });
+      installs.rows.set("install-retained", { id: "install-retained", packageName: PACKAGE, status: "active",
+        organizationId: "org-1", ownerLevel: "organization", ownerId: null, isDefault: false,
+        version: RETAINED_VERSION, dependencyEdges: [] });
+      return withActorContext({ dependentInstallId: DEPENDENT } as Parameters<typeof withActorContext>[0], fn) as Promise<T>;
+    }
+    async function runtimeCall(registerHandler: (input: unknown) => Promise<unknown>, cfg: unknown) {
+      const runtime = await createMcpRuntimeServer({
+        name: "authorized-runs-test", version: "0.0.0",
+        registerCapabilities: (toolServer) => {
+          (toolServer.registerTool as unknown as (n: string, c: unknown, h: (input: unknown) => unknown) => unknown)(
+            SWAPPED, cfg, async (input: unknown) => wrapExtensionToolResult(await registerHandler(input)));
+        },
+      });
+      const registry = (runtime as unknown as {
+        _registeredTools: Record<string, { handler: (...a: unknown[]) => unknown }>;
+      })._registeredTools;
+      return () => mcpRequestContextStorage.run(runFrame(), () => registry[SWAPPED]!.handler({}, {})) as Promise<ToolResult>;
+    }
+
+    beforeEach(() => {
+      __resetVersionKeyedServingForTests();
+      installs.rows.clear();
+      vi.mocked(augmentModule.lookupPrimitiveClassification).mockImplementation((name: string) =>
+        name === SWAPPED ? { ...FIXTURE_CLASSIFICATION } : undefined);
+    });
+    afterEach(() => {
+      extensionRegistryModule.removeExtensionMcpToolsForPackage(PACKAGE);
+      __resetVersionKeyedServingForTests();
+      selfInvoker.handlers.clear();
+      __resetHostSelfPrimitiveHandlers();
+      installs.rows.clear();
+    });
+
+    it("the runtime server's default dispatch runs the planned registration A, never B", async () => {
+      const ran: string[] = [];
+      const a = registerDefault("A", ran, false);
+      const call = await runtimeCall((input) => dispatchPlannedExtensionMcpTool({ expected: "default", tool: a }, input),
+        config(a, "extension-default", VERSION));
+      registerDefault("B", ran, true);
+      const result = await call();
+      expect(result.isError).toBeFalsy();
+      expect(ran).toEqual(["A"]);
+      expect(store.consume).not.toHaveBeenCalled();
+    });
+
+    // The handler below is the live replay's versioned dispatch as `src/lib/mcp-server.ts` writes it (the planned
+    // retained entry passed as `registration`).
+    // red-first-expect: expected [ 'B' ] to deeply equal []
+    it("the runtime server's versioned dispatch refuses when the retained entry was replaced", async () => {
+      const ran: string[] = [];
+      const a = retain("A", ran, false);
+      const call = await runtimeCall((input) => dispatchPlannedExtensionMcpTool({ expected: "versioned",
+        packageName: PACKAGE, name: SWAPPED, version: RETAINED_VERSION, registration: a }, input),
+      config(a, "extension-versioned", RETAINED_VERSION));
+      retain("B", ran, true);
+      const outcome = await pinRetained(call).catch((e: unknown) => e);
+      expect(ran).toEqual([]);
+      expect(outcome).toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+      expect(String((outcome as Error).message)).toContain("re-registered by another load since it was planned");
+      expect(store.consume).not.toHaveBeenCalled();
+    });
+
+    it("the self-invoker's inner call on the default version runs the authorized registration A, never B", async () => {
+      const ran: string[] = [];
+      const a = registerDefault("A", ran, false);
+      selfInvoker.handlers.clear();
+      const recording = extensionRegistryModule.createSelfPrimitiveRecordingServer(
+        selfInvoker.handlers as Map<string, CapturedHostPrimitive>);
+      // As the self-invoker build captures a default registration.
+      (recording.registerTool as unknown as (n: string, c: unknown, h: (input: unknown) => unknown) => unknown)(
+        SWAPPED, config(a, "extension-default", VERSION),
+        async (input: unknown) => wrapExtensionToolResult(await dispatchExtensionMcpToolEdgeBound(a, input)));
+      __resetHostSelfPrimitiveHandlers();
+      registerDefault("B", ran, true);
+      const out = await mcpRequestContextStorage.run(runFrame(), () => callHostPrimitive(SWAPPED, {}));
+      expect(ran).toEqual(["A"]);
+      expect(out).toEqual({ ran: "A" });
+      expect(store.consume).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected [ 'B' ] to deeply equal []
+    it("the self-invoker's inner call on a retained version refuses when the retained entry was replaced", async () => {
+      const ran: string[] = [];
+      const a = retain("A", ran, false);
+      selfInvoker.handlers.clear();
+      const recording = extensionRegistryModule.createSelfPrimitiveRecordingServer(
+        selfInvoker.handlers as Map<string, CapturedHostPrimitive>);
+      // As the self-invoker build captures a retained union entry.
+      (recording.registerTool as unknown as (n: string, c: unknown, h: (input: unknown) => unknown) => unknown)(
+        SWAPPED, config(a, "extension-versioned", RETAINED_VERSION),
+        async (input: unknown) => wrapExtensionToolResult(
+          await dispatchVersionedOnlyExtensionMcpTool({ packageName: PACKAGE, name: SWAPPED }, input)));
+      __resetHostSelfPrimitiveHandlers();
+      retain("B", ran, true);
+      const outcome = await pinRetained(() =>
+        mcpRequestContextStorage.run(runFrame(), () => callHostPrimitive(SWAPPED, {}))).catch((e: unknown) => e);
+      expect(ran).toEqual([]);
+      expect(outcome).toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+      expect(String((outcome as Error).message)).toContain("re-registered by another load since it was planned");
+      expect(store.consume).not.toHaveBeenCalled();
+    });
+
+    it("the self-invoker's inner call on a retained version runs its entry when nothing replaced it", async () => {
+      const ran: string[] = [];
+      const a = retain("A", ran, false);
+      selfInvoker.handlers.clear();
+      const recording = extensionRegistryModule.createSelfPrimitiveRecordingServer(
+        selfInvoker.handlers as Map<string, CapturedHostPrimitive>);
+      (recording.registerTool as unknown as (n: string, c: unknown, h: (input: unknown) => unknown) => unknown)(
+        SWAPPED, config(a, "extension-versioned", RETAINED_VERSION),
+        async (input: unknown) => wrapExtensionToolResult(
+          await dispatchVersionedOnlyExtensionMcpTool({ packageName: PACKAGE, name: SWAPPED }, input)));
+      __resetHostSelfPrimitiveHandlers();
+      const out = await pinRetained(() => mcpRequestContextStorage.run(runFrame(), () => callHostPrimitive(SWAPPED, {})));
+      expect(out).toEqual({ ran: "A" });
+      expect(ran).toEqual(["A"]);
     });
   });
 });
