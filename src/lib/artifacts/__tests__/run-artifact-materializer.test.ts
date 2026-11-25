@@ -38,7 +38,7 @@ const {
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock }),
+  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -79,7 +79,9 @@ vi.mock("../resolve-bound-artifact-type", () => ({
 vi.mock("../artifact-creation", () => ({
   createSemanticArtifact: createSemanticArtifactMock,
 }));
-vi.mock("../materialization-ledger", () => ({
+vi.mock("../materialization-ledger", async () => ({
+  // cinatra#4762: the reused revision's restamp, as the module ships it.
+  restampReusedRevision: (await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger")).restampReusedRevision,
   claimMaterialization: claimMaterializationMock,
   buildFinalizeMaterializationQuery: buildFinalizeMaterializationQueryMock,
   readFinalizedMaterialization: readFinalizedMaterializationMock,
