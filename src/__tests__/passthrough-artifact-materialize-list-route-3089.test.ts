@@ -257,18 +257,44 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
   });
 
   // red-first-expect: expected 400 to be 200
-  it("answers the artifacts and the review targets beside the echoed inputs when the call asks for its inputs back", async () => {
-    const res = await POST(post({ ...listBody(), result_input_passthrough: true }));
+  it("hands the caller's own inputs on, member fields and content text untouched, beside the artifacts and the review targets", async () => {
+    // The members carry fields the filing does not use (a recipient id): the
+    // step after this one reads them from the echoed content.
+    const members = DRAFTS.map((d, i) => ({ ...d, recipientId: `rcp-${i + 1}` }));
+    const text = JSON.stringify(members, null, 2);
+    const call = listBody({ content: text }) as { input: Record<string, unknown> };
+    const res = await POST(post({ ...call, result_input_passthrough: true }));
     expect(res.status).toBe(200);
     const body = await res.json();
     const artifacts = [1, 2, 3].map((i) => ({ artifactId: `art-${i}`, representationRevisionId: `rep-${i}` }));
     expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
-    expect(body.artifacts).toEqual(artifacts);
-    expect(body.reviewTargets).toBe(JSON.stringify(artifacts));
-    // The echoed inputs, as a single filing echoes them.
-    expect(body).toMatchObject({ extension: EXT, declaredMime: "text/markdown", nodeId: NODE });
+    // Byte for byte the text the caller sent, with every member field in it.
+    expect(body.content).toBe(text);
+    expect(JSON.parse(body.content)).toEqual(members);
+    // The whole input as received, then the answer; the filing took the shaped members only.
+    expect(body).toEqual({ ...call.input, artifacts, reviewTargets: JSON.stringify(artifacts) });
+    expect(h.materializeToolArtifact.mock.calls.map((c) => (c[0] as { content: string }).content)).toEqual(
+      DRAFTS.map((d) => d.body),
+    );
     // A list has no single id: no id field, and never a null one.
     expect(body).not.toHaveProperty("id");
+  });
+
+  // red-first-expect: expected 400 to be 200
+  it("hands a list of about 140 KiB on whole while only the shaped members are filed", async () => {
+    const big = Array.from({ length: 4 }, (_, i) => ({
+      subject: `Long draft ${i + 1}`,
+      body: `${i}`.repeat(36 * 1024),
+      recipientId: `rcp-${i + 1}`,
+    }));
+    const text = JSON.stringify(big);
+    const res = await POST(post({ ...listBody({ content: text }), result_input_passthrough: true }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(h.materializeToolArtifact).toHaveBeenCalledTimes(4);
+    expect(body.content).toBe(text);
+    expect(body.artifacts).toHaveLength(4);
+    expect(JSON.parse(body.reviewTargets)).toEqual(body.artifacts);
   });
 
   // red-first-expect: expected { Object (error) } to deeply equal

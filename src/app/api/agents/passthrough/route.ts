@@ -1018,17 +1018,22 @@ export async function POST(req: Request): Promise<Response> {
         result && typeof result === "object" && !Array.isArray(result)
           ? (result as Record<string, unknown>)
           : {};
-      const echoFields =
-        tool === "objects_save"
+      // cinatra#3089: a filed list is the one call whose echo is the input AS
+      // RECEIVED (`rawInput`): the shaped call carries each member cut down to its
+      // title and content and an empty `content` (the list is counted once against
+      // the argument limit), so echoing it would hand the next step a mutilated copy.
+      const filedList = tool === "artifact_materialize" && input.members !== undefined;
+      const echoFields = filedList
+        ? rawInput
+        : tool === "objects_save"
           ? (input.rawData && typeof input.rawData === "object"
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
       const savedObjectId = tool === "objects_save" ? resultObj.objectId : undefined;
-      // cinatra#3089: a filed list keeps its whole answer beside the echo — the
-      // artifacts and the review targets the next review step reads — and gets
-      // no id field (a list has no single id; a named one is refused above).
-      const filedList = tool === "artifact_materialize" && input.members !== undefined;
+      // A filed list keeps its whole answer beside the echo — the artifacts and
+      // the review targets the next review step reads — and gets no id field (a
+      // list has no single id; a named one is refused above).
       const shaped: Record<string, unknown> = filedList
         ? { ...echoFields, artifacts: resultObj.artifacts, reviewTargets: resultObj.reviewTargets }
         : { ...echoFields, [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null };
