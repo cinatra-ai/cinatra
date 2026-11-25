@@ -297,6 +297,17 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(setMembers()).toHaveLength(2);
   });
 
+  // red-first-expect: expected 400 to be 409
+  it("answers 409 with the reason for a list call refused while a publishing call of the run is in flight", async () => {
+    h.materializeSet.mockResolvedValueOnce({
+      ok: false, code: "publish_call_in_flight", reason: "publish_call_in_flight",
+      error: "a publishing call of this run is in flight; try again once it has ended",
+    });
+    const res = await POST(post(listBody()));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: "a publishing call of this run is in flight; try again once it has ended", reason: "publish_call_in_flight" });
+  });
+
   // red-first-expect: expected 400 to be 500
   it("answers one fixed 500 for a fault that is not a refusal of the call, and never the exception's text", async () => {
     h.materializeSet.mockRejectedValueOnce(new Error("connect ECONNREFUSED 10.1.2.3:5432 password=hunter2"));

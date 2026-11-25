@@ -475,8 +475,7 @@ describe("the claim module's guards", () => {
   });
 
   // cinatra#4758: a claim taken for a named gate task lands only while the run waits at that task, in the same statement
-  // that checks the generation, and a refusal at another task is "moved-on". Red first at 7ca04b14: the claim read no task.
-  // red-first-expect: to contain '"cinatra"."agent_runs"."a2a_task_id"
+  // that checks the generation, and a refusal at another task is "moved-on".
   it("a claim bound to a gate task lands only at that task, and a refusal at another task is moved-on", async () => {
     shared.returningRows = [[{ expiresAt: new Date() }] as unknown as { id: string }[]];
     await claimPause({ ...REF, taskId: "task-1" }, SESSION);

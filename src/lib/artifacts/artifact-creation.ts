@@ -25,7 +25,12 @@ import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
 import {
   type OwnerLevel,
   normalizeOwnerLevel,
@@ -467,12 +472,6 @@ type Tx2Results = ReturnType<typeof runPostgresQueriesSync>;
 /** One statement of a transaction (the shape `runPostgresQueriesSync` takes). */
 type Tx2Query = { text: string; values?: unknown[] };
 
-/** Fixed leading-query count before the producer ops of ONE artifact's transaction:
- *  lock(1) + objects/outbox(1) + representation(1) + audit(1) = 4. Each
- *  `buildAssertSemanticTypeQueries` contributes exactly 2 ops (archive, insert-RETURNING) —
- *  parseResult locates its insert-RETURNING relative to the spliced offset. */
-const PRODUCER_OPS_OFFSET = 4;
-
 /** Everything of ONE artifact's write that is decided before its transaction opens (the bytes
  *  stored, the resource row committed, the producer plan resolved) and the queries of its
  *  transaction. */
@@ -487,6 +486,8 @@ type PreparedArtifactWrite = {
   persistedRunId: string | null;
   planProduces: string[];
   producerSplice: ReturnType<typeof buildAssertSemanticTypeQueries>[];
+  /** Where this artifact's producer ops begin among its own queries (the lock, the run lock, objects, representation, audit). */
+  producerOpsOffset: number;
   tx2Queries: Tx2Query[];
 };
 
@@ -973,12 +974,40 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
   // carries its exact declared type in `objects.type`, so there is no default
   // eligible assertion to rebalance.)
   const producerOps = producerSplice.flatMap((p) => p.queries);
-  // Fixed leading-query count before the producer ops: lock(1) +
-  // objects/outbox(1) + representation(1) + audit(1) = 4. Each
+  // Lifecycle-interceptions S1 (cinatra#2039, epic #2037): the transactional
+  // ArtifactProduced event, written in THIS same held-lock tx as the
+  // artifact/representation so review is driven by a durable, same-tx
+  // idempotent event (deterministic event_id → ON CONFLICT DO NOTHING).
+  // SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is spliced
+  // unless a deployment sets `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, in
+  // which case `maybeBuildProducedEventInsertOp` returns null, nothing is
+  // spliced and the tx is byte-identical to the pre-flip one. Built here, ahead
+  // of the query list, because it also decides the run lock below.
+  // `originKind` is the physical ArtifactOriginKind — the emitter maps it onto
+  // the lattice axis.
+  const producedEventOp = maybeBuildProducedEventInsertOp(schema, {
+    orgId: input.orgId,
+    artifactId,
+    representationRevisionId,
+    emitter: "createSemanticArtifact",
+    originKind,
+    producerRunId: persistedRunId,
+    producerAgentId: null,
+    producerAttempt: producerAttemptForRun(persistedRunId),
+  });
+  // cinatra#4762: the producing run's row FOR KEY SHARE before the first write
+  // (after the artifact's advisory lock), held to commit, so a Publish's locked
+  // fence read never runs while this output's rows are written but its event
+  // (appended LAST) is not: it waits for the commit and sees the event, or it
+  // ran before the first write. Empty when no event is spliced or no run is
+  // named; see `producerRunLockOps`.
+  const runLockOps = producerRunLockOps(schema, persistedRunId, producedEventOp);
+  // The fixed leading queries before the producer ops: lock(1) + the run lock
+  // (0 or 1) + objects/outbox(1) + representation(1) + audit(1). Each
   // `buildAssertSemanticTypeQueries` contributes exactly 2 ops
   // (archive, insert-RETURNING) — parseResult locates its
   // insert-RETURNING relative to the spliced offset.
-
+  const PRODUCER_OPS_OFFSET = 4 + runLockOps.length;
   // ---------------------------------------------------------------------
   // Binding reconcile, IN Tx2 (cinatra#1868).
   //
@@ -1073,6 +1102,7 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
           text: `SELECT pg_advisory_xact_lock(hashtext($1))`,
           values: [artifactId],
         },
+        ...runLockOps,
         // objects + outbox via the single-CTE pattern (objects-store.ts
         // invariant — outbox INSERT only fires when the upsert actually
         // wrote, so a cross-tenant collision NEVER spawns a phantom
@@ -1194,30 +1224,11 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         ...(input.additionalTx2Queries
           ? input.additionalTx2Queries({ artifactId, representationRevisionId })
           : []),
-        // Lifecycle-interceptions S1 (cinatra#2039, epic #2037): the transactional
-        // ArtifactProduced event, written in THIS same held-lock tx as the
-        // artifact/representation so review is driven by a durable, same-tx
-        // idempotent event (deterministic event_id → ON CONFLICT DO NOTHING).
-        // SWITCHED default-ON (cinatra#2047, ruling 2026-07-27): the op is
-        // spliced unless a deployment sets
-        // `CINATRA_LIFECYCLE_REVIEW_ORCHESTRATION=off`, in which case
-        // `maybeBuildProducedEventInsertOp` returns null, this splices NOTHING and
-        // the tx is byte-identical to the pre-flip one. Appended LAST so every fixed result
+        // The produced event (built above). Appended LAST so every fixed result
         // offset above (PRODUCER_OPS_OFFSET + the producer splice) is untouched;
-        // its result is never parsed. `originKind` is the physical
-        // ArtifactOriginKind — the emitter maps it onto the lattice axis.
-        ...(() => {
-          const op = maybeBuildProducedEventInsertOp(schema, {
-            orgId: input.orgId,
-            artifactId,
-            representationRevisionId,
-            emitter: "createSemanticArtifact",
-            originKind,
-            producerRunId: persistedRunId,
-            producerAgentId: null,
-          });
-          return op ? [op] : [];
-        })(),
+        // its result is never parsed. The run lock taken before the first write
+        // covers the rows above it.
+        ...(producedEventOp ? [producedEventOp] : []),
   ];
   return {
     input,
@@ -1230,6 +1241,7 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     persistedRunId,
     planProduces,
     producerSplice,
+    producerOpsOffset: PRODUCER_OPS_OFFSET,
     tx2Queries,
   };
 }
@@ -1256,6 +1268,7 @@ async function finishArtifactWrite(
   queryBase: number,
 ): Promise<CreateSemanticArtifactResult> {
   const { input, artifactId, representationRevisionId, blobStore, newBlob, authoritative, originKind, persistedRunId, planProduces, producerSplice } = p;
+  const PRODUCER_OPS_OFFSET = p.producerOpsOffset;
 
   // -------------------------------------------------------------------
   // Post-tx: if dedupe won, the new blob bytes on disk are an
@@ -1368,7 +1381,9 @@ async function commitArtifactWrites(
   } catch (err) {
     // The transaction failed AFTER the resource rows (Tx1) committed.
     for (const p of prepared) await abandonArtifactWrite(p);
-    throw err;
+    // cinatra#4762: the in-flight fence of the produced event is surfaced typed
+    // (PublishCallInFlightError); any other failure is thrown as it was.
+    throw publishCallInFlightOr(err);
   }
   const results: CreateSemanticArtifactResult[] = [];
   let base = 0;

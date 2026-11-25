@@ -69,7 +69,7 @@ const {
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock }),
+  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -540,6 +540,45 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   });
 });
 
+describe("cinatra#3089 — the set keeps the produced-event attempt and the in-flight fence of cinatra#4762", () => {
+  const attempt = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+    return mcpRequestContextStorage.run({ runAttempt: { runId: "run-1", resetGeneration: 1 } } as never, fn);
+  };
+  const eventStatements = () =>
+    poolQueryMock.mock.calls
+      .filter(([text]) => String(text).includes("artifact_produced_outbox"))
+      .map(([, values]) => (values as unknown[])[3]);
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("an identical retry restamps each member's existing produced event for the attempt it runs in, as every reuse road does", async () => {
+    await fileSet();
+    poolQueryMock.mockClear();
+    const again = await attempt(() => fileSet());
+    expect(again).toEqual({ ok: true, deduped: true, artifacts: EXPECTED });
+    expect(eventStatements()).toEqual(["rep-1", "rep-2", "rep-3"]);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("a publishing call in flight refuses the set, temporarily, with nothing stored: in the write and in the restamp", async () => {
+    const { PublishCallInFlightError } = await import("@/lib/lifecycle/lifecycle-emit");
+    createSemanticArtifactsMock.mockRejectedValueOnce(new PublishCallInFlightError());
+    expect(await fileSet()).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+    expect(storedObjects.size).toBe(0);
+    expect(ledger).toEqual([]);
+    // The identical retry that finds the set stored is refused too when the restamp meets the in-flight fence.
+    await fileSet();
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (String(text).includes("artifact_produced_outbox")) {
+        throw Object.assign(new Error('invalid input syntax for type integer: "cinatra_publish_call_in_flight"'), { code: "22P02" });
+      }
+      return base(text, values);
+    });
+    expect(await attempt(() => fileSet())).toMatchObject({ ok: false, reason: "publish_call_in_flight" });
+  });
+});
+
 describe("cinatra#3089 — members that repeat their bytes", () => {
   const same = (n: number, over?: (i: number) => Partial<ToolArtifactSetMember>): ToolArtifactSetMember[] =>
     Array.from({ length: n }, (_, i) => ({ title: `Hello ${i + 1}`, content: "Dear customer, the same text", typedData: { contactId: `c-${i + 1}` }, ...(over?.(i) ?? {}) }));
@@ -973,6 +1012,10 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     expect(count(batch, "artifact_audit")).toBe(3);
     expect(count(batch, "UPDATE finalize")).toBe(3);
     expect(count(batch, "artifact_produced_outbox")).toBe(3);
+    // cinatra#4762: each artifact takes the run row FOR KEY SHARE right after its own advisory lock, before its first write.
+    const locks = batch.flatMap((t, i) => (t.includes("pg_advisory_xact_lock") ? [i] : []));
+    expect(locks).toHaveLength(3);
+    for (const at of locks) expect(batch[at + 1]).toContain("FOR KEY SHARE");
   });
 
   // red-first-expect: createSemanticArtifacts is not a function

@@ -9,8 +9,6 @@
 // them.
 
 import { describe, expect, it, vi } from "vitest";
-// Before the fix the module does not export the preflight, so the call throws.
-// red-first-expect: lentReviewPressAccessOp is not a function
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-lent-review-press-preflight";
 
