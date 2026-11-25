@@ -766,6 +766,53 @@ export async function runHasFiledReviewBodies(input: {
   return (res.rows[0] as { filed?: boolean } | undefined)?.filed === true;
 }
 
+/**
+ * Record the campaign correlation of an approved body on its object row
+ * (cinatra#3089): `runId`, `campaignId` and `contactId` are merged into the
+ * row's `data`, which the campaign views filter on (`data->>'campaignId'`). A
+ * body the drafting step filed for review carries none of them, and the send
+ * that mails it writes no body of its own, so without this the campaign views
+ * never find a reviewed body. Only those three keys move: the revision rows,
+ * the revision pointer and every other field are untouched (the merge is the
+ * same `data || jsonb_build_object(...)` the revision append uses for its
+ * pointer fields). The object id never changes, so no identity key re-keys or
+ * merges the row (a type's identity key only derives the id of a NEW object at
+ * save time). A key the row already holds with ANOTHER value is never
+ * overwritten: the call answers false and writes nothing. A row that already
+ * holds all three values is not written again. True when the row of that type
+ * in the organization holds the three values after the call.
+ */
+export async function recordFanoutMessageCorrelation(input: {
+  orgId: string;
+  artifactId: string;
+  objectTypeId: string;
+  runId: string;
+  campaignId: string;
+  contactId: string;
+}): Promise<boolean> {
+  ensurePostgresSchema();
+  const s = schema();
+  const values = [input.artifactId, input.orgId, input.objectTypeId, input.runId, input.campaignId, input.contactId];
+  const fields = `jsonb_build_object('runId', $4::text, 'campaignId', $5::text, 'contactId', $6::text)`;
+  await pool().query(
+    `UPDATE "${s}"."objects"
+    SET data = data || ${fields}, updated_at = now()
+  WHERE id = $1 AND org_id = $2 AND type = $3
+    AND COALESCE(data->>'runId', $4) = $4
+    AND COALESCE(data->>'campaignId', $5) = $5
+    AND COALESCE(data->>'contactId', $6) = $6
+    AND NOT (data @> ${fields})`,
+    values,
+  );
+  const held = await pool().query(
+    `SELECT (data @> ${fields}) AS held FROM "${s}"."objects"
+  WHERE id = $1 AND org_id = $2 AND type = $3
+  LIMIT 1`,
+    values,
+  );
+  return (held.rows[0] as { held?: boolean } | undefined)?.held === true;
+}
+
 /** Give a won message back, ONLY when its mail was demonstrably never handed to
  *  the provider: a later call may then mail it. Never touches a sent row. */
 export async function releaseFanoutMessageSend(input: {

@@ -228,6 +228,24 @@ const sendActor: PrimitiveActorContext = {
   sessionId: "sess-1",
   orgId: "org-a",
 };
+/** The publish decision a person released for exactly the list a case names
+ *  (cinatra#3089): the card's Recipients list row and its Emails row, drawn
+ *  from the frozen values. These cases are about what the send does with an
+ *  approved list, so the card shows the list the case names. */
+function releasedCardFor(named: unknown) {
+  const list = (typeof named === "string" ? JSON.parse(named) : named) as Array<{ recipientEmail: string; subject: string }>;
+  return {
+    surfacedValues: {
+      recipients: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
+      emailBodies: named,
+    },
+    declaredRows: [
+      { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
+      { kind: "artifacts", input: "emailBodies" },
+    ],
+  };
+}
+
 const BUNDLE = "11111111-1111-4111-8111-111111111111";
 const LIST = "22222222-2222-4222-8222-222222222222";
 
@@ -241,7 +259,8 @@ function sendOnce(
 ) {
   const emitEmailFanout = async (args: EmailFanoutArgs) => {
     const body = args.approvedBodies!.get(0)!;
-    const outputId = "email-body:run-1:idx-0";
+    // One message is one approved body artifact of the run (cinatra#3089).
+    const outputId = "email-body:run-1:art-1";
     const contentHash = createHash("sha256").update(body.text, "utf8").digest("hex");
     const key = ["run-1", outputId, opts.winningPack, contentHash].join("|");
     if (!table.rows.some((r) => [r.run_id, r.output_id, r.extension, r.content_hash].join("|") === key)) {
@@ -284,16 +303,19 @@ function sendOnce(
     emitEmailFanout,
     readDecidedBody: async () => ({ ok: true as const, text: opts.text, data: {} }),
     readRunReviewedBodies: async () => true,
+    readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
+    readReleasedPublishDecision: async () => releasedCardFor(approvedBodies),
   } as unknown as TriggerEmailSendDeps;
+  const approvedBodies = [
+    { artifactId: "art-1", representationRevisionId: opts.revision, contactId: "c1", recipientEmail: "one@example.com", subject: "Hello" },
+  ];
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   return handlers["email_outreach_send_initial_start"]({
     input: {
       campaignId: "33333333-3333-4333-8333-333333333333",
       approvedDraftBundleRef: BUNDLE,
       confirmedRecipientsRef: LIST,
-      approvedBodies: [
-        { artifactId: "art-1", representationRevisionId: opts.revision, contactId: "c1", recipientEmail: "one@example.com", subject: "Hello" },
-      ],
+      approvedBodies,
     },
     actor: sendActor,
   } as never) as unknown as Promise<{ status: string; sentCount: number; alreadySentCount?: number; inDoubtCount?: number; errorMessage?: string }>;

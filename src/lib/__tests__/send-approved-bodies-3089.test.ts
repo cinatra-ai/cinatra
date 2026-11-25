@@ -101,6 +101,24 @@ function memorySendLedger() {
   return { rows, ledger };
 }
 
+/** The publish decision a person released for exactly the list a case names
+ *  (cinatra#3089): the card's Recipients list row and its Emails row, drawn
+ *  from the frozen values. These cases are about what the send does with an
+ *  approved list, so the card shows the list the case names. */
+function releasedCardFor(named: unknown) {
+  const list = (typeof named === "string" ? JSON.parse(named) : named) as Array<{ recipientEmail: string; subject: string }>;
+  return {
+    surfacedValues: {
+      recipients: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
+      emailBodies: named,
+    },
+    declaredRows: [
+      { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
+      { kind: "artifacts", input: "emailBodies" },
+    ],
+  };
+}
+
 const actor: PrimitiveActorContext = {
   actorType: "human",
   source: "route",
@@ -254,10 +272,13 @@ function makeFixture(opts?: {
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
     readRunReviewedBodies,
+    readCallingRun: async () => ({ runId: "run-1", stepId: "send" }),
+    readReleasedPublishDecision: async () => releasedCardFor(named),
   } as TriggerEmailSendDeps;
+  let named: unknown;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
-    handlers["email_outreach_send_initial_start"]({
+    ((named = input.approvedBodies), handlers["email_outreach_send_initial_start"])({
       input: {
         campaignId: CAMPAIGN_ID,
         approvedDraftBundleRef: BUNDLE_REF,
@@ -486,17 +507,19 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     expect(fx.bindBody.mock.calls.map(([b]) => b)).toEqual([
       {
         runId: "run-1",
-        outputId: emailBodyExternalId("run-1", "idx-0"),
+        outputId: emailBodyExternalId("run-1", "art-1"),
         markdown: "Approved body one",
         artifactId: "art-1",
         representationRevisionId: "rev-1",
+        correlation: { campaignId: CAMPAIGN_ID, contactId: "c1" },
       },
       {
         runId: "run-1",
-        outputId: emailBodyExternalId("run-1", "idx-1"),
+        outputId: emailBodyExternalId("run-1", "art-2"),
         markdown: "Approved body two",
         artifactId: "art-2",
         representationRevisionId: "rev-2",
+        correlation: { campaignId: CAMPAIGN_ID, contactId: "c2" },
       },
     ]);
     const emitted = await fx.emitEmailFanout.mock.results[0]!.value;
@@ -653,11 +676,12 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     const result = await fx.start({ approvedBodies: entries });
     expect(result.status).toBe("completed");
     expect(result.sentCount).toBe(2);
-    // The mail goes to the address the send resolved, not to the entry's text.
+    // The mail goes to the address the released card showed (trimmed), the
+    // bundle's equal address only checked against it.
     // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
     expect(fx.sent).toEqual([
-      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
-      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
+      expect.objectContaining({ to: ["ONE@Example.COM"], subject: "Bundle subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["Two@EXAMPLE.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
     ]);
   });
 

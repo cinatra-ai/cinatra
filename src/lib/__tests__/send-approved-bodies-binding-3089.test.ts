@@ -15,7 +15,7 @@
  *   T1 a failed type discovery refuses the approved send before any mail
  *   T2 a failed type discovery leaves the reference-only send as it was: the
  *      bundle is mailed and no body is filed
- *   N1 bundles without a run id refuse the approved send before any mail
+ *   N1 a call without a run refuses the approved send before any mail
  *   B1 a binding refused at the second of three messages: nothing is mailed and
  *      the third is never bound
  *   B2 a fan-out that leaves a message unbound refuses the send before any mail
@@ -130,6 +130,24 @@ function memorySendLedger() {
   return { rows, ledger };
 }
 
+/** The publish decision a person released for exactly the list a case names
+ *  (cinatra#3089): the card's Recipients list row and its Emails row, drawn
+ *  from the frozen values. These cases are about what the send does with an
+ *  approved list, so the card shows the list the case names. */
+function releasedCardFor(named: unknown) {
+  const list = (typeof named === "string" ? JSON.parse(named) : named) as Array<{ recipientEmail: string; subject: string }>;
+  return {
+    surfacedValues: {
+      recipients: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
+      emailBodies: named,
+    },
+    declaredRows: [
+      { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
+      { kind: "artifacts", input: "emailBodies" },
+    ],
+  };
+}
+
 const actor: PrimitiveActorContext = {
   actorType: "human",
   source: "route",
@@ -235,10 +253,14 @@ function makeFixture(opts?: {
     messageSendLedger: sendLedger.ledger,
     // A run without bodies filed for review, so the reference-only form runs.
     readRunReviewedBodies: async () => false,
+    // The run of the call follows the case's run: none when the case has none.
+    readCallingRun: async () => (runId ? { runId, stepId: "send" } : null),
+    readReleasedPublishDecision: async () => releasedCardFor(named),
   } as TriggerEmailSendDeps;
+  let named: unknown;
   const handlers = createTriggerEmailSendHandlers(createTriggerEmailSendUseCases(deps));
   const start = (input: Record<string, unknown>) =>
-    handlers["email_outreach_send_initial_start"]({
+    ((named = input.approvedBodies), handlers["email_outreach_send_initial_start"])({
       input: {
         campaignId: CAMPAIGN_ID,
         approvedDraftBundleRef: BUNDLE_REF,
@@ -343,12 +365,12 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect(writeRevisionMock).not.toHaveBeenCalled();
   });
 
-  it("N1 bundles without a run id refuse the approved send before any mail", async () => {
+  it("N1 a call without a run refuses the approved send before any mail", async () => {
     const fx = makeFixture({ runId: null });
     const result = await fx.start({ approvedBodies: approved });
     // red-first-expect: expected 'completed' to be 'failed'
     expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("the campaign bundles carry no run id");
+    expect(result.errorMessage).toContain("the call carries no run");
     expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 
@@ -418,7 +440,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const deliveries = (to: string) => sent.filter((m) => m.to[0] === to).length;
     expect(["p1@example.com", "p2@example.com", "p3@example.com"].map(deliveries)).toEqual([1, 0, 1]);
     expect(done).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 1, inDoubtCount: 1 });
-    expect(done.errorMessage).toContain("draft 2 (email-body:run-1:idx-1)");
+    expect(done.errorMessage).toContain("draft 2 (email-body:run-1:art-2)");
     expect(done.errorMessage).toContain("in doubt");
   });
 
@@ -458,7 +480,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const sendLedger = memorySendLedger();
     // The earlier call claimed message 1 and stopped: no mark, no release.
     const held = await sendLedger.ledger.claim(
-      { runId: "run-1", outputId: "email-body:run-1:idx-0", artifactId: "art-1", representationRevisionId: "rev-1" },
+      { runId: "run-1", outputId: "email-body:run-1:art-1", artifactId: "art-1", representationRevisionId: "rev-1" },
       actor,
     );
     expect(held.kind).toBe("won");
@@ -467,7 +489,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     // red-first-expect: expected [ 'p1@example.com', …(2) ] to deeply equal [ 'p2@example.com', 'p3@example.com' ]
     expect(fx.sent.map((m) => m.to[0])).toEqual(["p2@example.com", "p3@example.com"]);
     expect(result).toMatchObject({ status: "failed", sentCount: 2, alreadySentCount: 0, inDoubtCount: 1 });
-    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:idx-0)");
+    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:art-1)");
     expect(result.errorMessage).toContain("in doubt");
   });
 
@@ -576,7 +598,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect(fx.sent).toHaveLength(3);
     // red-first-expect: expected { …(7) } to match object { Object (status, sentCount, ...) }
     expect(result).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
-    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:idx-0) was mailed, but its sent record could not be written");
+    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written");
     // A record that is not open is not written again.
     expect(markSent).toHaveBeenCalledTimes(3);
   });
@@ -603,7 +625,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const first = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
     // red-first-expect: expected { …(7) } to match object { Object (status, sentCount, ...) }
     expect(first).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
-    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:idx-0) was mailed, but its sent record could not be written: connection reset");
+    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written: connection reset");
     expect(markSent).toHaveBeenCalledTimes(5);
     const retry = await makeFixture({ sendLedger, sent }).start({ approvedBodies: approved });
     expect(sent.map((m) => m.to[0])).toEqual(["p1@example.com", "p2@example.com", "p3@example.com"]);

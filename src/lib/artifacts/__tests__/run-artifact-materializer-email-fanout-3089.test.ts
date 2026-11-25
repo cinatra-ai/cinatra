@@ -44,6 +44,7 @@ const {
   findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterializationMock,
   recordFanoutReuseMaterializationMock,
+  recordFanoutMessageCorrelationMock,
   isWriteAllowedMock,
   resolveBoundArtifactTargetMock,
   enqueueArtifactMatchRunMock,
@@ -58,6 +59,7 @@ const {
   findFinalizedMidRunMaterializationMock: vi.fn(async (): Promise<unknown> => null),
   findFinalizedFanoutMessageMaterializationMock: vi.fn(),
   recordFanoutReuseMaterializationMock: vi.fn(),
+  recordFanoutMessageCorrelationMock: vi.fn(async (): Promise<boolean> => true),
   isWriteAllowedMock: vi.fn(async () => true),
   resolveBoundArtifactTargetMock: vi.fn(),
   enqueueArtifactMatchRunMock: vi.fn(async (): Promise<void> => {}),
@@ -100,6 +102,7 @@ vi.mock("../materialization-ledger", () => ({
   findFinalizedMidRunMaterialization: findFinalizedMidRunMaterializationMock,
   findFinalizedFanoutMessageMaterialization: findFinalizedFanoutMessageMaterializationMock,
   recordFanoutReuseMaterialization: recordFanoutReuseMaterializationMock,
+  recordFanoutMessageCorrelation: recordFanoutMessageCorrelationMock,
   isMaterializationFinalizeConflict: (err: unknown) =>
     err instanceof Error && err.message.includes("materialization-finalize-conflict"),
 }));
@@ -539,6 +542,35 @@ describe("cinatra#3089 — a message bound to its approved revision", () => {
     expect(refused.ok).toBe(false);
     expect(!refused.ok && refused.error).toContain("is already bound to revision rev-old of artifact art-old");
     expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("P4 a bind with a correlation records the run, campaign and contact on the body, again on a retry, and refuses a body that names others", async () => {
+    recordFanoutMessageCorrelationMock.mockClear();
+    recordFanoutMessageCorrelationMock.mockResolvedValue(true);
+    const correlated = { ...approvedInput, correlation: { campaignId: "camp-1", contactId: "c1" } };
+    // red-first-expect: bindFanoutMessageRevision is not a function
+    const first = await bindFanoutMessageRevision(correlated);
+    expect(first).toEqual({ ok: true, artifactId: "art-approved", representationRevisionId: "rev-approved", deduped: false });
+    const expected = {
+      orgId: "org-a",
+      artifactId: "art-approved",
+      objectTypeId: BODY_TYPE,
+      runId: "run-1",
+      campaignId: "camp-1",
+      contactId: "c1",
+    };
+    expect(recordFanoutMessageCorrelationMock).toHaveBeenCalledWith(expected);
+    const retry = await bindFanoutMessageRevision(correlated);
+    expect(retry).toEqual({ ...first, deduped: true });
+    expect(recordFanoutMessageCorrelationMock).toHaveBeenCalledTimes(2);
+    expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+    recordFanoutMessageCorrelationMock.mockResolvedValueOnce(false);
+    const refused = await bindFanoutMessageRevision(correlated);
+    expect(!refused.ok && refused.error).toContain("artifact art-approved already names another run, campaign or contact");
+    // Without a correlation nothing is recorded on the body.
+    recordFanoutMessageCorrelationMock.mockClear();
+    await bindFanoutMessageRevision(approvedInput);
+    expect(recordFanoutMessageCorrelationMock).not.toHaveBeenCalled();
   });
 
   it("P3 binds nothing for a run outside the organization or a type no pack claims", async () => {
