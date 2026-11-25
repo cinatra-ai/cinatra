@@ -14,15 +14,27 @@ import "server-only";
 //     A row the actor may not read and a row that does not exist get the SAME
 //     refusal, so the answer never tells that an artifact exists;
 //   - the artifact is not of the declared object type the caller expects;
-//   - the artifact was not filed in the caller's run: no finalized row of the
-//     materialization ledger links the artifact to that run (the drafting
-//     step's mid-run filing, or a message bound in an earlier drive of the
-//     same run). A body of another run is not a body of this send;
-//   - the revision is not the artifact's CURRENT revision: the objects row
-//     points at its latest representation (`latestRepresentationRevisionId`,
-//     moved by every append and refile, artifact-revision-append.ts), so a body
-//     produced again after the decision supersedes the old revision and the old
-//     one is refused;
+//   - the REVISION was not filed in the caller's run: no finalized row of the
+//     materialization ledger links that run to this artifact AT THIS REVISION
+//     (the drafting step's mid-run filing, or a message bound in an earlier
+//     drive of the same run). A revision another run filed of the same artifact
+//     is not a body of this send;
+//   - the revision is not the artifact's CURRENT revision: the newest row of
+//     the append-only `representation` table for the artifact (the highest
+//     `revision`, allocated under the unique index on organisation, artifact
+//     and revision; the table refuses UPDATE and DELETE by trigger), so a body
+//     produced again after the decision supersedes the old revision. The
+//     pointer the objects row carries (`latestRepresentationRevisionId`) is
+//     object data an ordinary object update can merge, so it never decides; it
+//     must agree with the table when present, and a disagreement is a refusal;
+//   - no person APPROVED this exact revision: an `artifact_review_audit` row of
+//     disposition approve for the revision, on a gate of the organisation that
+//     pinned the revision and resolved as approve (a gate that lapsed at its
+//     expiry writes no audit row, so it is no approval);
+//   - the objects row changed after that approval (`objects.updated_at`, set by
+//     the store on every write, later than the approval's audit row): the
+//     body's own fields (`subject`, `contactId`) are object data, so a change
+//     after the decision is content no person decided on;
 //   - a gate decided against the revision (an `artifact_review_audit` row of
 //     disposition reject or changes_requested), a gate that pins it is still
 //     open, or a repair names it as its base (`lifecycle_repair`): each of these
@@ -89,24 +101,31 @@ export async function readCurrentDecidedRevision(input: {
       rec.data && typeof rec.data === "object" && !Array.isArray(rec.data)
         ? (rec.data as Record<string, unknown>)
         : {};
-    const latest = data.latestRepresentationRevisionId;
-    if (typeof latest !== "string" || latest.length === 0) {
-      return { ok: false, error: `artifact ${artifactId} carries no current revision` };
-    }
-    if (latest !== representationRevisionId) {
-      return {
-        ok: false,
-        error: `${name} is not its current revision (the current one is ${latest}); a revision filed after the decision supersedes it`,
-      };
-    }
-
     ensurePostgresSchema();
     const s = postgresSchema.replaceAll('"', '""');
     const [res] = await runPostgresQueriesAsync({
       connectionString: getPostgresConnectionString(),
       queries: [
         {
-          text: `SELECT
+          text: `WITH approval AS (
+  SELECT max(a.created_at) AS approved_at
+    FROM "${s}"."artifact_review_audit" a
+    JOIN "${s}"."artifact_review_gates" g ON g.id = a.gate_id
+   WHERE g.org_id = $1 AND a.artifact_id = $2 AND a.representation_revision_id = $3
+     AND a.disposition = 'approve'
+     AND g.status = 'resolved' AND g.disposition = 'approve'
+     AND g.pinned_targets @> jsonb_build_array(
+           jsonb_build_object('artifactId', $2::text, 'representationRevisionId', $3::text))
+)
+SELECT
+  (SELECT p.id FROM "${s}"."representation" p
+    WHERE p.org_id = $1 AND p.artifact_id = $2
+    ORDER BY p.revision DESC LIMIT 1) AS latest_revision_id,
+  (SELECT approved_at IS NOT NULL FROM approval) AS approved,
+  EXISTS (
+    SELECT 1 FROM "${s}"."objects" o, approval
+     WHERE o.id = $2 AND o.org_id = $1 AND o.updated_at > approval.approved_at
+  ) AS changed_after_approval,
   EXISTS (
     SELECT 1 FROM "${s}"."artifact_review_audit" a
       JOIN "${s}"."artifact_review_gates" g ON g.id = a.gate_id
@@ -127,7 +146,7 @@ export async function readCurrentDecidedRevision(input: {
   EXISTS (
     SELECT 1 FROM "${s}"."artifact_materializations" m
      WHERE m.org_id = $1 AND m.run_id = $4 AND m.artifact_id = $2
-       AND m.phase = 'finalized'
+       AND m.representation_revision_id = $3 AND m.phase = 'finalized'
   ) AS filed_in_run`,
           values: [orgId, artifactId, representationRevisionId, runId],
         },
@@ -135,6 +154,9 @@ export async function readCurrentDecidedRevision(input: {
     });
     const row = (res?.rows?.[0] ?? null) as
       | {
+          latest_revision_id?: string | null;
+          approved?: boolean;
+          changed_after_approval?: boolean;
           decided_against?: boolean;
           open_gate?: boolean;
           repaired?: boolean;
@@ -142,8 +164,25 @@ export async function readCurrentDecidedRevision(input: {
         }
       | null;
     if (!row) return { ok: false, error: `the decision state of ${name} could not be read` };
+    const latest = row.latest_revision_id;
+    if (typeof latest !== "string" || latest.length === 0) {
+      return { ok: false, error: `artifact ${artifactId} carries no current revision` };
+    }
+    if (latest !== representationRevisionId) {
+      return {
+        ok: false,
+        error: `${name} is not its current revision (the current one is ${latest}); a revision filed after the decision supersedes it`,
+      };
+    }
+    const pointer = data.latestRepresentationRevisionId;
+    if (pointer !== undefined && pointer !== latest) {
+      return {
+        ok: false,
+        error: `${name} is the newest revision of the artifact, but the artifact names ${String(pointer)} as its current one`,
+      };
+    }
     if (row.filed_in_run !== true) {
-      return { ok: false, error: `artifact ${artifactId} was not filed in run ${runId}` };
+      return { ok: false, error: `${name} was not filed in run ${runId}` };
     }
     if (row.decided_against === true) {
       return { ok: false, error: `${name} was decided against (rejected or sent back for changes)` };
@@ -153,6 +192,12 @@ export async function readCurrentDecidedRevision(input: {
     }
     if (row.repaired === true) {
       return { ok: false, error: `${name} has a repair filed against it` };
+    }
+    if (row.approved !== true) {
+      return { ok: false, error: `${name} was not approved by a person` };
+    }
+    if (row.changed_after_approval === true) {
+      return { ok: false, error: `artifact ${artifactId} was changed after ${name} was approved` };
     }
 
     const { readArtifactRepresentationText } = await import("./extension-artifact-reads");

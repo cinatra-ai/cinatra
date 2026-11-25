@@ -20,6 +20,14 @@
  *   D8 an actor that may not read the artifact gets exactly the refusal of an
  *      artifact that does not exist, and nothing else is read
  *   D9 an artifact the run never filed is refused
+ *   D10 object data whose revision pointer was moved back to an older revision
+ *       does not make that revision current: the newest representation row
+ *       decides
+ *   D11 a pointer in object data that disagrees with the newest representation
+ *       row is a refusal
+ *   D12 a revision no person approved is refused
+ *   D13 a body changed after its approval (a subject altered through an object
+ *       update) is refused, whatever the altered data says
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -54,9 +62,20 @@ const ref = {
   objectTypeId: BODY_TYPE,
 };
 const UNSEEN = "artifact art-1 is not an artifact this organisation can see";
+/** The decision state of an approved, current, undisputed revision. */
+const CLEAR = {
+  latest_revision_id: "rev-2",
+  approved: true,
+  changed_after_approval: false,
+  decided_against: false,
+  open_gate: false,
+  repaired: false,
+  filed_in_run: true,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
+  runQueriesMock.mockReset();
   getArtifactMock.mockReturnValue({ artifactId: "art-1", objectType: BODY_TYPE });
   getObjectByIdMock.mockReturnValue({
     id: "art-1",
@@ -65,7 +84,7 @@ beforeEach(() => {
     data: { latestRepresentationRevisionId: "rev-2", subject: "Hello", contactId: "c1" },
   });
   runQueriesMock.mockResolvedValue([
-    { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: true }] },
+    { rows: [{ ...CLEAR }] },
   ]);
   readTextMock.mockResolvedValue({
     artifactId: "art-1",
@@ -117,6 +136,7 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
   });
 
   it("D4 refuses a revision that is not the artifact's current revision and reads nothing", async () => {
+    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, latest_revision_id: "rev-3" }] }]);
     getObjectByIdMock.mockReturnValue({
       id: "art-1",
       type: BODY_TYPE,
@@ -126,7 +146,6 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     const read = await readCurrentDecidedRevision(ref);
     expect(read.ok).toBe(false);
     expect(!read.ok && read.error).toContain("is not its current revision (the current one is rev-3)");
-    expect(runQueriesMock).not.toHaveBeenCalled();
     expect(readTextMock).not.toHaveBeenCalled();
   });
 
@@ -137,7 +156,7 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
       ["repaired", "has a repair filed against it"],
     ] as const) {
       runQueriesMock.mockResolvedValueOnce([
-        { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: true, [flag]: true }] },
+        { rows: [{ ...CLEAR, [flag]: true }] },
       ]);
       const read = await readCurrentDecidedRevision(ref);
       expect(read.ok).toBe(false);
@@ -175,6 +194,17 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
     expect(sql).toContain("r.base_representation_revision_id = $3");
     expect(sql).toContain(`"public"."artifact_materializations" m`);
     expect(sql).toContain("m.org_id = $1 AND m.run_id = $4 AND m.artifact_id = $2");
+    // The run's ledger row must name this exact revision: a row of the run at
+    // another revision of the same artifact does not admit this one.
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(sql).toMatch(/m\.artifact_id = \$2\s+AND m\.representation_revision_id = \$3 AND m\.phase = 'finalized'/);
+    // Current is the newest row of the append-only representation table.
+    expect(sql).toMatch(
+      /SELECT p\.id FROM "public"\."representation" p\s+WHERE p\.org_id = \$1 AND p\.artifact_id = \$2\s+ORDER BY p\.revision DESC LIMIT 1/,
+    );
+    // Approved is a person's approve audit row on a resolved approve gate pinning the revision.
+    expect(sql).toMatch(/a\.disposition = 'approve'\s+AND g\.status = 'resolved' AND g\.disposition = 'approve'/);
+    expect(sql).toContain("o.updated_at > approval.approved_at");
   });
 
   it("D8 an actor that may not read the artifact gets the refusal of an absent artifact, and nothing else is read", async () => {
@@ -194,11 +224,84 @@ describe("cinatra#3089 — readCurrentDecidedRevision", () => {
 
   it("D9 refuses an artifact the run never filed", async () => {
     runQueriesMock.mockResolvedValueOnce([
-      { rows: [{ decided_against: false, open_gate: false, repaired: false, filed_in_run: false }] },
+      { rows: [{ ...CLEAR, filed_in_run: false }] },
     ]);
     const read = await readCurrentDecidedRevision(ref);
     // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
-    expect(read).toEqual({ ok: false, error: "artifact art-1 was not filed in run run-1" });
+    expect(read).toEqual({ ok: false, error: "revision rev-2 of artifact art-1 was not filed in run run-1" });
     expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it("D10 a pointer moved back to an older revision in object data does not make that revision current", async () => {
+    // An ordinary object update merged `latestRepresentationRevisionId: rev-1`
+    // into the data; the representation table's newest row is still rev-2.
+    getObjectByIdMock.mockReturnValue({
+      id: "art-1",
+      type: BODY_TYPE,
+      orgId: "org-1",
+      data: { latestRepresentationRevisionId: "rev-1", subject: "Hello", contactId: "c1" },
+    });
+    // The older revision's text is readable as such.
+    readTextMock.mockResolvedValue({
+      artifactId: "art-1",
+      representationRevisionId: "rev-1",
+      mime: "text/markdown",
+      text: "A superseded body",
+      truncated: false,
+      bytesRead: 17,
+      totalBytes: 17,
+    });
+    const read = await readCurrentDecidedRevision({ ...ref, representationRevisionId: "rev-1" });
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({
+      ok: false,
+      error:
+        "revision rev-1 of artifact art-1 is not its current revision (the current one is rev-2); a revision filed after the decision supersedes it",
+    });
+    expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it("D11 a pointer in object data that disagrees with the newest representation row is a refusal", async () => {
+    getObjectByIdMock.mockReturnValue({
+      id: "art-1",
+      type: BODY_TYPE,
+      orgId: "org-1",
+      data: { latestRepresentationRevisionId: "rev-9", subject: "Hello" },
+    });
+    const read = await readCurrentDecidedRevision(ref);
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({
+      ok: false,
+      error: "revision rev-2 of artifact art-1 is the newest revision of the artifact, but the artifact names rev-9 as its current one",
+    });
+    expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it("D12 a revision no person approved is refused", async () => {
+    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, approved: false }] }]);
+    const read = await readCurrentDecidedRevision(ref);
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({ ok: false, error: "revision rev-2 of artifact art-1 was not approved by a person" });
+    expect(readTextMock).not.toHaveBeenCalled();
+  });
+
+  it("D13 a body changed after its approval is refused, whatever the altered data says", async () => {
+    // The subject was altered through an object update after the approval; the
+    // data itself looks like any other (it even keeps the right pointer).
+    getObjectByIdMock.mockReturnValue({
+      id: "art-1",
+      type: BODY_TYPE,
+      orgId: "org-1",
+      data: { latestRepresentationRevisionId: "rev-2", subject: "Altered subject", contactId: "c1" },
+    });
+    runQueriesMock.mockResolvedValueOnce([{ rows: [{ ...CLEAR, changed_after_approval: true }] }]);
+    const read = await readCurrentDecidedRevision(ref);
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    expect(read).toEqual({ ok: false, error: "artifact art-1 was changed after revision rev-2 of artifact art-1 was approved" });
+    expect(readTextMock).not.toHaveBeenCalled();
+    // The same data with no change after the approval reads: the decision rests
+    // on the rows, not on what the data says.
+    const unchanged = await readCurrentDecidedRevision(ref);
+    expect(unchanged.ok).toBe(true);
   });
 });
