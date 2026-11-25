@@ -17,8 +17,8 @@
  * `materializeEmailFanout`.
  *
  * Cases:
- *   S1 the approved form mails the approved revision's text and subject, even
- *      when the bundle's body text differs
+ *   S1 the approved form mails the approved revision's text and the subject the
+ *      card showed, even when the bundle's body text differs
  *   R1 a draft with an address and no approved body refuses the whole send
  *   R2 an approved revision that cannot be read refuses the whole send
  *   R3 an approved revision that is not the artifact's current revision (a body
@@ -36,10 +36,12 @@
  *      keys
  *   Z2 every entry carries the address and the subject the card showed
  *   C1-C9 each message is mailed only to the address and with the subject the
- *      publish card showed: a change in the bundle, the recipients list, the
- *      draft's subject or the body's subject refuses the whole send before any
- *      claim and names no address; equal values (the address in any letter
- *      case, with spaces) are sent; the JSON text form behaves the same
+ *      publish card showed: a change in the bundle, the recipients list or the
+ *      draft's subject refuses the whole send before any claim and names no
+ *      address; the mailed subject is the entry's, byte for byte, whatever a
+ *      body artifact's own `subject` field holds; equal values (the address in
+ *      any letter case, with spaces) are sent; the JSON text form behaves the
+ *      same
  */
 import { describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -131,7 +133,7 @@ function makeStore(): Map<string, StoredBody> {
         type: EMAIL_BODY_TYPE_ID,
         latest: "rev-1",
         revisions: { "rev-1": "Approved body one" },
-        data: { subject: "Approved subject one", contactId: "c1" },
+        data: { subject: "Bundle subject one", contactId: "c1" },
       },
     ],
     [
@@ -148,10 +150,10 @@ function makeStore(): Map<string, StoredBody> {
 }
 
 // Each entry carries what the publish card showed for its message: the
-// address and the subject the send mails (art-2 has no subject of its own, so
-// its draft's subject is the one mailed).
+// address and the subject of its draft, which is the subject the send mails.
+// art-1 also carries a subject of its own, equal to its draft's; art-2 has none.
 const approved = [
-  { artifactId: "art-1", representationRevisionId: "rev-1", contactId: "c1", recipientEmail: "one@example.com", subject: "Approved subject one" },
+  { artifactId: "art-1", representationRevisionId: "rev-1", contactId: "c1", recipientEmail: "one@example.com", subject: "Bundle subject one" },
   { artifactId: "art-2", representationRevisionId: "rev-2", contactId: "c2", recipientEmail: "two@example.com", subject: "Bundle subject two" },
 ];
 
@@ -256,15 +258,14 @@ async function expectRefused(
 }
 
 describe("cinatra#3089 — the send mails the approved body revisions", () => {
-  it("S1 the approved form mails the approved revision's text and subject, even when the bundle's body text differs", async () => {
+  it("S1 the approved form mails the approved revision's text and the card's subject, even when the bundle's body text differs", async () => {
     const fx = makeFixture();
     const result = await fx.start({ approvedBodies: approved });
     expect(result.status).toBe("completed");
     expect(result.sentCount).toBe(2);
     // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
     expect(fx.sent).toEqual([
-      expect.objectContaining({ to: ["one@example.com"], subject: "Approved subject one", textBody: "Approved body one" }),
-      // art-2 carries no subject of its own: the draft's subject stands.
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
       expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
     ]);
     expect(fx.sent.some((m) => m.textBody.startsWith("Bundle body"))).toBe(false);
@@ -467,24 +468,62 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     );
   });
 
-  it("C3 a subject changed on the draft refuses the whole send", async () => {
-    // art-2 has no subject of its own, so the draft's subject is the one mailed.
+  it("C3 a subject changed on the draft after the card refuses the whole send, even when the body artifact still carries the old one", async () => {
+    // art-1 carries its own subject, equal to the draft's subject on the card.
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: "Changed subject one" } : d));
+    // red-first-expect: expected 'completed' to be 'failed'
+    await expectCardRefused(makeFixture({ drafts }), { approvedBodies: approved }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+  });
+
+  it("C3b a subject changed on a draft without a subject of its own on the body artifact refuses the whole send", async () => {
     const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, subject: "Changed subject two" } : d));
     // red-first-expect: expected 'completed' to be 'failed'
     await expectCardRefused(makeFixture({ drafts }), { approvedBodies: approved }, `draft 2 of the bundle (contact c2): ${SUBJECT_CHANGED}`);
   });
 
-  it("C4 a subject changed on the body artifact refuses the whole send", async () => {
+  it("C4 a body artifact's own subject that differs from the card's subject neither blocks the send nor is mailed: nobody was shown it", async () => {
     const store = makeStore();
-    store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "Changed subject one" };
-    // red-first-expect: expected 'completed' to be 'failed'
-    await expectCardRefused(makeFixture({ store }), { approvedBodies: approved }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+    store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "Subject of the artifact alone" };
+    const fx = makeFixture({ store });
+    const result = await fx.start({ approvedBodies: approved });
+    expect(result.status).toBe("completed");
+    expect(result.sentCount).toBe(2);
+    // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
+    ]);
   });
 
-  it("C5 the subject is compared exactly: a different letter case refuses the send", async () => {
-    const entries = [{ ...approved[0]!, subject: "approved subject one" }, approved[1]];
+  it("C4b a body artifact whose own subject equals its draft's is sent with it", async () => {
+    const fx = makeFixture();
+    expect(fx.store.get("art-1")!.data.subject).toBe("Bundle subject one");
+    const result = await fx.start({ approvedBodies: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.sent[0]?.subject).toBe("Bundle subject one");
+  });
+
+  it("C5 the subject is compared exactly with the draft's: a different letter case refuses the send", async () => {
+    // The body artifact's own subject equals the entry's, so only the draft's
+    // subject can refuse it.
+    const store = makeStore();
+    store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "bundle subject one" };
+    const entries = [{ ...approved[0]!, subject: "bundle subject one" }, approved[1]];
     // red-first-expect: expected 'completed' to be 'failed'
-    await expectCardRefused(makeFixture(), { approvedBodies: entries }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+    await expectCardRefused(makeFixture({ store }), { approvedBodies: entries }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+  });
+
+  it("C5b the mailed subject is the entry's subject byte for byte, not trimmed", async () => {
+    const padded = "  Padded  subject ";
+    const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: padded } : d));
+    const store = makeStore();
+    store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: padded.trim() };
+    const fx = makeFixture({ drafts, store });
+    const result = await fx.start({ approvedBodies: [{ ...approved[0]!, subject: padded }, approved[1]] });
+    expect(result.status).toBe("completed");
+    expect(fx.sent[0]?.subject).toBe(padded);
+    // red-first-expect: expected 'Bundle body one' to be 'Approved body one'
+    expect(fx.sent[0]?.textBody).toBe("Approved body one");
   });
 
   it("C6 equal values are sent as before, the address compared trimmed and in any letter case", async () => {
@@ -496,7 +535,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     // The mail goes to the address the send resolved, not to the entry's text.
     // red-first-expect: to deeply equal [ ObjectContaining{…}, …(1) ]
     expect(fx.sent).toEqual([
-      expect.objectContaining({ to: ["one@example.com"], subject: "Approved subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
       expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
     ]);
   });

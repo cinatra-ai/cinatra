@@ -1168,18 +1168,17 @@ async function runInitialSend(args: {
         if (ownContact !== undefined && ownContact !== contact) {
           refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
         }
-        // The subject mailed: the body artifact's own `subject` (artifact
-        // data, not part of the revision), else the draft's subject, else
-        // "(no subject)". It must equal the subject the card showed, exactly:
-        // the send hands it to the mail connector unchanged.
+        // ONE subject per message: the one the card showed, which the entry
+        // carries and the send mails. It must equal the subject the bundle's
+        // draft holds now, exactly, so a draft changed after the card refuses
+        // the send. The body artifact's own `subject` field is read by no
+        // reviewer (the review shows its text and title), so it neither
+        // decides the mailed subject nor blocks the send.
         const index = draftsByContact.get(contact)![0]!;
-        const subject =
-          textOf(read.data.subject) !== undefined
-            ? String(read.data.subject)
-            : (drafts[index]!.subject ?? "(no subject)");
-        if (subject !== body.subject) {
+        if ((drafts[index]!.subject ?? "(no subject)") !== body.subject) {
           refuse(`draft ${index + 1} of the bundle (contact ${contact}): the subject changed after the card was shown`);
         }
+        const subject = body.subject;
         approvedByIndex.set(index, {
           artifactId: body.artifactId,
           representationRevisionId: body.representationRevisionId,
