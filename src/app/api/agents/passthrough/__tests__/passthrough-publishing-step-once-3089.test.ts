@@ -177,7 +177,8 @@ describe("a declared publishing step's call, once per released decision", () => 
       return ledger(claim);
     });
     const first = POST(makeReq());
-    await firstEntered;
+    // A call that is answered without claiming does not hold the second one back.
+    await Promise.race([firstEntered, first]);
     const second = POST(makeReq());
     await vi.waitFor(() => expect(h.claims).toHaveLength(1));
     release();
