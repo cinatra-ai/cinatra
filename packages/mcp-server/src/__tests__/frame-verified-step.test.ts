@@ -179,4 +179,10 @@ describe("the frame's verified step", () => {
     expect(mixed.runId).toBe(RUN);
     expect(mixed.stepId).toBeUndefined();
   });
+
+  it("the transport hands the actor's publish decision to the resolver and puts the resolved one on the frame", () => {
+    expect(resolverCall()).toContain(
+      'delegatedPublishDecisionId: delegatedActor?.delegation === "agent_run" ? delegatedActor.verifiedPublishDecisionId : undefined,');
+    expect(frameLiteral()).toContain("verifiedPublishDecisionId: runContext.publishDecisionId,");
+  });
 });
