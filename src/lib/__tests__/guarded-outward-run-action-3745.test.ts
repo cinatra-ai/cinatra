@@ -32,6 +32,7 @@ import {
   retireLoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
+import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
 import {
   dispatchExtensionMcpToolEdgeBound,
   dispatchPlannedExtensionMcpTool,
@@ -74,7 +75,46 @@ const installs = vi.hoisted(() => ({ rows: new Map<string, unknown>() }));
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readInstalledExtensionById: async (id: string) => installs.rows.get(id) ?? null,
   readInstalledExtensionsByPackageName: async () => [],
+  listInstalledExtensions: async () => [],
 }));
+
+// The runtime loader's SDK driver, as a fake that emits the real sequence (makeContext, the register settle, then the
+// bootstrap results), and the loader's store, trust and migration reads. Absent a fake driver, the real one runs.
+const activation = vi.hoisted(() => ({
+  drive: null as null | ((root: string, deps: Record<string, unknown>) => Promise<unknown[]>),
+  records: [] as unknown[],
+}));
+vi.mock(import("@cinatra-ai/sdk-extensions"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    runRuntimePackageActivation: ((root: string, deps: Record<string, unknown>) =>
+      activation.drive ? activation.drive(root, deps)
+        : (actual.runRuntimePackageActivation as (...a: unknown[]) => unknown)(root, deps)) as never,
+    recordDeclaresHostMigrations: ((...a: unknown[]) =>
+      activation.drive ? false : (actual.recordDeclaresHostMigrations as (...b: unknown[]) => boolean)(...a)) as never,
+  };
+});
+vi.mock(import("@/lib/extension-store-io"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, discoverStoreRecordsV2: (async () => activation.records) as never };
+});
+vi.mock(import("@/lib/extension-signature"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, resolveSignatureVerdict: () => undefined, signaturesRequired: () => false };
+});
+vi.mock(import("@/lib/extension-trust"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, classifyExtensionTrust: (() => ({ trusted: true, tier: "trusted-bootstrap", reason: "ok" })) as never };
+});
+vi.mock(import("@/lib/extension-migration-host"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    applyMigrationsForTrustedRecords: (async () => ({ applied: [], refused: [] })) as never,
+    applyMigrationUnionForTrustedRecords: (async () => ({ applied: [], refused: [] })) as never,
+  };
+});
 
 vi.mock("@cinatra-ai/agents/store", () => ({
   readCurrentRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
@@ -568,6 +608,96 @@ describe("the guarded outward run action", () => {
       const result = await server.call(OUTWARD, runFrame());
       expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_missing_or_stale`);
       expect(store.consume).not.toHaveBeenCalled();
+    });
+
+    // cinatra#3745: an extension's outward tool is callable only while the extension is fully activated. These cases
+    // run the REAL runtime loader with a fake SDK driver that emits the real order: the record registers (its ctx
+    // registers OUTWARD, the settle reports success), and only then the bootstrap pass runs, which may throw.
+    describe("an extension whose activation did not complete", () => {
+      const DIGEST = "d".repeat(64);
+      const record = () => ({ packageName: PACKAGE, version: VERSION, serverEntry: "./register",
+        requestedHostPorts: ["mcp"], sdkAbiRange: "^2", storeDir: `/store/connector/outreach/${DIGEST}`,
+        declaredDigest: DIGEST, kind: "connector" });
+      const anchor = (installId: string) => ({ installId, integrity: "sha512-a", contentHash: "ch-a",
+        registryUrl: "https://registry.cinatra.ai", trustDecision: true, approvedPorts: ["mcp"], version: VERSION,
+        isDefault: true, signature: null, digest: DIGEST, kind: "connector" });
+
+      type Deps = { records?: Array<ReturnType<typeof record>>;
+        makeContext: (p: string, ports: readonly string[], r: unknown) => ReturnType<typeof createExtensionHostContext>;
+        onRegisterSettled?: (r: unknown, ok: boolean) => void };
+      /** One activation of PACKAGE@VERSION through the real loader; `bootstrap` decides the bootstrap result. */
+      async function activate(installId: string, bootstrap: "passes" | "throws", ran: string[]) {
+        extensionRegistryModule.removeExtensionMcpToolsForPackage(PACKAGE);
+        activation.records = [record()];
+        activation.drive = async (_root, rawDeps) => {
+          const deps = rawDeps as unknown as Deps;
+          const results: unknown[] = [];
+          const registered: string[] = [];
+          for (const r of deps.records ?? []) {
+            const ctx = deps.makeContext(r.packageName, r.requestedHostPorts, r);
+            ctx.mcp.registerTool({ name: OUTWARD, description: OUTWARD, outward: {},
+              handler: async () => { ran.push(installId); return { sent: installId }; } } as Parameters<typeof ctx.mcp.registerTool>[0]);
+            deps.onRegisterSettled?.(r, true);
+            results.push({ packageName: r.packageName, status: "registered" });
+            registered.push(r.packageName);
+          }
+          for (const packageName of registered) {
+            results.push(bootstrap === "throws"
+              ? { packageName, status: "failed", reason: "bootstrap-threw", error: new Error("bootstrap failed") }
+              : { packageName, status: "bootstrapped" });
+          }
+          return results;
+        };
+        return loadRuntimePackageExtensions("/store", {
+          resolveInstallAnchors: async () => [anchor(installId)] as never,
+        });
+      }
+
+      afterEach(() => {
+        activation.drive = null;
+        activation.records = [];
+      });
+
+      // Without the guarded action the refusal names no code; without this rule the stamp of a register-passes /
+      // bootstrap-throws activation stays current, so the call runs:
+      // red-first-expect: expected 'Authorization denied for example_outw…' to contain 'outward_effect_requires_recorded_deci…
+      it("refuses an outward tool of an extension whose bootstrap threw, and consumes no decision", async () => {
+        const ran: string[] = [];
+        const results = await activate("install-A", "throws", ran);
+        expect(results.map((r) => (r as { status: string }).status)).toEqual(["registered", "failed"]);
+        const result = await (await replayServer())(runFrame());
+        expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
+        expect(store.consume).not.toHaveBeenCalled();
+        expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+        expect(ran).toEqual([]);
+      });
+
+      it("serves the outward tool of a fully activated extension once", async () => {
+        const ran: string[] = [];
+        await activate("install-A", "passes", ran);
+        expect((await (await replayServer())(runFrame())).isError).toBeFalsy();
+        expect(ran).toEqual(["install-A"]);
+        expect((store.consume.mock.calls[0]![0] as { action: { installId: string } }).action.installId).toBe("install-A");
+      });
+
+      // A reload's own stamp retires the previous identity of the same version at once, and its bootstrap failure
+      // retires the new one: nothing serves an outward call until a later activation passes (the hot update's
+      // rollback re-activates the previous revision, which then gets an identity of its own).
+      // red-first-expect: expected 'Authorization denied for example_outw…' to contain 'outward_effect_requires_recorded_deci…
+      it("a reload whose bootstrap throws retires the new identity and keeps no previous one serving", async () => {
+        const ran: string[] = [];
+        await activate("install-A", "passes", ran);
+        const previous = await replayServer();
+        await activate("install-B", "throws", ran);
+        for (const call of [previous, await replayServer()]) {
+          expect((await call(runFrame())).content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
+        }
+        expect(store.consume).not.toHaveBeenCalled();
+        expect(ran).toEqual([]);
+        await activate("install-A", "passes", ran);
+        expect((await (await replayServer())(runFrame())).isError).toBeFalsy();
+        expect(ran).toEqual(["install-A"]);
+      });
     });
   });
 

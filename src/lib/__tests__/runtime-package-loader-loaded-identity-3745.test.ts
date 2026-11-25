@@ -5,7 +5,8 @@ import type { PackageStoreRecord, ActivationResult, ExtensionHostContext } from 
 // install: only an anchor with an install id and a digest stamps one, a record
 // that fails to register keeps none, a successful unpinned reload retires an
 // older one, a failed attempt never retires a concurrent attempt's newer one,
-// and the capability teardown retires it.
+// the capability teardown retires it, and a stamp becomes current only after
+// the record fully activated (for a default record: after its bootstrap).
 // DI-unit: the SDK driver is a FAKE that drives makeContext/onRegisterSettled
 // like the real one (which verifies the bytes against the anchor and imports
 // the entry before makeContext); the identity registry is REAL.
@@ -161,6 +162,26 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     });
     expect(current()).toBeUndefined();
     expect(registry.isLoadedExtensionIdentityCurrent(pinned)).toBe(false);
+  });
+
+  // Before the change the stamp is current from makeContext on, so it is current while the bootstrap is still ahead:
+  // red-first-expect: expected true to be false
+  it("makes the stamp current only after the default record's bootstrap passed", async () => {
+    let duringPass: boolean | undefined;
+    runRuntimePackageActivation.mockImplementation(async (_root, deps) => {
+      const record = (deps.records ?? [])[0];
+      deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
+      deps.onRegisterSettled?.(record, true);
+      // The real driver runs the bootstrap pass only after every register settled.
+      duringPass = registry.isLoadedExtensionIdentityCurrent(current());
+      return [
+        { packageName: record.packageName, status: "registered" },
+        { packageName: record.packageName, status: "bootstrapped" },
+      ] as ActivationResult[];
+    });
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    expect(duringPass).toBe(false);
+    expect(registry.isLoadedExtensionIdentityCurrent(current())).toBe(true);
   });
 
   it("a failed attempt keeps the identity a concurrent attempt stamped and registered", async () => {

@@ -57,6 +57,7 @@ import {
   // co-located in that registry so it costs no new route-graph module.
   recordServingImplementation,
   // cinatra#3745: the loaded identity of a verified install.
+  promoteLoadedExtensionIdentity,
   recordLoadedExtensionIdentity,
   retireLoadedExtensionIdentity,
   type LoadedExtensionIdentity,
@@ -548,8 +549,20 @@ export async function loadRuntimePackageExtensions(
   // a structural supertype of the store record, hence the `object` key type).
   const pendingSinks = new Map<object, VersionKeyedRegistrationSink>();
   // cinatra#3745: the loaded identity each attempt stamped, by the same record
-  // object identity, so the settle retires only its own stamp.
+  // object identity, so a failure retires only its own stamp. A stamp is
+  // PENDING (never current) until its record fully activated: a non-default
+  // record at its successful register settle, a default record only after its
+  // bootstrap passed too (`awaitingBootstrap`, resolved after the pass). An
+  // outward tool of a half-activated extension therefore never has a current
+  // identity, and the boundary refuses its call.
   const stampedIdentities = new Map<object, LoadedExtensionIdentity>();
+  const awaitingBootstrap = new Map<object, LoadedExtensionIdentity>();
+  // The one retire path of a failed attempt, for a register failure AND a
+  // bootstrap failure: compare-and-delete of this attempt's own stamp.
+  const retireAttemptIdentity = (
+    record: { packageName: string; version?: string | null },
+    stamped: LoadedExtensionIdentity,
+  ) => retireLoadedExtensionIdentity(record.packageName, record.version, stamped);
 
   // cinatra#2762 (round-5 convergence): the version of the DEFAULT record whose
   // register pass ACTUALLY SETTLED SUCCESSFULLY, captured at the settle hook
@@ -650,12 +663,15 @@ export async function loadRuntimePackageExtensions(
         try {
           stampedIdentities.set(
             record,
-            recordLoadedExtensionIdentity({
-              packageName,
-              version: record.version,
-              installId: anchor.installId,
-              digest: anchor.digest,
-            }),
+            recordLoadedExtensionIdentity(
+              {
+                packageName,
+                version: record.version,
+                installId: anchor.installId,
+                digest: anchor.digest,
+              },
+              { pending: true },
+            ),
           );
         } catch {
           // A malformed field stamps nothing: this attempt loads unpinned.
@@ -702,12 +718,18 @@ export async function loadRuntimePackageExtensions(
       // (compare-and-delete), never a newer one of a concurrent attempt. A
       // successful load without a stamp now owns the version unpinned, so any
       // older identity is retired and no owner is attributed to that install.
+      // A registered default record still has its bootstrap ahead: its stamp
+      // waits for that result; a non-default record has no bootstrap.
       const stamped = stampedIdentities.get(record);
       stampedIdentities.delete(record);
       if (!registered) {
-        if (stamped) retireLoadedExtensionIdentity(record.packageName, record.version, stamped);
+        if (stamped) retireAttemptIdentity(record, stamped);
       } else if (!stamped) {
         retireLoadedExtensionIdentity(record.packageName, record.version);
+      } else if (record.isDefault !== false) {
+        awaitingBootstrap.set(record, stamped);
+      } else {
+        promoteLoadedExtensionIdentity(stamped);
       }
       const sink = pendingSinks.get(record);
       if (!sink) return;
@@ -735,6 +757,11 @@ export async function loadRuntimePackageExtensions(
     // attempts are untouched (abort is ownership-guarded anyway).
     for (const sink of pendingSinks.values()) sink.abort();
     pendingSinks.clear();
+    // cinatra#3745: a stamp the driver never settled stays pending; retire it.
+    for (const [record, stamped] of stampedIdentities) {
+      retireAttemptIdentity(record as { packageName: string; version?: string | null }, stamped);
+    }
+    stampedIdentities.clear();
   });
 
   // engineering#534 S1 — publish the SUCCESSFULLY-ACTIVATED `trusted-signed`
@@ -767,6 +794,15 @@ export async function loadRuntimePackageExtensions(
       .filter((r) => r.status === "failed" && r.reason === "bootstrap-threw")
       .map((r) => r.packageName),
   );
+  // cinatra#3745: resolve each registered default's pending identity by its own
+  // bootstrap outcome. A bootstrap failure retires it through the same retire
+  // path as a register failure; only a fully activated default becomes current.
+  for (const [record, stamped] of awaitingBootstrap) {
+    const r = record as { packageName: string; version?: string | null };
+    if (bootstrapFailedNames.has(r.packageName)) retireAttemptIdentity(r, stamped);
+    else promoteLoadedExtensionIdentity(stamped);
+  }
+  awaitingBootstrap.clear();
   // cinatra#2762: the version of each INSTALL that actually registered, so a
   // request-time surface can tell "the installed version is serving" from "the
   // row is live but the image's copy is what serves". The version comes from
