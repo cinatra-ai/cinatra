@@ -437,6 +437,14 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     }
   });
 
+  it("a marked review gate whose node id starts with ctx- is a review like any other: no id namespace makes it a context step", async () => {
+    // red-first-expect: expected undefined to be 'ctx-review'
+    const res = await compile({ draftsGates: [markedGate("ctx-review")] });
+    const steps = res.ok ? res.value.approvalPolicy.steps : [];
+    expect(byName(steps, "Review drafts")?.artifactReviewGateNode, res.ok ? "" : res.error).toBe("ctx-review");
+    expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
   it("a gate with the bare context-selector alias takes no renderer slot, as one with the scoped id takes none", async () => {
     for (const renderer of ["context-selector", "@test/context:context-selector"]) {
       const steps = await compileSteps({
@@ -762,6 +770,36 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     expect(await compileError({ draftsFlow: outer("start") })).toContain(CALLER);
     const steps = await compileSteps({ draftsFlow: outer("mint") });
     expect(byName(steps, "Review drafts").artifactReviewTargetsInput).toBe("reviewTargets");
+  });
+
+  it("a nested flow whose End output is only its own same-named input passed through (no edge feeds it) produces nothing: the caller's value is refused, at any depth", async () => {
+    // The loader binds an unfed End output to the same-named Flow and Start input (OAS-RUNTIME-005).
+    const implicit = (id: string, inner?: Record<string, unknown>) => ({
+      ...(inner
+        ? flowDoc(id, `${id}-s`, [startNode(`${id}-s`, ["reviewTargets"]), { component_type: "FlowNode", id: `${id}-n`, name: `${id}-n`, subflow: inner }, endNode(`${id}-e`, ["reviewTargets"])],
+          [ctl(`${id}-s`, `${id}-n`), ctl(`${id}-n`, `${id}-e`)],
+          [dataEdge(`${id}-s`, "reviewTargets", `${id}-n`, "reviewTargets"), dataEdge(`${id}-n`, "reviewTargets", `${id}-e`, "reviewTargets")])
+        : flowDoc(id, `${id}-s`, [startNode(`${id}-s`, ["reviewTargets"]), endNode(`${id}-e`, ["reviewTargets"])], [ctl(`${id}-s`, `${id}-e`)])),
+      inputs: [{ title: "reviewTargets", type: "string" }],
+    });
+    const minted = (id: string) => flowDoc(id, `${id}-m`, [mintNode(`${id}-m`), endNode(`${id}-e`, ["reviewTargets"])],
+      [ctl(`${id}-m`, `${id}-e`)], [dataEdge(`${id}-m`, "reviewTargets", `${id}-e`, "reviewTargets")]);
+    const outer = (inner: Record<string, unknown>) =>
+      flowDoc("drafts-subflow", "cs", [
+        startNode("cs", ["reviewTargets"]),
+        { component_type: "FlowNode", id: "inner_node", name: "inner_node", subflow: inner },
+        markedGate(),
+        endNode("ce"),
+      ], [ctl("cs", "inner_node"), ctl("inner_node", G), ctl(G, "ce")],
+      [dataEdge("cs", "reviewTargets", "inner_node", "reviewTargets"), dataEdge("inner_node", "reviewTargets", G, "reviewTargets")]);
+    for (const [label, inner] of [["one level", implicit("p1")], ["two levels", implicit("p2", implicit("p1"))]] as const) {
+      const error = await compileError({ draftsFlow: outer(inner) });
+      expect(error, label).toContain(CALLER);
+    }
+    for (const [label, inner] of [["one level", minted("m1")], ["two levels", implicit("p2", minted("m1"))]] as const) {
+      const steps = await compileSteps({ draftsFlow: outer(inner) });
+      expect(byName(steps, "Review drafts").artifactReviewTargetsInput, label).toBe("reviewTargets");
+    }
   });
 
   it("refuses a marked gate whose unfed targets input is handed in by the embedding flow, and one whose targets nothing in the child produces", async () => {

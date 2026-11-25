@@ -59,6 +59,7 @@ import {
 import type { PersistedArtifactBindingDeclaration } from "./artifact-binding";
 import { readKeyList } from "./gate-keys-not-from-run-inputs";
 import { isContextSelectorRendererId, stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { endOutputPassesThroughFlowInput } from "./validate-oas-runtime-invariants";
 import {
   PUBLISH_ROW_COLUMNS_MAX,
   PUBLISH_ROW_FIELD_MAX,
@@ -1456,9 +1457,6 @@ function subflowSurfaceGateInputKeys(
 // authored review gateSteps never actually pause). Scans the INLINED subflow
 // only; when the ref is absent or not inlined we return true (safe default:
 // treat as firing so a real gate is never dropped).
-function isContextGateRenderer(gateId: string, renderer: string): boolean {
-  return isContextSelectorRendererId(renderer) || gateId.startsWith("ctx-");
-}
 function subflowFiresNonContextRuntimeGate(
   subflowValue: unknown,
   localRefs: Record<string, unknown>,
@@ -1481,7 +1479,9 @@ function subflowFiresNonContextRuntimeGate(
       const nodeId = typeof node["id"] === "string" ? (node["id"] as string) : "";
       // The renderer of the gate is read as the compiled step reads it.
       const renderer = readInputMessageGateView(node as InputMessageGateComponent, nodeId).renderer;
-      if (requiresApproval && !isContextGateRenderer(nodeId, renderer)) {
+      // The `ctx-` id prefix is this phantom check's own older reading for unmarked gates (#839); a marked gate is
+      // judged by its renderer alone (embeddedGateIsReviewerPause).
+      if (requiresApproval && !(isContextSelectorRendererId(renderer) || nodeId.startsWith("ctx-"))) {
         fires = true;
         return;
       }
@@ -1535,7 +1535,7 @@ function readInputMessageGateView(
 // not a context gate, judged by the renderer its compiled step carries (the
 // resolved renderer of readInputMessageGateView), never by a second reading.
 function embeddedGateIsReviewerPause(gate: InputMessageGateComponent, gateId: string): boolean {
-  return gate.metadata?.cinatra?.requiresApproval === true && !isContextGateRenderer(gateId, readInputMessageGateView(gate, gateId).renderer);
+  return gate.metadata?.cinatra?.requiresApproval === true && !isContextSelectorRendererId(readInputMessageGateView(gate, gateId).renderer);
 }
 
 // The InputMessageNodes a flow can execute: the nodes reachable from its start
@@ -1752,23 +1752,32 @@ function traceTargetsInput(
       return flowInput(up, src.srcOutput);
     }
     if (kind === "FlowNode" || kind === "ParallelFlowNode") {
-      producers.push({ flow, nodeId: src.srcId });
+      // The node produces the value only when, inside it, a step feeds it. An End output no edge feeds is the node's
+      // own same-named input passed through (endOutputPassesThroughFlowInput, the loader's rule): traced on to what
+      // feeds that input here.
       const values =
         kind === "FlowNode"
           ? [comp["subflow"]]
           : [comp["subflow"], ...(Array.isArray(comp["subflows"]) ? comp["subflows"] : [])].filter((v) => v !== undefined);
       const subScope = { ...outer, ...refs };
       const link: FlowLink = { flow, outer, nodeId: src.srcId, parent: up };
+      const before = producers.length;
+      let passedThrough = false;
       for (const value of values) {
         const sub = resolveSubflowValue(value, refs, outer);
         if (!sub) return true;
         const subRefs = isRecord(sub["$referenced_components"]) ? sub["$referenced_components"] : {};
         for (const [endId, end] of Object.entries(subRefs)) {
           if (!isRecord(end) || end["component_type"] !== "EndNode") continue;
+          if (dataEdgesInto(sub, endId, src.srcOutput).length === 0) {
+            passedThrough ||= endOutputPassesThroughFlowInput(sub, src.srcOutput);
+            continue;
+          }
           if (valueAt(sub, subScope, link, endId, src.srcOutput, false)) return true;
         }
       }
-      return false;
+      if (producers.length > before) producers.push({ flow, nodeId: src.srcId });
+      return passedThrough && valueAt(flow, outer, up, src.srcId, src.srcOutput, true);
     }
     if (comp["subflow"] !== undefined || comp["subflows"] !== undefined) {
       untraceable = true;

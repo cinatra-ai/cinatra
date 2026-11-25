@@ -1230,7 +1230,7 @@ function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
     // (b) Same-named Flow input that trickles through StartNode (start.X → end.X
     // requires StartNode to declare it; the pyagentspec graph tolerates the
     // missing explicit edge in many cases as the loader auto-binds names).
-    if (flowInputTitles.has(output) && startInputTitles.has(output)) continue;
+    if (endOutputIsFlowInput(flowInputTitles, startInputTitles, output)) continue;
     findings.push({
       code: "OAS-RUNTIME-005",
       severity: "blocker",
@@ -1251,6 +1251,17 @@ function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
     });
   }
   return findings;
+}
+
+function endOutputIsFlowInput(flowInputTitles: ReadonlySet<string>, startInputTitles: ReadonlySet<string>, output: string): boolean {
+  return flowInputTitles.has(output) && startInputTitles.has(output);
+}
+/** An EndNode output of `rawFlow` that no data edge feeds is the same-named Flow input passed through the StartNode when
+ *  the Flow and its StartNode both declare it (rule (b) of OAS-RUNTIME-005 above). The compiler's review-target
+ *  provenance reads it here (cinatra#3089). */
+export function endOutputPassesThroughFlowInput(rawFlow: Record<string, unknown>, output: string): boolean {
+  const flow = extractFlow(rawFlow);
+  return flow !== null && endOutputIsFlowInput(new Set(flow.flowInputTitles), new Set(flow.startNode?.inputTitles ?? []), output);
 }
 
 // ---------------------------------------------------------------------------
