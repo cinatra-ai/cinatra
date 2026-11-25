@@ -4,10 +4,27 @@
  * Item 9 asks for a browser test per surface against a development server with
  * a real Postgres and the real review store. Every surface draws the one
  * `ReviewDecisionBar` (the one-card source proof,
- * `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-floor-surfaces.test.ts`),
- * so this spec drives the two hosts a person reaches it on: the review page
- * (which sends the reader to the run's own address, rail on the review step)
- * and the review card in the chat (the run panel's review slot, `run_card`).
+ * `src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-floor-surfaces.test.ts`).
+ *
+ * SURFACES DRIVEN HERE (two of the three hosts a person reaches the floor on):
+ *   1. The run page's review step. The review page's own address answers only
+ *      with a redirect to the run's address with the gate's step named
+ *      (`?step=review:<task>`), so the test opens the review page address, asserts
+ *      the exact run address it lands on, and drives the floor drawn there
+ *      (card host `run_card`, rail row of the gate marked as the open screen).
+ *   2. The review card in the chat thread (the run panel's review slot inside
+ *      the transcript, card host `chat_thread`).
+ *
+ * SURFACE NOT DRIVEN: the review card inside a third-party application (the site
+ * widget, card host `site_widget`, drawn with the broker credential and cookies
+ * omitted). It is the same `ReviewGateCard` and `ReviewDecisionBar` in the
+ * conversation arm of `AgenticRunPanel`, but a regression in the widget's own
+ * broker or credential handling would NOT fail this spec. Driving it needs a
+ * connected widget site, a `cit_`/`cwu_` token pair bound to the embed origin,
+ * the embed's parent bootstrap handshake, and a run started from the widget
+ * (see `./render-parity-live-targets.ts`, `resolveParityBrokerTokens`), which
+ * this fixture does not provide. Until a spec drives it, item 9 is open for
+ * that surface.
  *
  * WHAT IS REAL. The gate is minted by the shipped run executor for a run of the
  * marked review gate fixture (`./review-gate-fixture.ts`, no LLM): a real run,
@@ -19,6 +36,9 @@
  * writes, as `./chat-render-parity-target.ts` does.
  *
  * WHAT IT ASSERTS, per surface:
+ *   - the floor is LIVE before anything is pressed: Continue, Regenerate and
+ *     Comment enabled, the note editable, and no access reason drawn (so a
+ *     comment-only reader cannot pass for a live floor);
  *   - Comment: the note is filed on the gate, the gate stays pending, the run
  *     stays parked where it was, the pinned revision is unchanged, no repair
  *     (successor lineage) exists, and the floor stays live (on the chat card
@@ -32,13 +52,15 @@
  * needs a producer whose filing node declares a Regenerate step and a runtime
  * with the step road (`regenerate_segment/1`).
  *
- * PRECONDITIONS. The fixture tree is staged into `extensions/`
- * (`stageReviewGateFixture`) BEFORE the server boots, so the dev boot registers
- * its template and the WayFlow runtime mounts it; the spec fails, with that
- * instruction, when the template row is missing. It depends on the `setup`
- * project (the signed-in admin and its active organization). Before the run,
- * stage the fixture with `stageReviewGateFixture` (`./review-gate-fixture.ts`)
- * into the checkout the dev server and the WayFlow runtime boot from.
+ * PRECONDITIONS. This is a live project, not a hermetic one: it needs the
+ * dev server on the canonical schema, Redis (the run queue), the WayFlow
+ * runtime, and the fixture tree staged into `extensions/`
+ * (`stageReviewGateFixture`, `./review-gate-fixture.ts`) BEFORE the server
+ * boots and the runtime mounts it, so the dev boot registers its template. The
+ * spec fails, with that instruction, when the template row is missing. It
+ * depends on the `setup` project (the signed-in admin and its active
+ * organization). No CI job runs it today: the workflow runs only the static
+ * `tunnel-wiring` project of this config.
  *
  *   E2E_REUSE_SERVER=1 pnpm exec playwright test \
  *     -c tests/e2e/config/agents-run.config.ts --project review-floor-browser
@@ -79,6 +101,13 @@ const FLOOR = '[data-conformance-id="review-decision-bar"]';
 const COMMENT = '[data-action="comment-review -> annotated"]';
 const REGENERATE = '[data-action="regenerate-review -> successor-gate-opened"]';
 const CONTINUE = '[data-action="continue-review -> resolved"]';
+/** The reason line the floor draws only for a reader who may NOT decide
+ *  (`reviewDecideDisabledReason` is null when the reader may decide). */
+const NO_DECISION_ACCESS_REASON = '[data-conformance-id="review-decision-disabled"]';
+/** The review card's root, as the run page's and the chat thread's review slot
+ *  draw it, and the host it declares (`data-lifecycle-card-host`). */
+const REVIEW_CARD = '[data-conformance-id="review-gate-card"]';
+const REVIEW_SLOT = '[data-run-review-slot="review"]';
 /** Every `data-action` anchor the floor draws, as the attribute's own words:
  *  the three decision buttons, in the sorted order `expectTheFloor` compares. */
 const FLOOR_ACTIONS = [
@@ -238,8 +267,14 @@ async function commentKeepsTheGateOpen(
   { floorStaysLive = true }: { floorStaysLive?: boolean } = {},
 ): Promise<void> {
   const before = await readGateState(gate);
+  // THE FLOOR IS LIVE BEFORE ANYTHING IS PRESSED. A reader with comment-only
+  // access also sees Comment enabled and Continue disabled; without this
+  // reading, a disabled Continue after the press could not be told from that.
+  await expectTheFloorLive(floor);
   const note = `Tighten the opening (${randomUUID().slice(0, 8)}).`;
-  await floor.getByTestId("review-rationale").fill(note);
+  const noteField = floor.getByTestId("review-rationale");
+  await noteField.fill(note);
+  await expect(noteField).toHaveValue(note);
   await floor.locator(COMMENT).click();
   // A development server compiles the decision's server action on its first
   // press, so the landed outcome gets a generous bound.
@@ -259,16 +294,20 @@ async function commentKeepsTheGateOpen(
   expect(after.gateCount, "Comment must mint no other gate").toBe(before.gateCount);
 }
 
-/** Comment decides nothing, so the floor it was pressed on stays live. */
+/** The floor is live for THIS reader: every decision control is enabled, the
+ *  note is editable, and no "you may not decide" reason is drawn. Continue
+ *  enabled is the reading of decision access (`canDecide`); a comment-only
+ *  reader has Comment enabled and Continue and Regenerate disabled. */
 async function expectTheFloorLive(floor: Locator): Promise<void> {
   await expect(floor.locator(CONTINUE)).toBeEnabled({ timeout: 60_000 });
   await expect(floor.locator(REGENERATE)).toBeEnabled();
   await expect(floor.locator(COMMENT)).toBeEnabled();
   await expect(floor.getByTestId("review-rationale")).toBeEditable();
+  await expect(floor.locator(NO_DECISION_ACCESS_REASON)).toHaveCount(0);
 }
 
-/** How long the known-defect pin gives the chat card's floor to become live
- *  after a Comment (the review page's floor clears at once). */
+/** How long the known-defect pin watches the chat card's floor after a Comment
+ *  (the review page's floor clears at once). */
 const LIVENESS_BOUND_MS = 30_000;
 
 /** One reading of the floor's liveness: every decision control is attached
@@ -282,6 +321,18 @@ async function floorIsLive(floor: Locator): Promise<boolean> {
   const note = floor.getByTestId("review-rationale");
   const noteEditable = (await note.count()) === 1 ? await note.isEditable() : false;
   return readings.every(Boolean) && noteEditable;
+}
+
+/** Sample the floor until it reads live or the bound passes. Returns the
+ *  milliseconds it took to read live, or null when it never did within the
+ *  bound. A failing read (a closed page) throws instead of reading "not live". */
+async function waitUntilFloorIsLive(floor: Locator, boundMs: number): Promise<number | null> {
+  const started = Date.now();
+  while (Date.now() - started < boundMs) {
+    if (await floorIsLive(floor)) return Date.now() - started;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return (await floorIsLive(floor)) ? Date.now() - started : null;
 }
 
 /** Press Continue and prove item 2 on the store: resolved, `approve`, released.
@@ -392,11 +443,45 @@ function reviewPagePath(gate: SeededReviewGate): string {
   ].join("/");
 }
 
+/**
+ * The run's own address with the gate's review step named: the ONE place the
+ * review page sends a reader (`reviewAddressRedirect`, `buildRunStepPath`). A run
+ * of this fixture has no launch scope, so its home is the bare run address.
+ */
+function runReviewStepAddress(gate: SeededReviewGate): { pathname: string; step: string } {
+  return {
+    pathname: ["", "agents", REVIEW_GATE_FIXTURE.vendor, REVIEW_GATE_FIXTURE.slug, encodeURIComponent(gate.runId)].join("/"),
+    step: `review:${gate.reviewTaskId}`,
+  };
+}
+
+/**
+ * Open the review page's address and drive the floor on the run page it sends
+ * the reader to. The landing address is asserted EXACTLY (the run's path, the
+ * single `step` query naming this gate), so a page that stopped redirecting and
+ * drew the floor at its own address fails; the card must sit in the run page's
+ * review slot, declare the `run_card` host, and the gate's rail row must be the
+ * open screen.
+ */
 async function floorOnReviewPage(page: Page, gate: SeededReviewGate): Promise<{ surface: Locator; floor: Locator }> {
+  const home = runReviewStepAddress(gate);
   await page.goto(reviewPagePath(gate), { waitUntil: "domcontentloaded" });
-  await expect(page).toHaveURL(new RegExp(`/${gate.runId}`));
-  const floor = page.locator(FLOOR);
-  await expect(floor).toHaveCount(1, { timeout: 120_000 });
+  await expect(page, `the review page must send the reader to ${home.pathname}?step=${home.step}`).toHaveURL(
+    (url) =>
+      url.pathname === home.pathname &&
+      [...url.searchParams.keys()].join(",") === "step" &&
+      url.searchParams.get("step") === home.step,
+    { timeout: 120_000 },
+  );
+  const card = page.locator(`${REVIEW_SLOT} ${REVIEW_CARD}`);
+  await expect(card).toHaveCount(1, { timeout: 120_000 });
+  await expect(card).toHaveAttribute("data-lifecycle-card-host", "run_card");
+  const floor = card.locator(FLOOR);
+  await expect(floor).toHaveCount(1);
+  const railRow = page.locator("[data-rail-gate-open]");
+  await expect(railRow).toHaveCount(1);
+  await expect(railRow).toHaveAttribute("data-rail-gate-open", gate.reviewTaskId);
+  await expect(railRow).toHaveAttribute("data-run-surface-rail-selected", "true");
   return { surface: page.locator("main").last(), floor };
 }
 
@@ -412,10 +497,10 @@ async function floorOnChatCard(
 
 /** The floor of the run's review card in the chat thread on screen. */
 async function chatCardFloor(page: Page, gate: SeededReviewGate): Promise<{ surface: Locator; floor: Locator }> {
-  const card = page.locator(
-    `[data-inline-run-card="${gate.runId}"] [data-run-review-slot="review"] [data-conformance-id="review-gate-card"]`,
-  );
+  const card = page.locator(`[data-inline-run-card="${gate.runId}"] ${REVIEW_SLOT} ${REVIEW_CARD}`);
   await expect(card).toHaveCount(1, { timeout: 60_000 });
+  // The transcript declares the thread host and the inline run panel inherits it.
+  await expect(card).toHaveAttribute("data-lifecycle-card-host", "chat_thread");
   const floor = card.locator(FLOOR);
   await expect(floor).toBeVisible({ timeout: 30_000 });
   return { surface: page.locator(`[data-inline-run-card="${gate.runId}"]`), floor };
@@ -426,7 +511,7 @@ test.describe("the review floor on a real gate, in the browser (cinatra#3080 ite
   // that compiles on first use: longer than the suite's 180 s default.
   test.describe.configure({ timeout: 480_000 });
 
-  test("review page: Comment keeps the gate pending, Continue resolves it", async ({ page, request }) => {
+  test("run page review step, opened through the review page address: Comment keeps the gate pending, Continue resolves it", async ({ page, request }) => {
     const gate = await parkRunOnGate(request, "page");
     const { surface, floor } = await floorOnReviewPage(page, gate);
     await expectTheFloor(floor);
@@ -456,33 +541,36 @@ test.describe("the review floor on a real gate, in the browser (cinatra#3080 ite
   // 90 s on a warm development server while the review page's floor clears at
   // once). A reader has to reload the thread to Continue.
   //
-  // The pin covers ONLY the liveness reading. The gate, the render and the
-  // Comment (with its full store reading) are hard assertions: any failure
-  // there fails this test. Then the floor is given LIVENESS_BOUND_MS to become
-  // live; the test FAILS if it does (the defect is fixed: remove this pin and
-  // assert `expectTheFloorLive` in the chat card test above) and passes while
-  // the floor stays drawn with Continue disabled.
+  // The pin covers ONLY the liveness reading. The gate, the render, the floor's
+  // liveness BEFORE the press and the Comment (with its full store reading) are
+  // hard assertions: any failure there fails this test. Then the floor is
+  // sampled for LIVENESS_BOUND_MS; the test FAILS if it reads live (the defect
+  // is fixed: remove this pin and assert `expectTheFloorLive` in the chat card
+  // test above) and passes only while the floor stays drawn with Continue
+  // disabled and no access reason. It is a bounded observation: it proves the
+  // floor did not clear within the bound, not that it never does.
   test("chat card: the floor stays disabled after a Comment (known defect pin)", async ({ page, request }) => {
     const gate = await parkRunOnGate(request, "chat-live");
     const { floor } = await floorOnChatCard(page, request, gate);
     await expectTheFloor(floor);
     await commentKeepsTheGateOpen(floor, gate, { floorStaysLive: false });
 
-    const becameLive = await expect
-      .poll(() => floorIsLive(floor), { timeout: LIVENESS_BOUND_MS })
-      .toBe(true)
-      .then(
-        () => true,
-        () => false,
-      );
+    // Sampled for the whole bound; an exception from a read fails the test
+    // rather than reading as "not live".
+    const liveAfterMs = await waitUntilFloorIsLive(floor, LIVENESS_BOUND_MS);
     expect(
-      becameLive,
+      liveAfterMs,
       "KNOWN DEFECT FIXED: the chat card's floor became live after a Comment. Remove this pin " +
         "and assert expectTheFloorLive after the Comment in the chat card test.",
-    ).toBe(false);
-    // The defect's own reading: the floor is still drawn and Continue is
-    // disabled (a floor that vanished is a different failure, not the defect).
+    ).toBeNull();
+    // The defect's own reading: the floor is still drawn, the Comment's
+    // acknowledgement is still on screen, and Continue is disabled with no
+    // access reason drawn. The floor was live before the press
+    // (commentKeepsTheGateOpen), so this is the pending state that never
+    // cleared, not a reader who may only comment.
     await expect(floor.locator(CONTINUE)).toHaveCount(1);
     await expect(floor.locator(CONTINUE)).toBeDisabled();
+    await expect(floor.locator('[data-review-outcome="annotated"]')).toBeVisible();
+    await expect(floor.locator(NO_DECISION_ACCESS_REASON)).toHaveCount(0);
   });
 });
