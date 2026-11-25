@@ -14,6 +14,8 @@
  *   npx vitest run src/__tests__/passthrough-artifact-materialize-list-route-3089.test.ts
  */
 import { createHmac } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -314,4 +316,70 @@ describe("POST /api/agents/passthrough — artifact_materialize list mode (cinat
     expect(await res.json()).toEqual({ artifactId: "art-1", representationRevisionId: "rep-1", deduped: false });
     expect(h.materializeToolArtifact.mock.calls[0]![0]).toMatchObject({ verifiedStepId: NODE, title: "T" });
   });
+
+  describe("in a Regenerate run (cinatra#3089)", () => {
+    const REPAIR_RUN = "lifecycle-repair-run:repair-1";
+    const record = { artifactNode: NODE, step: NODE, noteInput: "note", startOutput: "note" };
+    const segmentRun = (overrides?: Record<string, unknown>) => ({
+      ...RUN,
+      id: REPAIR_RUN,
+      sourceType: "lifecycle_repair",
+      inputParams: { note: "shorter", lifecycleRepairRequest: { findings: [], regenerateInput: record } },
+      ...overrides,
+    });
+    const useRun = (run: Record<string, unknown>) => {
+      h.readAgentRunById.mockResolvedValue(run);
+      h.readAgentRunByContextId.mockImplementation(async (ctx: string) => (ctx === CTX ? run : null));
+    };
+
+    // red-first-expect: expected undefined to be 'materialize_list_in_regenerate_run'
+    it("refuses a list call before anything is filed, with a typed error", async () => {
+      useRun(segmentRun());
+      const res = await POST(post({ ...listBody(), agent_run_id: REPAIR_RUN }));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.code).toBe("materialize_list_in_regenerate_run");
+      expect(body.error).toContain("a Regenerate run files exactly one artifact");
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected undefined to be 'materialize_list_in_regenerate_run'
+    it("refuses a list call of a repair run whose inputs cannot be read (fail closed)", async () => {
+      useRun(segmentRun({ inputParams: "{ not json" }));
+      const res = await POST(post({ ...listBody(), agent_run_id: REPAIR_RUN }));
+      expect(res.status).toBe(400);
+      expect((await res.json()).code).toBe("materialize_list_in_regenerate_run");
+      expect(h.materializeToolArtifact).not.toHaveBeenCalled();
+    });
+
+    // red-first-expect: expected 400 to be 200
+    it("files the list of an ordinary repair run (no Regenerate record) as before", async () => {
+      useRun(segmentRun({ inputParams: { lifecycleRepairRequest: { findings: [{ note: "x" }] } } }));
+      const res = await POST(post({ ...listBody(), agent_run_id: REPAIR_RUN }));
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(3);
+    });
+
+    it("keeps the single call of a Regenerate run as it was", async () => {
+      useRun(segmentRun());
+      const res = await POST(
+        post({
+          tool: "artifact_materialize",
+          agent_run_id: REPAIR_RUN,
+          input: { extension: EXT, content: "# Hi", declaredMime: "text/markdown", title: "T", node_id: NODE },
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect(h.materializeToolArtifact).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads a Regenerate run by the same names the segment module writes", () => {
+      const source = readFileSync(join(__dirname, "../../packages/agents/src/regenerate-segment.ts"), "utf8");
+      expect(source).toContain('export const SEGMENT_REPAIR_RUN_PREFIX = "lifecycle-repair-run:";');
+      expect(source).toContain('const LIFECYCLE_REPAIR_SOURCE_TYPE = "lifecycle_repair";');
+      expect(source).toContain('const LIFECYCLE_REPAIR_REQUEST_INPUT = "lifecycleRepairRequest";');
+      expect(source).toContain('export const REGENERATE_INPUT_RECORD_KEY = "regenerateInput";');
+    });
+  });
 });
+

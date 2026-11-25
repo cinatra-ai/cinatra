@@ -4,6 +4,7 @@ import type { ReviewFinding } from "../validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactImageNodesFromOasDocument,
+  collectArtifactMaterializeListNodeIds,
   collectArtifactMaterializeNodesFromOasDocument,
 } from "../artifact-binding";
 
@@ -212,6 +213,12 @@ export type RegenerateDeclarationEntry = z.infer<typeof regenerateDeclarationSch
 
 export const REGENERATE_DECLARATION_INVALID = "REGENERATE_DECLARATION_INVALID";
 
+/** cinatra#3089: the refusal of a `regenerate` entry whose `artifactNode` is a list filing. */
+export const REGENERATE_LIST_FILING_REFUSAL =
+  "artifactNode is a list filing (artifact_materialize with memberContentField / memberTitleField) that files " +
+  "one artifact per member; a list filing cannot be the node a Regenerate re-runs, because a Regenerate takes " +
+  "exactly one production; regenerating one member needs its own entry";
+
 export type RegenerateDeclarationCheck = { ok: true } | { ok: false; error: string };
 
 type RegenerateRec = Record<string, unknown>;
@@ -270,6 +277,9 @@ function regenerateListProblem(node: RegenerateRec, where: string): string | nul
  *   6. exactly one edge ends at (`step`, `noteInput`); it starts at the flow's
  *      StartNode on a canonical string output that the root `inputs` declare,
  *      and that output feeds nothing else.
+ * And (cinatra#3089) `artifactNode` is not a list filing
+ * (`collectArtifactMaterializeListNodeIds`): a list files one artifact per
+ * member, and a Regenerate takes exactly one production.
  */
 export function checkRegenerateDeclaration(
   parsedOas: unknown,
@@ -286,6 +296,7 @@ export function checkRegenerateDeclaration(
   const edges = (Array.isArray(oas.data_flow_connections) ? oas.data_flow_connections : []).filter(isRegenerateRec);
   const startId = regenerateRefId(oas.start_node);
   const start = startId !== null ? refs[startId] : undefined;
+  const listFilings = collectArtifactMaterializeListNodeIds(oas);
 
   for (const entry of schema.data) {
     const { artifactNode, step, noteInput } = entry;
@@ -304,6 +315,12 @@ export function checkRegenerateDeclaration(
     }
     if ((refs[artifactNode] as RegenerateRec).component_type !== "ApiNode") {
       return refuse("artifactNode must be an ApiNode");
+    }
+    // cinatra#3089: a plain entry (one with no member-specific keys) never names
+    // a list filing. Re-running it would file every member again, and the run
+    // that takes the repair accepts exactly one production.
+    if (listFilings.has(artifactNode) && !("memberKeyInput" in entry)) {
+      return refuse(REGENERATE_LIST_FILING_REFUSAL);
     }
     const linked = edges.some(
       (e) => regenerateRefId(e.source_node) === step && regenerateRefId(e.destination_node) === artifactNode,

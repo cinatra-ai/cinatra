@@ -1,9 +1,15 @@
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, it, expect } from "vitest";
 
 import {
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactMaterializeNodesFromOasDocument,
 } from "../artifact-binding";
+import { compileOasAgentJson } from "../oas-compiler";
+import { checkRegenerateDeclaration } from "../verdaccio/package-contract";
 
 // ---------------------------------------------------------------------------
 // cinatra#3089 — the compile check of the `artifact_materialize` LIST MODE:
@@ -107,5 +113,106 @@ describe("collectArtifactMaterializeNodesFromOasDocument — list mode (cinatra#
     delete input.memberTitleField;
     const result = collect(input);
     expect(result.errors).toEqual([expect.stringContaining("data.input.title: must be a non-empty string")]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#3089 — a list filing is never the node a Regenerate re-runs: the
+// list files one artifact per member, and a Regenerate takes exactly one
+// production. A `regenerate` entry whose `artifactNode` is a list filing does
+// not compile; a single filing compiles as before.
+// ---------------------------------------------------------------------------
+
+const LIST_REFUSAL = "a list filing cannot be the node a Regenerate re-runs";
+const PACKAGE_NAME = "@cinatra-ai/synthetic-gemini-agent";
+const FILE_NODE = "call_llm_bridge";
+const SELF_FILING = [{ artifactNode: FILE_NODE, step: FILE_NODE, noteInput: "user" }];
+
+/** The synthetic fixture with its one ApiNode turned into a passthrough
+ *  `artifact_materialize` node that files its own output (single or list). */
+function fixtureWithFiling(list: boolean, dataAsText = false): Record<string, unknown> {
+  const oas = JSON.parse(readFileSync(join(__dirname, "fixtures", "synthetic-gemini-agent.json"), "utf8"));
+  for (const input of [...oas.inputs, ...oas.$referenced_components.start.inputs]) input.default ??= "";
+  const node = oas.$referenced_components[FILE_NODE];
+  node.url = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+  const input: Record<string, unknown> = {
+    extension: EXT,
+    content: "{{ user }}",
+    declaredMime: "text/markdown",
+    node_id: FILE_NODE,
+    ...(list ? { memberContentField: "body", memberTitleField: "subject" } : { title: "{{ user }}" }),
+  };
+  const data = { tool: ARTIFACT_MATERIALIZE_TOOL, agent_run_id: "{{ cinatra_run_id }}", input };
+  node.data = dataAsText ? JSON.stringify(data) : data;
+  return oas;
+}
+
+function stageOas(oas: Record<string, unknown>): string {
+  const dir = mkdtempSync(join(tmpdir(), "list-regen-3089-"));
+  mkdirSync(join(dir, "cinatra"));
+  const oasPath = join(dir, "cinatra", "oas.json");
+  writeFileSync(oasPath, JSON.stringify(oas));
+  return oasPath;
+}
+
+describe("a regenerate entry and a list filing (cinatra#3089)", () => {
+  // red-first-expect: to contain 'REGENERATE_DECLARATION_INVALID'
+  it("a flow whose regenerate entry names a list filing node does not compile", async () => {
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(fixtureWithFiling(true)),
+      retainedRegenerate: SELF_FILING,
+    });
+    expect(result.ok).toBe(false);
+    const error = (result as { error: string }).error;
+    expect(error).toContain("REGENERATE_DECLARATION_INVALID");
+    expect(error).toContain(LIST_REFUSAL);
+    expect(error).toContain("regenerating one member needs its own entry");
+  });
+
+  it("a flow whose regenerate entry names a single filing node compiles as before", async () => {
+    const result = await compileOasAgentJson({
+      packageName: PACKAGE_NAME,
+      oasSourcePath: stageOas(fixtureWithFiling(false)),
+      retainedRegenerate: SELF_FILING,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  // red-first-expect: expected { ok: true } to match object { ok: false }
+  it.each([
+    ["an object data block", false],
+    ["a JSON-text data block", true],
+  ])("the check refuses a list filing with %s, filed by another step too", (_name, dataAsText) => {
+    const oas = fixtureWithFiling(true, dataAsText);
+    expect(checkRegenerateDeclaration(oas, SELF_FILING)).toMatchObject({ ok: false });
+    // The same node under another ref key, reached by its own id: still refused.
+    const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    refs.file_list = { ...refs[FILE_NODE], id: "file_list" };
+    (oas.nodes as unknown[]).push({ $component_ref: "file_list" });
+    (oas.data_flow_connections as unknown[]).push({
+      component_type: "DataFlowEdge",
+      name: "call_text_to_file_list",
+      source_node: { $component_ref: FILE_NODE },
+      source_output: "text",
+      destination_node: { $component_ref: "file_list" },
+      destination_input: "user",
+    });
+    const other = checkRegenerateDeclaration(oas, [{ artifactNode: "file_list", step: FILE_NODE, noteInput: "user" }]);
+    expect(other).toMatchObject({ ok: false });
+    expect((other as { error: string }).error).toContain(LIST_REFUSAL);
+  });
+
+  // red-first-expect: expected { ok: true } to match object { ok: false }
+  it("refuses a node that carries only one of the two member fields (fail closed)", () => {
+    const oas = fixtureWithFiling(true);
+    const input = ((oas.$referenced_components as Record<string, Record<string, Record<string, unknown>>>)[FILE_NODE]!
+      .data as Record<string, Record<string, unknown>>).input!;
+    delete input.memberTitleField;
+    expect(checkRegenerateDeclaration(oas, SELF_FILING)).toMatchObject({ ok: false });
+  });
+
+  it("accepts a single filing node in the check", () => {
+    expect(checkRegenerateDeclaration(fixtureWithFiling(false), SELF_FILING)).toEqual({ ok: true });
   });
 });

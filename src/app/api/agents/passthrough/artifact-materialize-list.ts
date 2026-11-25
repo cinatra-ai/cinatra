@@ -66,3 +66,50 @@ export async function materializeArtifactList(
   }
   return { ok: true, artifacts, reviewTargets: JSON.stringify(artifacts) };
 }
+
+// THE REGENERATE RUN (cinatra#3089). A Regenerate re-runs one filing node and
+// takes exactly one production (`claimSegmentProduction` in
+// packages/agents/src/regenerate-segment.ts). A list call in such a run would
+// file every member again, the repair would not be applied, and the filed
+// artifacts would stay. The compile refuses a `regenerate` entry that names a
+// list filing; this refuses the call too (an older compiled template, a
+// hand-made flow), before anything is filed.
+//
+// A Regenerate run is a lifecycle repair run whose typed request carries the
+// record its dispatch writes (`regenerateInput`); the run start refuses a
+// Regenerate run without it. The names are those of regenerate-segment.ts
+// (pinned by the route test); they are kept here so that this module stays
+// free of project imports.
+
+export const MATERIALIZE_LIST_IN_REGENERATE_RUN = "materialize_list_in_regenerate_run";
+
+export const MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR =
+  "artifact_materialize: a list call files one artifact per member, and a Regenerate run files exactly one " +
+  "artifact; nothing was filed. Regenerating one member needs its own regenerate entry";
+
+const REPAIR_RUN_SOURCE_TYPE = "lifecycle_repair";
+const REPAIR_RUN_ID_PREFIX = "lifecycle-repair-run:";
+const REPAIR_REQUEST_INPUT = "lifecycleRepairRequest";
+const REGENERATE_RECORD_KEY = "regenerateInput";
+
+/** Whether `run` is a Regenerate run (or a repair run whose inputs cannot be
+ *  read, which counts as one: fail closed). */
+export function isRegenerateRepairRun(run: {
+  id: string;
+  sourceType?: string | null;
+  inputParams?: unknown;
+}): boolean {
+  if (run.sourceType !== REPAIR_RUN_SOURCE_TYPE && !run.id.startsWith(REPAIR_RUN_ID_PREFIX)) return false;
+  let params: unknown = run.inputParams;
+  if (typeof params === "string") {
+    try {
+      params = JSON.parse(params);
+    } catch {
+      return true;
+    }
+  }
+  if (params === null || typeof params !== "object" || Array.isArray(params)) return true;
+  const request = (params as Record<string, unknown>)[REPAIR_REQUEST_INPUT];
+  if (request === null || typeof request !== "object" || Array.isArray(request)) return false;
+  return Object.prototype.hasOwnProperty.call(request, REGENERATE_RECORD_KEY);
+}

@@ -26,7 +26,12 @@ import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
-import { materializeArtifactList } from "./artifact-materialize-list";
+import {
+  isRegenerateRepairRun,
+  materializeArtifactList,
+  MATERIALIZE_LIST_IN_REGENERATE_RUN,
+  MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR,
+} from "./artifact-materialize-list";
 import {
   shapeArtifactImageInput,
   type ShapedArtifactImageInput,
@@ -623,6 +628,13 @@ export async function POST(req: Request): Promise<Response> {
       // step. A member that fails ends the call with a typed refusal and no
       // artifacts; the ledger makes a retry reuse every member filed before.
       if (shaped.members !== undefined) {
+        // A Regenerate run takes one production: a list is refused before any member is filed.
+        if (isRegenerateRepairRun(run)) {
+          return NextResponse.json(
+            { error: MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR, code: MATERIALIZE_LIST_IN_REGENERATE_RUN },
+            { status: 400 },
+          );
+        }
         const listed = await materializeArtifactList(shaped.members, (member) =>
           materializeToolArtifact({
             runId: run.id,
