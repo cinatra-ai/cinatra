@@ -192,6 +192,19 @@ describe("on a run frame, the declaration and owner are those of the version tha
     expect(hoisted.captured).not.toHaveBeenCalled();
   });
 
+  it("hands the boundary the live request's own frame, so its verified publish decision reaches the guarded action", async () => {
+    const saved = hoisted.frame;
+    const frame = { ...saved, verifiedPublishDecisionId: "decision-2" };
+    hoisted.frame = frame;
+    try {
+      await callHostPrimitive("example_default_outward", { postId: "artifact-1", postRevision: "revision-1" });
+    } finally {
+      hoisted.frame = saved;
+    }
+    expect(hoisted.boundary.mock.calls[0]?.[0]?.ctx).toBe(frame);
+    expect((hoisted.boundary.mock.calls[0]?.[0]?.ctx as Record<string, unknown>).verifiedPublishDecisionId).toBe("decision-2");
+  });
+
   it("off a run frame, an unrestricted call keeps the captured wrapper and resolves no edge here", async () => {
     const saved = hoisted.frame;
     hoisted.frame = { orgId: "org-1", userId: "user-1" };

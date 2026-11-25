@@ -360,4 +360,85 @@ describe("the guarded outward run action", () => {
       expect(server.handled).toEqual([OUTWARD]);
     });
   });
+  // cinatra#3745: a step entered twice in one attempt has one decision per visit and signs the same proof on both. The
+  // frame carries the decision of its own visit (`verifiedPublishDecisionId`, verified from the token beside the proof)
+  // and the guarded action hands it to the consumption unchanged. The consumption double here keeps the visits of the
+  // step and answers as the real consumption does for a call with and without that id (the rule itself is pinned
+  // through the real function in packages/agents).
+  describe("the decision of the call's own visit", () => {
+    type Visit = { id: string; stepId: string; consumed: boolean };
+    let visits: Visit[];
+    beforeEach(() => {
+      visits = [{ id: "decision-1", stepId: "step-1", consumed: false }];
+      store.consume.mockReset().mockImplementation(async (input: {
+        runId: string; proof: { stepId: string }; action: { toolName: string }; publishDecisionId?: string;
+      }) => {
+        const own = visits.filter((v) => v.stepId === input.proof.stepId);
+        let visit: Visit | undefined;
+        if (input.publishDecisionId !== undefined) {
+          visit = own.find((v) => v.id === input.publishDecisionId);
+          if (!visit) throw new store.RunStepToolPolicyRefusal("action_decision_binding_mismatch");
+        } else {
+          if (own.length === 0) throw new store.RunStepToolPolicyRefusal("action_person_decision_missing");
+          if (own.length > 1) throw new store.RunStepToolPolicyRefusal("action_decision_binding_missing");
+          visit = own[0]!;
+        }
+        if (visit.consumed) throw new store.RunStepToolPolicyRefusal("action_person_decision_already_consumed");
+        visit.consumed = true;
+        return Object.freeze({ consumptionKey: `publish_decision:${visit.id}`, decisionId: visit.id, decidedBy: "person-1",
+          stepId: input.proof.stepId, action: input.action });
+      });
+    });
+    const visitFrame = (publishDecisionId?: string, stepId = "step-1") => runFrame({
+      verifiedStepId: stepId, verifiedExecutedSource: source(stepId),
+      ...(publishDecisionId === undefined ? {} : { verifiedPublishDecisionId: publishDecisionId }),
+    });
+
+    // Before the change the consumption gets no decision id, so with two visits the delayed call is refused as unbound:
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("a delayed first-visit call after the second release never uses the second visit's decision", async () => {
+      const server = await buildServer();
+      expect((await server.call(OUTWARD, visitFrame("decision-1"))).isError).toBeFalsy();
+      visits.push({ id: "decision-2", stepId: "step-1", consumed: false });
+      const delayed = await server.call(OUTWARD, visitFrame("decision-1"));
+      expect(delayed.content?.[0]?.text).toContain(`${REASON}:action_person_decision_already_consumed`);
+      expect(visits.find((v) => v.id === "decision-2")!.consumed).toBe(false);
+      expect(server.handled).toEqual([OUTWARD]);
+      expect((store.consume.mock.calls[0]![0] as { publishDecisionId?: unknown }).publishDecisionId).toBe("decision-1");
+    });
+
+    // red-first-expect: expected true to be falsy
+    it("the second visit's own call is served once", async () => {
+      visits.push({ id: "decision-2", stepId: "step-1", consumed: false });
+      const server = await buildServer();
+      expect((await server.call(OUTWARD, visitFrame("decision-2"))).isError).toBeFalsy();
+      const again = await server.call(OUTWARD, visitFrame("decision-2"));
+      expect(again.content?.[0]?.text).toContain(`${REASON}:action_person_decision_already_consumed`);
+      expect(visits.map((v) => v.consumed)).toEqual([false, true]);
+      expect(server.handled).toEqual([OUTWARD]);
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("refuses a verified decision of another step, and uses nothing up", async () => {
+      visits.push({ id: "decision-other-step", stepId: "step-2", consumed: false });
+      const server = await buildServer();
+      const result = await server.call(OUTWARD, visitFrame("decision-other-step"));
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_decision_binding_mismatch`);
+      expect(visits.every((v) => !v.consumed)).toBe(true);
+      expect(server.handled).toEqual([]);
+    });
+
+    it("serves a call with no verified decision when the step has exactly one decision", async () => {
+      const server = await buildServer();
+      expect((await server.call(OUTWARD, visitFrame())).isError).toBeFalsy();
+      expect((store.consume.mock.calls[0]![0] as { publishDecisionId?: unknown }).publishDecisionId).toBeUndefined();
+      expect(server.handled).toEqual([OUTWARD]);
+    });
+
+    it("hands a malformed frame value to the consumption unchanged, never as an absent one", async () => {
+      const server = await buildServer();
+      await server.call(OUTWARD, runFrame({ verifiedPublishDecisionId: 7 }));
+      expect((store.consume.mock.calls[0]![0] as { publishDecisionId?: unknown }).publishDecisionId).toBe(7);
+    });
+  });
 });

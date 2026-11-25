@@ -1811,6 +1811,11 @@ export type CheckedOutwardRunAction = Readonly<{
   /** The item and revision the call acts on, read from its arguments by the
    * tool's declared subject fields; null when the tool declares no subject. */
   subject: RunActionSubject | null;
+  /** The publish decision of the call's own visit of the step, as the frame
+   * verified it (`verifiedPublishDecisionId`, cinatra#3745); absent when the
+   * runtime signed none. Passed to the consumption as it is, which applies the
+   * rule for a call with and without one. */
+  publishDecisionId: string | undefined;
 }>;
 
 /** The names of a tool's two input fields that carry its item and revision (the
@@ -1894,7 +1899,10 @@ export function checkOutwardRunAction(input: {
   }
   // The item and revision the call acts on, read by the declared field names.
   const subject = input.subject === undefined || input.subject === null ? null : readCallSubject(input.subject, input.args);
-  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action, subject });
+  // The frame's verified decision of this visit, read once from its own data
+  // property and handed on unchanged (the consumption refuses a malformed one).
+  const publishDecisionId = Object.getOwnPropertyDescriptor(frame, "verifiedPublishDecisionId")?.value as string | undefined;
+  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action, subject, publishDecisionId });
 }
 
 /**
@@ -1916,7 +1924,8 @@ export async function consumeOutwardRunAction(checked: CheckedOutwardRunAction):
   }
   try {
     return await consumeRunActionDecision({ orgId: checked.orgId, runId: checked.runId,
-      authority: checked.authority, proof: checked.proof, action, subject: checked.subject });
+      authority: checked.authority, proof: checked.proof, action, subject: checked.subject,
+      publishDecisionId: checked.publishDecisionId });
   } catch (err) {
     if (runActionRefusalClassCode(err)) throw err;
     throw new RunStepToolPolicyRefusal("action_person_decision_unavailable");
