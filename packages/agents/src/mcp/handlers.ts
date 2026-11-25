@@ -280,7 +280,12 @@ import {
   cleanupForAgent,
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
-import { approveReviewTaskInternal } from "../review-task-actions";
+import {
+  approveReviewTaskInternal,
+  LIST_STEP_ANSWER_NAMES_NO_LIST,
+  midRunAnswerLacksAList,
+} from "../review-task-actions";
+import { readDurableHitlGateForContinue } from "../agent-run-hitl-prompts";
 import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
 import { describeStartedRun } from "../run-status";
@@ -2147,6 +2152,25 @@ async function handleAgentBuilderRunResume(
       // retries from the beginning instead of continuing from the checkpoint.
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
+      }
+      // cinatra#3562: a list step is answered with a list, here as on the review
+      // page's Continue (`midRunAnswerLacksAList`), refused before the pause is
+      // claimed. The step is read from its durable gate row; a row that cannot
+      // be read leaves only the answer's own reading.
+      {
+        let gateXRenderer: string | null = null;
+        try {
+          gateXRenderer =
+            (await readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`))?.xRenderer ?? null;
+        } catch {
+          gateXRenderer = null;
+        }
+        if (midRunAnswerLacksAList(gateXRenderer, { userResponse, approvalNote })) {
+          return {
+            error: "This step is answered with a list: resume it with an approvalNote that names one, or pick the list on its card.",
+            code: LIST_STEP_ANSWER_NAMES_NO_LIST,
+          };
+        }
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");

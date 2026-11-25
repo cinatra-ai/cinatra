@@ -9,7 +9,6 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
-  type ComponentType,
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
@@ -51,7 +50,7 @@ import {
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
-import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
+import type { FieldRendererContext } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
@@ -72,6 +71,7 @@ import {
   useRunReviewRailRefresh,
   type RunReviewSlot,
   type RunReviewSlotReader,
+  GateValidityOwner,
 } from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 // The review screen's PLACEHOLDER (cinatra#2997) and the gate-level BLOCKED
@@ -109,7 +109,6 @@ import {
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
-  type GateValidityStore,
 } from "./hitl-gate-submit";
 import {
   applyJustSubmittedSuppression,
@@ -539,33 +538,6 @@ function withoutLifecycleCardRef(
   const { lifecycleCardRef: _ref, ...rest } = values;
   void _ref;
   return rest;
-}
-
-/**
- * Draws a gate's renderer so that its validity reports (cinatra#3562, see
- * `GateValidityStore`) are its own: the renderer reports under an owner that
- * lives as long as it does, and the release drops only that owner's report.
- * Another renderer in its place gets a new owner. The owner is attached and
- * released in a layout effect: a renderer's own layout effects run first, so a
- * report it makes at mount is kept and counts at the attach, in the same commit.
- */
-function GateValidityOwner({
-  renderer: Renderer,
-  store,
-  gateKey,
-  ...props
-}: FieldRendererProps & {
-  renderer: ComponentType<FieldRendererProps>;
-  store: GateValidityStore;
-  gateKey: string;
-}): ReactNode {
-  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
-  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
-  useLayoutEffect(() => {
-    store.attach(owner);
-    return () => store.release(owner);
-  }, [store, owner]);
-  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
 export function AgenticRunPanel({

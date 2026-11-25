@@ -110,6 +110,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -125,6 +126,7 @@ import {
   useCookieSessionSurface,
   useLifecycleCardAuth,
   useLifecycleCardHost,
+  GateValidityOwner,
   type LifecycleCardAuth,
 } from "./lifecycle-card-runtime";
 import {
@@ -143,6 +145,7 @@ import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   applyRendererApprovalNote,
+  createGateValidityStore,
   gateAwaitsRendererValue,
   hasUsableListPick,
   hitlGateIdentityKey,
@@ -158,6 +161,7 @@ import {
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
+  type GateValidityStore,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -738,7 +742,7 @@ export function AgentHitlScreenFields({
   registerFlush,
   gateKey,
   onRequestRefresh,
-  onValidityChange,
+  validityStore,
 }: {
   runId: string;
   /** THE HOST THIS REGION IS DRAWN ON — §I's hierarchy is a fact about the
@@ -776,8 +780,9 @@ export function AgentHitlScreenFields({
   /** A list step's new read (cinatra#3562), handed to the renderer through the
    *  shared props contract; see `listStepRefreshFor`. */
   onRequestRefresh?: () => Promise<unknown>;
-  /** The renderer's report on whether its value may be sent (props contract 1). */
-  onValidityChange?: (valid: boolean) => void;
+  /** Where the renderer's report on whether its value may be sent is kept
+   *  (props contract 1), under the gate identity `gateKey`. */
+  validityStore: GateValidityStore;
 }): ReactElement {
   const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
@@ -853,10 +858,14 @@ export function AgentHitlScreenFields({
           Waiting for input — no renderer configured for this step.
         </p>
       ) : (
-        <Renderer
+        <GateValidityOwner
           // The full gate identity (review task, renderer, field), as the buffer
           // is keyed (cinatra#3380, cinatra#3035): a later gate remounts with no pick.
           key={hitlGateKey(gate)}
+          // Its validity reports are kept with this gate (cinatra#3562).
+          renderer={Renderer}
+          store={validityStore}
+          gateKey={gateKey ?? ""}
           fieldName={hitlRendererFieldName(gate.fieldName ?? undefined)}
           schema={renderSchema}
           value={
@@ -916,7 +925,6 @@ export function AgentHitlScreenFields({
           }
           registerFlush={registerRendererFlush}
           onRequestRefresh={onRequestRefresh}
-          onValidityChange={onValidityChange}
         />
       )}
     </div>
@@ -1247,28 +1255,21 @@ export function AgentHitlScreenCard({
   // cinatra#3035: the mounted renderer reports here when it settles on the floor,
   // for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(gateKey);
-  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562). The renderer
-  // reports through `onValidityChange` whether what it holds may be sent (the
-  // list step: whether its pick is one the step still offers); the report is
-  // kept with the gate it was made for. While this gate's latest report is
-  // `false`, the card's Continue is unavailable, on a setup gate as on a
-  // mid-run one, as on the run page and in the stepper. The setup press also
-  // reads the report from a ref after its flush, since the flush can make the
-  // renderer report. A gate the renderer has not reported on holds nothing.
-  const [gateValidity, setGateValidity] = useState<{
-    gateKey: string | null;
-    valid: boolean;
-  } | null>(null);
-  const gateValidityRef = useRef<{ gateKey: string | null; valid: boolean } | null>(null);
-  const reportGateValidity = useCallback(
-    (valid: boolean) => {
-      gateValidityRef.current = { gateKey, valid };
-      setGateValidity({ gateKey, valid });
-    },
-    [gateKey],
+  // THE RENDERER'S OWN READING OF ITS VALUE (cinatra#3562), kept the way the
+  // run panel and the stepper keep it (`GateValidityStore`, the renderer drawn
+  // through `GateValidityOwner`): each report is kept with the gate it was made
+  // for, and goes with the renderer that made it. While a report on the gate on
+  // screen is `false`, the card's Continue is unavailable, on a setup gate as
+  // on a mid-run one, and every press reads the store again before it sends (a
+  // grouped form's own submit too; the setup press again after its flush), so
+  // a report the drawn state has not caught up with holds the press as well.
+  // A gate the renderer has not reported on holds nothing.
+  const [gateValidity] = useState(createGateValidityStore);
+  const gateReportedInvalid = useSyncExternalStore(
+    gateValidity.subscribe,
+    () => gateValidity.isHeld(gateKey),
+    () => false,
   );
-  const gateReportedInvalid =
-    gateValidity !== null && gateValidity.gateKey === gateKey && !gateValidity.valid;
   // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
   // made for one gate can arrive after the next gate has been committed: a
   // flush that took its time, or a replaced renderer that still calls its
@@ -1429,9 +1430,11 @@ export function AgentHitlScreenCard({
 
   const onContinue = useCallback(
     async (payload: Record<string, unknown>) => {
+      // Reported unsendable (see `gateValidity`): the press sends nothing.
+      if (gateValidity.isHeld(gateKey)) return;
       await submit(payload, undefined);
     },
-    [submit],
+    [submit, gateValidity, gateKey],
   );
 
   // WHERE THE CARD OWNS THE SEND, the setup field's own change STAGES instead of
@@ -1488,8 +1491,7 @@ export function AgentHitlScreenCard({
       if (liveGateKeyRef.current !== pressedFor) return;
       // Reported unsendable (see `gateValidity`), read after the flush: the
       // press sends nothing, and what is staged stays for a later press.
-      const report = gateValidityRef.current;
-      if (report !== null && report.gateKey === pressedFor && !report.valid) return;
+      if (gateValidity.isHeld(pressedFor)) return;
       const staged = takeSetupAnswer();
       // Nothing to submit: a required box the renderer refused to hand over says
       // so itself, in its own words, inside the field. The screen is left
@@ -1500,15 +1502,18 @@ export function AgentHitlScreenCard({
       setSubmitting(false);
       setupPressRef.current = false;
     }
-  }, [submit, gateKey, takeSetupAnswer]);
+  }, [submit, gateKey, takeSetupAnswer, gateValidity]);
 
   // The grouped-setup form's own submit lands here: the SAME approved envelope
   // the Continue builds, from the buffer the form just wrote.
   const onSubmitBuffer = useCallback(
     async (next: Record<string, unknown>) => {
+      // Held the same way: a grouped form's own submit sends nothing while a
+      // report on its gate is `false`.
+      if (gateValidity.isHeld(gateKey)) return;
       await submit({ ...next, approved: true, approvedAt: new Date().toISOString() }, undefined);
     },
-    [submit],
+    [submit, gateValidity, gateKey],
   );
 
   const body = useMemo<ReactNode>(() => {
@@ -1569,7 +1574,7 @@ export function AgentHitlScreenCard({
                 actions.readListStepContent(runId, reviewTaskId),
               ),
           )}
-          onValidityChange={reportGateValidity}
+          validityStore={gateValidity}
         />
         </RendererFloorReportContext.Provider>
         {isMidRun && !isGroupedSetup ? (
@@ -1612,7 +1617,7 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
-    reportGateValidity,
+    gateValidity,
     gateReportedInvalid,
   ]);
 

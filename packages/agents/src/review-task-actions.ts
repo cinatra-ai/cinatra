@@ -208,9 +208,72 @@ function isBlankSetupValue(value: unknown): boolean {
 function isListAnswerNamingNoList(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const answer = value as { scope?: unknown; listId?: unknown; listIds?: unknown };
-  if (answer.scope !== "list") return false;
+  return answer.scope === "list" && !listAnswerNamesAList(answer);
+}
+
+/** A usable `listId`, or a usable entry in `listIds` (a non-blank string). */
+function listAnswerNamesAList(answer: { listId?: unknown; listIds?: unknown }): boolean {
   const names = (id: unknown) => typeof id === "string" && id.trim() !== "";
-  return !(names(answer.listId) || (Array.isArray(answer.listIds) && answer.listIds.some(names)));
+  return names(answer.listId) || (Array.isArray(answer.listIds) && answer.listIds.some(names));
+}
+
+/**
+ * cinatra#3562 — the list answer a mid-run answer carries, or null. A list
+ * step's pick arrives lifted into the resume text (`liftRendererApprovalNote`:
+ * `{type: "list", listId, …}`, or `{type: "list", listIds, …}` for several
+ * picks), in `userResponse` when the host wrapped it with attachments
+ * (`{text, attachments}`), else in `approvalNote`, the order the resume text
+ * is taken in below.
+ */
+function midRunListAnswerOf(values: unknown): { listId?: unknown; listIds?: unknown } | null {
+  if (values === null || typeof values !== "object" || Array.isArray(values)) return null;
+  const { userResponse, approvalNote } = values as { userResponse?: unknown; approvalNote?: unknown };
+  const text =
+    typeof userResponse === "string" && userResponse.trim() !== ""
+      ? userResponse
+      : typeof approvalNote === "string"
+        ? approvalNote.trim()
+        : "";
+  const parse = (raw: string): unknown => {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  };
+  let parsed = parse(text);
+  if (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    !Array.isArray(parsed) &&
+    (parsed as { type?: unknown }).type === undefined &&
+    typeof (parsed as { text?: unknown }).text === "string"
+  ) {
+    parsed = parse((parsed as { text: string }).text);
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  return (parsed as { type?: unknown }).type === "list"
+    ? (parsed as { listId?: unknown; listIds?: unknown })
+    : null;
+}
+
+/** The stable code of the refusal of a list step answered without a list. */
+export const LIST_STEP_ANSWER_NAMES_NO_LIST = "LIST_STEP_ANSWER_NAMES_NO_LIST";
+
+/**
+ * cinatra#3562 — ONE RULE FOR EVERY MID-RUN ANSWER ROAD (the review page's
+ * Continue and `agent_run_resume`): true when the answer must be refused. A
+ * list answer that names no list is refused on any step; a step whose durable
+ * gate row names a list renderer (`xRenderer` ending `:list-picker`) is refused
+ * when its answer carries no list answer at all (a bare approve, a free text).
+ */
+export function midRunAnswerLacksAList(
+  gateXRenderer: string | null | undefined,
+  values: unknown,
+): boolean {
+  const listAnswer = midRunListAnswerOf(values);
+  if (listAnswer !== null) return !listAnswerNamesAList(listAnswer);
+  return typeof gateXRenderer === "string" && gateXRenderer.endsWith(":list-picker");
 }
 
 /**
@@ -1021,6 +1084,21 @@ export async function approveReviewTaskInternal(
     if (foundThroughReverseMap ? latestTaskId !== taskId : latestTaskId != null && latestTaskId !== taskId) {
       throw refuse(run.status, `is no longer the pause the run waits at`);
     }
+    // Read only THIS pre-dispatch materialization, never the latest gate later.
+    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
+    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
+    // A LIST STEP IS ANSWERED WITH A LIST (cinatra#3562, `midRunAnswerLacksAList`),
+    // refused before the pause is claimed, so nothing is recorded or
+    // dispatched. The hosts withhold their Continue for it; this is the
+    // server's own refusal.
+    {
+      if (midRunAnswerLacksAList(gateSnapshot?.xRenderer, values)) {
+        throw Object.assign(
+          new Error(`List step approval rejected: the answer to gate ${taskId} on run ${run.id} names no list`),
+          { code: LIST_STEP_ANSWER_NAMES_NO_LIST },
+        );
+      }
+    }
     const claim = await claimPause(
       { runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number },
       resumeAuthority,
@@ -1096,9 +1174,6 @@ export async function approveReviewTaskInternal(
     // A failure OF the dispatch is not released: WayFlow may already have taken
     // the message, and re-opening the gate there is the double resume this whole
     // section exists to prevent.
-    // Read only THIS pre-dispatch materialization, never the latest gate later.
-    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
     let dispatchStarted = false;
     let fencedAt = 0;
     let settled = false;

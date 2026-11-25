@@ -40,9 +40,11 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentType,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -63,6 +65,8 @@ import {
 // The pause a review gate belongs to (its id before the leg suffix): a pure
 // leaf module with no imports of its own.
 import { baseReviewTaskId } from "@/lib/artifacts/artifact-review-target";
+import type { FieldRendererProps } from "./field-renderer-registry";
+import type { GateValidityStore } from "./hitl-gate-submit";
 
 /** The server route that re-authorizes a ref and answers with the card envelope. */
 export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
@@ -120,6 +124,37 @@ export const LIFECYCLE_PUBLISH_DECISION_DECIDE_PATH = "/api/lifecycle-views/publ
  */
 export const LIFECYCLE_HITL_SCREEN_SUBMIT_PATH =
   "/api/lifecycle-views/hitl-screen/submit";
+
+/**
+ * Draws a gate's renderer so that its validity reports (cinatra#3562, see
+ * `GateValidityStore`) are its own: the renderer reports under an owner that
+ * lives as long as it does, and the release drops only that owner's report.
+ * Another renderer in its place gets a new owner. The owner is attached and
+ * released in a layout effect: a renderer's own layout effects run first, so a
+ * report it makes at mount is kept and counts at the attach, in the same commit.
+ *
+ * One implementation for every host that keeps the reports: the run panel,
+ * the stepper and the conversation's card all draw their gate's renderer
+ * through it, and all three already import this module.
+ */
+export function GateValidityOwner({
+  renderer: Renderer,
+  store,
+  gateKey,
+  ...props
+}: FieldRendererProps & {
+  renderer: ComponentType<FieldRendererProps>;
+  store: GateValidityStore;
+  gateKey: string;
+}): ReactElement {
+  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
+  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
+  useLayoutEffect(() => {
+    store.attach(owner);
+    return () => store.release(owner);
+  }, [store, owner]);
+  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
+}
 
 // ---------------------------------------------------------------------------
 // Host declaration — absent means "no host", which means no card.

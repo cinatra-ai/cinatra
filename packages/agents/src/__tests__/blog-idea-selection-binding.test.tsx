@@ -209,6 +209,7 @@ describe("the floor commits no pick, so a floor-drawn idea step does not hold it
     expect(reports.at(-1)).toBe(false);
   });
 
+  // red-first-expect: to contain 'return <Renderer {...props} onValidit
   it("each Continue caller lifts the hold only on the floor report of the renderer it mounts", () => {
     const src = (file: string) => readFileSync(join(__dirname, "..", file), "utf8");
     const card = src("agent-hitl-screen-card.tsx");
@@ -219,14 +220,15 @@ describe("the floor commits no pick, so a floor-drawn idea step does not hold it
     // draws the renderer as its own child, so the renderer still reports its floor.
     const floorWrapsOwner =
       /<RendererFloorReportContext\.Provider value=\{setRendererFloored\}>\s*(?:\{\/\*[^*]*\*\/\}\s*)?<GateValidityOwner\s+renderer=\{RendererComponent\}/;
-    const ownerDrawsRenderer = "return <Renderer {...props} onValidityChange=";
+    // One owner for every host, in the module all three import.
+    expect(src("lifecycle-card-runtime.tsx")).toContain("return <Renderer {...props} onValidityChange=");
+    // The card's region draws its renderer through the same owner.
+    expect(card).toMatch(/<GateValidityOwner\b[\s\S]*?renderer=\{Renderer\}/);
     const panel = src("agentic-run-panel.tsx");
     expect(panel).toMatch(floorWrapsOwner);
-    expect(panel).toContain(ownerDrawsRenderer);
     expect(panel).toContain("(!rendererFloored && continueAwaitsAPick(hitlRendererEntry?.entry, bufferedHitlValue))");
     const stepper = src("orchestrator-stepper-panel.tsx");
     expect(stepper).toMatch(floorWrapsOwner);
-    expect(stepper).toContain(ownerDrawsRenderer);
     expect(stepper).toContain("(!rendererFloored && continueAwaitsAPick(entry, bufferedHitlValue))");
     // No state is kept by binding id any more.
     expect(src("extension-field-renderer.tsx")).not.toMatch(/new Set<string>\(\)/);

@@ -51,6 +51,7 @@ vi.mock("../list-picker-actions", () => listActions);
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import { AgentHitlScreenCard, hitlGateKey, type AgentHitlScreenCarrier } from "../agent-hitl-screen-card";
+import { GROUPED_SETUP_FORM_RENDERER_ID } from "../agent-builder-ids";
 
 const RUN_ID = "run-3562";
 const LIST_STEP_ID = "@cinatra-test/pack-agent-refresh:list-picker";
@@ -477,5 +478,83 @@ describe("AgentHitlScreenCard — a setup list step's Continue follows the step'
     const [taskId, sent] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, unknown];
     expect(taskId).toBe(SETUP_TASK);
     expect(JSON.stringify(sent)).toContain('"listId":"l-1"');
+  });
+});
+
+/**
+ * EVERY PRESS READS THE REPORT AGAIN (cinatra#3562). The card keeps the
+ * renderer's validity reports in the store the run panel and the stepper use,
+ * and each of its sends reads it at the press: a report the drawn Continue has
+ * not caught up with holds the press too.
+ */
+describe("AgentHitlScreenCard — a press reads the step's validity report again (cinatra#3562)", () => {
+  /** Writes an answer at mount; its button reports the answer unsendable and
+   *  presses the card's Continue in the same turn, before the card redraws. */
+  function WithdrawsThenPresses({ onChange, onValidityChange }: FieldRendererProps) {
+    React.useLayoutEffect(() => {
+      void onChange({ userResponse: "ok" });
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return (
+      <Button
+        type="button"
+        onClick={() => {
+          onValidityChange?.(false);
+          (document.querySelector('[data-action="submit-hitl-screen"]') as HTMLButtonElement | null)?.click();
+        }}
+      >
+        Withdraw and press
+      </Button>
+    );
+  }
+  /** A grouped form: its own submit reports the answer unsendable, then submits. */
+  function WithdrawsThenSubmits({ onChange, onValidityChange }: FieldRendererProps) {
+    return (
+      <Button
+        type="button"
+        onClick={() => {
+          onValidityChange?.(false);
+          void onChange({ topic: "x" });
+        }}
+      >
+        Submit the form
+      </Button>
+    );
+  }
+  function bindOnly(id: string, renderer: (props: FieldRendererProps) => React.ReactElement) {
+    fieldRendererRegistry.clear();
+    fieldRendererRegistry.register({
+      id,
+      priority: 90,
+      condition: (_f, _s, ctx) => ctx.xRenderer === id,
+      renderer,
+      credentialSafe: true,
+    });
+  }
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("the mid-run Continue pressed before the card redraws sends nothing", async () => {
+    bindOnly(OTHER_STEP_ID, WithdrawsThenPresses);
+    asking = askingOn(OTHER_STEP_ID, {});
+    mountOn("chat_thread");
+    await settle();
+    const continueOf = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+    await waitFor(() => expect(continueOf().disabled).toBe(false), { timeout: 3000 });
+    fireEvent.click(screen.getByRole("button", { name: "Withdraw and press" }));
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    expect(continueOf().disabled).toBe(true);
+  });
+
+  // red-first-expect: expected "vi.fn()" to not be called at all, but actually been called 1 times
+  it("a grouped form's own submit made with its report false sends nothing", async () => {
+    const GROUPED = `${GROUPED_SETUP_FORM_RENDERER_ID}:output`;
+    bindOnly(GROUPED, WithdrawsThenSubmits);
+    asking = askingOn(GROUPED, {});
+    mountOn("chat_thread");
+    await settle();
+    fireEvent.click(await screen.findByRole("button", { name: "Submit the form" }, { timeout: 3000 }));
+    await settle();
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
   });
 });

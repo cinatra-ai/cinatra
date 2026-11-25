@@ -26,13 +26,11 @@ import {
   useCallback,
   useEffect,
   useInsertionEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
   useTransition,
-  type ComponentType,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -91,6 +89,7 @@ import {
   useRunReviewSlot,
   useRunReviewRailRefresh,
   type RunReviewSlot,
+  GateValidityOwner,
 } from "./lifecycle-card-runtime";
 // The publish card (cinatra#4150), mounted by the same rule as the agentic panel: one read decides the card and the
 // stage card's stand-down.
@@ -141,7 +140,6 @@ import {
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
   wrapPrimitiveSetupPayload,
-  type GateValidityStore,
   readSchemaFieldGate,
 } from "./hitl-gate-submit";
 // `resolveFieldLabel` joins it for cinatra#3532 fix leg 3: the answered step
@@ -163,7 +161,7 @@ import {
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
-import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
+import type { FieldRendererContext } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
@@ -516,33 +514,6 @@ function ReviewGateStepCard({
       </CardContent>
     </Card>
   );
-}
-
-/**
- * Draws a gate's renderer so that its validity reports (cinatra#3562, see
- * `GateValidityStore`) are its own: the renderer reports under an owner that
- * lives as long as it does, and the release drops only that owner's report.
- * Another renderer in its place gets a new owner. The owner is attached and
- * released in a layout effect: a renderer's own layout effects run first, so a
- * report it makes at mount is kept and counts at the attach, in the same commit.
- */
-function GateValidityOwner({
-  renderer: Renderer,
-  store,
-  gateKey,
-  ...props
-}: FieldRendererProps & {
-  renderer: ComponentType<FieldRendererProps>;
-  store: GateValidityStore;
-  gateKey: string;
-}): ReactElement {
-  const [owner, setOwner] = useState(() => ({ renderer: Renderer }));
-  if (owner.renderer !== Renderer) setOwner({ renderer: Renderer });
-  useLayoutEffect(() => {
-    store.attach(owner);
-    return () => store.release(owner);
-  }, [store, owner]);
-  return <Renderer {...props} onValidityChange={(valid) => store.report(owner, gateKey, valid)} />;
 }
 
 // THE IDENTITY OF ONE SETUP GATE (cinatra#3532). Sequential setup gates share
