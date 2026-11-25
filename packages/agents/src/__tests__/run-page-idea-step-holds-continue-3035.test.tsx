@@ -162,6 +162,9 @@ describe("the run page's idea step opens with nothing picked and its Continue un
   });
 
   it("U0: a mid-run gate of a kind that declares no hold keeps its Continue enabled with nothing typed", async () => {
+    // The gate's package declares its screen, as an installed package does: a
+    // binding of a kind that commits no pick (`campaign-recipients-review`).
+    registerFieldRendererBindings([{ id: HOLD_FREE_GATE.xRenderer, kind: "campaign-recipients-review", priority: 80 }]);
     stream.interruptContext = { ...HOLD_FREE_GATE };
     render(<OrchestratorStepperPanel {...panelProps()} />);
     await waitFor(() => expect(continueButtons().length).toBeGreaterThan(0));

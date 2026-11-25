@@ -186,6 +186,8 @@ import {
 } from "@/lib/assistant-runtime/lifecycle-view-envelope";
 import { createAgUiSinkAdapter } from "@/lib/assistant-runtime/ag-ui-sink-adapter";
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import { fieldRendererRegistry } from "../../../agents/src/field-renderer-registry";
+import { SchemaOnlyFloorRenderer } from "../../../agents/src/schema-field-renderer";
 
 import { projectConversationMessage } from "../ag-ui-chat-client";
 import { reduceAgUiEvents } from "../renderer/ag-ui-reducer";
@@ -240,7 +242,10 @@ const HITL_SCREEN_ASKING = {
   screenRef: REF_BY_KIND.agent_hitl_screen,
   gate: {
     reviewTaskId: "task-2827",
-    xRenderer: "cinatra.schema-field:output",
+    // A screen a real install draws: the plain form's own id, the id the flow
+    // compiler gives a step that declares no screen of its own. An id no
+    // registry entry or binding declares is refused (no control is drawn).
+    xRenderer: "@cinatra-ai/agent-builder:schema-field-fallback",
     inputSchema: { type: "object", properties: { answer: { type: "string" } } },
     currentValues: {},
     fieldName: "answer",
@@ -541,6 +546,19 @@ async function mountKind(kind: LifecycleCardKind) {
 let resolveStub: ReturnType<typeof installResolveStub>;
 
 beforeEach(() => {
+  // The plain form's entry exactly as a real install registers it at boot
+  // (`ensureDefaultFieldRenderersRegistered`, src/app/field-renderer-init.tsx):
+  // the HITL screen's gate is drawn with it. The full registration's module
+  // graph does not resolve in this package's test setup.
+  fieldRendererRegistry.register({
+    id: HITL_SCREEN_ASKING.gate.xRenderer,
+    priority: 1,
+    condition: (_fieldName, schema) => schema["x-renderer"] === HITL_SCREEN_ASKING.gate.xRenderer,
+    renderer: SchemaOnlyFloorRenderer,
+    drawnBySchemaFloor: true,
+    credentialSafe: true,
+    drawsOwnSubmit: true,
+  });
   holdStateMock.mockImplementation(async () => ({
     state: "held",
     agentPackageName: "@cinatra-ai/proof-agent",
