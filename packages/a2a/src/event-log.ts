@@ -430,6 +430,15 @@ export async function rememberWayflowGateTask(
  * time to live of both, and a list that starts again (empty: never written, or
  * expired) drops what the hash held. The whole read and write is one script,
  * so two reports of one pause, or of two pauses, never both take a place.
+ *
+ * THE DURABLE RECORD IS THE SOURCE (cinatra#3562). These keys are a fast path:
+ * `recovered` is the run's last placed renderer pause as its durable gate
+ * record holds it (its task, its verified node or null, its place), read by
+ * the caller. When the list is empty, the list is rebuilt from it (filler
+ * entries up to its place, then its task, with its node as the last node), so
+ * a pause after the records expired keeps the step's place exactly as before.
+ * A pause reported again with a verified node, when it is the last placed pause,
+ * becomes the last node (a pause first recorded without one is repaired).
  */
 const RENDERER_GATE_PLACE_LUA = `
 local ttl = tonumber(ARGV[3])
@@ -440,9 +449,23 @@ end
 local list = redis.call('LRANGE', KEYS[1], 0, -1)
 if #list == 0 then
   redis.call('DEL', KEYS[2])
+  if ARGV[4] ~= '' and ARGV[6] ~= '' then
+    local place = tonumber(ARGV[6])
+    for i = 1, place do
+      redis.call('RPUSH', KEYS[1], '~recovered')
+    end
+    redis.call('RPUSH', KEYS[1], ARGV[4])
+    if ARGV[5] ~= '' then
+      redis.call('HSET', KEYS[2], 'last', ARGV[5])
+    end
+    list = redis.call('LRANGE', KEYS[1], 0, -1)
+  end
 end
 for i = 1, #list do
   if list[i] == ARGV[1] then
+    if ARGV[2] ~= '' and i == #list then
+      redis.call('HSET', KEYS[2], 'last', ARGV[2])
+    end
     keep()
     return i - 1
   end
@@ -472,6 +495,7 @@ export async function getOrAddWayflowRendererGateIndex(
   runId: string,
   taskId: string,
   verifiedNodeId?: string | null,
+  recovered?: { taskId: string; nodeId: string | null; place: number } | null,
 ): Promise<number> {
   await rememberWayflowGateTask(runId, taskId);
   const key = `cinatra:wayflow:renderer-gates:${runId}`;
@@ -484,6 +508,9 @@ export async function getOrAddWayflowRendererGateIndex(
     taskId,
     typeof verifiedNodeId === "string" ? verifiedNodeId : "",
     String(GATE_SEQUENCE_TTL_S),
+    recovered ? recovered.taskId : "",
+    recovered && typeof recovered.nodeId === "string" ? recovered.nodeId : "",
+    recovered && Number.isInteger(recovered.place) && recovered.place >= 0 ? String(recovered.place) : "",
   );
   const index = Number(place);
   if (!Number.isInteger(index) || index < 0) {

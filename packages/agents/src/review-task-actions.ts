@@ -39,8 +39,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
-import { stepFiresRendererGate, rendererGateStepsOf, recordedListStepRefreshValue } from "./orchestrator-gate-predicate";
-import { verifyGateNodeClaim } from "@/lib/agent-run-token";
+import { stepFiresRendererGate, rendererGateStepsOf, recordedListStepRefreshValue, recordedGateNode } from "./orchestrator-gate-predicate";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -1031,22 +1030,13 @@ export async function approveReviewTaskInternal(
         }
         // In a flow with more than one renderer step a pause is that step again
         // only by its verified node (`getOrAddWayflowRendererGateIndex`): the
-        // pause being refreshed must have one on record, or the next pause could
-        // take the next step's place. Then the refresh is refused.
-        if (rendererSteps.length > 1) {
-          const { resolveWayflowGateNodeClaim } = await import("@cinatra-ai/a2a");
-          const claim = await resolveWayflowGateNodeClaim(run.id, taskId).catch(() => null);
-          const node = verifyGateNodeClaim({
-            key: process.env.CINATRA_CONTEXT_ATTEST_KEY,
-            contextId: run.a2aContextId,
-            taskId,
-            claim,
-          });
-          if (node === null) {
-            throw new Error(
-              `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh: the step it waits at is not known`,
-            );
-          }
+        // pause being refreshed must have one in its durable record (written
+        // once with the pause, execution.ts; it does not expire), or the next
+        // pause could take the next step's place. Then the refresh is refused.
+        if (rendererSteps.length > 1 && recordedGateNode(gate.inputSchema) === null) {
+          throw new Error(
+            `WayFlow approval rejected: gate ${taskId} on run ${run.id} takes no list step refresh: the step it waits at is not known`,
+          );
         }
         listStepRefreshAsk = declaredRefreshValue;
       }

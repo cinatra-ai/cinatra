@@ -110,6 +110,18 @@ vi.mock("../agent-run-hitl-prompts", () => ({
     const fallback = durableGate.value;
     return durableGate.rows.get(reviewTaskId) ?? (fallback && fallback.reviewTaskId === reviewTaskId ? fallback : null);
   },
+  /** The run's other record with the highest recorded place, as the store's query orders them. */
+  readLastPlacedDurableRendererGate: async (_runId: string, exceptReviewTaskId: string) => {
+    if (durableGate.readFails) throw new Error("gate record read failed");
+    let best: { reviewTaskId: string; inputSchema: Record<string, unknown> } | null = null;
+    for (const [reviewTaskId, record] of durableGate.rows) {
+      const schema = (record.inputSchema ?? {}) as Record<string, unknown>;
+      const place = schema["x-cinatra-gate-place"];
+      if (reviewTaskId === exceptReviewTaskId || typeof place !== "number") continue;
+      if (best === null || place >= (best.inputSchema["x-cinatra-gate-place"] as number)) best = { reviewTaskId, inputSchema: schema };
+    }
+    return best;
+  },
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
@@ -148,9 +160,12 @@ const redis = vi.hoisted(() => {
   const lists = new Map<string, string[]>();
   const hashes = new Map<string, Map<string, string>>();
   const ttls = new Map<string, number>();
+  /** When set, the write of a pause's signed node claim fails. */
+  const faults = { claimWriteFails: false };
   const has = (key: string) => store.has(key) || lists.has(key) || hashes.has(key);
   class FakeRedis {
     async set(key: string, value: string, mode?: string, seconds?: number): Promise<"OK"> {
+      if (faults.claimWriteFails && key.startsWith("cinatra:wayflow:gate-node:")) throw new Error("claim write failed");
       store.set(key, value);
       if (mode === "EX" && typeof seconds === "number") ttls.set(key, seconds);
       else ttls.delete(key);
@@ -239,6 +254,7 @@ const redis = vi.hoisted(() => {
         .replace(/local function (\w+)\(\)/g, "const $1 = () => {")
         .replace(/\blocal\b/g, "let")
         .replace(/for (\w+) = 1, #(\w+) do/g, "for (let $1 = 1; $1 <= $2.length - 1; $1++) {")
+        .replace(/for (\w+) = 1, (\w+) do/g, "for (let $1 = 1; $1 <= $2; $1++) {")
         .replace(/#(\w+)/g, "($1.length - 1)")
         .replace(/\bif (.+) then (.+) end$/gm, "if ($1) { $2 }")
         .replace(/\bif (.+) then$/gm, "if ($1) {")
@@ -260,7 +276,7 @@ const redis = vi.hoisted(() => {
       return this;
     }
   }
-  return { store, lists, hashes, ttls, FakeRedis };
+  return { store, lists, hashes, ttls, faults, FakeRedis };
 });
 vi.mock("ioredis", () => ({ Redis: redis.FakeRedis, default: redis.FakeRedis }));
 
@@ -383,6 +399,7 @@ function arrange() {
   redis.lists.clear();
   redis.hashes.clear();
   redis.ttls.clear();
+  redis.faults.claimWriteFails = false;
   // A refused send leaves its queued answer behind: drop it.
   sendTask.mockReset();
   durableGate.value = null;
@@ -527,17 +544,30 @@ describe("cinatra#3562 — without a verified node, pauses are placed as before"
     expect(row.status).toBe("pending_approval");
   });
 
-  it("a refresh is refused when the runtime's signing key is not set", async () => {
+  it("a refresh is refused when the signing key was not set when the pause was recorded", async () => {
+    const key = process.env.CINATRA_CONTEXT_ATTEST_KEY;
+    delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
+    try {
+      await firstPause("task-list-1");
+    } finally {
+      process.env.CINATRA_CONTEXT_ATTEST_KEY = key;
+    }
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow(NOT_KNOWN);
+    expect(sendTask).not.toHaveBeenCalled();
+  });
+
+  it("a pause verified when it was recorded still refreshes after the signing key is removed", async () => {
     await firstPause("task-list-1");
     const key = process.env.CINATRA_CONTEXT_ATTEST_KEY;
     delete process.env.CINATRA_CONTEXT_ATTEST_KEY;
     try {
       // red-first-expect: buildListStepRefreshPayload is not a function
-      await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow(NOT_KNOWN);
+      await refresh("task-list-1", "task-list-2", null, "none");
     } finally {
       process.env.CINATRA_CONTEXT_ATTEST_KEY = key;
     }
-    expect(sendTask).not.toHaveBeenCalled();
+    expect(sendTask).toHaveBeenCalledTimes(1);
   });
 
   it("a pause after a refresh with a claim that does not verify takes a new place: no place is reused without a verified node", async () => {
@@ -560,14 +590,74 @@ describe("cinatra#3562 — without a verified node, pauses are placed as before"
 });
 
 describe("cinatra#3562 — when the run's place records expire", () => {
-  it("after the records expire (7 days), places restart from the first renderer step, as before", async () => {
+  /** Every Redis record of the run is gone (the seven-day expiry, or never written). */
+  const allRedisRecordsGone = () => {
+    redis.lists.clear();
+    redis.hashes.clear();
+    redis.store.clear();
+    redis.ttls.clear();
+  };
+  const SHARED_LIST_TEMPLATE = {
+    ...TEMPLATE,
+    approvalPolicy: {
+      steps: [
+        { ...TEMPLATE.approvalPolicy.steps[0], stepNumber: 1 },
+        { ...TEMPLATE.approvalPolicy.steps[0], stepNumber: 2 },
+        { ...TEMPLATE.approvalPolicy.steps[1], stepNumber: 3 },
+      ],
+    },
+  };
+
+  it("after the records expire (7 days), a pause reported again keeps its step: its place is read from its durable record", async () => {
     await firstPause("task-list-1");
     await pick("task-list-1", "task-second-1");
-    redis.lists.delete(RENDERER_GATES_KEY);
-    redis.hashes.delete(NODES_KEY);
+    allRedisRecordsGone();
+    // red-first-expect: expected '@cinatra-ai/email-outreach-agent:list
     await reportAgain("task-second-1", SECOND_NODE);
-    // The place is not known any more: the pause takes place 0, the list step's.
+    expect(renderers().at(-1)).toBe(SECOND_STEP_ID);
+  });
+
+  it("a gate that waits ten days still refreshes, and the pause after the refresh keeps the step", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(SHARED_LIST_TEMPLATE);
+    await firstPause("task-a-1", LIST_NODE);
+    await pick("task-a-1", "task-b-1", OTHER_LIST_NODE);
+    allRedisRecordsGone();
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-b-1", "task-b-2", OTHER_LIST_NODE);
+    await refresh("task-b-2", "task-b-3", OTHER_LIST_NODE);
+    await pick("task-b-3", "task-second-1", SECOND_NODE);
+    expect(stepNumbers()).toEqual([1, 2, 2, 2, 3]);
+  });
+
+  it("a refresh is taken when the pause's node claim could not be written", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue(SHARED_LIST_TEMPLATE);
+    await firstPause("task-a-1", LIST_NODE);
+    redis.faults.claimWriteFails = true;
+    await pick("task-a-1", "task-b-1", OTHER_LIST_NODE);
+    redis.faults.claimWriteFails = false;
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await refresh("task-b-1", "task-b-2", OTHER_LIST_NODE);
+    expect(stepNumbers()).toEqual([1, 2, 2]);
+  });
+
+  it("a pause first recorded without a verified node and reported again with one is repaired: its refresh keeps the step", async () => {
+    await firstPause("task-list-1", LIST_NODE, "none");
+    await reportAgain("task-list-1");
+    // red-first-expect: expected undefined to be 'recipients-scope_gate'
+    expect((durableGate.rows.get("wayflow-task-list-1")?.inputSchema as Record<string, unknown>)["x-cinatra-gate-node"]).toBe(LIST_NODE);
+    await refresh("task-list-1", "task-list-2");
     expect(renderers().at(-1)).toBe(LIST_STEP_ID);
+    await pick("task-list-2", "task-second-1");
+    expect(renderers().at(-1)).toBe(SECOND_STEP_ID);
+  });
+
+  it("a later report never replaces a recorded node or place", async () => {
+    await firstPause("task-list-1");
+    await reportAgain("task-list-1", null);
+    const schema = durableGate.rows.get("wayflow-task-list-1")?.inputSchema as Record<string, unknown>;
+    // red-first-expect: expected undefined to be 'recipients-scope_gate'
+    expect(schema["x-cinatra-gate-node"]).toBe(LIST_NODE);
+    expect(schema["x-cinatra-gate-place"]).toBe(0);
   });
 
   const SEVEN_DAYS_S = 7 * 24 * 3600;
@@ -595,7 +685,7 @@ describe("cinatra#3562 — when the run's place records expire", () => {
     expect([redis.ttls.get(RENDERER_GATES_KEY), redis.ttls.get(NODES_KEY)]).toEqual([SEVEN_DAYS_S, SEVEN_DAYS_S]);
   });
 
-  it("node records left from an ended list are not read: the places restart together", async () => {
+  it("node records left from an ended list are not read: the place comes from the durable record", async () => {
     storeMock.readAgentTemplateById.mockResolvedValue({
       ...TEMPLATE,
       approvalPolicy: {
@@ -614,8 +704,10 @@ describe("cinatra#3562 — when the run's place records expire", () => {
     // The list ends alone; the node hash still says task-b-2 is place 1.
     redis.lists.delete(RENDERER_GATES_KEY);
     await reportAgain("task-b-2", OTHER_LIST_NODE);
-    expect(stepNumbers().at(-1)).toBe(1);
+    // The stale hash is dropped and the place is rebuilt from the durable record.
+    expect(stepNumbers().at(-1)).toBe(2);
     expect(redis.hashes.get(NODES_KEY)?.get("task:task-b-2")).toBeUndefined();
+    expect(redis.lists.get(RENDERER_GATES_KEY)).toEqual(["~recovered", "task-b-2"]);
     expect(redis.ttls.get(NODES_KEY)).toBe(SEVEN_DAYS_S);
   });
 });
@@ -659,7 +751,7 @@ describe("cinatra#3562 — the refresh value is the one the pause recorded", () 
     expect(sendTask).not.toHaveBeenCalled();
   });
 
-  it("a later report whose read of the first record fails records no value, so no other value can be sent", async () => {
+  it("a later report whose read of the first record fails writes nothing over it: the recorded value still refreshes", async () => {
     await firstPause("task-list-1");
     listBinding.params = { refreshValue: "reload" };
     durableGate.readFails = true;
@@ -668,11 +760,15 @@ describe("cinatra#3562 — the refresh value is the one the pause recorded", () 
     } finally {
       durableGate.readFails = false;
     }
-    // red-first-expect: buildListStepRefreshPayload is not a function
+    const schema = durableGate.rows.get("wayflow-task-list-1")?.inputSchema as Record<string, unknown>;
+    // red-first-expect: expected undefined to be 'refresh'
+    expect(schema["x-cinatra-list-step-refresh-value"]).toBe("refresh");
     await expect(
       approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("reload")),
     ).rejects.toThrow("takes no such list step refresh");
-    expect(sendTask).not.toHaveBeenCalled();
+    sendTask.mockResolvedValueOnce(pauseTask("task-list-2"));
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(renderers().at(-1)).toBe(LIST_STEP_ID);
   });
 });
 

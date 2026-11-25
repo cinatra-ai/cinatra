@@ -106,6 +106,11 @@ import {
   isListStepRefreshPayloadShape,
   listStepRefreshRequest,
   pauseStepNumber,
+  NO_GATE_ATTACHMENT_SCOPE,
+  gateAttachmentsAtPause,
+  listStepRefreshCarryFor,
+  afterListStepRefreshSend,
+  type GateAttachmentScope,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -746,14 +751,11 @@ export function AgenticRunPanel({
   // dep array `[]` and reads at submit time, not on render — the panel owns
   // its own visible-state copy.
   const pendingAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
-  // cinatra#3562: the pause a Try again was sent from and its step number (the
-  // step the run's policy places it at), while its refresh is under way. A
-  // refresh does not leave the step: the run pauses at the same step again as a
-  // new task, so what the person attached for it stays. BOUND TO THE PAUSE AND
-  // ITS STEP, never to the renderer (two steps can share one). Set when the
-  // refresh is sent, removed when the send fails, by any other answer, and by
-  // the first pause after it (see the attachment clear below).
-  const listStepRefreshCarryRef = useRef<{ fromReviewTaskId: string; stepNumber: number } | null>(null);
+  // cinatra#3562: which pause the attached files belong to, and the Try again
+  // under way, if any (`gateAttachmentsAtPause`, the rule the stepper applies
+  // too): files go to the next pause only when it directly follows a Try again
+  // of their pause at the same step number.
+  const gateAttachmentScopeRef = useRef<GateAttachmentScope>(NO_GATE_ATTACHMENT_SCOPE);
   // State-backed so onApply merges trigger re-render, matching HitlApprovalCard.
   // Accumulates renderer-produced values (e.g. campaignId from recipients renderer)
   // so the Continue button can include them in the resume payload.
@@ -1321,7 +1323,9 @@ export function AgenticRunPanel({
       // Reported unsendable: nothing is sent and nothing is changed.
       if (args.holdKey !== undefined && gateValidity.isHeld(args.holdKey)) return false;
       // Any answer other than a list step's refresh leaves the step.
-      if (!isListStepRefreshPayloadShape(args.payload)) listStepRefreshCarryRef.current = null;
+      if (!isListStepRefreshPayloadShape(args.payload)) {
+        gateAttachmentScopeRef.current = { ...gateAttachmentScopeRef.current, carry: null };
+      }
       if (args.trackApproving) setIsApproving(true);
       // This submit's own token: a failure below releases only what it added,
       // never the pair or the claim of another submit (cinatra#3080).
@@ -1734,13 +1738,12 @@ export function AgenticRunPanel({
   const currentReviewTaskId = effectiveHitlContext?.reviewTaskId ?? null;
   const currentStepNumber = pauseStepNumber(effectiveHitlContext?.currentValues);
   useEffect(() => {
-    const carry = listStepRefreshCarryRef.current;
-    if (carry !== null) {
-      if (currentReviewTaskId === null || currentReviewTaskId === carry.fromReviewTaskId) return;
-      listStepRefreshCarryRef.current = null;
-      if (currentStepNumber === carry.stepNumber) return;
-    }
-    pendingAttachmentsRef.current = [];
+    const next = gateAttachmentsAtPause(gateAttachmentScopeRef.current, {
+      reviewTaskId: currentReviewTaskId,
+      stepNumber: currentStepNumber,
+    });
+    gateAttachmentScopeRef.current = next.scope;
+    if (!next.keep) pendingAttachmentsRef.current = [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentReviewTaskId]);
   // React-idiomatic "derived state reset" pattern: when the tracked xRenderer
@@ -1838,9 +1841,10 @@ export function AgenticRunPanel({
       listStepRefreshInFlightRef.current = forGate;
       // A pause with no step number carries nothing: its files are cleared at
       // the next pause, as for any other answer.
-      const stepNumber = pauseStepNumber(gate.currentValues);
-      listStepRefreshCarryRef.current =
-        stepNumber === null ? null : { fromReviewTaskId: gate.reviewTaskId, stepNumber };
+      gateAttachmentScopeRef.current = {
+        ...gateAttachmentScopeRef.current,
+        carry: listStepRefreshCarryFor({ reviewTaskId: gate.reviewTaskId, values: gate.currentValues }),
+      };
       try {
         const sent = await performGateSubmit({
           reviewTaskId: gate.reviewTaskId,
@@ -1853,9 +1857,7 @@ export function AgenticRunPanel({
         });
         // A failed send leaves the step where it was: nothing is carried to a
         // later pause.
-        if (!sent && listStepRefreshCarryRef.current?.fromReviewTaskId === gate.reviewTaskId) {
-          listStepRefreshCarryRef.current = null;
-        }
+        gateAttachmentScopeRef.current = afterListStepRefreshSend(gateAttachmentScopeRef.current, gate.reviewTaskId, sent);
       } finally {
         listStepRefreshInFlightRef.current = null;
       }

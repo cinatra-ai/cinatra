@@ -36,6 +36,34 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
  */
 export const LIST_STEP_REFRESH_VALUE_SCHEMA_KEY = "x-cinatra-list-step-refresh-value";
 
+/**
+ * cinatra#3562: WHAT A PAUSE IS, recorded with its durable gate record (the
+ * gate's schema, beside the refresh value), once, at the first record of the
+ * task. `GATE_NODE_SCHEMA_KEY` holds the flow node that paused the run as the
+ * runtime signed it and the host verified it; a record without it is the
+ * recorded fact that the pause had no verified node. A later report never
+ * replaces a recorded node; it may add one where none was recorded. `GATE_PLACE_SCHEMA_KEY` holds
+ * the place the pause took in the run's renderer step sequence
+ * (`getOrAddWayflowRendererGateIndex`); it is never replaced. A refresh, and
+ * the place of the pause after it, read these, never an expiring key.
+ */
+export const GATE_NODE_SCHEMA_KEY = "x-cinatra-gate-node";
+export const GATE_PLACE_SCHEMA_KEY = "x-cinatra-gate-place";
+
+/** The verified node a gate's record holds; null when it holds none (no node, or a recorded "none"). */
+export function recordedGateNode(schema: unknown): string | null {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return null;
+  const value = (schema as Record<string, unknown>)[GATE_NODE_SCHEMA_KEY];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/** The place a gate's record holds; null when it holds none. */
+export function recordedGatePlace(schema: unknown): number | null {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return null;
+  const value = (schema as Record<string, unknown>)[GATE_PLACE_SCHEMA_KEY];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 /** cinatra#3562: the refresh value a gate's recorded schema carries; undefined when none (or blank). */
 export function recordedListStepRefreshValue(schema: unknown): string | undefined {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return undefined;

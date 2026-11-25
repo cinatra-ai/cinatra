@@ -33,6 +33,7 @@ import {
   useSyncExternalStore,
   useTransition,
   type ComponentType,
+  type MutableRefObject,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -136,6 +137,12 @@ import {
   liftRendererApprovalNote,
   buildListStepRefreshPayload,
   listStepRefreshRequest,
+  pauseStepNumber,
+  NO_GATE_ATTACHMENT_SCOPE,
+  gateAttachmentsAtPause,
+  listStepRefreshCarryFor,
+  afterListStepRefreshSend,
+  type GateAttachmentScope,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -699,6 +706,8 @@ function HitlApprovalCard({
   onListStepRefreshSent,
   onSetupAnswerAccepted,
   embedMode = false,
+  attachmentsRef,
+  attachmentScopeRef,
 }: {
   interruptContext: InterruptCtx;
   runId: string;
@@ -733,6 +742,11 @@ function HitlApprovalCard({
    *  Used by Dev Stepper View so the inline preview doesn't double-card the
    *  child agent's HITL form. */
   embedMode?: boolean;
+  /** cinatra#3562: the attached files and the pause they belong to, held by
+   *  the panel so they outlive this card, which unmounts while the run works
+   *  on an answer. Absent: the card holds its own. */
+  attachmentsRef?: MutableRefObject<LlmAttachmentRef[]>;
+  attachmentScopeRef?: MutableRefObject<GateAttachmentScope>;
 }) {
   const [isApproving, setIsApproving] = useState(false);
 
@@ -747,7 +761,10 @@ function HitlApprovalCard({
   // `approveReviewTask` site below wraps the legacy `userResponse` text with
   // the envelope. Ref (not state) because the submit path reads at click time,
   // not on render; the panel owns its own visible-state copy.
-  const pendingAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
+  const ownAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
+  const pendingAttachmentsRef = attachmentsRef ?? ownAttachmentsRef;
+  const ownAttachmentScopeRef = useRef<GateAttachmentScope>(NO_GATE_ATTACHMENT_SCOPE);
+  const gateAttachmentScopeRef = attachmentScopeRef ?? ownAttachmentScopeRef;
 
   // Hoisted from useRef so onApply merges trigger a re-render.
   // NOTE (cinatra#853): the card previously also carried a
@@ -846,9 +863,18 @@ function HitlApprovalCard({
   // whenever the active gate changes (reviewTaskId transition) OR the gate
   // goes away. Covers the failure paths the success-clear misses:
   // already-resolved branch, external (non-panel) gate resolution, panel close.
+  // A list step's Try again keeps them for the next pause at the same step
+  // number (cinatra#3562, `gateAttachmentsAtPause`, the run panel's rule).
   const currentReviewTaskId = interruptContext?.reviewTaskId ?? null;
+  const currentStepNumber = pauseStepNumber(interruptContext?.values);
   useEffect(() => {
-    pendingAttachmentsRef.current = [];
+    const next = gateAttachmentsAtPause(gateAttachmentScopeRef.current, {
+      reviewTaskId: currentReviewTaskId,
+      stepNumber: currentStepNumber,
+    });
+    gateAttachmentScopeRef.current = next.scope;
+    if (!next.keep) pendingAttachmentsRef.current = [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentReviewTaskId]);
 
   // This panel has three approveReviewTask submit paths: main handleContinue
@@ -1187,15 +1213,24 @@ function HitlApprovalCard({
       if (!(await checkRunName())) return;
       if (!isGateOnScreen(forGate)) return;
       const payload = buildListStepRefreshPayload(refresh);
+      const fromReviewTaskId = interruptContext.reviewTaskId;
+      // The files attached at this pause go to the next pause at the same step
+      // number, and only after this send lands.
+      gateAttachmentScopeRef.current = {
+        ...gateAttachmentScopeRef.current,
+        carry: listStepRefreshCarryFor({ reviewTaskId: fromReviewTaskId, values: interruptContext.values }),
+      };
+      let sent = false;
       onApproved?.();
       setIsApproving(true);
       try {
-        const outcome = await approveReviewTask(interruptContext.reviewTaskId, payload, undefined, interruptContext.schema as Record<string, unknown> | undefined);
+        const outcome = await approveReviewTask(fromReviewTaskId, payload, undefined, interruptContext.schema as Record<string, unknown> | undefined);
         if (!outcome.ok) {
           onApproveRejected?.();
           setGateBlocked(outcome.blocked);
           return;
         }
+        sent = true;
         // A refresh answers no step, so it is not reported as a submission:
         // the replay map would show the retry as the step's pick.
         onListStepRefreshSent?.();
@@ -1205,6 +1240,7 @@ function HitlApprovalCard({
         onApproveRejected?.();
         toast.error("Could not continue this run.");
       } finally {
+        gateAttachmentScopeRef.current = afterListStepRefreshSend(gateAttachmentScopeRef.current, fromReviewTaskId, sent);
         setIsApproving(false);
       }
     } finally {
@@ -2885,6 +2921,11 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   // Show SpinnerCard immediately after the user clicks Continue, before the SSE
   // frame with the next interrupt arrives.
   const [awaitingNextStep, setAwaitingNextStep] = useState(false);
+  // cinatra#3562: the files attached at the approval card and the pause they
+  // belong to live here, not in the card, which unmounts while the run works on
+  // an answer: a list step's Try again carries them to the step's next pause.
+  const gateAttachmentsRef = useRef<LlmAttachmentRef[]>([]);
+  const gateAttachmentScopeRef = useRef<GateAttachmentScope>(NO_GATE_ATTACHMENT_SCOPE);
 
   // Reset when a new HITL interrupt arrives (effectiveInterruptContext gets a new value).
   useEffect(() => {
@@ -3428,6 +3469,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
         templateName={templateName}
         onApproved={() => setAwaitingNextStep(true)}
         onApproveRejected={() => setAwaitingNextStep(false)}
+        attachmentsRef={gateAttachmentsRef}
+        attachmentScopeRef={gateAttachmentScopeRef}
         onSetupAnswerAccepted={(gateKey, answer) => {
           setAnsweredSetupGateKeys((prev) =>
             prev.includes(gateKey) ? prev : [...prev, gateKey],

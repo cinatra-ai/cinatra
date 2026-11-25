@@ -104,6 +104,14 @@ const storeMock = vi.hoisted(() => {
   };
 });
 vi.mock("../store", () => storeMock);
+// cinatra#3562: the pause reads its own gate record before it writes one; this
+// suite holds no record database, so the read answers "no record yet" (a read
+// that fails writes no record).
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-hitl-prompts")>()),
+  readDurableHitlGateForContinue: async () => null,
+  readLastPlacedDurableRendererGate: async () => null,
+}));
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
 vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),

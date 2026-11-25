@@ -549,6 +549,10 @@ import {
 import {
   stepFiresRendererGate,
   LIST_STEP_REFRESH_VALUE_SCHEMA_KEY,
+  GATE_NODE_SCHEMA_KEY,
+  GATE_PLACE_SCHEMA_KEY,
+  recordedGateNode,
+  recordedGatePlace,
   recordedListStepRefreshValue,
 } from "./orchestrator-gate-predicate";
 import {
@@ -1827,7 +1831,8 @@ async function resolveWayflowXRenderer(
   taskId: string,
   verifiedNodeId: string | null,
   approvalPolicySteps: Array<{ stepNumber?: number; requiresApproval?: boolean; hitlOwnedBy?: string; xRenderer?: string; gateCount?: number; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; skipLlm?: boolean; firesRendererGate?: boolean; artifactReviewTargetsInput?: string; surfaceGateInputKeys?: unknown }>,
-): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null }> {
+  recoverLastPlaced: () => Promise<{ taskId: string; nodeId: string | null; place: number } | null> = async () => null,
+): Promise<{ xRenderer: string; stepNumber: number | null; schema: Record<string, unknown> | null; artifactReviewTargetsInput: string | null; surfaceGateInputKeys: string[] | null; place?: number }> {
   const fallback = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   // cinatra#4457 — a gate the walk below cannot pin to one step withholds every
   // key that any step lists (null: a list is unreadable, every run input).
@@ -1916,8 +1921,10 @@ async function resolveWayflowXRenderer(
   // gates, which are resolved by payload shape and never consume a policy slot),
   // so this stays aligned with `childSteps` even when context gates interleave.
   // cinatra#3562: a pause whose verified node is the last placed pause's node
-  // is that step again and keeps its place (event-log.ts).
-  const idx = await getOrAddWayflowRendererGateIndex(runId, taskId, verifiedNodeId);
+  // is that step again and keeps its place (event-log.ts). The durable record
+  // of the run's last placed pause rebuilds the place records when Redis holds
+  // none (expired, or never written).
+  const idx = await getOrAddWayflowRendererGateIndex(runId, taskId, verifiedNodeId, await recoverLastPlaced());
 
   // gateCount tells the resolver how many orchestrator-level input-required events
   // a single approval step spans.
@@ -1947,11 +1954,12 @@ async function resolveWayflowXRenderer(
         artifactReviewTargetsInput:
           typeof step.artifactReviewTargetsInput === "string" ? step.artifactReviewTargetsInput : null,
         surfaceGateInputKeys: readStoredKeyList(step.surfaceGateInputKeys),
+        place: idx,
       };
     }
     accumulated += gateCount;
   }
-  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys() };
+  return { xRenderer: fallback, stepNumber: null, schema: null, artifactReviewTargetsInput: null, surfaceGateInputKeys: unpinnedKeys(), place: idx };
 }
 
 // ---------------------------------------------------------------------------
@@ -2444,6 +2452,42 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       taskId: task.id,
       claim: gateNodeClaim,
     });
+    // cinatra#3562: WHAT THIS PAUSE IS, as its durable gate record already
+    // holds it (a later report of the same task). A read that fails is no
+    // "nothing recorded": this report then writes no record (see the record
+    // step below), so a passing fault never replaces a good record.
+    const ownGateRecord: { read: true; record: Awaited<ReturnType<typeof import("./agent-run-hitl-prompts")["readDurableHitlGateForContinue"]>> } | { read: false } =
+      await (async () => {
+        try {
+          const { readDurableHitlGateForContinue } = await import("./agent-run-hitl-prompts");
+          return { read: true as const, record: await readDurableHitlGateForContinue(runId, `wayflow-${task.id}`) };
+        } catch (err) {
+          console.error(
+            `[wayflow-gate-record] run=${runId} task=${task.id} the gate record could not be read (${err instanceof Error ? err.message : String(err)}); this report writes no gate record`,
+          );
+          return { read: false as const };
+        }
+      })();
+    const recordedSchema = ownGateRecord.read && ownGateRecord.record ? ownGateRecord.record.inputSchema : null;
+    // The node of this pause: the one its record holds (written once), else
+    // the one this report verifies (a record that held none may gain one).
+    const pauseNode = recordedGateNode(recordedSchema) ?? verifiedGateNode;
+    const recordedPlace = recordedGatePlace(recordedSchema);
+    // The run's last placed renderer pause, from the durable records: this
+    // pause itself when its record holds a place, else the run's other pause
+    // with the highest recorded place. A fault reads as none.
+    const recoverLastPlaced = async (): Promise<{ taskId: string; nodeId: string | null; place: number } | null> => {
+      if (recordedPlace !== null) return { taskId: task.id, nodeId: pauseNode, place: recordedPlace };
+      try {
+        const { readLastPlacedDurableRendererGate } = await import("./agent-run-hitl-prompts");
+        const last = await readLastPlacedDurableRendererGate(runId, `wayflow-${task.id}`);
+        const place = last ? recordedGatePlace(last.inputSchema) : null;
+        if (!last || place === null || !last.reviewTaskId.startsWith("wayflow-")) return null;
+        return { taskId: last.reviewTaskId.slice("wayflow-".length), nodeId: recordedGateNode(last.inputSchema), place };
+      } catch {
+        return null;
+      }
+    };
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2532,6 +2576,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // envelope contract.
     let wayflowXRenderer: string = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
     let wayflowStepNumber: number | null = null;
+    // cinatra#3562: the place this pause took in the renderer step sequence,
+    // when the sequence placed it (a flow with more than one renderer step).
+    let wayflowPlace: number | null = null;
     let wayflowSchema: Record<string, unknown> | null = null;
     // cinatra#1796 — the resolved gate's artifact-review marker (the flow input
     // that carries the immutable review targets), or null for an ordinary HITL
@@ -2599,9 +2646,10 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
             surfaceGateInputKeys: readStoredKeyList(s.surfaceGateInputKeys),
           };
         }
-        const resolved = await resolveWayflowXRenderer(runId, task.id, verifiedGateNode, policySteps);
+        const resolved = await resolveWayflowXRenderer(runId, task.id, pauseNode, policySteps, recoverLastPlaced);
         ({ xRenderer: wayflowXRenderer, stepNumber: wayflowStepNumber, schema: wayflowSchema, artifactReviewTargetsInput: wayflowArtifactReviewTargetsInput } =
           resolved);
+        wayflowPlace = typeof resolved.place === "number" ? resolved.place : null;
         // An absent template has no compiled step to say which keys are the
         // gate's: no run input fills it.
         wayflowSurfaceGateInputKeys = tmpl ? resolved.surfaceGateInputKeys : null;
@@ -3067,25 +3115,22 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // own step schema) loses it, so a gate cannot withhold run inputs itself.
     const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
     const wayflowGateId = `wayflow-${task.id}`;
-    // cinatra#3562: the refresh value is recorded with the gate ONCE, at the
-    // first record of this task, and a refresh of this pause sends exactly that
-    // value (review-task-actions.ts), whatever a later deployment declares. A
-    // later report of the same task (a reconnect, a retry, a re-emit) keeps the
-    // value its record holds, or none when the first record held none; only a
-    // task with no record yet takes the value its renderer binding declares
-    // now. A record that cannot be read, or a binding that cannot be read,
-    // records none, and the pause then takes no refresh. Only the host writes
-    // the key: the gate's own schema loses it first. The rest of the record is
-    // still refreshed by a later report (the schema's resolved options, the
-    // values, the time), as the durable gate row intends.
-    const declaredRefreshValue: unknown = await (async () => {
-      try {
-        const { readDurableHitlGateForContinue } = await import("./agent-run-hitl-prompts");
-        const recorded = await readDurableHitlGateForContinue(runId, wayflowGateId);
-        if (recorded) return recordedListStepRefreshValue(recorded.inputSchema);
-      } catch {
-        return undefined;
-      }
+    // cinatra#3562: WHAT THIS PAUSE IS is recorded with the gate ONCE, at the
+    // first record of this task, in the record's schema: the refresh value its
+    // list step's binding declares (a refresh sends exactly that value,
+    // review-task-actions.ts, whatever a later deployment declares), its
+    // verified node or the fact that it had none, and the place it took. A
+    // later report of the same task keeps what the record holds; only a node
+    // may be added where none was recorded (and then the place records were
+    // repaired from it above). Only the host writes these keys: the gate's own
+    // schema loses them first. When the record could not be read, this report
+    // writes none of them and no record at all (`persistArtifact` below): the
+    // next report writes it, and a passing fault costs nothing durable. The
+    // rest of the record is still refreshed by a later report (the schema's
+    // resolved options, the values, the time), as the durable gate row intends.
+    const declaredRefreshValue: unknown = (() => {
+      if (!ownGateRecord.read) return undefined;
+      if (ownGateRecord.record) return recordedListStepRefreshValue(recordedSchema);
       try {
         const binding = getMergedFieldRendererBindings().find((b) => b.id === wayflowXRenderer);
         return (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
@@ -3093,11 +3138,19 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         return undefined;
       }
     })();
+    const pausePlace = recordedPlace ?? wayflowPlace;
     const gateSchemaBase = {
-      ...withoutKeys(withoutGateKeysList(gateSchemaSource), [LIST_STEP_REFRESH_VALUE_SCHEMA_KEY]),
+      ...withoutKeys(withoutGateKeysList(gateSchemaSource), [
+        LIST_STEP_REFRESH_VALUE_SCHEMA_KEY,
+        GATE_NODE_SCHEMA_KEY,
+        GATE_PLACE_SCHEMA_KEY,
+      ]),
       ...(typeof declaredRefreshValue === "string" && declaredRefreshValue.trim().length > 0
         ? { [LIST_STEP_REFRESH_VALUE_SCHEMA_KEY]: declaredRefreshValue }
         : {}),
+      // A record without the node key is the recorded fact "no verified node".
+      ...(ownGateRecord.read && pauseNode !== null ? { [GATE_NODE_SCHEMA_KEY]: pauseNode } : {}),
+      ...(ownGateRecord.read && pausePlace !== null ? { [GATE_PLACE_SCHEMA_KEY]: pausePlace } : {}),
     };
     const enrichedValues: Record<string, unknown> = {
       ...withoutKeys(gateRunInputs, keysWithheldFromRunInputs),
@@ -3145,15 +3198,20 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
-      persistArtifact: (artifact) =>
-        writeDurableHitlGateArtifact({
+      persistArtifact: async (artifact) => {
+        // cinatra#3562: a record that could not be read is not written over.
+        if (!ownGateRecord.read) {
+          throw new Error("the existing gate record could not be read");
+        }
+        await writeDurableHitlGateArtifact({
           runId,
           reviewTaskId: artifact.reviewTaskId,
           xRenderer: artifact.xRenderer,
           inputSchema: artifact.schema,
           values: artifact.values,
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
-        }),
+        });
+      },
       parkRun: async () => {
         try {
           await transitionRunStatus(runId, fromStatus, "pending_approval", { pauseTaskId: task.id, ...legFence }, authority);

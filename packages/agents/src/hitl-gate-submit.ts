@@ -588,6 +588,66 @@ export function pauseStepNumber(values: unknown): number | null {
 }
 
 /**
+ * WHICH PAUSE THE PERSON'S ATTACHED FILES BELONG TO (cinatra#3562), the one
+ * rule every host with attachments (the run panel, the stepper) applies, so
+ * the hosts cannot drift. Files belong to the pause they were attached at. A
+ * list step's Try again does not leave the step: the run pauses at the same
+ * step again as a new task, and the files go to that pause, and only to it.
+ *
+ * `carry` is the pause a Try again was sent from and its step number. It is
+ * set when the refresh is sent (`listStepRefreshCarryFor`), removed when the
+ * send fails (`afterListStepRefreshSend`) or any other answer is sent, and
+ * used once, by the first pause after it.
+ */
+export type ListStepRefreshCarry = { fromReviewTaskId: string; stepNumber: number };
+export type GateAttachmentScope = {
+  /** The pause the files were attached at, or null when no pause is shown. */
+  forReviewTaskId: string | null;
+  carry: ListStepRefreshCarry | null;
+};
+export const NO_GATE_ATTACHMENT_SCOPE: GateAttachmentScope = { forReviewTaskId: null, carry: null };
+
+/** The carry a Try again sent from this pause sets; none for a pause with no step number. */
+export function listStepRefreshCarryFor(gate: { reviewTaskId: string; values: unknown }): ListStepRefreshCarry | null {
+  const stepNumber = pauseStepNumber(gate.values);
+  return stepNumber === null ? null : { fromReviewTaskId: gate.reviewTaskId, stepNumber };
+}
+
+/** After a Try again's send: a send that did not land carries nothing. */
+export function afterListStepRefreshSend(
+  scope: GateAttachmentScope,
+  fromReviewTaskId: string,
+  sent: boolean,
+): GateAttachmentScope {
+  if (sent || scope.carry?.fromReviewTaskId !== fromReviewTaskId) return scope;
+  return { ...scope, carry: null };
+}
+
+/**
+ * The pause on screen now: whether the files attached so far stay, and the
+ * scope after it. The same pause keeps them. While no pause is shown they stay
+ * only when a Try again is under way. Another pause keeps them only when it
+ * directly follows a Try again of the pause they were attached at and has the
+ * same step number; every other pause starts with none.
+ */
+export function gateAttachmentsAtPause(
+  scope: GateAttachmentScope,
+  current: { reviewTaskId: string | null; stepNumber: number | null },
+): { keep: boolean; scope: GateAttachmentScope } {
+  if (current.reviewTaskId === null) {
+    return scope.carry !== null ? { keep: true, scope } : { keep: false, scope: { forReviewTaskId: null, carry: null } };
+  }
+  if (current.reviewTaskId === scope.forReviewTaskId) return { keep: true, scope };
+  const carry = scope.carry;
+  const keep =
+    carry !== null &&
+    carry.fromReviewTaskId !== current.reviewTaskId &&
+    current.stepNumber !== null &&
+    current.stepNumber === carry.stepNumber;
+  return { keep, scope: { forReviewTaskId: current.reviewTaskId, carry: null } };
+}
+
+/**
  * The answer a refresh request sends: the refresh value as the resume text
  * (`userResponse`) and under `LIST_STEP_REFRESH_KEY`, with no approval note and
  * no list. `now` is injectable for tests.

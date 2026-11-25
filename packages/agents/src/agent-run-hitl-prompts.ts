@@ -335,6 +335,26 @@ export async function readConfirmedContextGates(
 /** Internal exact materialization identity, distinct from the public latest-gate DTO. */
 export type ContinueGateSnapshot = DurableHitlGateArtifact & { readonly materializedAt: string };
 
+/**
+ * cinatra#3562: the durable record of the run's last placed renderer pause
+ * other than `exceptReviewTaskId`: the pause with the highest recorded place
+ * (`GATE_PLACE_SCHEMA_KEY`), newest first among equal places. Its node and
+ * place let the place of a pause be found again when the run's Redis place
+ * records are gone (expired, or never written). Null when the run has none.
+ */
+export async function readLastPlacedDurableRendererGate(
+  runId: string, exceptReviewTaskId: string, deps: {query?: HitlGateQuery} = {},
+): Promise<{ reviewTaskId: string; inputSchema: Record<string, unknown> } | null> {
+  const rows = await (deps.query ?? receiptQuery)<{ review_task_id: string; input_schema: Record<string, unknown> }>(
+    `SELECT review_task_id, input_schema FROM ${table("agent_run_hitl_gates")}
+       WHERE run_id = $1 AND review_task_id <> $2
+         AND jsonb_typeof(input_schema -> 'x-cinatra-gate-place') = 'number'
+       ORDER BY (input_schema ->> 'x-cinatra-gate-place')::int DESC, materialized_at DESC
+       LIMIT 1`, [runId, exceptReviewTaskId]);
+  const row = rows[0];
+  return row ? { reviewTaskId: row.review_task_id, inputSchema: row.input_schema } : null;
+}
+
 export async function readDurableHitlGateForContinue(
   runId: string, reviewTaskId: string, deps: {query?: HitlGateQuery} = {},
 ): Promise<ContinueGateSnapshot | null> {

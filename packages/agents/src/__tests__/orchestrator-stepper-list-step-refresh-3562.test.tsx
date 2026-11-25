@@ -21,6 +21,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 
 import { Button } from "@/components/ui/button";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { RunPageChrome } from "../run-page-chrome";
 import { fieldRendererRegistry } from "../field-renderer-registry";
 import type { FieldRendererProps } from "../field-renderer-registry";
 
@@ -413,5 +414,77 @@ describe("OrchestratorStepperPanel — a list step's Try again (cinatra#3562)", 
     const replay = await view.findByTestId("list-step-replay");
     expect(replay.textContent).toContain("list-a");
     expect(replay.textContent).not.toContain("listStepRefresh");
+  });
+});
+
+describe("OrchestratorStepperPanel — a list step's Try again keeps the files attached for that step (cinatra#3562)", () => {
+  const FILE = {
+    artifactId: "art-1",
+    representationRevisionId: "ver-1",
+    digest: "sha256:abc",
+    mime: "application/pdf",
+    originKind: "upload",
+    filename: "report.pdf",
+  };
+
+  beforeEach(() => {
+    fieldRendererRegistry.register({
+      id: LIST_STEP_ID,
+      priority: 110,
+      condition: (_fieldName, schema) =>
+        (schema as { "x-renderer"?: unknown })["x-renderer"] === LIST_STEP_ID,
+      renderer: PickOrRetryRenderer,
+      drawsOwnSubmit: true,
+    });
+  });
+
+  /** The run pauses at `reviewTaskId`, step `stepNumber`. */
+  const pauseAt = (reviewTaskId: string, stepNumber: number) => {
+    INTERRUPT = { schema: gateSchema(), xRenderer: LIST_STEP_ID, values: { stepNumber }, reviewTaskId };
+  };
+
+  async function attachThenTryAgain() {
+    pauseAt("wayflow-task-first", 1);
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    conversation.onSubmit = null;
+    const draw = () => <RunPageChrome>{twoListStepsPanel(OrchestratorStepperPanel)}</RunPageChrome>;
+    const view = render(draw());
+    await view.findByTestId("list-picker-try-again");
+    await waitFor(() => expect(conversation.onSubmit).not.toBeNull());
+    await act(async () => {
+      await conversation.onSubmit!("", [FILE]);
+    });
+    fireEvent.click(view.getByTestId("list-picker-try-again"));
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    return { view, rerender: () => view.rerender(draw()) };
+  }
+
+  async function pickAndContinue(view: ReturnType<typeof render>) {
+    fireEvent.click(await view.findByTestId("list-picker-pick"));
+    await waitFor(() => expect(productContinue()!.disabled).toBe(false));
+    fireEvent.click(productContinue()!);
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(2));
+    return (hitlActions.approveReviewTask.mock.calls[1] as unknown as [string, Record<string, unknown>])[1];
+  }
+
+  it("a file attached before Try again goes with the pick on the step's next pause", async () => {
+    // red-first-expect: to be called 1 times, but got 0 times
+    const { view, rerender } = await attachThenTryAgain();
+    pauseAt("wayflow-task-first-again", 1);
+    rerender();
+    const payload = await pickAndContinue(view);
+    expect(typeof payload.userResponse).toBe("string");
+    const envelope = JSON.parse(payload.userResponse as string) as { attachments: Array<{ artifactId: string }> };
+    expect(envelope.attachments.map((a) => a.artifactId)).toEqual(["art-1"]);
+  });
+
+  it("a file attached before Try again does not go with the next step's answer when the run moves on instead (guard)", async () => {
+    // red-first-expect: to be called 1 times, but got 0 times
+    const { view, rerender } = await attachThenTryAgain();
+    pauseAt("wayflow-task-second", 2);
+    rerender();
+    const payload = await pickAndContinue(view);
+    expect(payload).not.toHaveProperty("userResponse");
   });
 });
