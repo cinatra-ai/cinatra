@@ -30,18 +30,15 @@ import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { isTombstonedHitlRendererId } from "./orchestrator-mid-run-hitl";
 import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
-import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
+import { gateTaskIsCurrentPause, PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { transitionRunStatus } from "./store";
 
 type ClaimRef = { runId: string; orgId: string; token: string };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
-
-/** A pre-send step failed: give the lease back and throw the step's error, or
- * PauseClaimReleaseError when the release failed too. A `lost` release needs
- * nothing: the lease is no longer this claimer's. */
 
 /**
  * THE DISPLAY-ONLY STEP IDS: a step parked under one of them is drawn as a card
@@ -53,33 +50,70 @@ const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
 ]);
 
+const FLOW_GATE_TASK_PREFIX = "wayflow-";
+
+/** The run's latest-task key; a read fault, or a missing export, reads as no key. */
+export async function readLatestGateTaskId(runId: string): Promise<string | null> {
+  return (async () => (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(runId))()
+    .then((latest) => latest ?? null)
+    .catch(() => null);
+}
+
 /**
  * WHAT A GENERIC ANSWER MAY NOT CONSUME, read for both generic roads (the MCP
- * resume and the generic answer action). It decides on the run's CURRENT gate:
- * its newest durable row (`readCurrentDurableHitlGate`), never the row the run's
- * task-id column names (that column can be stale). Returns that gate and why an
- * answer is refused, or `null`:
- *   - `stale`: the caller named a gate (`namedReviewTaskId`) and the run's
- *     current gate is another one;
- *   - `display-only`: the current gate is a display-only card
- *     (`DISPLAY_ONLY_HITL_RENDERER_IDS`); only its own decision consumes it.
+ * resume and the generic answer action). Returns the durable row of the step
+ * the answer reaches, when there is one, and why the answer is refused, or
+ * `null`.
+ *
+ * WHICH STEP THE RUN WAITS AT is not the durable row's to say: its write is
+ * best-effort (human-gate-park.ts), so the run can wait at a step whose row was
+ * never written while an older step's row is the newest. It is decided as the
+ * answer road decides it everywhere else (`gateTaskIsCurrentPause`): the run's
+ * latest-task key and the run row. The newest durable row
+ * (`readCurrentDurableHitlGate`) only CONFIRMS:
+ *   - it names the gate the caller names (`namedReviewTaskId`): it is that
+ *     gate's row;
+ *   - it names another task that the run waits at by those sources: the row is
+ *     the current step's. A caller that named a gate is refused as `stale`;
+ *   - anything else (an older row, a row the sources do not name): it says
+ *     nothing, and is not used (`gate: null`). It never makes a current step
+ *     stale.
+ * Then, on the row it confirmed:
+ *   - `retired`: a retired step (`isTombstonedHitlRendererId`, the set every
+ *     host withholds its Continue for: `parkedHitlStepIsAnswerable`); nothing
+ *     answers it any more;
+ *   - `display-only`: a display-only card (`DISPLAY_ONLY_HITL_RENDERER_IDS`);
+ *     only its own decision consumes it.
  * It does not judge whether a page draws the step: every other recorded
- * renderer id is left to the road, as before. No durable row (`gate: null`)
- * refuses nothing. A row that cannot be read throws; each road refuses with its
- * own fixed text.
+ * renderer id is left to the road, as before. A row that cannot be read
+ * throws; each road refuses with its own fixed text. `latestTaskId`: the key as
+ * the road read it; left out, it is read here when a row needs it.
  */
 export async function currentHitlGateRefusal(input: {
-  readonly runId: string;
+  readonly run: { readonly id: string; readonly status: string; readonly a2aTaskId?: string | null };
   readonly namedReviewTaskId?: string;
-}): Promise<{ gate: DurableHitlGateArtifact | null; refusal: "stale" | "display-only" | null }> {
-  const gate = await readCurrentDurableHitlGate(input.runId);
+  readonly latestTaskId?: string | null;
+}): Promise<{ gate: DurableHitlGateArtifact | null; refusal: "stale" | "retired" | "display-only" | null }> {
+  const { run, namedReviewTaskId } = input;
+  const gate = await readCurrentDurableHitlGate(run.id);
   if (!gate) return { gate: null, refusal: null };
-  if (input.namedReviewTaskId !== undefined && gate.reviewTaskId !== input.namedReviewTaskId) {
-    return { gate, refusal: "stale" };
+  if (namedReviewTaskId === undefined || gate.reviewTaskId !== namedReviewTaskId) {
+    const rowTask = gate.reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX)
+      ? gate.reviewTaskId.slice(FLOW_GATE_TASK_PREFIX.length)
+      : "";
+    const latest = input.latestTaskId !== undefined ? input.latestTaskId : await readLatestGateTaskId(run.id);
+    if (!gateTaskIsCurrentPause({ status: run.status, a2aTaskId: run.a2aTaskId ?? null }, rowTask, latest)) {
+      return { gate: null, refusal: null };
+    }
+    if (namedReviewTaskId !== undefined) return { gate, refusal: "stale" };
   }
+  if (isTombstonedHitlRendererId(gate.xRenderer)) return { gate, refusal: "retired" };
   return { gate, refusal: DISPLAY_ONLY_HITL_RENDERER_IDS.has(gate.xRenderer) ? "display-only" : null };
 }
 
+/** A pre-send step failed: give the lease back and throw the step's error, or
+ * PauseClaimReleaseError when the release failed too. A `lost` release needs
+ * nothing: the lease is no longer this claimer's. */
 export async function failPreSendStep(
   ref: ClaimRef & { expiresAt: Date },
   authority: OrgWriteAuthority | undefined,

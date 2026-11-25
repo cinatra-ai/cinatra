@@ -180,7 +180,7 @@ describe("the conversation card's floor report belongs to the gate whose rendere
     return document.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
   }
 
-  it("C4: after gate A settled on the floor, gate B of the same binding draws its Continue held in every frame while it loads", async () => {
+  it("C4: after gate A settled on the floor, gate B of the same binding offers no available Continue in any frame while it loads", async () => {
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     __setFieldRendererComponentMapForTests({
       [FLOOR_ID]: {
@@ -208,9 +208,12 @@ describe("the conversation card's floor report belongs to the gate whose rendere
     );
     stream.current = floorStream("gate-floor-3035-a");
     const { rerender } = render(panel());
-    await waitFor(() => expect(panelContinue()).not.toBeNull());
-    // Gate A settled on its floor: the floor commits no pick, so its Continue is not held.
-    await waitFor(() => expect(panelContinue()!.disabled).toBe(false));
+    // Gate A settled on its floor: the floor's own Continue is the step's one, and
+    // the floor commits no pick, so it is not held.
+    await waitFor(() => expect(document.getElementById("field-selectedIdeaJson")).not.toBeNull());
+    await waitFor(() => expect(continueButtons()).toHaveLength(1));
+    await waitFor(() => expect(continueButtons()[0]!.disabled).toBe(false));
+    expect(panelContinue()).toBeNull();
 
     loadFloorComponent = () => new Promise(() => {});
     stream.current = floorStream("gate-floor-3035-b");
@@ -219,9 +222,11 @@ describe("the conversation card's floor report belongs to the gate whose rendere
     await act(async () => {
       await new Promise((r) => setTimeout(r, 20));
     });
-    expect(heldInFrame.length).toBeGreaterThan(0);
-    // Held in every committed frame of gate B, the first one included.
+    // No committed frame of gate B, the first one included, offers an available
+    // panel Continue; the loading plain form's Continue is the one, held.
     expect(heldInFrame).not.toContain(false);
-    expect(panelContinue()!.disabled).toBe(true);
+    expect(panelContinue()).toBeNull();
+    expect(continueButtons()).toHaveLength(1);
+    expect(continueButtons()[0]!.disabled).toBe(true);
   });
 });

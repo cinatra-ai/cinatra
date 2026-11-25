@@ -19,13 +19,21 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
   type ReactNode,
 } from "react";
 import type { FieldRendererProps } from "./field-renderer-registry";
-import { FloorAnswerMarkContext, FloorSubmitContext, RendererFloorReportContext, SchemaOnlyFloorRenderer } from "./schema-field-renderer";
+import {
+  FloorAnswerMarkContext,
+  FloorOwnsContinueReportContext,
+  FloorSubmitContext,
+  RendererFloorReportContext,
+  SchemaOnlyFloorRenderer,
+  schemaFloorDrawsOwnContinue,
+} from "./schema-field-renderer";
 import { loadFieldRendererComponent } from "./field-renderer-components";
 
 /** Render-time containment: an extension renderer that throws while rendering is
@@ -109,6 +117,17 @@ export function makeExtensionFieldRenderer(
       reportFloor?.(floored);
     }, [floored, reportFloor]);
     useEffect(() => () => reportFloor?.(false), [reportFloor]);
+    // ONE CONTINUE PER STEP (`FloorOwnsContinueReportContext`): while the plain
+    // form is on the screen (the load window included) and draws a Continue of
+    // its own, the host draws none beneath it. Reported in a layout effect, so
+    // the host's re-render lands before the paint: no frame shows two.
+    const reportFloorOwnsContinue = useContext(FloorOwnsContinueReportContext);
+    const floorOwnsContinue =
+      (floored || resolved === null) && schemaFloorDrawsOwnContinue(props.schema, props.hideSubmit);
+    useLayoutEffect(() => {
+      reportFloorOwnsContinue?.(floorOwnsContinue);
+    }, [floorOwnsContinue, reportFloorOwnsContinue]);
+    useLayoutEffect(() => () => reportFloorOwnsContinue?.(false), [reportFloorOwnsContinue]);
     // THE RESOLVED COMPONENT'S VALIDITY REPORTS (cinatra#3562). The host's
     // validity owner belongs to this wrapper, which stays on the screen when
     // the component inside it crashes into the floor. So the wrapper closes
@@ -180,7 +199,11 @@ export function makeExtensionFieldRenderer(
       props.schema as { "x-renderer"?: unknown } & Record<string, unknown>;
     const floorProps: FieldRendererProps = {
       ...props,
-      ...(heldAtCrash ? { disabled: true } : {}),
+      // While the component loads it may still mount and replace the plain
+      // form, so the plain form is drawn unavailable then: its one Continue
+      // (`FloorOwnsContinueReportContext`) holds until the load settles
+      // (cinatra#3035: the load window holds the step).
+      ...(heldAtCrash || (resolved === null && !floored) ? { disabled: true } : {}),
       onChange: (next: unknown) => {
         // The plain form awaits what the host returns: it is handed back.
         markFloorAnswer?.(floorSubmittingRef.current ? "submit" : "change");

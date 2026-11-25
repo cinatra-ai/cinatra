@@ -707,6 +707,8 @@ describe("OrchestratorStepperPanel - a real generated binding whose component fa
         expect(button).not.toBeNull();
         return button!;
       });
+      // ONE CONTINUE PER STEP: the one nearest the field is the only one.
+      await waitFor(() => expect(continues()).toEqual([floorContinue]));
       fireEvent.click(floorContinue);
       await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
       const call = hitlActions.approveReviewTask.mock.calls[0] as unknown[];
@@ -715,12 +717,24 @@ describe("OrchestratorStepperPanel - a real generated binding whose component fa
       expect(call[2]).toBeUndefined();
     };
     for (const g of FALLBACK_GATES.filter((row) => row.submit === "plain form")) {
-      // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+      // red-first-expect: to deeply equal [ <button
       it(`${id}: a ${g.shape} answer is sent by the plain form's own submit only, as the plain form sends it`, () => answerAndSubmit(g));
     }
     for (const g of FALLBACK_GATES.filter((row) => row.submit === "host Continue")) {
       // red-first-expect: to match object {
       it(`${id}: a ${g.shape} answer is sent by the host's Continue only, as the plain form sends it`, () => answerAndSubmit(g));
     }
+    it(`${id}: with nothing typed into a required text, the step's one Continue is unavailable`, async () => {
+      await registerRealBindingInFallback(id);
+      INTERRUPT = { schema: { type: "string", title: "Answer" }, xRenderer: id, values: {}, reviewTaskId: TASK_ID, fieldName: "answer" };
+      const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+      render(<OrchestratorStepperPanel {...baseProps()} />);
+      await waitFor(() => expect(document.getElementById("field-answer")).not.toBeNull());
+      await waitFor(() => expect(continues()).toHaveLength(1));
+      expect(continues()[0]!.disabled).toBe(true);
+      fireEvent.click(continues()[0]!);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    });
   }
 });

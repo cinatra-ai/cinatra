@@ -103,6 +103,33 @@ export function useFloorAnswerMark(): readonly [() => FloorAnswerKind | null, (k
  */
 export const FloorSubmitContext = createContext<((submitting: boolean) => void) | null>(null);
 
+/**
+ * Does the plain form draw a Continue of its own for this schema? Every kind
+ * does unless `hideSubmit`, except a pick list (an enum): its pick is handed up
+ * as it is made, and the host's Continue sends it.
+ */
+export function schemaFloorDrawsOwnContinue(schema: unknown, hideSubmit: boolean | undefined): boolean {
+  if (hideSubmit === true) return false;
+  const enumValues = (schema as { enum?: unknown } | null | undefined)?.enum;
+  return !(Array.isArray(enumValues) && enumValues.length > 0);
+}
+
+/**
+ * ONE CONTINUE PER STEP, AND IT SENDS WHAT WAS TYPED. An extension wrapper that
+ * shows the plain form in place of its component (while it loads, after a
+ * failed load or a crash) reports here whether that plain form draws a Continue
+ * of its own (`schemaFloorDrawsOwnContinue`): `true` while it does, `false`
+ * otherwise and when it unmounts. A host that would draw its own Continue
+ * beneath a mid-run step draws none while the report is `true`, as it draws
+ * none beside a plain-form step of its own id: the plain form's Continue is
+ * the step's one Continue, and it sends what the person typed, which the
+ * plain form keeps to itself until then. Where the plain form draws none (a
+ * box whose host hides its submit, a pick list), the host's Continue stays the
+ * one, and it sends the held answer. A host keeps the report per gate
+ * (`useGateRendererFloor`). Here for the route-graph reason given above.
+ */
+export const FloorOwnsContinueReportContext = createContext<((owns: boolean) => void) | null>(null);
+
 /** The plain form's own submit: `onChange`, said to be a submit (`FloorSubmitContext`). */
 function useSubmitAnswer(onChange: (value: unknown) => unknown): (value: unknown) => unknown {
   const saySubmitting = useContext(FloorSubmitContext);

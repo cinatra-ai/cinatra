@@ -50,7 +50,7 @@ import {
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
 import { continueAwaitsAPick } from "./field-renderer-registry";
-import { FloorAnswerMarkContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, FloorOwnsContinueReportContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
@@ -1296,8 +1296,13 @@ export function AgenticRunPanel({
       resolveGateRendering(effectiveHitlContext).entry,
       effectiveHitlContext.currentValues,
     );
+  // Read by the composer's submit and the publish effect below; written after
+  // each commit, in an effect declared before the publish effect, so that
+  // effect reads this commit's answer.
   const activeGateAnswerableRef = useRef(activeGateAnswerable);
-  activeGateAnswerableRef.current = activeGateAnswerable;
+  useEffect(() => {
+    activeGateAnswerableRef.current = activeGateAnswerable;
+  }, [activeGateAnswerable]);
 
   const gateFields: ChatGateField[] = useMemo(() => {
     if (!effectiveHitlContext) return [];
@@ -1820,6 +1825,9 @@ export function AgenticRunPanel({
   // cinatra#3035: the mounted gate renderer reports here when it settles on the
   // floor, for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferedHitlValueKey);
+  // The plain form an extension wrapper shows draws this step's one Continue
+  // (`FloorOwnsContinueReportContext`): the Continue beneath the field is not drawn.
+  const [floorOwnsContinue, setFloorOwnsContinue] = useGateRendererFloor(bufferedHitlValueKey);
   // An answer the plain form hands up from inside an extension wrapper
   // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
   const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
@@ -3342,6 +3350,7 @@ export function AgenticRunPanel({
                 return (
                   <>
                     <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
+                    <FloorOwnsContinueReportContext.Provider value={setFloorOwnsContinue}>
                     <RendererFloorReportContext.Provider value={setRendererFloored}>
                     {/* The renderer reports this gate's validity as its own. */}
                     <GateValidityOwner
@@ -3566,6 +3575,7 @@ export function AgenticRunPanel({
                       }
                     />
                     </RendererFloorReportContext.Provider>
+                    </FloorOwnsContinueReportContext.Provider>
                     </FloorAnswerMarkContext.Provider>
                     {/* Show the external Continue button only for non-grouped-setup midrun renderers.
                         cinatra#3380 — it stays unavailable while the gate declares a
@@ -3574,6 +3584,7 @@ export function AgenticRunPanel({
                         drawn exactly as before. */}
                     {isMidRunHitl &&
                       !isGroupedSetup &&
+                      !floorOwnsContinue &&
                       renderApprovalActionsRow({
                         awaitingRendererValue: gateAwaitsRendererValue(
                           hitlRendererEntry.fieldSchema,

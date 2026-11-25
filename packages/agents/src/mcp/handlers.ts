@@ -2148,18 +2148,17 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
-      // A display-only card (the artifact-review redirect) is not answered here
-      // (`currentHitlGateRefusal`, the reading both generic roads share); the
-      // run stays parked. It decides on the run's CURRENT gate (its newest
-      // durable row), not the row the run's task-id column names: that column
-      // can be stale, and the resume reaches the run's current gate through its
-      // context. A record that cannot be read refuses too: only a real absence
-      // goes on.
+      // A retired step or a display-only card is not answered here, and the run stays parked
+      // (`currentHitlGateRefusal`, both generic roads' reading: the run row and latest-task key name
+      // the step, a durable row only confirms it). An unreadable record refuses; only an absence goes on.
       let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
       try {
-        parked = await currentHitlGateRefusal({ runId: run.id });
+        parked = await currentHitlGateRefusal({ run });
       } catch {
         return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` };
+      }
+      if (parked.refusal === "retired") {
+        return { error: `Run ${runId} is paused at a retired step; it can no longer be answered.` };
       }
       if (parked.refusal === "display-only") {
         return { error: `Run ${runId} is paused at an artifact review; it goes on only when that review is decided.` };

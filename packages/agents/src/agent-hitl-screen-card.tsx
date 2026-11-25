@@ -146,7 +146,7 @@ import {
   parkedHitlStepIsAnswerable,
   resolveHitlGateRenderer,
 } from "./orchestrator-mid-run-hitl";
-import { FloorAnswerMarkContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, FloorOwnsContinueReportContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
@@ -1281,6 +1281,9 @@ export function AgentHitlScreenCard({
   // cinatra#3035: the mounted renderer reports here when it settles on the floor,
   // for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(gateKey);
+  // The plain form an extension wrapper shows draws this step's one Continue
+  // (`FloorOwnsContinueReportContext`): the card draws no Continue of its own.
+  const [floorOwnsContinue, setFloorOwnsContinue] = useGateRendererFloor(gateKey);
   // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
   // made for one gate can arrive after the next gate has been committed: a
   // flush that took its time, or a replaced renderer that still calls its
@@ -1558,6 +1561,7 @@ export function AgentHitlScreenCard({
       gateMountsAnAnsweringRenderer(runId, gate);
     return (
       <>
+        <FloorOwnsContinueReportContext.Provider value={setFloorOwnsContinue}>
         <RendererFloorReportContext.Provider value={setRendererFloored}>
         <AgentHitlScreenFields
           runId={runId}
@@ -1574,7 +1578,8 @@ export function AgentHitlScreenCard({
           gateKey={gateKey ?? ""}
         />
         </RendererFloorReportContext.Provider>
-        {stepIsAnswerable && isMidRun && !isGroupedSetup ? (
+        </FloorOwnsContinueReportContext.Provider>
+        {stepIsAnswerable && isMidRun && !isGroupedSetup && !floorOwnsContinue ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
@@ -1612,6 +1617,8 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
+    floorOwnsContinue,
+    setFloorOwnsContinue,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

@@ -120,7 +120,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { FloorAnswerMarkContext, GateContinueHoldContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, FloorOwnsContinueReportContext, GateContinueHoldContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -795,6 +795,9 @@ function HitlApprovalCard({
   // cinatra#3035: the mounted gate renderer reports here when it settles on the
   // floor, for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
+  // The plain form an extension wrapper shows draws this step's one Continue
+  // (`FloorOwnsContinueReportContext`): the outer Continue is not drawn.
+  const [floorOwnsContinue, setFloorOwnsContinue] = useGateRendererFloor(bufferKey);
   // An answer the plain form hands up from inside an extension wrapper
   // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
   const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
@@ -1530,6 +1533,7 @@ function HitlApprovalCard({
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
           <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
+          <FloorOwnsContinueReportContext.Provider value={setFloorOwnsContinue}>
           <RendererFloorReportContext.Provider value={setRendererFloored}>
           <GateValidityOwner
             renderer={RendererComponent}
@@ -1761,6 +1765,7 @@ function HitlApprovalCard({
             }
           />
           </RendererFloorReportContext.Provider>
+          </FloorOwnsContinueReportContext.Provider>
           </FloorAnswerMarkContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
@@ -1783,7 +1788,7 @@ function HitlApprovalCard({
           />
         ) : null}
 
-        {showContinueButton && (
+        {showContinueButton && !floorOwnsContinue && (
           <div className="flex justify-end pt-2 border-t border-line">
             {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
                 cinatra#3035: held while a gate whose kind declares the hold has no pick. */}

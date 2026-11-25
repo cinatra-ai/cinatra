@@ -6,6 +6,7 @@
 // under the claim and before the fence.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
+import * as midRun from "../orchestrator-mid-run-hitl";
 
 // cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
 vi.mock("../run-pause-claim", async (orig) => ({
@@ -181,6 +182,13 @@ const sendTaskSpy = vi.hoisted(() => vi.fn(async (_req: unknown) => ({}) as unkn
 // own mock and the handler would end up holding the real client.
 vi.mock("../../../a2a/src/external-client", () => ({
   createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskSpy })),
+}));
+
+// The run's latest-task key, stubbed at its leaf as the transport is: none by default.
+const latestKey = vi.hoisted(() => vi.fn<(runId: string) => Promise<string | null>>(async () => null));
+vi.mock("../../../a2a/src/event-log", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveLatestWayflowGateTaskId: latestKey,
 }));
 
 const decisions = vi.hoisted(() => ({
@@ -540,6 +548,7 @@ describe("agent_run_resume and the paused step's durable record", () => {
     decisions.readLatestDecisionForRun.mockResolvedValue(null);
     durableGate.read.mockReset().mockResolvedValue(null);
     durableGate.current.mockReset().mockImplementation(currentIsTheRunsTask);
+    latestKey.mockReset().mockResolvedValue(null);
   });
 
   // THE RUN'S CURRENT GATE DECIDES (its newest durable row), never the row its
@@ -547,6 +556,8 @@ describe("agent_run_resume and the paused step's durable record", () => {
   // current gate through the run's context.
   // red-first-expect: to not be called at all, but actually been called 1 times
   it("an answerable row under the run's stale task does not open a display-only current gate", async () => {
+    // The run's latest-task key names the newer task: the task column is stale.
+    latestKey.mockResolvedValue("task-2");
     durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
     durableGate.current.mockResolvedValue({
       ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
@@ -627,6 +638,38 @@ describe("agent_run_resume and the paused step's durable record", () => {
   it("a step whose renderer id no registered screen claims is resumed as before", async () => {
     durableGate.read.mockResolvedValue(gateFor("@acme/removed:output"));
     await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every
+  // host draws no Continue for) is answered by nothing, under any id of it.
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("a pause on any retired step is refused and not consumed", async () => {
+    const retired = [
+      ...midRun.TOMBSTONED_HITL_RENDERER_IDS,
+      `${[...midRun.TOMBSTONED_HITL_RENDERER_PACKAGES][0]}:any-step`,
+    ];
+    for (const id of retired) {
+      expect(midRun.parkedHitlStepIsAnswerable(id, null), id).toBe(false);
+      durableGate.read.mockResolvedValue(gateFor(id));
+      const answer = (await resume()) as { error?: string };
+      expect(answer.error, id).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+      nothingMoved();
+    }
+  });
+
+  // WHICH STEP THE RUN WAITS AT is decided by its row and latest-task key; a
+  // durable row only confirms it. An older step's display-only row, newest
+  // because the current step's row was never written, refuses nothing.
+  it("an older step's display-only row does not refuse the step the run waits at", async () => {
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-0",
+    });
+    latestKey.mockResolvedValue("task-1");
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
     expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });

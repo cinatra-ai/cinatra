@@ -543,6 +543,8 @@ describe("AgentHitlScreenCard — a real generated binding whose component faile
           expect(button).not.toBeNull();
           return button!;
         });
+        // ONE CONTINUE PER STEP: the one nearest the field is the only one.
+        await waitFor(() => expect(continues(container)).toEqual([floorContinue]));
         fireEvent.click(floorContinue);
         await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
         expect(approveMock.mock.calls[0]![0]).toBe(TASK_ID);
@@ -550,13 +552,25 @@ describe("AgentHitlScreenCard — a real generated binding whose component faile
         expect(approveMock.mock.calls[0]![2]).toBeUndefined();
       };
       for (const g of FALLBACK_GATES.filter((row) => row.submit === "plain form")) {
-        // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+        // red-first-expect: to deeply equal [ <button
         it(`${host}: ${id}: a ${g.shape} answer is sent by the plain form's own submit only, as the plain form sends it`, () => answerAndSubmit(g));
       }
       for (const g of FALLBACK_GATES.filter((row) => row.submit === "host Continue")) {
         // red-first-expect: to match object {
         it(`${host}: ${id}: a ${g.shape} answer is sent by the host's Continue only, as the plain form sends it`, () => answerAndSubmit(g));
       }
+      it(`${host}: ${id}: with nothing typed into a required text, the step's one Continue is unavailable`, async () => {
+        await registerRealBindingInFallback(id);
+        askingFor(id, { inputSchema: { type: "string", title: "Answer" }, fieldName: "answer" });
+        const { container } = mountOn(host);
+        await settle();
+        await waitFor(() => expect(container.querySelector("#field-answer")).not.toBeNull());
+        await waitFor(() => expect(continues(container)).toHaveLength(1));
+        expect(continues(container)[0]!.disabled).toBe(true);
+        fireEvent.click(continues(container)[0]!);
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(approveMock).not.toHaveBeenCalled();
+      });
     }
   }
 });

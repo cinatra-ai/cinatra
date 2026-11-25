@@ -31,7 +31,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { currentHitlGateRefusal, failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { currentHitlGateRefusal, failPreSendStep, readLatestGateTaskId, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -939,17 +939,24 @@ export async function approveReviewTaskInternal(
         currentStatus,
         message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
       });
-    // THE RUN'S CURRENT GATE (`currentHitlGateRefusal`, the reading both generic
-    // roads share): its newest durable row. An answer to another gate is refused
-    // as no longer the pause the run waits at; a DISPLAY-ONLY card (the
-    // artifact-review redirect) is consumed only by its review's own decision.
-    // Both are refused here, before the pause is claimed: nothing is recorded or
-    // sent and the run stays parked. A record that cannot be read refuses too (a
-    // fixed text, no store error); a run with no durable record (`null`) is left
-    // to the checks below.
+    // The run's latest-task key, read once for this answer (`readLatestGateTaskId`:
+    // a Redis failure or a missing export reads as no key). What it decides is
+    // told where it is used: the step's durable row below and the claim further on.
+    const latestTaskId = await readLatestGateTaskId(run.id);
+    // THE STEP THE ANSWER REACHES (`currentHitlGateRefusal`, the reading both
+    // generic roads share). Which step the run waits at is decided by the run row
+    // and the latest-task key; the newest durable row only confirms it, and a
+    // missing or older row (its write is best-effort) never makes this gate
+    // stale. An answer to another gate that those sources name as the current
+    // pause is refused as no longer the pause the run waits at; a RETIRED step is
+    // answered by nothing; a DISPLAY-ONLY card (the artifact-review redirect) is
+    // consumed only by its review's own decision. All are refused here, before
+    // the pause is claimed: nothing is recorded or sent and the run stays parked.
+    // A record that cannot be read refuses too (a fixed text, no store error); no
+    // confirmed row (`null`) is left to the checks below.
     let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
     try {
-      parked = await currentHitlGateRefusal({ runId: run.id, namedReviewTaskId: reviewTaskId });
+      parked = await currentHitlGateRefusal({ run, namedReviewTaskId: reviewTaskId, latestTaskId });
     } catch {
       throw new Error(`WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`);
     }
@@ -957,6 +964,13 @@ export async function approveReviewTaskInternal(
       throw refuse(run.status, `is no longer the pause the run waits at`);
     }
     const parkedStep = parked.gate;
+    if (parkedStep && parked.refusal === "retired") {
+      throw new HitlStepNotAnswerableError({
+        runId: run.id,
+        xRenderer: parkedStep.xRenderer,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
+      });
+    }
     if (parkedStep && parked.refusal === "display-only") {
       throw new HitlStepNotAnswerableError({
         runId: run.id,
@@ -1037,9 +1051,7 @@ export async function approveReviewTaskInternal(
     // durable since the pause write is (execution.ts), and the key, which expires
     // after 7 days, can only refuse: a key that names ANOTHER task means the run has
     // moved on to a later pause; no key or a Redis failure leaves the column's word.
-    // The import is inside the guarded call, so a missing export reads as no key.
-    const latestTaskId = await (async () =>
-      (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(run.id))().catch(() => null);
+    // (`latestTaskId`: read above, before the step's durable row.)
     if (foundThroughReverseMap ? latestTaskId !== taskId : latestTaskId != null && latestTaskId !== taskId) {
       throw refuse(run.status, `is no longer the pause the run waits at`);
     }

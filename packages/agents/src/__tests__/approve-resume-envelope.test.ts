@@ -15,7 +15,7 @@
  *   (c) submittedValues parses the {text, attachments} JSON correctly.
  *   (d) the legacy plain-string userResponse path is unchanged.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
@@ -117,10 +117,17 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: () => globalThis.fetch,
 }));
 
+// The run's latest-task key and the reverse task-run map: none by default.
+const runKeys = vi.hoisted(() => ({
+  latest: vi.fn<(runId: string) => Promise<string | null>>(async () => null),
+  runOfTask: vi.fn<(taskId: string) => Promise<string | null>>(async () => null),
+}));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => ({
     sendTask: sendTaskMock,
   })),
+  resolveLatestWayflowGateTaskId: runKeys.latest,
+  resolveRunIdByWayflowTaskId: runKeys.runOfTask,
   // #1987 — the wayflow- resume mints answered-gate provenance (and re-asserts
   // the latest-task join key) before dispatch; stub both so the resume proceeds.
   rememberLatestWayflowGateTask: vi.fn(async () => {}),
@@ -623,6 +630,8 @@ describe("the generic answer and the paused step's durable record", () => {
     setupRun();
     continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
     continueMock.readCurrentDurableHitlGate.mockReset().mockImplementation(currentIsTheAnsweredGate);
+    runKeys.latest.mockReset().mockResolvedValue(null);
+    runKeys.runOfTask.mockReset().mockResolvedValue(null);
   });
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
@@ -663,6 +672,8 @@ describe("the generic answer and the paused step's durable record", () => {
   // another task is refused as no longer the pause the run waits at.
   // red-first-expect: promise resolved "undefined" instead of rejecting
   it("an answer to an older gate is refused when the run's current gate is a display-only card", async () => {
+    // The run's latest-task key names the newer task: the run waits there.
+    runKeys.latest.mockResolvedValue("task-r2");
     continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
     continueMock.readCurrentDurableHitlGate.mockResolvedValue({
       ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
@@ -679,6 +690,7 @@ describe("the generic answer and the paused step's durable record", () => {
 
   // red-first-expect: promise resolved "undefined" instead of rejecting
   it("an answer to an older display-only gate is refused as stale, not as that card", async () => {
+    runKeys.latest.mockResolvedValue("task-r2");
     continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
     continueMock.readCurrentDurableHitlGate.mockResolvedValue({
       ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
@@ -725,6 +737,99 @@ describe("the generic answer and the paused step's durable record", () => {
     await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
     expect(sendTaskMock).toHaveBeenCalledTimes(1);
     expect(wayflowText()).toBe("go");
+  });
+
+  // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every
+  // host draws no Continue for) is answered by nothing, under any id of it.
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("a pause on any retired step is refused and not consumed", async () => {
+    const retired = [
+      ...midRun.TOMBSTONED_HITL_RENDERER_IDS,
+      `${[...midRun.TOMBSTONED_HITL_RENDERER_PACKAGES][0]}:any-step`,
+    ];
+    for (const id of retired) {
+      expect(midRun.parkedHitlStepIsAnswerable(id, null), id).toBe(false);
+      continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(id));
+      await expect(
+        approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+        id,
+      ).rejects.toMatchObject({
+        name: "HitlStepNotAnswerableError",
+        message: "WayFlow approval rejected: gate task-r1 on run run-r1 is a retired step; it can no longer be answered",
+      });
+      nothingMoved();
+    }
+  });
+});
+
+// WHICH STEP THE RUN WAITS AT IS DECIDED BY THE RUN ROW AND ITS LATEST-TASK KEY,
+// never by a durable step row: that row's write is best-effort, so step A's row
+// can be the newest while the run waits at step B, whose row was never written.
+describe("the generic answer when the step's durable row was not written", () => {
+  const STEP_A = "task-a";
+  const STEP_B = "task-b";
+  const rowOfA = {
+    runId: "run-r1",
+    reviewTaskId: `wayflow-${STEP_A}`,
+    xRenderer: "@cinatra-ai/agent-builder:schema-field-fallback",
+    inputSchema: { type: "object" },
+    values: {},
+  };
+  const runAtB = {
+    id: "run-r1",
+    templateId: "tpl-int",
+    status: "pending_approval",
+    a2aTaskId: STEP_B,
+    a2aContextId: "ctx-r1",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    // The run waits at B: its row names B, and so does its latest-task key.
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) => (taskId === STEP_B ? runAtB : null));
+    storeMock.readAgentRunById.mockResolvedValue(runAtB);
+    runKeys.latest.mockReset().mockResolvedValue(STEP_B);
+    runKeys.runOfTask.mockReset().mockImplementation(async () => "run-r1");
+    // Step A's row was written; step B's write failed, so A's row is the newest.
+    continueMock.readDurableHitlGateForContinue.mockReset().mockImplementation(
+      async (_runId?: string, reviewTaskId?: string) => (reviewTaskId === rowOfA.reviewTaskId ? rowOfA : null),
+    );
+    continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(rowOfA);
+  });
+  afterEach(() => {
+    runKeys.latest.mockReset().mockResolvedValue(null);
+    runKeys.runOfTask.mockReset().mockResolvedValue(null);
+    storeMock.readAgentRunById.mockReset();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+    continueMock.readCurrentDurableHitlGate.mockReset().mockImplementation(currentIsTheAnsweredGate);
+  });
+
+  it("answering the step the run waits at is accepted", async () => {
+    await approveReviewTaskInternal(`wayflow-${STEP_B}`, "actor-1", { approved: true, userResponse: "go" });
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("go");
+  });
+
+  it("answering the older step whose row was written is refused", async () => {
+    await expect(
+      approveReviewTaskInternal(`wayflow-${STEP_A}`, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-a on run run-r1 is no longer the pause the run waits at",
+    });
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("an older display-only row does not refuse the step the run waits at", async () => {
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...rowOfA,
+      xRenderer: "@cinatra-ai/agent-builder:artifact-review-redirect",
+    });
+    await approveReviewTaskInternal(`wayflow-${STEP_B}`, "actor-1", { approved: true, userResponse: "go" });
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
   });
 });
 

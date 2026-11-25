@@ -253,7 +253,38 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     vi.restoreAllMocks();
   });
 
-  it("a load that fails after a pick was entered through the loading floor makes the Continue available with no further input", async () => {
+  /**
+   * The step's one Continue (`FloorOwnsContinueReportContext`): exactly one is
+   * drawn in the card. While the plain form is on the screen it is the plain
+   * form's own, and the card draws none.
+   */
+  function onlyContinue(container: HTMLElement): HTMLButtonElement {
+    const all = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).filter((b) =>
+      /Continu/.test(b.textContent ?? ""),
+    );
+    expect(all).toHaveLength(1);
+    return all[0]!;
+  }
+
+  /** The plain form is on the screen and the card draws no Continue: the plain form's is the one. */
+  async function plainFormDrawsTheOneContinue(container: HTMLElement): Promise<HTMLButtonElement> {
+    await waitFor(() => expect(container.querySelector("input, textarea")).not.toBeNull());
+    await waitFor(() => expect(cardContinue(container)).toBeNull());
+    return onlyContinue(container);
+  }
+
+  /** While the component loads, that one Continue is held (the load may still replace the plain form). */
+  async function plainFormHoldsTheOneContinue(container: HTMLElement) {
+    expect((await plainFormDrawsTheOneContinue(container)).disabled).toBe(true);
+  }
+
+  /** Settled on the floor, that one Continue is available: the floor commits no pick to wait for. */
+  async function floorOffersTheOneContinue(container: HTMLElement) {
+    await plainFormDrawsTheOneContinue(container);
+    await waitFor(() => expect(onlyContinue(container).disabled).toBe(false));
+  }
+
+  it("a load that fails ends the hold of the loading floor's one Continue, which then sends the typed pick", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const load = deferred();
     loadFloorComponent = () => load.promise;
@@ -261,19 +292,19 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     asking = floorGate("task-3035-floor-1");
     const mounted = render(card("chat_thread", "task-3035-floor-1"));
     await settle();
-    await waitFor(() => expect(cardContinue(mounted.container)).not.toBeNull());
-    // The load window: the pack's chooser may still mount, so the hold applies.
-    expect(cardContinue(mounted.container)!.disabled).toBe(true);
-    await enterThroughFloor(mounted.container, PICK);
-    expect(cardContinue(mounted.container)!.disabled).toBe(true);
+    // The load window: the plain form is drawn, and its Continue is the step's one, held.
+    await plainFormHoldsTheOneContinue(mounted.container);
 
     await act(async () => {
       load.reject(new Error("chunk unavailable"));
     });
-    await waitFor(() => expect(cardContinue(mounted.container)!.disabled).toBe(false));
+    await floorOffersTheOneContinue(mounted.container);
+    await enterThroughFloor(mounted.container, PICK);
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
+    expect(JSON.stringify(approveMock.mock.calls[0]![1])).toContain("idea-a1");
   });
 
-  it("a component that throws while rendering settles on the floor and makes the Continue available", async () => {
+  it("a component that throws while rendering settles on the floor, whose Continue is the step's one and is available", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const load = deferred();
     loadFloorComponent = () => load.promise;
@@ -281,16 +312,16 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     asking = floorGate("task-3035-floor-2");
     const mounted = render(card("chat_thread", "task-3035-floor-2"));
     await settle();
-    await waitFor(() => expect(cardContinue(mounted.container)).not.toBeNull());
-    expect(cardContinue(mounted.container)!.disabled).toBe(true);
+    await plainFormHoldsTheOneContinue(mounted.container);
 
     await act(async () => {
       load.resolve({ default: ThrowingChooser });
     });
-    await waitFor(() => expect(cardContinue(mounted.container)!.disabled).toBe(false));
+    await floorOffersTheOneContinue(mounted.container);
+    expect(approveMock).not.toHaveBeenCalled();
   });
 
-  it("the same binding mounted again for a later gate after a crash starts held while its component loads", async () => {
+  it("the same binding mounted again for a later gate after a crash draws the plain form's one Continue, unavailable, while its component loads", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const first = deferred();
     loadFloorComponent = () => first.promise;
@@ -309,10 +340,10 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     mounted.rerender(card("chat_thread", "task-3035-floor-3b"));
     await settle();
     await waitFor(() => expect(mounted.container.textContent).toContain("Idea for task-3035-floor-3b"));
-    expect(cardContinue(mounted.container)!.disabled).toBe(true);
+    await plainFormHoldsTheOneContinue(mounted.container);
   });
 
-  it("two mounted instances of one binding keep their own hold: one floored, one loading and then loaded", async () => {
+  it("two mounted instances of one binding keep their own Continue: one floored, one loading and then loaded", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     loadFloorComponent = () => Promise.reject(new Error("chunk unavailable"));
     registerFloorBinding();
@@ -326,18 +357,20 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     loadFloorComponent = () => second.promise;
     const loading = render(card("chat_thread", "task-3035-floor-4"));
     await settle();
-    await waitFor(() => expect(cardContinue(loading.container)).not.toBeNull());
-    // Still loading: held, whatever the other instance settled on.
-    expect(cardContinue(loading.container)!.disabled).toBe(true);
+    // Still loading: the plain form's Continue is its one, whatever the other instance settled on.
+    await plainFormHoldsTheOneContinue(loading.container);
 
     await act(async () => {
       second.resolve({ default: QuietChooser });
     });
     await waitFor(() => expect(loading.container.textContent).toContain("pack chooser"));
-    // The second instance's good load does not put the hold back on the first one's floor.
+    // The loaded chooser draws no Continue of its own: the card's is the one, held until a pick.
+    await waitFor(() => expect(cardContinue(loading.container)).not.toBeNull());
+    expect(onlyContinue(loading.container).disabled).toBe(true);
+    // The second instance's good load leaves the first one on its floor: its floor's Continue sends.
+    await floorOffersTheOneContinue(floored.container);
     await enterThroughFloor(floored.container, PICK);
-    expect(cardContinue(floored.container)!.disabled).toBe(false);
-    // The loaded chooser still holds its own Continue until a pick.
+    await waitFor(() => expect(approveMock).toHaveBeenCalledTimes(1));
     expect(cardContinue(loading.container)!.disabled).toBe(true);
   });
 
@@ -345,7 +378,7 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
   // gate, so the record of gate A's floor must not reach gate B's first frame. Every
   // commit of gate B is read in the commit itself (the Profiler's onRender runs before
   // any passive effect of that commit), not after the effects have settled.
-  it("a later gate of the same binding, after the earlier gate settled on the floor, draws its Continue held from its first frame while it loads", async () => {
+  it("a later gate of the same binding, after the earlier gate settled on the floor, offers no available card Continue in any frame while it loads", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     loadFloorComponent = () => Promise.reject(new Error("chunk unavailable"));
     registerFloorBinding();
@@ -365,8 +398,8 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     );
     const mounted = render(profiled("task-3035-floor-5a"));
     await settle();
-    // Gate A settled on its floor: the floor commits no pick, so its Continue is not held.
-    await waitFor(() => expect(cardContinue(mounted.container)!.disabled).toBe(false));
+    // Gate A settled on its floor: the floor's Continue is the step's one, available.
+    await floorOffersTheOneContinue(mounted.container);
 
     // The run moves on: gate B mounts the same binding again, and its component is still loading.
     loadFloorComponent = () => new Promise(() => {});
@@ -375,9 +408,8 @@ describe("AgentHitlScreenCard - the idea step's hold follows the renderer instan
     mounted.rerender(profiled("task-3035-floor-5b"));
     await settle();
     await waitFor(() => expect(mounted.container.textContent).toContain("Idea for task-3035-floor-5b"));
-    expect(heldInFrame.length).toBeGreaterThan(0);
-    // Held in every committed frame of gate B, the first one included.
+    // No committed frame of gate B, the first one included, offers an available card Continue.
     expect(heldInFrame).not.toContain(false);
-    expect(cardContinue(mounted.container)!.disabled).toBe(true);
+    await plainFormHoldsTheOneContinue(mounted.container);
   });
 });
