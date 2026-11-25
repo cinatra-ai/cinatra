@@ -1757,6 +1757,95 @@ export function collectPublishRows(
   return { ok: true, rows };
 }
 
+// cinatra#4762: the host routes that check a publishing call when it is made (publishCallAllowed: the decision is
+// released and the review fence still holds). WayFlow calls any other URL itself, with no check, so a call made by a
+// publishing step must go to one of these. Only the exact template form counts: the loader sends the run's token and
+// the step's signature only to the CINATRA_BASE_URL host, and a host route outside this list does not check the call.
+const PUBLISH_CALL_ROUTES = new Set(["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]);
+const PUBLISH_ADDRESS_KEY = /(?:url|uri|endpoint)$/i;
+
+/** Every component of a publishing step that carries a `url` (the step itself, and each component inside it, a subflow
+ *  or agent its `$component_ref` names included) must name a PUBLISH_CALL_ROUTES route; any other value refuses the
+ *  compile. A reference resolves where the compile later resolves it: the nearest enclosing `$referenced_components`
+ *  first, then the global registry. A reference that resolves nowhere refuses the compile too, because the component
+ *  it names cannot be checked. The error names the node id only, never the URL. */
+export function checkPublishingCallRoutes(
+  parsed: Record<string, unknown>,
+  publishingSteps: readonly string[],
+  globalRegistry: Record<string, unknown>,
+): { ok: true } | { ok: false; error: string } {
+  type Scope = Record<string, unknown>;
+  const rootRefs = (parsed.$referenced_components as Scope | undefined) ?? {};
+  for (const step of publishingSteps) {
+    const seen = new Set<object>();
+    // Each entry: the value, its reference scopes (nearest first, the global registry last), the nearest component id.
+    const stack: Array<[unknown, Scope[], string]> = [[rootRefs[step], [rootRefs, globalRegistry], step]];
+    while (stack.length > 0) {
+      const [value, outer, owner] = stack.pop()!;
+      if (!value || typeof value !== "object" || seen.has(value)) continue;
+      seen.add(value);
+      if (Array.isArray(value)) {
+        for (const item of value) stack.push([item, outer, owner]);
+        continue;
+      }
+      const comp = value as Record<string, unknown>;
+      const own = comp.$referenced_components;
+      const scopes = own && typeof own === "object" && !Array.isArray(own) ? [own as Scope, ...outer] : outer;
+      const who = typeof comp.component_type === "string" && typeof comp.id === "string" ? comp.id : owner;
+      const fail = (what: string) => ({ ok: false as const, error: `PUBLISH_CALL_UNCHECKED: node ${quoteNodeId(who)} of publishing step ${quoteNodeId(step)} ${what}, so its call would skip the publish check` });
+      if (typeof comp.component_type === "string") {
+        if (hasOwn(comp, "url") && !PUBLISH_CALL_ROUTES.has(comp.url as string)) {
+          return fail("calls a URL that is not the host's model bridge or passthrough");
+        }
+        // An A2AAgent's calls go straight to its agent_url (agent card and send_message), never through ApiCallStep or a
+        // host route, so no host route checks them; any other address field (agent_url, base_url, an *_uri or endpoint)
+        // is an outward call form the routes above do not cover either.
+        if (comp.component_type === "A2AAgent" || Object.keys(comp).some((k) => k !== "url" && PUBLISH_ADDRESS_KEY.test(k))) {
+          return fail("calls a remote agent or address that is not the host's model bridge or passthrough");
+        }
+      }
+      if (hasOwn(comp, "$component_ref")) {
+        const ref = comp.$component_ref;
+        const scope = typeof ref === "string" ? scopes.find((s) => hasOwn(s, ref)) : undefined;
+        const target = scope ? scope[ref as string] : undefined;
+        if (!target || typeof target !== "object") return fail("references a component that resolves nowhere");
+        stack.push([target, scopes, who]);
+      }
+      for (const child of Object.values(comp)) stack.push([child, scopes, who]);
+    }
+  }
+  return { ok: true };
+}
+
+/** cinatra#4762: checkPublishingCallRoutes on the source a run EXECUTES (the loader's selected declaration source),
+ *  so a template compiled before the route check is refused before its first send, never trusted for having compiled.
+ *  The publishing steps are the source's own: every top-level node whose `metadata.cinatra.publishes` is the boolean
+ *  true, the nodes the loader puts a publish gate in front of. References resolve inside the source only, as the
+ *  runtime resolves them (it has no global registry); one that resolves nowhere refuses. A source that is not a JSON
+ *  object refuses too, since its steps cannot be read. */
+export function checkExecutedPublishingCallRoutes(source: string): { ok: true } | { ok: false; error: string } {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(source);
+  } catch {
+    doc = null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) {
+    return { ok: false, error: "PUBLISH_CALL_UNCHECKED: the executed source cannot be read, so the calls of its publishing steps cannot be checked" };
+  }
+  const parsed = doc as Record<string, unknown>;
+  const refs = parsed.$referenced_components;
+  const rootRefs = refs && typeof refs === "object" && !Array.isArray(refs) ? (refs as Record<string, unknown>) : {};
+  const steps = (Array.isArray(parsed.nodes) ? parsed.nodes : [])
+    .map((n) => (n && typeof n === "object" ? (n as { $component_ref?: unknown }).$component_ref : undefined))
+    .filter((id): id is string => typeof id === "string" && hasOwn(rootRefs, id))
+    .filter((id) => {
+      const cinatra = ((rootRefs[id] as { metadata?: { cinatra?: unknown } } | null)?.metadata)?.cinatra;
+      return !!cinatra && typeof cinatra === "object" && (cinatra as { publishes?: unknown }).publishes === true;
+    });
+  return checkPublishingCallRoutes(parsed, steps, {});
+}
+
 // ---------------------------------------------------------------------------
 // Main compile entry point
 // ---------------------------------------------------------------------------
@@ -1873,6 +1962,12 @@ export async function compileOasAgentJson(opts: {
   if (!publishRows.ok) {
     return { ok: false, error: publishRows.error };
   }
+  // The route check resolves references against the same global registry the compile reads below.
+  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  const publishRoutes = checkPublishingCallRoutes(parsed, publishing.steps, globalRegistry);
+  if (!publishRoutes.ok) {
+    return { ok: false, error: publishRoutes.error };
+  }
 
   // Fan out `metadata.cinatra.llm` to every
   // `/api/llm-bridge`-targeting ApiNode at all nesting depths (top-level and
@@ -1902,8 +1997,7 @@ export async function compileOasAgentJson(opts: {
     }
   }
 
-  // 4. Load registries
-  const globalRegistry = await loadGlobalRegistry(opts.registryPath);
+  // 4. Load registries (the global registry was loaded for the publishing route check above)
   const localRefs = (parsed.$referenced_components as Record<string, unknown>) ?? {};
 
   // 5. Topology: derive step order via BFS from StartNode following control_flow_connections

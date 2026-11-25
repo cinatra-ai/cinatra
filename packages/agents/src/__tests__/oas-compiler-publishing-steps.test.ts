@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { collectPublishingSteps, compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
+import { checkPublishingCallRoutes, collectPublishingSteps, compileOasAgentJson, __resetRegistryCacheForTests } from "../oas-compiler";
 
 type Node = Record<string, unknown>;
 
@@ -29,7 +29,8 @@ function apiNode(id: string, cinatra?: Record<string, unknown>, extra: Node = {}
     component_type: "ApiNode",
     id,
     name: id,
-    url: `https://example.invalid/${id}`,
+    // A publishing node calls the host's model bridge, where its call is checked (cinatra#4762).
+    url: cinatra?.publishes === true ? "{{CINATRA_BASE_URL}}/api/llm-bridge" : `https://example.invalid/${id}`,
     http_method: "POST",
     data: {},
     outputs: [{ title: `${id}_out`, type: "string" }],
@@ -466,5 +467,88 @@ describe("cinatra#4150 — the error texts name the field and the node id, never
   it("an inline subflow with no id is named as such", () => {
     const doc = { nodes: [{ $component_ref: "top" }], $referenced_components: { top: { component_type: "FlowNode", id: "top", subflow: { component_type: "Flow", metadata: { cinatra: { publishes: "x" } } } } } };
     expect(collectPublishingSteps(doc)).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISHES_MALFORMED: an inline subflow declares /) });
+  });
+});
+
+describe("cinatra#4762 — a publishing step calls only the host routes that check the call", () => {
+  const publishingSubflow = (url: string) => {
+    const sub = withSubflow([{ ...apiNode("inner_write"), url }]);
+    sub.middle[0]!.metadata = { cinatra: { publishes: true } };
+    return buildFlow(sub);
+  };
+
+  // red-first-expect: expected true to be false
+  it("a publishing ApiNode that calls another host is refused, and the error names the node, never the URL", async () => {
+    const error = await compileError(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url: "https://api.example.invalid/v2/posts" }] }));
+    expect(error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" /);
+    expect(error).not.toContain("example.invalid");
+  });
+
+  // red-first-expect: expected true to be false
+  it("a host route that does not check the call, or the route's path on another host, is refused too", async () => {
+    for (const url of ["{{CINATRA_BASE_URL}}/api/context-resolve", "https://elsewhere.example.invalid/api/llm-bridge", "/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough?x=1", 42]) {
+      expect(await compileError(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url }] }))).toMatch(/^PUBLISH_CALL_UNCHECKED: /);
+    }
+  });
+
+  // red-first-expect: expected true to be false
+  it("a call inside a publishing FlowNode's subflow that goes to another host is refused", async () => {
+    expect(await compileError(publishingSubflow("https://api.example.invalid/v2/posts"))).toMatch(/^PUBLISH_CALL_UNCHECKED: node "inner_write" of publishing step "sub" /);
+  });
+
+  // red-first-expect: checkPublishingCallRoutes) is not a function
+  it("the model bridge and the passthrough pass, at the top level and inside a publishing subflow", async () => {
+    expect(await publishingStepsOf(publishingSubflow("{{CINATRA_BASE_URL}}/api/llm-bridge"))).toEqual(["sub"]);
+    for (const url of ["{{CINATRA_BASE_URL}}/api/llm-bridge", "{{CINATRA_BASE_URL}}/api/agents/passthrough"]) {
+      expect(checkPublishingCallRoutes(buildFlow({ middle: [{ ...apiNode("publish", { publishes: true }), url }] }), ["publish"], {})).toEqual({ ok: true });
+      expect(checkPublishingCallRoutes(publishingSubflow(url), ["sub"], {})).toEqual({ ok: true });
+    }
+  });
+
+  const agentNode = (agent: Node): Node => ({ component_type: "AgentNode", id: "publish", name: "publish", agent, outputs: [], metadata: { cinatra: { publishes: true } } });
+
+  // red-first-expect: expected true to be false
+  it("a publishing AgentNode that wraps an external A2A agent is refused, and the error never echoes its agent_url", async () => {
+    const error = await compileError(buildFlow({ middle: [agentNode({ component_type: "A2AAgent", id: "remote_peer", name: "remote_peer", agent_url: "https://peer.example.invalid/api/a2a" })] }));
+    expect(error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "remote_peer" of publishing step "publish" calls a remote agent/);
+    expect(error).not.toContain("peer.example.invalid");
+  });
+
+  // red-first-expect: checkPublishingCallRoutes) is not a function
+  it("any other address field inside a publishing step is refused, while a local child agent stays allowed", () => {
+    for (const key of ["agent_url", "base_url", "baseUrl", "api_spec_uri", "service_endpoint"]) {
+      const doc = buildFlow({ middle: [agentNode({ component_type: "Agent", id: "child", name: "child", llm_config: { component_type: "SomeLlmConfig", id: "cfg", name: "cfg", [key]: "https://x.example.invalid" } })] });
+      expect(checkPublishingCallRoutes(doc, ["publish"], {})).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "cfg" of publishing step "publish" /) });
+    }
+    const local = buildFlow({ middle: [agentNode({ component_type: "Agent", id: "child", name: "child", system_prompt: "write", tools: [] })] });
+    expect(checkPublishingCallRoutes(local, ["publish"], {})).toEqual({ ok: true });
+  });
+
+  // red-first-expect: expected true to be false
+  it("a publishing AgentNode that references an A2A agent in the global registry is refused", async () => {
+    writeFileSync(path.join(tempDir, "components.json"), JSON.stringify({ components: { shared_peer: { component_type: "A2AAgent", id: "shared_peer", name: "shared_peer", agent_url: "https://peer.example.invalid/api/a2a" } } }));
+    const error = await compileError(buildFlow({ middle: [agentNode({ $component_ref: "shared_peer" })] }));
+    expect(error).toMatch(/^PUBLISH_CALL_UNCHECKED: node "shared_peer" of publishing step "publish" calls a remote agent/);
+    expect(error).not.toContain("peer.example.invalid");
+  });
+
+  // red-first-expect: checkPublishingCallRoutes) is not a function
+  it("a reference inside a publishing step that resolves nowhere is refused", async () => {
+    const doc = buildFlow({ middle: [agentNode({ $component_ref: "missing_agent" })] });
+    expect(checkPublishingCallRoutes(doc, ["publish"], {})).toEqual({ ok: false, error: expect.stringMatching(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" references a component that resolves nowhere/) });
+    expect(await compileError(doc)).toMatch(/^PUBLISH_CALL_UNCHECKED: node "publish" of publishing step "publish" references a component /);
+  });
+
+  // red-first-expect: checkPublishingCallRoutes) is not a function
+  it("a publishing AgentNode whose child agent is a local or global Agent still compiles", async () => {
+    const child = { component_type: "Agent", id: "child", name: "child", system_prompt: "write", tools: [] };
+    writeFileSync(path.join(tempDir, "components.json"), JSON.stringify({ components: { shared_child: { ...child, id: "shared_child", name: "shared_child" } } }));
+    expect(await publishingStepsOf(buildFlow({ middle: [agentNode({ $component_ref: "child" })], extraRefs: { child } }))).toEqual(["publish"]);
+    expect(await publishingStepsOf(buildFlow({ middle: [agentNode({ $component_ref: "shared_child" })] }))).toEqual(["publish"]);
+    expect(checkPublishingCallRoutes(buildFlow({ middle: [agentNode({ $component_ref: "shared_child" })] }), ["publish"], { shared_child: child })).toEqual({ ok: true });
+  });
+
+  it("a node that does not publish may still call another host", async () => {
+    expect(await publishingStepsOf(buildFlow({ middle: [apiNode("draft"), apiNode("publish", { publishes: true })] }))).toEqual(["publish"]);
   });
 });

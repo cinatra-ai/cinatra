@@ -188,6 +188,47 @@ export async function pairTwin(tx: TwinTx, ctx: DashboardTwinContext): Promise<v
   await registeredTwinWriter(tx, ctx);
 }
 
+/**
+ * cinatra#4762 — the host's PRODUCING-RUN LOCK. A content writer whose actor
+ * carries a run (create, update, publish) calls it on its transaction BEFORE its
+ * first dashboards write, so the producing run's row is held (FOR KEY SHARE, to
+ * commit) from the first product write on, not only from the twin's own ops,
+ * which run after the dashboards row and its audit row. A Publish reads its
+ * review fence under the same row FOR UPDATE; with the lock first, that read
+ * either runs before the writer's first write or sees its committed event.
+ * The host decides whether to lock (the review orchestration switched off, or
+ * no run, locks nothing). Registered beside the twin writer.
+ */
+export type DashboardTwinProducerRunLock = (tx: TwinTx, producerRunId: string) => Promise<void>;
+
+let registeredRunLock: DashboardTwinProducerRunLock | null = null;
+
+/** Register the host's producing-run lock. Same rules as the twin writer: the
+ *  SAME reference again is idempotent, a DIFFERENT one over it throws. */
+export function setDashboardTwinProducerRunLock(lock: DashboardTwinProducerRunLock): void {
+  if (registeredRunLock !== null && registeredRunLock !== lock) {
+    throw new DashboardTwinWriterConflictError();
+  }
+  registeredRunLock = lock;
+}
+
+/** Clear the registered producing-run lock. For test isolation ONLY. */
+export function resetDashboardTwinProducerRunLock(): void {
+  registeredRunLock = null;
+}
+
+/** Take the producing run's row before the first write. No run: nothing. No
+ *  lock registered (a test twin with no substrate): nothing, as no event is
+ *  written then either; the host registers its lock with its twin writer. */
+export async function lockTwinProducerRun(
+  tx: TwinTx,
+  producerRunId: string | null | undefined,
+): Promise<void> {
+  if (typeof producerRunId !== "string" || producerRunId.length === 0) return;
+  if (registeredRunLock === null) return;
+  await registeredRunLock(tx, producerRunId);
+}
+
 /** An EXPLICIT no-op twin for tests / integration harnesses that drive a
  *  dashboards writer without standing up the substrate. It proves nothing about
  *  atomicity (only the substrate-backed kill-tests do) — it exists solely to
@@ -220,6 +261,12 @@ declare global {
   var __cinatraDashboardArtifactTwinPair:
     | ((tx: TwinTx, ctx: DashboardTwinContext) => Promise<void>)
     | undefined;
+  // eslint-disable-next-line no-var
+  var __cinatraDashboardArtifactTwinRunLock:
+    | ((tx: TwinTx, producerRunId: string | null | undefined) => Promise<void>)
+    | undefined;
 }
 
 globalThis.__cinatraDashboardArtifactTwinPair = pairTwin;
+// cinatra#4762: the producing-run lock rides the same port pattern.
+globalThis.__cinatraDashboardArtifactTwinRunLock = lockTwinProducerRun;

@@ -382,7 +382,20 @@ TOOL_INPUT_SHAPERS.email_outreach_recipients_update = (raw) =>
 // anything but a plain object (the shaper-throw contract answers HTTP 400).
 TOOL_INPUT_SHAPERS.objects_update = (raw) => shapeObjectsUpdateInput(raw);
 
+/** cinatra#4762: a publishing call holds its released decision until its answer is built, whatever it is
+ *  (publishCallAllowed), so no output or review of its run is written while its effect runs. The release is awaited
+ *  before the answer goes back: the run's next node cannot write while it is still pending. A release that cannot be
+ *  written is logged and the answer still goes back, since the call's effect has already happened. */
 export async function POST(req: Request): Promise<Response> {
+  const releases: Array<() => Promise<void>> = [];
+  try {
+    return await handlePassthrough(req, (release) => { releases.push(release); });
+  } finally {
+    for (const release of releases) await release();
+  }
+}
+
+async function handlePassthrough(req: Request, holdRelease: (release: () => Promise<void>) => void): Promise<Response> {
   if (!isAuthorizedBridgeRequest(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -494,7 +507,13 @@ export async function POST(req: Request): Promise<Response> {
   }
   // cinatra#4150 — no publish without a released decision, enforced at the call,
   // before any tool runs: the run the binding proved, the verified step or none.
-  if (!(await publishCallAllowed(run, verifiedStepId))) {
+  // cinatra#4762: the decision the check claimed for this call, as the server took it, never from the request. The
+  // call's frame carries it, so the call's own output passes the in-flight fence of that claim and no other.
+  let publishCallClaim: { runId: string; decisionId: string } | undefined;
+  if (!(await publishCallAllowed(run, verifiedStepId, (release, claim) => {
+    holdRelease(release);
+    if (claim && typeof claim.decisionId === "string" && claim.decisionId) publishCallClaim = { runId: run.id, decisionId: claim.decisionId };
+  }))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
       { status: 403 },
@@ -582,6 +601,7 @@ export async function POST(req: Request): Promise<Response> {
       ...(verifiedStepId ? { verifiedStepId } : {}),
       ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
       ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
+      ...(publishCallClaim ? { publishCallClaim } : {}),
     }, async () => {
     // Every deterministic branch shares the verified executing-source frame;
     // no materializer, extension-data branch or primitive gets a legacy bypass.
@@ -658,7 +678,9 @@ export async function POST(req: Request): Promise<Response> {
         if (!appended.ok) {
           return NextResponse.json(
             { error: appended.error, reason: appended.reason },
-            { status: appended.reason === "stale_base" ? 409 : 400 },
+            // cinatra#4762: a publishing call in flight is temporary, answered as a
+            // conflict the node may retry, as a stale base is.
+            { status: appended.reason === "stale_base" || appended.reason === "publish_call_in_flight" ? 409 : 400 },
           );
         }
         // The SAME response shape a create answers with — the fields at the top
@@ -689,7 +711,10 @@ export async function POST(req: Request): Promise<Response> {
         if (!outcome.ok) {
           // Fail the calling node visibly (validation OR infra) — the flow
           // author decides whether the node failure gates the run.
-          return NextResponse.json({ error: outcome.error }, { status: 400 });
+          // cinatra#4762: a publishing call in flight is a conflict the node may retry.
+          return outcome.reason === "publish_call_in_flight"
+            ? NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 409 })
+            : NextResponse.json({ error: outcome.error }, { status: 400 });
         }
         result = {
           artifactId: outcome.artifactId,
@@ -732,7 +757,7 @@ export async function POST(req: Request): Promise<Response> {
       if (!outcome.ok) {
         return NextResponse.json(
           { error: outcome.error, reason: outcome.reason },
-          { status: outcome.reason === "stale_base" ? 409 : 400 },
+          { status: outcome.reason === "stale_base" || outcome.reason === "publish_call_in_flight" ? 409 : 400 },
         );
       }
       result = {
@@ -762,7 +787,8 @@ export async function POST(req: Request): Promise<Response> {
         url: shaped.url,
       });
       if (!outcome.ok) {
-        return NextResponse.json({ error: outcome.error, reason: outcome.reason }, { status: 400 });
+        return NextResponse.json({ error: outcome.error, reason: outcome.reason },
+          { status: outcome.reason === "publish_call_in_flight" ? 409 : 400 });
       }
       result = {
         artifactId: outcome.artifactId,
@@ -1074,6 +1100,16 @@ export async function POST(req: Request): Promise<Response> {
     // sentence and the refusal's code, never with exception text.
     const refusal = await runActionRefusalCode(err).catch(() => null);
     if (refusal) return NextResponse.json({ error: RUN_ACTION_REFUSED, code: refusal }, { status: 403 });
+    // cinatra#4762: a writer refused because a publishing call of the run is in
+    // flight (lifecycle-emit PublishCallInFlightError, read by its code so the
+    // artifact stack stays out of this route's static graph): temporary, a
+    // conflict the node may retry, never a tool failure.
+    if ((err as { code?: unknown } | null)?.code === "publish_call_in_flight") {
+      return NextResponse.json(
+        { error: "A publishing call of this run is in flight; try again once it has ended.", code: "publish_call_in_flight" },
+        { status: 409 },
+      );
+    }
     // cinatra#4223, cinatra#4465: an error with the zod marker answers its
     // issues, and a primitive's stated refusal without it keeps its text when
     // that text is a string. Every other throw, a marked error with no readable
