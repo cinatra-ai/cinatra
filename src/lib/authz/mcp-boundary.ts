@@ -144,6 +144,11 @@ export function oboCeilingNonOrgTiers(
 /** The reason `enforceMcpBoundary` answers a call of the outward-effect set with. */
 export const RECORDED_DECISION_REQUIRED_REASON = "outward_effect_requires_recorded_decision";
 
+/** cinatra#3745: the fixed code of an outward call made as the inner call of a
+ * run's tool (`innerRunCall`). The person's one decision covers the step's
+ * offered tool only, so such a call is refused, never admitted. */
+export const INNER_OUTWARD_CALL_REFUSED = "action_inner_outward_call_refused";
+
 export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Messages: campaign sends and follow-ups (every trigger-email-send tool
   // whose metadata marks a state change).
@@ -255,6 +260,13 @@ export type McpBoundaryRequest = {
   outwardSubject?: Readonly<{ artifactId: string; representationRevisionId: string }> | null;
   /** cinatra#3745: the call's prepared arguments, read only for the subject fields. */
   toolArguments?: unknown;
+  /**
+   * cinatra#3745: true when the call is the inner call of a run's tool (the
+   * in-process self-invoker on a run frame sets it; the live transport never
+   * does). An outward inner call is refused with `INNER_OUTWARD_CALL_REFUSED`
+   * before any decision is read, whatever owner it names.
+   */
+  innerRunCall?: true;
 };
 
 function statusShouldBlock(status: EnforcementStatus): boolean {
@@ -300,10 +312,19 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
  * action, and any failure in it, is audited and answered with
  * `outward_effect_requires_recorded_decision:<code>`, the code being the
  * refusal's fixed code (`action_admission_unavailable` for any other failure);
- * it never carries store text. Every other outward call on a run frame stays
- * refused.
+ * it never carries store text. An outward inner call of a run's tool
+ * (`innerRunCall`) is refused with `INNER_OUTWARD_CALL_REFUSED`. Every other
+ * outward call on a run frame stays refused.
  */
 export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
+  // An outward inner call of a run's tool: the person's decision covers the
+  // step's offered tool only, so this call neither uses it nor gets its own.
+  if (req.innerRunCall === true && needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
+    const reason = `${RECORDED_DECISION_REQUIRED_REASON}:${INNER_OUTWARD_CALL_REFUSED}`;
+    await audit(req, "agent_run", "denied", { mode: "enforced",
+      boundary: req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch", reason });
+    return { allowed: false, reason, shouldBlock: true };
+  }
   if (req.outwardOwner === undefined ||
       !needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
     return decideMcpBoundary(req, false);

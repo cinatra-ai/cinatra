@@ -31,6 +31,10 @@ import {
   recordLoadedExtensionIdentity,
   retireLoadedExtensionIdentity,
 } from "@/lib/extension-capabilities-registry";
+import { createExtensionHostContext } from "@/lib/extension-host-context";
+import { dispatchPlannedExtensionMcpTool, wrapExtensionToolResult } from "@/lib/extension-edge-bound-serving";
+import { callHostPrimitive, __resetHostSelfPrimitiveHandlers } from "@/lib/extension-self-mcp";
+import type { CapturedHostPrimitive } from "@/lib/extension-mcp-registry";
 import { createMcpRuntimeServer } from "../../../packages/mcp-server/src/runtime-server";
 import {
   mcpRequestContextStorage,
@@ -50,6 +54,10 @@ const store = vi.hoisted(() => {
     consume: vi.fn(),
   };
 });
+// The host's in-process primitive map (the self-invoker's), captured per case through the real recording server.
+const selfInvoker = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }));
+vi.mock("@/lib/mcp-server", () => ({ buildHostSelfPrimitiveHandlers: async () => selfInvoker.handlers }));
+
 vi.mock("@cinatra-ai/agents/store", () => ({
   readCurrentRunStepToolPolicy: async () => ({ source: "bound-source-under-test" }),
   assertRunStepToolAllowed: () => ({ kind: "declared" }),
@@ -79,13 +87,14 @@ const runFrame = (over: Partial<Record<string, unknown>> = {}): McpRequestContex
 type ToolResult = { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
 
 /** One runtime server with the two outward tools; `owner` stamps an extension owner (absent: a host built-in). */
-async function buildServer(owner?: { packageName: string; version: string },
+async function buildServer(owner?: { packageName: string; version: string; loadedIdentity?: object },
   subject?: { artifactId: string; representationRevisionId: string }) {
   const handled: string[] = [];
   const config = (name: string) => ({
     title: name, description: name, outward: subject ? { subject } : {},
     ...(owner ? { cinatraPrimitive: { ownerPackage: owner.packageName, resolvedVersion: owner.version,
-      dispatchTarget: { kind: "extension-default", packageName: owner.packageName, version: owner.version, name } } } : {}),
+      dispatchTarget: { kind: "extension-default", packageName: owner.packageName, version: owner.version, name,
+        ...(owner.loadedIdentity ? { loadedIdentity: owner.loadedIdentity } : {}) } } } : {}),
   });
   const runtime = await createMcpRuntimeServer({
     name: "guarded-outward-test",
@@ -257,8 +266,9 @@ describe("the guarded outward run action", () => {
     // Before the change the loaded identity is not consulted and every outward run call is refused:
     // red-first-expect: expected true to be falsy
     it("is admitted once under the owner's current loaded identity", async () => {
-      recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
-      const server = await buildServer({ packageName: PACKAGE, version: VERSION });
+      const loadedIdentity = recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION,
+        installId: "install-9", digest: "sha256:abc" });
+      const server = await buildServer({ packageName: PACKAGE, version: VERSION, loadedIdentity });
       const result = await server.call(OUTWARD, runFrame());
       expect(result.isError).toBeFalsy();
       expect(server.handled).toEqual([OUTWARD]);
@@ -266,8 +276,10 @@ describe("the guarded outward run action", () => {
         toolName: OUTWARD, packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
     });
 
-    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
-    it("is refused when its owner has no loaded identity (a dev, legacy or bundled load)", async () => {
+    // The registration carries no identity, though another load of the same version has a current one: it is never
+    // looked up again by package and version.
+    it("is refused when its registration carries no loaded identity (a dev or legacy load)", async () => {
+      recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
       const server = await buildServer({ packageName: PACKAGE, version: VERSION });
       const result = await server.call(OUTWARD, runFrame());
       expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_missing_or_stale`);
@@ -276,18 +288,20 @@ describe("the guarded outward run action", () => {
 
     // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
     it("is refused when its owner's loaded identity was retired", async () => {
-      recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
+      const loadedIdentity = recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION,
+        installId: "install-9", digest: "sha256:abc" });
       retireLoadedExtensionIdentity(PACKAGE, VERSION);
-      const server = await buildServer({ packageName: PACKAGE, version: VERSION });
+      const server = await buildServer({ packageName: PACKAGE, version: VERSION, loadedIdentity });
       const result = await server.call(OUTWARD, runFrame());
-      expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_missing_or_stale`);
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
       expect(store.consume).not.toHaveBeenCalled();
       expect(server.handled).toEqual([]);
     });
 
     // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
     it("is refused when its owner's loaded identity is replaced between the check and the consumption", async () => {
-      recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId: "install-9", digest: "sha256:abc" });
+      const loadedIdentity = recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION,
+        installId: "install-9", digest: "sha256:abc" });
       // The boundary's other rules run between the two steps; a new install is stamped while they run.
       vi.mocked(augmentModule.lookupPrimitiveClassification).mockImplementation((name: string) => {
         if (name === OUTWARD) {
@@ -296,7 +310,7 @@ describe("the guarded outward run action", () => {
         }
         return undefined;
       });
-      const server = await buildServer({ packageName: PACKAGE, version: VERSION });
+      const server = await buildServer({ packageName: PACKAGE, version: VERSION, loadedIdentity });
       const result = await server.call(OUTWARD, runFrame());
       expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
       expect(store.consume).not.toHaveBeenCalled();
@@ -439,6 +453,208 @@ describe("the guarded outward run action", () => {
       const server = await buildServer();
       await server.call(OUTWARD, runFrame({ verifiedPublishDecisionId: 7 }));
       expect((store.consume.mock.calls[0]![0] as { publishDecisionId?: unknown }).publishDecisionId).toBe(7);
+    });
+  });
+
+  // cinatra#3745: the identity checked, recorded and re-checked is the identity of the handler that will run: the loaded
+  // identity the registry keeps beside that handler (stamped by the load attempt whose ctx registered it), read off the
+  // same captured entry the dispatch invokes, never looked up again by package and version.
+  describe("the identity of the handler that runs", () => {
+    /** One load attempt of PACKAGE@VERSION: the loader stamps its identity, and the attempt's ctx registers OUTWARD. */
+    function loadAttempt(installId: string, digest: string, ran: string[], stamp = true) {
+      const loadedIdentity = recordLoadedExtensionIdentity({ packageName: PACKAGE, version: VERSION, installId, digest });
+      const ctx = createExtensionHostContext(PACKAGE, ["mcp"], {}, { installId, version: VERSION, isDefault: true,
+        ...(stamp ? { loadedIdentity } : {}) });
+      ctx.mcp.registerTool({ name: OUTWARD, description: OUTWARD, outward: {},
+        // A registration that names an identity itself is ignored: the host writes the field.
+        ...(stamp ? {} : { loadedIdentity }),
+        handler: async () => { ran.push(installId); return { sent: installId }; } } as Parameters<typeof ctx.mcp.registerTool>[0]);
+    }
+
+    /** The per-request server the replay builds: the registry entry captured now, with its handler and its stamp. */
+    async function replayServer() {
+      const tool = extensionRegistryModule.listExtensionMcpTools().find((t) => t.name === OUTWARD);
+      if (!tool) throw new Error(`"${OUTWARD}" is not registered`);
+      const runtime = await createMcpRuntimeServer({
+        name: "guarded-outward-replay-test",
+        version: "0.0.0",
+        registerCapabilities: (toolServer) => {
+          (toolServer.registerTool as unknown as (n: string, c: unknown, h: (input: unknown) => unknown) => unknown)(
+            OUTWARD,
+            extensionRegistryModule.buildReplayedExtensionToolConfig(OUTWARD, tool, {
+              ownerPackage: PACKAGE, resolvedVersion: tool.resolvedVersion,
+              dispatchTarget: { kind: "extension-default", packageName: PACKAGE, version: VERSION, name: OUTWARD },
+            }),
+            async (input: unknown) => wrapExtensionToolResult(
+              await dispatchPlannedExtensionMcpTool({ expected: "default", tool }, input)),
+          );
+        },
+      });
+      const registry = (runtime as unknown as {
+        _registeredTools: Record<string, { handler: (...a: unknown[]) => unknown }>;
+      })._registeredTools;
+      return (frame: McpRequestContext): Promise<ToolResult> =>
+        mcpRequestContextStorage.run(frame, () => registry[OUTWARD]!.handler({}, {})) as Promise<ToolResult>;
+    }
+
+    afterEach(() => {
+      extensionRegistryModule.removeExtensionMcpToolsForPackage(PACKAGE);
+    });
+
+    it("records the install whose handler runs", async () => {
+      const ran: string[] = [];
+      loadAttempt("install-A", "sha256:aaa", ran);
+      const call = await replayServer();
+      expect((await call(runFrame())).isError).toBeFalsy();
+      expect(ran).toEqual(["install-A"]);
+      expect((store.consume.mock.calls[0]![0] as { action: unknown }).action).toEqual({
+        toolName: OUTWARD, packageName: PACKAGE, version: VERSION, installId: "install-A", digest: "sha256:aaa" });
+    });
+
+    // Before the change the check looks the identity up by package and version, finds install B and runs A under it:
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("refuses a call whose captured handler was replaced by a same-version hot update before admission", async () => {
+      const ran: string[] = [];
+      loadAttempt("install-A", "sha256:aaa", ran);
+      const call = await replayServer();
+      // A hot update of the same version stamps install B and registers its handler after A's was captured.
+      loadAttempt("install-B", "sha256:bbb", ran);
+      const result = await call(runFrame());
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_stale`);
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+      expect(ran).toEqual([]);
+      expect(JSON.stringify(auditSpy.mock.calls)).not.toContain("install-B");
+      // A request planned after the update runs B's handler under B's identity, with the unused decision.
+      const next = await replayServer();
+      expect((await next(runFrame())).isError).toBeFalsy();
+      expect(ran).toEqual(["install-B"]);
+      expect((store.consume.mock.calls[0]![0] as { action: { installId: string } }).action.installId).toBe("install-B");
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("refuses a registration whose ctx carried no stamp, whatever identity the tool names itself", async () => {
+      const ran: string[] = [];
+      loadAttempt("install-A", "sha256:aaa", ran, false);
+      const result = await (await replayServer())(runFrame());
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_missing_or_stale`);
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(ran).toEqual([]);
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("refuses an identity of another package or version than the planned owner", async () => {
+      const loadedIdentity = recordLoadedExtensionIdentity({ packageName: PACKAGE, version: "9.9.9",
+        installId: "install-9", digest: "sha256:abc" });
+      const server = await buildServer({ packageName: PACKAGE, version: VERSION, loadedIdentity });
+      const result = await server.call(OUTWARD, runFrame());
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_loaded_identity_missing_or_stale`);
+      expect(store.consume).not.toHaveBeenCalled();
+    });
+  });
+
+  // cinatra#3745: ONE DECISION, ONE EFFECT. The person released one decision for the step's offered tool and its
+  // subject. A call a tool's handler makes through `ctx.mcp.callPrimitive` (the self-invoker's inner call) is not that
+  // tool, so an outward inner call is refused with a fixed code, whether the offered tool is outward or not, and never
+  // uses the decision. These cases run the real self-invoker and the real boundary inside the real runtime server.
+  describe("an outward call made inside a run's tool", () => {
+    const WRAPPER = "example_outward_wrapper";
+    const PLAIN_WRAPPER = "example_plain_wrapper";
+    const INNER = "example_inner_publish";
+    const INNER_READ = "example_inner_read";
+    const INNER_REASON = `${REASON}:action_inner_outward_call_refused`;
+
+    async function buildWrappers(innerName: string) {
+      const ran: string[] = [];
+      const errors: string[] = [];
+      let later: (() => Promise<unknown>) | null = null;
+      selfInvoker.handlers.clear();
+      const recording = extensionRegistryModule.createSelfPrimitiveRecordingServer(
+        selfInvoker.handlers as Map<string, CapturedHostPrimitive>);
+      for (const [name, outward] of [[INNER, true], [INNER_READ, false]] as const) {
+        (recording.registerTool as unknown as (n: string, c: unknown, h: (...a: unknown[]) => unknown) => unknown)(
+          name, { title: name, description: name, ...(outward ? { outward: {} } : {}) },
+          async () => { ran.push(name); return { structuredContent: { ok: name } }; });
+      }
+      __resetHostSelfPrimitiveHandlers();
+      const runtime = await createMcpRuntimeServer({
+        name: "guarded-outward-inner-test",
+        version: "0.0.0",
+        registerCapabilities: (toolServer) => {
+          for (const [name, outward] of [[WRAPPER, true], [PLAIN_WRAPPER, false]] as const) {
+            (toolServer.registerTool as unknown as (n: string, c: unknown, h: (...a: unknown[]) => unknown) => unknown)(
+              name, { title: name, description: name, ...(outward ? { outward: {} } : {}) }, async () => {
+                ran.push(name);
+                later = () => callHostPrimitive(innerName, {});
+                try { await callHostPrimitive(innerName, {}); } catch (e) { errors.push(String((e as Error).message)); }
+                return { content: [{ type: "text", text: "done" }] };
+              });
+          }
+        },
+      });
+      const registry = (runtime as unknown as {
+        _registeredTools: Record<string, { handler: (...a: unknown[]) => unknown }>;
+      })._registeredTools;
+      return {
+        ran, errors,
+        call: (name: string): Promise<ToolResult> =>
+          mcpRequestContextStorage.run(runFrame(), () => registry[name]!.handler({}, {})) as Promise<ToolResult>,
+        callLater: () => mcpRequestContextStorage.run(runFrame(), () => later!()),
+      };
+    }
+
+    beforeEach(() => {
+      store.decisions.set("run-1|step-1", { tools: new Set([WRAPPER, INNER]), consumed: false, released: [] });
+      vi.mocked(augmentModule.lookupPrimitiveClassification).mockImplementation((name: string) =>
+        [OUTWARD, OTHER_OUTWARD, WRAPPER, PLAIN_WRAPPER, INNER, INNER_READ].includes(name)
+          ? { ...FIXTURE_CLASSIFICATION } : undefined);
+    });
+    afterEach(() => {
+      selfInvoker.handlers.clear();
+      __resetHostSelfPrimitiveHandlers();
+    });
+
+    // Before the change the inner call takes the guarded action and is refused as undeclared after the wrapper used
+    // the decision up:
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("a declared outward wrapper uses the decision once, and its outward inner call is refused, unrun", async () => {
+      const w = await buildWrappers(INNER);
+      expect((await w.call(WRAPPER)).isError).toBeFalsy();
+      expect(w.errors).toHaveLength(1);
+      expect(w.errors[0]).toContain(INNER_REASON);
+      expect(w.ran).toEqual([WRAPPER]);
+      expect(store.consume).toHaveBeenCalledTimes(1);
+      expect((store.consume.mock.calls[0]![0] as { action: { toolName: string } }).action.toolName).toBe(WRAPPER);
+      expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({ operation: INNER, decision: "denied",
+        metadata: expect.objectContaining({ reason: INNER_REASON }) }));
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("a wrapper that is not outward has no decision, and its outward inner call is refused without reading one", async () => {
+      const w = await buildWrappers(INNER);
+      expect((await w.call(PLAIN_WRAPPER)).isError).toBeFalsy();
+      expect(w.errors[0]).toContain(INNER_REASON);
+      expect(w.ran).toEqual([PLAIN_WRAPPER]);
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+    });
+
+    // red-first-expect: to contain 'outward_effect_requires_recorded_deci…
+    it("an outward inner call made after the wrapper returned is refused, and the decision is not used again", async () => {
+      const w = await buildWrappers(INNER);
+      await w.call(WRAPPER);
+      const late = await w.callLater().catch((e: unknown) => e);
+      expect(String((late as Error).message)).toContain(INNER_REASON);
+      expect(w.ran).toEqual([WRAPPER]);
+      expect(store.consume).toHaveBeenCalledTimes(1);
+    });
+
+    it("an inner call of a tool that is not outward is served as before", async () => {
+      const w = await buildWrappers(INNER_READ);
+      expect((await w.call(PLAIN_WRAPPER)).isError).toBeFalsy();
+      expect(w.errors).toEqual([]);
+      expect(w.ran).toEqual([PLAIN_WRAPPER, INNER_READ]);
+      expect(store.consume).not.toHaveBeenCalled();
     });
   });
 });

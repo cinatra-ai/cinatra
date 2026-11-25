@@ -47,7 +47,6 @@ import { devFixtureProvenanceKey } from "@/lib/extension-fixture-provenance";
 import {
   registerCapabilityProvider,
   resolveCapabilityProviders,
-  currentLoadedExtensionIdentity,
   isLoadedExtensionIdentityCurrent,
   isLoadedExtensionIdentityMinted,
   type LoadedExtensionIdentity,
@@ -406,6 +405,12 @@ export type ExtensionRecordIdentityInput = {
   version?: string | null;
   /** Whether the record is the DEFAULT version of its package (default: true). */
   isDefault?: boolean;
+  /**
+   * cinatra#3745: the loaded identity the host's loader stamped for THIS load
+   * attempt (host loader only; omit for legacy/dev ctxs). Every MCP tool this
+   * ctx registers carries it beside its handler.
+   */
+  loadedIdentity?: LoadedExtensionIdentity | null;
 };
 
 function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): {
@@ -760,7 +765,11 @@ function makeMcp(
     // legacy/dev ctx carries none; that registration is then unversioned, and
     // version-bound admission refuses it rather than guessing.
     registerTool: (tool) =>
-      registerExtensionMcpTool(packageName, tool, { resolvedVersion: identity?.version ?? null }),
+      registerExtensionMcpTool(packageName, tool, {
+        resolvedVersion: identity?.version ?? null,
+        // cinatra#3745: the loaded identity of this load attempt, beside the handler.
+        loadedIdentity: identity?.loadedIdentity ?? null,
+      }),
     callPrimitive: makeCallPrimitive(packageName, identity),
     listExternalServers: async () => {
       const { listEnabledGlobalExternalMcpServers } = await import("@/lib/external-mcp-registry");
@@ -1572,7 +1581,10 @@ export function createNonDefaultVersionHostContext(
   const mcp: ExtensionHostContext["mcp"] = granted.has("mcp")
     ? {
         ...base.mcp,
-        registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName }),
+        // cinatra#3745: the host's fields last, so the retained handler carries
+        // this load attempt's loaded identity and never one the tool named.
+        registerTool: (tool) =>
+          sink.retainMcpTool({ ...tool, packageName, loadedIdentity: identity?.loadedIdentity ?? null }),
         // cinatra#1392 S8: a retained (edge-bound-served) handler of this
         // non-default version may itself call host primitives at DISPATCH time.
         // The probe base's callPrimitive throws unconditionally; with a sink
@@ -1791,7 +1803,9 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
 
 /** The owner of an outward tool as the registration's plan resolved it (the
  * planned entry's dispatch target), or null when its identity failed. */
-export type OutwardActionOwner = Readonly<{ kind: string; packageName: string; version: string }>;
+export type OutwardActionOwner = Readonly<{ kind: string; packageName: string; version: string;
+  /** The loaded identity of the registration the dispatch invokes (carried with its handler). */
+  loadedIdentity?: object }>;
 
 /** The install id and digest of a host built-in tool's owner. A host built-in is
  * part of the host build, not a loaded install, so it has no loaded identity;
@@ -1808,6 +1822,9 @@ export type CheckedOutwardRunAction = Readonly<{
   authority: OrgWriteAuthority;
   proof: VerifiedExecutedRunSource;
   action: RunActionToolIdentity;
+  /** The loaded identity checked for the owner (the object the loader minted), or
+   * null for a host built-in; checked again, by object, before the consumption. */
+  ownerIdentity: LoadedExtensionIdentity | null;
   /** The item and revision the call acts on, read from its arguments by the
    * tool's declared subject fields; null when the tool declares no subject. */
   subject: RunActionSubject | null;
@@ -1887,13 +1904,25 @@ export function checkOutwardRunAction(input: {
   const version = ownString(owner, "version");
   if (!kind || !packageName || !version) throw new OutwardActionRefusal("action_owner_unresolved");
   let action: RunActionToolIdentity;
+  let ownerIdentity: LoadedExtensionIdentity | null = null;
   if (kind === "host" && packageName === HOST_PRIMITIVE_OWNER_PACKAGE) {
     action = Object.freeze({ toolName: input.toolName, packageName, version,
       installId: HOST_BUILTIN_ACTION_OWNER, digest: HOST_BUILTIN_ACTION_OWNER });
   } else {
-    // Every other owner is an extension version (or a bundled module, which has
-    // no loaded identity and is refused here).
-    const identity = assertOutwardActionLoadedIdentity(currentLoadedExtensionIdentity(packageName, version));
+    // Every other owner is an extension version. Its identity is the one carried
+    // with the handler that will run (the registration's own stamp, captured in
+    // the same entry as that handler), never one looked up again by package and
+    // version: a same-version hot update between the capture and this check
+    // makes that identity stale, so the call is refused rather than run under
+    // the new install's name. A stamp-less registration (a dev or legacy load)
+    // has none and is refused. A stamp-less host registration (a platform
+    // module, or a bundled connector module, which also plans as a host
+    // registration today) took the host branch above.
+    const identity = assertOutwardActionLoadedIdentity(Object.getOwnPropertyDescriptor(owner, "loadedIdentity")?.value);
+    if (identity.packageName !== packageName || identity.version !== version) {
+      throw new OutwardActionRefusal("action_loaded_identity_missing_or_stale");
+    }
+    ownerIdentity = identity;
     action = Object.freeze({ toolName: input.toolName, packageName: identity.packageName, version: identity.version,
       installId: identity.installId, digest: identity.digest });
   }
@@ -1902,7 +1931,8 @@ export function checkOutwardRunAction(input: {
   // The frame's verified decision of this visit, read once from its own data
   // property and handed on unchanged (the consumption refuses a malformed one).
   const publishDecisionId = Object.getOwnPropertyDescriptor(frame, "verifiedPublishDecisionId")?.value as string | undefined;
-  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action, subject, publishDecisionId });
+  return Object.freeze({ orgId, runId, authority: authority as OrgWriteAuthority, proof, action, ownerIdentity, subject,
+    publishDecisionId });
 }
 
 /**
@@ -1913,11 +1943,12 @@ export function checkOutwardRunAction(input: {
  * `action_person_decision_unavailable` for any other failure.
  */
 export async function consumeOutwardRunAction(checked: CheckedOutwardRunAction): Promise<RunActionDecisionConsumption> {
-  const { action } = checked;
-  const hostBuiltin = action.packageName === HOST_PRIMITIVE_OWNER_PACKAGE &&
+  const { action, ownerIdentity } = checked;
+  const hostBuiltin = ownerIdentity === null && action.packageName === HOST_PRIMITIVE_OWNER_PACKAGE &&
     action.installId === HOST_BUILTIN_ACTION_OWNER && action.digest === HOST_BUILTIN_ACTION_OWNER;
   if (!hostBuiltin) {
-    const identity = assertOutwardActionLoadedIdentity(currentLoadedExtensionIdentity(action.packageName, action.version));
+    // The same object that was checked, still the current one of its version.
+    const identity = assertOutwardActionLoadedIdentity(ownerIdentity);
     if (identity.installId !== action.installId || identity.digest !== action.digest) {
       throw new OutwardActionRefusal("action_loaded_identity_stale");
     }

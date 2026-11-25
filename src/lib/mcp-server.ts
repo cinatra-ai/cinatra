@@ -365,13 +365,20 @@ export async function registerAllCapabilities(
     // (convergence round 0 #3 — input validated against one version's schema must
     // never reach another version's handler).
     const registration = entry.tool;
+    // cinatra#3745: the loaded identity kept beside THIS entry's handler. The
+    // default dispatch invokes this very entry's handler; the versioned dispatch
+    // re-reads the retained entry and refuses when it no longer carries this
+    // identity. The replayed config stamps the same identity, read off the same
+    // `registration`, into the dispatch target the outward check reads, so that
+    // check always names the bytes that run.
+    const loadedIdentity = entry.tool.loadedIdentity ?? null;
     const dispatchPlanned =
       entry.mode === "default"
         ? (input: unknown) =>
             dispatchPlannedExtensionMcpTool({ expected: "default", tool: entry.tool }, input)
         : (input: unknown) =>
             dispatchPlannedExtensionMcpTool(
-              { expected: "versioned", packageName: entry.packageName, name, version: entry.version },
+              { expected: "versioned", packageName: entry.packageName, name, version: entry.version, loadedIdentity },
               input,
             );
     // cinatra#2817 slice 1 — the PROVENANCE the choke point plans this

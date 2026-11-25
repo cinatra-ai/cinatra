@@ -835,6 +835,34 @@ describe("dispatchPlannedExtensionMcpTool — plan-pinned dispatch (codex round-
     expect(versionedHandler).toHaveBeenCalledWith({ b: 2 });
   });
 
+  // cinatra#3745: the plan read the retained handler's loaded identity beside it; a same-version re-activation since
+  // (a new attempt registered another handler under another identity) must refuse, never run the new bytes.
+  it("planned VERSIONED with its loaded identity + a same-version re-registration since → EDGE_BOUND_PLAN_DRIFT", async () => {
+    type Identity = Parameters<typeof dispatchPlannedExtensionMcpTool>[0] & { expected: "versioned" };
+    const planned = Object.freeze({ installId: "install-a" }) as unknown as Identity["loadedIdentity"];
+    const replaced = Object.freeze({ installId: "install-b" }) as unknown as Identity["loadedIdentity"];
+    const sink = beginVersionKeyedRegistration(TARGET, V);
+    sink.retainMcpTool({ name: "the_tool", handler: versionedHandler, packageName: TARGET, loadedIdentity: replaced });
+    sink.commit();
+    // red-first-expect: promise resolved "{ served: 'versioned' }" instead of rejecting
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: V, loadedIdentity: planned },
+        {},
+        depsWith({}),
+      ),
+    ).rejects.toMatchObject({ code: "EDGE_BOUND_PLAN_DRIFT" });
+    expect(versionedHandler).not.toHaveBeenCalled();
+    // The identity the plan read is served.
+    await expect(
+      dispatchPlannedExtensionMcpTool(
+        { expected: "versioned", packageName: TARGET, name: "the_tool", version: V, loadedIdentity: replaced },
+        { c: 3 },
+        depsWith({}),
+      ),
+    ).resolves.toEqual({ served: "versioned" });
+  });
+
   it("planned VERSIONED + decision flips to default/none or ANOTHER version → EDGE_BOUND_PLAN_DRIFT", async () => {
     // Flip to none (edge gone).
     await expect(

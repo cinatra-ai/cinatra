@@ -305,7 +305,7 @@ export async function callHostPrimitive(
         // cinatra#3745: ONE RESOLUTION FOR THE CHECK AND THE EXECUTION. The
         // captured entry is the union winner's registration, and its wrapper
         // re-resolves the caller's edge, so it may execute another version (a
-        // retained pin) than the one whose declaration and owner the boundary
+        // retained pin) than the one whose outward declaration the boundary
         // would read. The caller's edge is resolved here first; the planned entry
         // is used only when it describes exactly the version this caller is
         // served, and the handler is pinned to that identity (the pinned
@@ -327,12 +327,16 @@ export async function callHostPrimitive(
         delegatedRestricted: !!ctx?.delegatedRestricted,
         // The outward declaration of the planned entry the call executes.
         declaresOutward: boundPlanned.declaredOutward !== null,
-        // cinatra#3745: that entry's planned owner, for the guarded outward run
-        // action (null when the identity failed: refused), its declared subject
-        // fields and the call's prepared arguments.
-        outwardOwner: boundPlanned.identityFailure === null ? boundPlanned.dispatchTarget : null,
-        outwardSubject: boundPlanned.declaredOutward?.subject ?? null,
-        toolArguments: input,
+        // cinatra#3745: ONE DECISION, ONE EFFECT. A call on a run frame is the
+        // inner call of the step's offered tool (see above). The person released
+        // their decision for that offered tool and its subject only, so an inner
+        // call never uses it and never gets one of its own: an outward inner call
+        // is refused by the boundary (`action_inner_outward_call_refused`),
+        // whether the wrapper is outward or not, and before any decision is read.
+        // A wrapper that must act outward declares itself outward and performs
+        // the effect in its own handler. Set here by the host, for every call of
+        // this invoker on a run frame; no request or extension sets it.
+        ...(ctx?.runId ? { innerRunCall: true as const } : {}),
       });
     } catch (err) {
       // cinatra#3745: a refused run call keeps its refusal class and code (its

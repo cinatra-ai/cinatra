@@ -134,20 +134,33 @@ describe("the in-process self-invocation hands the boundary the planned outward 
     expect(request?.declaresOutward).not.toBe(true);
   });
 
-  it("hands the boundary the captured primitive's planned owner as outwardOwner, for the guarded outward run action", async () => {
+  // cinatra#3745: a call on a run frame is the inner call of the step's offered tool, which the boundary refuses when it
+  // is outward; it names no owner, so it can never take the guarded outward run action and use the person's decision.
+  it("marks a run frame's call as an inner call and names no owner for the guarded outward run action", async () => {
     await callHostPrimitive("example_outward_tool", { a: 3 });
     expect(hoisted.boundary).toHaveBeenCalledTimes(1);
-    // red-first-expect: expected undefined to deeply equal
-    expect(hoisted.boundary.mock.calls[0]?.[0]?.outwardOwner).toEqual({
-      kind: "host", packageName: "@example-org/host", version: "1.0.0", name: "example_outward_tool",
-    });
+    const request = hoisted.boundary.mock.calls[0]?.[0];
+    // red-first-expect: expected undefined to be true
+    expect(request?.innerRunCall).toBe(true);
+    expect(request).not.toHaveProperty("outwardOwner");
+  });
+
+  it("off a run frame, the call is no inner call", async () => {
+    const saved = hoisted.frame;
+    hoisted.frame = { orgId: "org-1", userId: "user-1" };
+    try {
+      await callHostPrimitive("example_plain_tool", { a: 8 });
+    } finally {
+      hoisted.frame = saved;
+    }
+    expect(hoisted.boundary.mock.calls[0]?.[0]).not.toHaveProperty("innerRunCall");
   });
 });
 
-// cinatra#3745: on a run frame the boundary checks and records the declaration and owner of the version that will
-// actually execute for this caller. The caller's edge is resolved first; the captured entry is used only when it is that
-// version's registration, and the call is then dispatched pinned to it. When it is not, the call is refused.
-describe("on a run frame, the declaration and owner are those of the version that executes", () => {
+// cinatra#3745: on a run frame the boundary reads the outward declaration of the version that will actually execute for
+// this caller. The caller's edge is resolved first; the captured entry is used only when it is that version's
+// registration, and the call is then dispatched pinned to it. When it is not, the call is refused.
+describe("on a run frame, the declaration is that of the version that executes", () => {
   it("refuses, before the boundary and the handler, a call whose run pins a version the union entry does not describe", async () => {
     // Version A's entry declares nothing outward; the run pins retained version B.
     hoisted.edge = { kind: "versioned", version: "2.0.0", resolvedInstallId: "install-b" };
@@ -168,41 +181,25 @@ describe("on a run frame, the declaration and owner are those of the version tha
     expect(hoisted.dispatch).not.toHaveBeenCalled();
   });
 
-  it("hands the boundary the retained version's own declaration and owner, and dispatches pinned to that version", async () => {
+  it("hands the boundary the retained version's own declaration, and dispatches pinned to that version", async () => {
     hoisted.edge = { kind: "versioned", version: "2.0.0", resolvedInstallId: "install-b" };
     const out = await callHostPrimitive("example_retained_outward", { a: 6 });
     expect(out).toEqual({ a: 6 });
     const request = hoisted.boundary.mock.calls[0]?.[0];
     // red-first-expect: expected { …(4) } to match object { declaresOutward: true, …(1) }
-    expect(request).toMatchObject({ declaresOutward: true, outwardOwner: { ...RETAINED_B, name: "example_retained_outward" } });
+    expect(request).toMatchObject({ declaresOutward: true, innerRunCall: true });
     expect(hoisted.dispatch).toHaveBeenCalledTimes(1);
     expect(hoisted.dispatch.mock.calls[0]?.[0]).toEqual({ ...RETAINED_B, name: "example_retained_outward" });
     expect(hoisted.captured).not.toHaveBeenCalled();
   });
 
-  it("hands the boundary the default version's declaration, owner, subject fields and arguments, pinned to it", async () => {
-    const args = { postId: "artifact-1", postRevision: "revision-1" };
-    await callHostPrimitive("example_default_outward", args);
+  it("hands the boundary the default version's declaration, pinned to it", async () => {
+    await callHostPrimitive("example_default_outward", { postId: "artifact-1", postRevision: "revision-1" });
     const request = hoisted.boundary.mock.calls[0]?.[0];
     // red-first-expect: expected { …(4) } to match object { declaresOutward: true, …(1) }
-    expect(request).toMatchObject({ declaresOutward: true, outwardOwner: { ...DEFAULT_A, name: "example_default_outward" } });
-    expect(request?.outwardSubject).toEqual(SUBJECT_FIELDS);
-    expect(request?.toolArguments).toEqual(args);
+    expect(request).toMatchObject({ declaresOutward: true, innerRunCall: true });
     expect(hoisted.dispatch.mock.calls[0]?.[0]).toEqual({ ...DEFAULT_A, name: "example_default_outward" });
     expect(hoisted.captured).not.toHaveBeenCalled();
-  });
-
-  it("hands the boundary the live request's own frame, so its verified publish decision reaches the guarded action", async () => {
-    const saved = hoisted.frame;
-    const frame = { ...saved, verifiedPublishDecisionId: "decision-2" };
-    hoisted.frame = frame;
-    try {
-      await callHostPrimitive("example_default_outward", { postId: "artifact-1", postRevision: "revision-1" });
-    } finally {
-      hoisted.frame = saved;
-    }
-    expect(hoisted.boundary.mock.calls[0]?.[0]?.ctx).toBe(frame);
-    expect((hoisted.boundary.mock.calls[0]?.[0]?.ctx as Record<string, unknown>).verifiedPublishDecisionId).toBe("decision-2");
   });
 
   it("off a run frame, an unrestricted call keeps the captured wrapper and resolves no edge here", async () => {

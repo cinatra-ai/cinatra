@@ -661,6 +661,9 @@ export async function loadRuntimePackageExtensions(
           // A malformed field stamps nothing: this attempt loads unpinned.
         }
       }
+      // cinatra#3745: the stamp rides into the ctx, so each MCP tool this attempt
+      // registers carries it beside its handler (never looked up again later).
+      const loadedIdentity = stampedIdentities.get(record) ?? null;
       if (record.isDefault === false) {
         let sink: VersionKeyedRegistrationSink | undefined;
         if (record.version) {
@@ -672,14 +675,14 @@ export async function loadRuntimePackageExtensions(
           grantedPorts,
           { envOverrides: record.envOverrides },
           sink,
-          { installId, version: record.version ?? null, isDefault: false },
+          { installId, version: record.version ?? null, isDefault: false, loadedIdentity },
         );
       }
       return createExtensionHostContext(
         packageName,
         grantedPorts,
         { envOverrides: record.envOverrides },
-        { installId, version: record.version ?? null, isDefault: true },
+        { installId, version: record.version ?? null, isDefault: true, loadedIdentity },
       );
     },
     // Per-record settle (cinatra#1392 Gap 1 / S8): commit a fully-successful
