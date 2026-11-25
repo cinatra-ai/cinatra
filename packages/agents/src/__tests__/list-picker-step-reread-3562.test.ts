@@ -54,15 +54,17 @@ const { FakeAuthzError } = vi.hoisted(() => ({
   },
 }));
 
-const { enforceRunAccessMock, readAgentRunByIdMock, readLatestGateMock } = vi.hoisted(() => ({
+const { enforceRunAccessMock, readAgentRunByIdMock, readLatestGateMock, readTemplateMock } = vi.hoisted(() => ({
   enforceRunAccessMock: vi.fn<(...args: unknown[]) => Promise<void>>(),
   readAgentRunByIdMock: vi.fn<(id: unknown, actor?: unknown, roles?: unknown) => Promise<unknown>>(),
   readLatestGateMock: vi.fn<(runId: unknown) => Promise<unknown>>(),
+  readTemplateMock: vi.fn<(templateId: unknown) => Promise<unknown>>(),
 }));
 vi.mock("../auth-policy", () => ({ enforceRunAccess: enforceRunAccessMock }));
 vi.mock("../store", () => ({
   readAgentRunById: readAgentRunByIdMock,
   readLatestDurableHitlGateArtifact: readLatestGateMock,
+  readAgentTemplateById: readTemplateMock,
 }));
 
 // The boundary is real; only its audit write is a stand-in.
@@ -126,12 +128,20 @@ const TEAM_CEILING = [
 
 const searchMock = vi.fn();
 
+// The run's template anchor: the ceiling is derived from it as the live tool
+// mint derives it (an organization-owned template here unless a case says so).
+const TEMPLATE_ID = "tmpl-3562";
+const ORG_TEMPLATE = { id: TEMPLATE_ID, ownerLevel: "organization", ownerId: "org-1" };
+const TEAM_TEMPLATE = { id: TEMPLATE_ID, ownerLevel: "team", ownerId: "team-9" };
+
 function waitingRun(overrides: Record<string, unknown> = {}) {
   return {
     id: RUN_ID,
     status: "pending_approval",
     runBy: "member-1",
     orgId: "org-1",
+    templateId: TEMPLATE_ID,
+    projectId: null,
     a2aTaskId: GATE_TASK,
     oboCeiling: ORG_ONLY_CEILING,
     ...overrides,
@@ -179,6 +189,8 @@ beforeEach(() => {
   readAgentRunByIdMock.mockResolvedValue(waitingRun());
   readLatestGateMock.mockReset();
   readLatestGateMock.mockResolvedValue(listGate());
+  readTemplateMock.mockReset();
+  readTemplateMock.mockResolvedValue(ORG_TEMPLATE);
   enforceRunAccessMock.mockReset();
   enforceRunAccessMock.mockRejectedValue(
     new FakeAuthzError({ statusCode: 404, reason: "hidden", message: "Not found." }),
@@ -321,6 +333,9 @@ describe("readListStepContent — only for the list step the run waits at", () =
 describe("readListStepContent — the run itself must be allowed the CRM list read", () => {
   // red-first-expect: readListStepContent is not a function
   it("a ceiling narrower than the organization answers the failed shape with no CRM call", async () => {
+    // A team-owned run whose stored ceiling carries the team: the derivation
+    // agrees, and the boundary itself refuses the narrower ceiling.
+    readTemplateMock.mockResolvedValueOnce(TEAM_TEMPLATE);
     readAgentRunByIdMock.mockResolvedValueOnce(waitingRun({ oboCeiling: TEAM_CEILING }));
     await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toEqual({ lists: [], listsRead: "failed" });
     expect(resolveCrmListReader).not.toHaveBeenCalled();
@@ -334,6 +349,24 @@ describe("readListStepContent — the run itself must be allowed the CRM list re
         metadata: expect.objectContaining({ reason: "agent_run_obo_scope_unsupported" }),
       }),
     );
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("a team-owned run with an organization-only stored ceiling answers the failed shape with no CRM call", async () => {
+    // The stored chain does not contain the team the template anchors the run
+    // to, so the live tool mint would refuse its token; the re-read refuses too.
+    readTemplateMock.mockResolvedValueOnce(TEAM_TEMPLATE);
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toEqual({ lists: [], listsRead: "failed" });
+    expect(readTemplateMock).toHaveBeenCalledWith(TEMPLATE_ID);
+    expect(resolveCrmListReader).not.toHaveBeenCalled();
+    expect(searchMock).not.toHaveBeenCalled();
+  });
+
+  // red-first-expect: readListStepContent is not a function
+  it("a corrupt template anchor (nothing derived) answers the failed shape with no CRM call", async () => {
+    readTemplateMock.mockResolvedValueOnce({ id: TEMPLATE_ID, ownerLevel: "team", ownerId: "" });
+    await expect(readListStepContent(RUN_ID, TASK_ID)).resolves.toEqual({ lists: [], listsRead: "failed" });
+    expect(searchMock).not.toHaveBeenCalled();
   });
 
   // red-first-expect: readListStepContent is not a function

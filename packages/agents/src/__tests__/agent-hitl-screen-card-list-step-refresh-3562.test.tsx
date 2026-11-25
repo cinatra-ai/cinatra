@@ -56,7 +56,7 @@ const RUN_ID = "run-3562";
 const LIST_STEP_ID = "@cinatra-test/pack-agent-refresh:list-picker";
 const OTHER_STEP_ID = "@cinatra-test/pack-agent-refresh:output";
 
-function askingOn(xRenderer: string) {
+function askingOn(xRenderer: string, currentValues: Record<string, unknown> = { lists: [], listsRead: "failed" }) {
   return {
     state: "asking" as const,
     runId: RUN_ID,
@@ -65,7 +65,7 @@ function askingOn(xRenderer: string) {
       reviewTaskId: "task-list-1",
       xRenderer,
       inputSchema: { type: "object" },
-      currentValues: { lists: [], listsRead: "failed" },
+      currentValues,
       fieldName: undefined,
     },
   };
@@ -287,5 +287,45 @@ describe("AgentHitlScreenCard — the shipped list picker's Try again (cinatra#3
     await waitFor(() => expect(screen.queryByTestId("list-picker-loading")).toBeNull());
     expect(screen.getByRole("alert").textContent).toContain("This list could not be read.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  // red-first-expect: expected "vi.fn()" to be called at least once
+  it("a row picked after Try again is what the card's Continue sends, in the approval note", async () => {
+    mountHostPicker();
+    asking = askingOn(HOST_STEP_ID);
+    mountOn("chat_thread");
+    await settle();
+    await screen.findByRole("alert", undefined, { timeout: 3000 });
+    const continueButton = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+    expect(continueButton().disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    fireEvent.click(await screen.findByText("Read again"));
+    // The pick buffers into the card's Continue; nothing is sent on the pick.
+    expect(hitlActions.approveReviewTask).not.toHaveBeenCalled();
+    await waitFor(() => expect(continueButton().disabled).toBe(false));
+    fireEvent.click(continueButton());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalledTimes(1));
+    const [taskId, sent] = hitlActions.approveReviewTask.mock.calls[0] as unknown as [string, { approvalNote?: string; userResponse?: unknown }];
+    expect(taskId).toBe("task-list-1");
+    expect(sent.userResponse).toBeUndefined();
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
+  });
+
+  // red-first-expect: expected "vi.fn()" to be called at least once
+  it("a restored choice the first read still offers is what Continue sends", async () => {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockResolvedValue([{ id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" }] as never);
+    asking = askingOn(HOST_STEP_ID, { scope: "list", listId: "l-9", listName: "Read again", memberCount: 0 });
+    mountOn("chat_thread");
+    await settle();
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
+    const continueButton = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+    await waitFor(() => expect(continueButton().disabled).toBe(false));
+    fireEvent.click(continueButton());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
   });
 });

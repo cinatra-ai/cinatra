@@ -88,7 +88,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
   useAgUiRunStream: vi.fn(() => streamResultFor(LIST_STEP_ID)),
 }));
 
-function streamResultFor(xRenderer: string) {
+function streamResultFor(xRenderer: string, values: Record<string, unknown> = { lists: [], listsRead: "failed" }) {
   return {
     status: "pending_approval",
     error: null,
@@ -97,7 +97,7 @@ function streamResultFor(xRenderer: string) {
     interruptContext: {
       schema: { type: "object" },
       xRenderer,
-      values: { lists: [], listsRead: "failed" },
+      values,
       reviewTaskId: "task-list-1",
     },
     streamedText: "",
@@ -121,9 +121,9 @@ function RefreshingStep({ value, onRequestRefresh }: FieldRendererProps) {
   );
 }
 
-async function renderPanelOn(xRenderer: string) {
+async function renderPanelOn(xRenderer: string, values?: Record<string, unknown>) {
   const { useAgUiRunStream } = await import("../use-ag-ui-run-stream");
-  (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(streamResultFor(xRenderer));
+  (useAgUiRunStream as unknown as ReturnType<typeof vi.fn>).mockReturnValue(streamResultFor(xRenderer, values));
   const { AgenticRunPanel } = await import("../agentic-run-panel");
   return render(
     <AgenticRunPanel
@@ -305,5 +305,21 @@ describe("AgenticRunPanel — the shipped list picker's Try again (cinatra#3562)
     await waitFor(() => expect(screen.queryByTestId("list-picker-loading")).toBeNull());
     expect(screen.getByRole("alert").textContent).toContain("This list could not be read.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  // red-first-expect: expected "vi.fn()" to be called at least once
+  it("a restored choice the first read still offers is what Continue sends", async () => {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockResolvedValue([{ id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" }] as never);
+    await renderPanelOn(HOST_STEP_ID, { scope: "list", listId: "l-9", listName: "Read again", memberCount: 0 });
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
+    const continueButton = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+    await waitFor(() => expect(continueButton().disabled).toBe(false));
+    fireEvent.click(continueButton());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
   });
 });

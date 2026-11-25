@@ -127,11 +127,11 @@ function RefreshingStep({ value, onRequestRefresh }: FieldRendererProps) {
   );
 }
 
-async function mountOn(xRenderer: string) {
+async function mountOn(xRenderer: string, values: Record<string, unknown> = { lists: [], listsRead: "failed" }) {
   INTERRUPT = {
     schema: { type: "object" },
     xRenderer,
-    values: { lists: [], listsRead: "failed" },
+    values,
     reviewTaskId: "task-list-1",
   };
   const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
@@ -308,5 +308,21 @@ describe("OrchestratorStepperPanel — the shipped list picker's Try again (cina
     await waitFor(() => expect(screen.queryByTestId("list-picker-loading")).toBeNull());
     expect(screen.getByRole("alert").textContent).toContain("This list could not be read.");
     expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
+  // red-first-expect: expected { type: 'list', listId: '', …(3) } to match object
+  it("a restored choice the first read still offers is what Continue sends", async () => {
+    __setFieldRendererComponentMapForTests({});
+    registerFieldRendererBindings([{ id: HOST_STEP_ID, kind: "list-picker", priority: 80 }]);
+    listActions.fetchAvailableLists.mockResolvedValue([{ id: "l-9", name: "Read again", memberCount: null, lastUpdated: null, memberType: "contact" }] as never);
+    await mountOn(HOST_STEP_ID, { scope: "list", listId: "l-9", listName: "Read again", memberCount: 0 });
+    await screen.findByText("Read again", undefined, { timeout: 3000 });
+    expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
+    const continueButton = () => screen.getByRole("button", { name: /continue/i }) as HTMLButtonElement;
+    await waitFor(() => expect(continueButton().disabled).toBe(false));
+    fireEvent.click(continueButton());
+    await waitFor(() => expect(hitlActions.approveReviewTask).toHaveBeenCalled());
+    const sent = (hitlActions.approveReviewTask.mock.calls[0] as unknown[])[1] as { approvalNote?: string };
+    expect(JSON.parse(sent.approvalNote ?? "{}")).toMatchObject({ type: "list", listId: "l-9", listName: "Read again" });
   });
 });

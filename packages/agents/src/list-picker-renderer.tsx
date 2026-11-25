@@ -198,8 +198,12 @@ export function ListPickerRenderer({
   useEffect(() => {
     latest.current = { mode, disabled, selectedId };
   });
-  // The pick last written, so a new read writes only a pick that changed.
-  const lastWritten = useRef({ listId: current.listId, listName: current.listName });
+  // The pick last written TO THIS HOST, so a new read writes only a pick that
+  // changed. It starts as nothing written: a host's answer buffer starts empty
+  // (the run panel's and the stepper's both do), so a restored pick that the
+  // first successful read still offers is written once, and the step reports
+  // itself valid only once the host holds the pick it would send.
+  const lastWritten = useRef({ listId: "", listName: "" });
   const inFlight = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {

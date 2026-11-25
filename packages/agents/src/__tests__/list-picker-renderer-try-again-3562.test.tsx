@@ -202,27 +202,25 @@ describe("ListPickerRenderer — the failed read and Try again (cinatra#3562)", 
 });
 
 describe("ListPickerRenderer — the pick after a new read (cinatra#3562)", () => {
-  it("a ticked list a new read no longer offers is dropped and the empty pick is written once", async () => {
-    // A restored pick (the step reopened with a value) and a failed first load.
-    vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(new Error("search failed"));
+  it("a written pick a later read no longer offers is dropped and the empty pick is written once", async () => {
+    // A restored pick, written to the host on the first good read; the run
+    // identity then re-issues the load, which no longer offers it.
+    vi.mocked(actions.fetchAvailableLists)
+      .mockResolvedValueOnce(FIRST)
+      .mockResolvedValueOnce([FIRST[1]]);
     const onChange = vi.fn();
-    const onRequestRefresh = vi
-      .fn<() => Promise<unknown>>()
-      .mockResolvedValueOnce({ lists: [{ id: "l-2", name: "Beta Prospects" }], listsRead: "ok" });
-    render(
+    const restored = { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 0 };
+    const { rerender } = render(<ListPickerRenderer {...props({ onChange, value: restored })} />);
+    await screen.findByText("Q2 Targets");
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    rerender(
       <ListPickerRenderer
-        {...props({
-          onRequestRefresh,
-          onChange,
-          value: { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 0 },
-        })}
+        {...props({ onChange, value: restored, context: { connectedApps: [], runId: "run-2" } })}
       />,
     );
-    await screen.findByRole("alert");
-    fireEvent.click(tryAgain()!);
-    await screen.findByText("Beta Prospects");
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith({ scope: "list", listId: "", listName: "", memberCount: 0 });
+    await waitFor(() => expect(screen.queryByText("Q2 Targets")).toBeNull());
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(2));
+    expect(onChange).toHaveBeenLastCalledWith({ scope: "list", listId: "", listName: "", memberCount: 0 });
     expect(screen.getAllByRole("button", { pressed: false })).toHaveLength(1);
   });
 
@@ -251,7 +249,7 @@ describe("ListPickerRenderer — the pick after a new read (cinatra#3562)", () =
     expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
   });
 
-  it("a restored pick the new read offers unchanged is not written again", async () => {
+  it("a restored pick the new read offers unchanged is written to the host once", async () => {
     vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(new Error("search failed"));
     const onChange = vi.fn();
     const onRequestRefresh = vi
@@ -269,7 +267,8 @@ describe("ListPickerRenderer — the pick after a new read (cinatra#3562)", () =
     await screen.findByRole("alert");
     fireEvent.click(tryAgain()!);
     await screen.findByText("Q2 Targets");
-    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ listId: "l-1", listName: "Q2 Targets" }));
   });
 });
 
@@ -277,7 +276,7 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
   const RESTORED = { scope: "list", listId: "l-1", listName: "Q2 Targets", memberCount: 0 };
 
   // red-first-expect: Unable to find role="alert"
-  it("a failed first load and a failed retry keep the restored pick and write nothing; a later good read keeps it", async () => {
+  it("a failed first load and failed retries keep the restored pick and write nothing; a later good read writes it once", async () => {
     vi.mocked(actions.fetchAvailableLists).mockRejectedValueOnce(new Error("search failed"));
     const onChange = vi.fn();
     const onValidityChange = vi.fn();
@@ -302,19 +301,19 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
     fireEvent.click(tryAgain()!);
     await screen.findByText("Q2 Targets");
     expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
-    expect(onChange).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ listId: "l-1", listName: "Q2 Targets" }));
     await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
   });
 
-  it("a first load that no longer offers the restored pick drops it and writes once; the same read again writes nothing", async () => {
+  it("a first load that no longer offers the restored pick drops it and writes nothing (the host holds none); the same read again writes nothing", async () => {
     vi.mocked(actions.fetchAvailableLists)
       .mockResolvedValueOnce([FIRST[1]])
       .mockResolvedValueOnce([FIRST[1]]);
     const onChange = vi.fn();
     const { rerender } = render(<ListPickerRenderer {...props({ value: RESTORED, onChange })} />);
     await screen.findByText("Beta Prospects");
-    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
-    expect(onChange).toHaveBeenCalledWith({ scope: "list", listId: "", listName: "", memberCount: 0 });
+    expect(screen.getAllByRole("button", { pressed: false })).toHaveLength(1);
     // The run identity re-issues the load; the same lists again write nothing.
     rerender(
       <ListPickerRenderer
@@ -323,7 +322,7 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
     );
     await waitFor(() => expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2));
     await screen.findByText("Beta Prospects");
-    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("a first load that renames the restored pick writes it once with the new name", async () => {
@@ -339,13 +338,27 @@ describe("ListPickerRenderer — a restored pick and reads that fail or succeed 
     );
   });
 
-  it("a first load that offers the restored pick unchanged writes nothing", async () => {
-    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(FIRST);
+  // red-first-expect: expected "vi.fn()" to be called 1 times, but got 0 times
+  it("a first load that offers the restored pick unchanged writes it to the host once; the same read again writes nothing", async () => {
+    vi.mocked(actions.fetchAvailableLists).mockResolvedValueOnce(FIRST).mockResolvedValueOnce(FIRST);
     const onChange = vi.fn();
-    render(<ListPickerRenderer {...props({ value: RESTORED, onChange })} />);
+    const onValidityChange = vi.fn();
+    const { rerender } = render(
+      <ListPickerRenderer {...props({ value: RESTORED, onChange, onValidityChange })} />,
+    );
     await screen.findByText("Q2 Targets");
     expect(screen.getByRole("button", { pressed: true })).toBeTruthy();
-    expect(onChange).not.toHaveBeenCalled();
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ listId: "l-1", listName: "Q2 Targets" }));
+    await waitFor(() => expect(onValidityChange).toHaveBeenLastCalledWith(true));
+    rerender(
+      <ListPickerRenderer
+        {...props({ value: RESTORED, onChange, onValidityChange, context: { connectedApps: [], runId: "run-2" } })}
+      />,
+    );
+    await waitFor(() => expect(actions.fetchAvailableLists).toHaveBeenCalledTimes(2));
+    await screen.findByText("Q2 Targets");
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 });
 

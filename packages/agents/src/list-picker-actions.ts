@@ -12,7 +12,8 @@ import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-c
 import type { AgentRunRecord } from "./agent-run-record";
 import { enforceRunAccess } from "./auth-policy";
 import { gateTaskIsCurrentPause } from "./run-status";
-import { readAgentRunById, readLatestDurableHitlGateArtifact } from "./store";
+import { deriveOboCeilingChain, oboCeilingContains } from "@cinatra-ai/mcp-server/obo-ceiling";
+import { readAgentRunById, readAgentTemplateById, readLatestDurableHitlGateArtifact } from "./store";
 
 // The picker still exposes the legacy `AvailableListSummary` shape so its
 // downstream consumers (orchestrator panels, list-curator scrape renderer,
@@ -286,6 +287,22 @@ async function runMayReadCrmLists(run: AgentRunRecord): Promise<boolean> {
       sourceType: run.sourceType,
     });
     if (!liveActor) return false;
+    // The ceiling, checked as the live tool mint checks it (llm-bridge route,
+    // the agent-run OBO mint), by the same functions in the same order:
+    // `readAgentTemplateById(run.templateId)`, then `deriveOboCeilingChain`
+    // from the template's owner anchor, the run's organization and project,
+    // then `oboCeilingContains(persisted, derived)`. A corrupt anchor (nothing
+    // derived) or a persisted chain that does not contain every derived
+    // element refuses, as the mint refuses its token; on a pass the PERSISTED
+    // chain goes to the boundary, as the mint carries it.
+    const template = await readAgentTemplateById(run.templateId);
+    const derived = deriveOboCeilingChain({
+      ownerLevel: template?.ownerLevel ?? null,
+      ownerId: template?.ownerId ?? null,
+      orgId: run.orgId,
+      projectId: run.projectId,
+    });
+    if (!derived || !oboCeilingContains(run.oboCeiling, derived)) return false;
     const { enforceMcpBoundary } = await import("@/lib/authz/mcp-boundary");
     const orgRole =
       liveActor.platformRole === "platform_admin"
