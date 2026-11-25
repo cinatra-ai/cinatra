@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { compileOasAgentJson, __resetRegistryCacheForTests, RUNTIME_GATE_NODE_MAX_DEPTH, type CompiledAgentOasStep } from "../oas-compiler";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { stepFiresRendererGate } from "../orchestrator-gate-predicate";
 import embeddedDrafting from "./fixtures/email-drafting-embedded-3089.json";
 
 // cinatra#3089 — an artifact-review gate inside an EMBEDDED child flow.
@@ -130,6 +131,8 @@ type Parts = {
   extraRefs?: Record<string, unknown>;
   // Data edges of the whole (parent) flow.
   parentEdges?: Array<Record<string, unknown>>;
+  // Control edges of the whole (parent) flow, added to its straight line.
+  parentControl?: Array<[string, string]>;
   draftsGateSteps?: unknown[] | undefined;
   senderGateSteps?: unknown[];
   startInputs?: string[];
@@ -152,12 +155,21 @@ function buildAgentJson(parts: Parts = {}): Record<string, unknown> {
     ...(parts.parentEdges ? { data_flow_connections: parts.parentEdges } : {}),
     start_node: { $component_ref: "startNode" },
     nodes: order.map((id) => ({ $component_ref: id })),
-    control_flow_connections: order.slice(1).map((to, i) => ({
-      component_type: "ControlFlowEdge",
-      name: `e${i}`,
-      from_node: { $component_ref: order[i] },
-      to_node: { $component_ref: to },
-    })),
+    control_flow_connections: [
+      ...order.slice(1).map((to, i) => ({
+        component_type: "ControlFlowEdge",
+        name: `e${i}`,
+        from_node: { $component_ref: order[i] },
+        to_node: { $component_ref: to },
+      })),
+      ...(parts.parentControl ?? []).map(([from, to], i) => ({
+        component_type: "ControlFlowEdge",
+        name: `x${i}`,
+        from_branch: `x${i}`,
+        from_node: { $component_ref: from },
+        to_node: { $component_ref: to },
+      })),
+    ],
     $referenced_components: {
       startNode: {
         component_type: "StartNode",
@@ -960,10 +972,28 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
     // The answers of a run are replayed onto the steps by order: a skipped gate
     // before a later reviewer would take that reviewer's answer.
     expect(await compileError(draftingParts(laterReviewer))).toContain("ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST");
-    // A later step that does not pause for a reviewer is no reviewer step.
-    const phantom = { senderGateSteps: [{ name: "Send log", hitlOwnedBy: "self", gateCount: 1 }] };
-    const steps = await compileSteps(draftingParts(phantom));
+  });
+
+  it("a later step the answer walker does not count (no renderer) does not refuse a gate a run may skip", async () => {
+    const noRenderer = { senderGateSteps: [{ name: "Send log", hitlOwnedBy: "self", gateCount: 1 }] };
+    const steps = await compileSteps(draftingParts(noRenderer));
     expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+    expect(stepFiresRendererGate(byName(steps, "Send log"))).toBe(false);
+    const counted = await compileSteps(laterReviewer);
+    expect(stepFiresRendererGate(byName(counted, "Confirm send"))).toBe(true);
+  });
+
+  it("a branch of the parent flow around the FlowNode makes the gate skippable: a later reviewer step is refused", async () => {
+    // red-first-expect: expected true to be false
+    expect(await compileError({ ...laterReviewer, parentControl: [["recipients_flow", "sender_flow"]] })).toContain("ARTIFACT_REVIEW_GATE_SKIPPABLE_NOT_LAST");
+    // Without a later reviewer step the branch is allowed.
+    const steps = await compileSteps({ parentControl: [["recipients_flow", "sender_flow"]] });
+    expect(byName(steps, "Review drafts").artifactReviewGateNode).toBe("drafts-approval_gate");
+  });
+
+  it("a control edge of the parent flow back to the FlowNode is refused: the gate could pause more than once", async () => {
+    // red-first-expect: expected true to be false
+    expect(await compileError({ parentControl: [["sender_flow", "drafts_flow"]] })).toContain("ARTIFACT_REVIEW_GATE_AMBIGUOUS");
   });
 
   it("refuses a marked gate whose id another component of the flow also carries", async () => {

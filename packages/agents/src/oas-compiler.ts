@@ -2001,6 +2001,18 @@ function readEmbeddedArtifactReviewGate(
   ) {
     return { ok: false, error: ambiguous };
   }
+  // The level above the child: the flow that holds the FlowNode (the root; an
+  // embedded marker is read only for a top-level FlowNode). The FlowNode must
+  // be on no control-flow cycle there either, so the gate pauses at most once.
+  const root = isRecord(rootDoc) ? rootDoc : {};
+  if (nodeOnControlCycle(root, flowNodeId)) {
+    return {
+      ok: false,
+      error:
+        `ARTIFACT_REVIEW_GATE_AMBIGUOUS: ${where} wraps the artifact-review gate ${quoteNodeId(gateId)}, ` +
+        `and a control edge of the flow leads back to the FlowNode, so the gate can pause more than once`,
+    };
+  }
   if (gateConversationDepth(only) > RUNTIME_GATE_NODE_MAX_DEPTH) {
     return {
       ok: false,
@@ -2088,7 +2100,10 @@ function readEmbeddedArtifactReviewGate(
         `whose id must be a non-empty id that no other component of the flow carries`,
     };
   }
-  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId, skippable: gateSkippable(only!) } };
+  // Skippable at any level from the gate up to the root: also when a path of
+  // the root flow from its start to an end avoids the FlowNode.
+  const skippable = gateSkippable(only!) || pathAvoidsNode(root, {}, flowNodeId);
+  return { ok: true, found: { targetsInput, gate: gate as InputMessageGateComponent, gateId, skippable } };
 }
 
 // cinatra#4150: the publishing-step declaration. A pack marks the node that
