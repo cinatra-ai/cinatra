@@ -7,11 +7,19 @@ import { deriveDashboardScopeTuple } from "@/lib/dashboards/dashboard-scope-tupl
 import { buildBindingReconcileQueries } from "@/lib/objects/binding-write-path";
 import { buildObjectsWithOutboxQuery, buildSoftDeleteObjectQuery } from "@/lib/objects-store";
 import { buildAssertSemanticTypeQueries } from "@/lib/artifacts/semantic-assertion-store";
-import { maybeBuildProducedEventInsertOp } from "@/lib/lifecycle/lifecycle-emit";
+import {
+  maybeBuildProducedEventInsertOp,
+  producerAttemptForRun,
+  producerRunLockOps,
+  producerRunLockOpsBeforeEvent,
+  publishCallInFlightOr,
+} from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
 import {
   setDashboardArtifactTwinWriter,
+  setDashboardTwinProducerRunLock,
   type DashboardArtifactTwinWriter,
+  type DashboardTwinProducerRunLock,
   type DashboardTwinContext,
   type TwinTx,
 } from "@cinatra-ai/dashboards/twin-writer-seam";
@@ -336,10 +344,16 @@ export function buildDashboardTwinQueries(
     originKind: ctx.extensionId != null || producerRunId != null ? "agent_generated" : "upload",
     producerRunId,
     producerAgentId: null,
+    producerAttempt: producerAttemptForRun(producerRunId),
   });
 
   return [
     lock,
+    // cinatra#4762: the producing run's row FOR KEY SHARE before the twin's first
+    // write, held to commit, so a Publish's locked fence read never runs while
+    // the twin's rows are written but its event (last) is not. Empty when no
+    // event is spliced or no run is named (see `producerRunLockOps`).
+    ...producerRunLockOps(s, producerRunId, producedEventOp),
     buildDashboardResourceQuery(schema, ctx),
     objectsOutbox,
     buildDashboardRepresentationQuery(schema, ctx, representationRevisionId, producerRunId),
@@ -391,15 +405,37 @@ export const dashboardArtifactTwinWriter: DashboardArtifactTwinWriter = async (
   ctx: DashboardTwinContext,
 ): Promise<void> => {
   const producerRunId = await readSameOrgProducerRunId(tx, ctx);
-  for (const q of buildDashboardTwinQueries(ctx, producerRunId)) {
+  try {
+    for (const q of buildDashboardTwinQueries(ctx, producerRunId)) {
+      await tx.execute(rawWithParams(q.text, q.values));
+    }
+  } catch (err) {
+    // cinatra#4762: the in-flight fence of the twin's produced event is surfaced
+    // typed (PublishCallInFlightError); the dashboards transaction rolls back
+    // whole. Any other failure is thrown as it was.
+    throw publishCallInFlightOr(err);
+  }
+};
+
+/** cinatra#4762 — the producing-run lock a content writer takes before its
+ *  first dashboards write (the seam's `lockTwinProducerRun`): the run row FOR
+ *  KEY SHARE when the review orchestration is active, else nothing, as the
+ *  twin's own `producerRunLockOps`. */
+export const dashboardTwinProducerRunLock: DashboardTwinProducerRunLock = async (
+  tx: TwinTx,
+  producerRunId: string,
+): Promise<void> => {
+  for (const q of producerRunLockOpsBeforeEvent(postgresSchema.replaceAll('"', '""'), producerRunId)) {
     await tx.execute(rawWithParams(q.text, q.values));
   }
 };
 
-/** Register the host twin writer into the dashboards seam. Idempotent for the
- *  same reference (delta D4) — the boot phase may re-import this module. */
+/** Register the host twin writer (and its producing-run lock) into the
+ *  dashboards seam. Idempotent for the same reference (delta D4) — the boot
+ *  phase may re-import this module. */
 export function registerDashboardArtifactTwinWriter(): void {
   setDashboardArtifactTwinWriter(dashboardArtifactTwinWriter);
+  setDashboardTwinProducerRunLock(dashboardTwinProducerRunLock);
 }
 
 // Self-register on import (mirrors extension-dashboard-lifecycle-wiring): a

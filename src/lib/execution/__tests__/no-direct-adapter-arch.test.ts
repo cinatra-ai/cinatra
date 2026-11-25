@@ -229,7 +229,7 @@ const ADAPTER_CALL_ALLOWLIST: ReadonlyArray<{
   },
   {
     file: "src/app/api/llm-bridge/route.ts",
-    fn: "POST",
+    fn: "handleBridge",
     method: "generate",
     count: 1,
     injects: false,
