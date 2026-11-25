@@ -19,7 +19,6 @@ beforeAll(() => {
 
 describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
   it.each([
-    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
     "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     // The context-selector renderer needs strict-set classification so the
     // stepper buffers selections instead of firing approveReviewTask per click.
@@ -31,11 +30,14 @@ describe("classifyMidRunHitl — strict-equality renderer IDs", () => {
   it.each([
     "@cinatra/some-other-agent:draft-review", // namespace collision attempt
     "@cinatra/some-other-agent:draft-confirm",
+    // Retired (cinatra#4150): the LinkedIn pack declares no field renderer any more.
+    "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
     "@cinatra/evil-agent:fake:draft-review",
     "draft-review",
     ":draft-review",
     "@cinatra-ai/blog-linkedin-publish-agent:something-else",
   ])("returns false for non-exact renderer id %s", (id) => {
+    // red-first-expect: expected true to be false
     expect(classifyMidRunHitl(id)).toBe(false);
   });
 

@@ -815,7 +815,7 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
     file: "src/lib/generated/field-renderer-components.ts",
     tokens: 0,
     sites: [],
-    loads: { count: 14, modules: "@cinatra-ai/[a-z0-9-]+-agents?/src/[a-z0-9/-]+|@cinatra-ai/email-artifacts/src/renderers/[a-z-]+", reading: EXTENSION_LOADS },
+    loads: { count: 13, modules: "@cinatra-ai/[a-z0-9-]+-agents?/src/[a-z0-9/-]+|@cinatra-ai/email-artifacts/src/renderers/[a-z-]+", reading: EXTENSION_LOADS },
   },
   { file: "src/lib/generated/webhooks.server.ts", tokens: 0, sites: [], loads: { count: 2, modules: "@cinatra-ai/[a-z0-9-]+-connector/src/webhooks/[a-z-]+", reading: EXTENSION_LOADS } },
 ];

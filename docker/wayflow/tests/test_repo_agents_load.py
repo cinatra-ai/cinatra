@@ -555,10 +555,10 @@ def test_synthetic_an_unresolved_reference_fails_loudly() -> None:
         _passthrough_mismatch(doc, agent, **_SYN_WALK)
 
 
-# cinatra#4150 PR 4 (A1-A3 in the runtime). No pinned pack declares
-# `metadata.cinatra.publishes` yet, so the shared parity fixture stands in for
-# the two publish packs (it was copied by hand from their node ids and their
-# edges into the publishing step at the lock pins). Each flow must load through the same
+# cinatra#4150 PR 4 (A1-A3 in the runtime). The shared parity fixture stands in
+# for the two publish packs (it was copied by hand from their node ids and their
+# edges into the publishing step at the lock pins; the LinkedIn pack declares
+# `metadata.cinatra.publishes` itself at its pin). Each flow must load through the same
 # pre-load pipeline with one gate in front of each declared step, the gates must
 # be the ids the host derives from the compiler's publishingSteps (the fixture
 # lists them; packages/agents/src/__tests__/publish-gate-parity.test.ts reads the

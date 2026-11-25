@@ -75,7 +75,7 @@
     {
       "packageName": "@cinatra-ai/blog-linkedin-publish-agent",
       "repo": "cinatra-ai/blog-linkedin-publish-agent",
-      "resolvedSha": "11753d6c4590e05ab0291e2c5309ba0239a50619"
+      "resolvedSha": "52a1213e5ffaeb495708ee7c542d4d39b8495c81"
     },
     {
       "packageName": "@cinatra-ai/blog-linkedin-writer-agent",
