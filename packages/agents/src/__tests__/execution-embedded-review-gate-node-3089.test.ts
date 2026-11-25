@@ -406,9 +406,9 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   const UNMARKED = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
   const v1Row = (steps: Array<Record<string, unknown>>) => ({ templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps } } });
   const V1_ROW = v1Row(OUTREACH);
-  async function pinnedPause(row: unknown, installed: { version: string | null; steps: Array<Record<string, unknown>> } = { version: null, steps: UNMARKED }) {
+  async function pinnedPause(row: unknown, installed: { version: string | null; steps: Array<Record<string, unknown>> } | null = { version: null, steps: UNMARKED }) {
     storeMock.readAgentTemplateById.mockReset();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeTemplate(installed.steps, installed.version));
+    storeMock.readAgentTemplateById.mockResolvedValue(installed === null ? null : makeTemplate(installed.steps, installed.version));
     storeMock.readAgentTemplateVersionById.mockReset();
     if (row instanceof Error) storeMock.readAgentTemplateVersionById.mockRejectedValue(row);
     else storeMock.readAgentTemplateVersionById.mockResolvedValue(row as never);
@@ -449,6 +449,31 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(emitSpy).toHaveBeenCalled();
     expect(routedToReview()).toBe(true);
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+  });
+
+  // The same content with every object's keys written in reverse order.
+  const reversedKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(reversedKeys)
+    : v !== null && typeof v === "object" ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reversedKeys(x)])) : v;
+
+  it("another version installed with the same steps written in another key order: the pause is classified as usual", async () => {
+    await pinnedPause(v1Row(reversedKeys(OUTREACH) as Array<Record<string, unknown>>), { version: "2.0.0", steps: OUTREACH });
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), "failed", expect.anything(), expect.anything());
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
+  });
+
+  it("another version installed with the same steps in another order: the steps differ, the run stops", async () => {
+    await pinnedPause(v1Row([...OUTREACH].reverse()), { version: "2.0.0", steps: OUTREACH });
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    stoppedWith("PAUSE_POLICY_VERSION_MISMATCH");
+  });
+
+  it("a pinned run whose template row is gone: which version ran is not known, so the run stops after the retries; no step-less approval", async () => {
+    await pinnedPause(V1_ROW, null);
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(emitSpy).not.toHaveBeenCalled();
+    stoppedWith("PAUSE_POLICY_UNREAD");
+    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
   });
 
   it("a pinned run whose snapshot is missing, unreadable or carries no policy stops after the retries; the live policy is never used", async () => {

@@ -80,6 +80,22 @@ export class PausePolicyVersionMismatchError extends Error {
     this.name = "PausePolicyVersionMismatchError";
   }
 }
+/** cinatra#3089: one text per policy CONTENT, whatever order its object keys were written in: keys sorted at every
+ *  level, arrays kept in their order (a policy's step order is its step numbering; any other array compared in order can
+ *  only stop a run, never match two different policies). Absent and `undefined` members are one (as JSON drops them). */
+export function canonicalPolicyText(value: unknown): string {
+  const walk = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map((x) => (x === undefined ? null : walk(x)));
+    if (v === null || typeof v !== "object") return v;
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(v as Record<string, unknown>).sort()) {
+      const x = (v as Record<string, unknown>)[k];
+      if (x !== undefined) out[k] = walk(x);
+    }
+    return out;
+  };
+  return JSON.stringify(walk(value ?? null));
+}
 /** cinatra#3089: the waits between the attempts of a pause's template read. Nothing re-drives a pause report the
  *  handler drops (the dispatch's blocking send returns it once), so a fault is retried here, briefly, before a stop. */
 export const PAUSE_POLICY_READ_WAITS_MS: readonly number[] = [250, 1000];

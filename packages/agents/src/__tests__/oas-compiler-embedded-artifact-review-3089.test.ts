@@ -135,6 +135,8 @@ type Parts = {
   parentControl?: Array<[string, string]>;
   draftsGateSteps?: unknown[] | undefined;
   senderGateSteps?: unknown[];
+  // The subflow the sender FlowNode references (default: its own).
+  senderSubflowRef?: string;
   startInputs?: string[];
 };
 
@@ -193,7 +195,7 @@ function buildAgentJson(parts: Parts = {}): Record<string, unknown> {
       })(),
       ...(parts.draftsInline ? {} : { "drafts-subflow": draftsFlowDoc }),
       ...(parts.extraRefs ?? {}),
-      sender_flow: flowNode("sender_flow", "sender-subflow", "@test/delivery", parts.senderGateSteps),
+      sender_flow: flowNode("sender_flow", parts.senderSubflowRef ?? "sender-subflow", "@test/delivery", parts.senderGateSteps),
       "sender-subflow": subflow("sender-subflow", [
         gate("sender-approval_gate", { renderer: "@test/delivery:send-confirmation", surfaceGateInputs: true }, ["campaignId"]),
       ]),
@@ -999,5 +1001,12 @@ describe("cinatra#3089 — an embedded child's artifact-review gate", () => {
   it("refuses a marked gate whose id another component of the flow also carries", async () => {
     const error = await compileError({ extraRefs: { "other-subflow": subflow("other-subflow", [gate(G, {})]) } });
     expect(error).toContain("ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE");
+  });
+
+  it("refuses two FlowNodes that embed the one subflow holding a marked gate: the gate's id would name two pauses", async () => {
+    const error = await compileError({ senderSubflowRef: "drafts-subflow", senderGateSteps: [DRAFTS_STEP] });
+    expect(error).toContain("ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE");
+    expect(error).toContain('FlowNode "sender_flow"');
+    expect(error).toContain('FlowNode "drafts_flow"');
   });
 });

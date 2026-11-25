@@ -381,21 +381,24 @@ export async function resolvePinnedRunSnapshot(
  * is the installed one, or when the installed version's policy is the same; else
  * the installed flow may have produced the pause under another policy, and
  * PausePolicyVersionMismatchError is thrown (no retry; the run stops). A
- * required pin that cannot be served, a snapshot read that throws, or a served
- * snapshot with no approval policy throws: the caller retries, then stops; it
- * never falls back to the live policy. No served snapshot: the live template.
+ * required pin that cannot be served, a snapshot read that throws, a served
+ * snapshot with no approval policy, or a served snapshot with no live row throws:
+ * the caller retries, then stops; it never falls back to the live policy and
+ * never to no policy. No served snapshot: the live template (or null).
  */
 export async function readPausePolicyTemplate(
   run: { templateId: string; packageVersion: string | null; versionId: string | null },
 ): Promise<Awaited<ReturnType<typeof readAgentTemplateById>>> {
   const live = await readAgentTemplateById(run.templateId);
   const pinned = await resolvePinnedRunSnapshot(run, { readAgentTemplateVersionById, readAgentTemplateVersionBySemver });
-  if (!pinned || !live) return live;
+  if (!pinned) return live;
+  // No live row (removed after the dispatch, which needs one): which version ran is not known.
+  if (!live) throw new Error(`the template row of ${run.templateId} is gone, so the version that ran is not known`);
   if (pinned.approvalPolicy === undefined) {
     throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
   }
   // Another version installed: the two policies must be the same, else it is not known which produced the pause.
-  if (live.packageVersion !== run.packageVersion && JSON.stringify(live.approvalPolicy ?? null) !== JSON.stringify(pinned.approvalPolicy)) {
+  if (live.packageVersion !== run.packageVersion && canonicalPolicyText(live.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
     throw new PausePolicyVersionMismatchError(run.packageVersion, live.packageVersion ?? null);
   }
   return { ...live, approvalPolicy: pinned.approvalPolicy as typeof live.approvalPolicy };
@@ -548,7 +551,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, PAUSE_POLICY_VERSION_MISMATCH_TEXT, PausePolicyVersionMismatchError, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, PAUSE_POLICY_VERSION_MISMATCH_TEXT, PausePolicyVersionMismatchError, canonicalPolicyText, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,

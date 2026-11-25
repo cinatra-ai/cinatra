@@ -2681,6 +2681,21 @@ export async function compileOasAgentJson(opts: {
     if (!read.ok) return { ok: false, error: read.error };
     if (read.found) embeddedReviewGates.set(id, read.found);
   }
+  // Two FlowNodes may embed ONE referenced subflow: the id then names one component but two pauses, and the host,
+  // which tells the step by the pause's verified node, would give both pauses the first step.
+  const embeddingOfGate = new Map<string, string>();
+  for (const [flowNodeId, found] of embeddedReviewGates) {
+    const first = embeddingOfGate.get(found.gateId);
+    if (first !== undefined) {
+      return {
+        ok: false,
+        error:
+          `ARTIFACT_REVIEW_GATE_NODE_NOT_UNIQUE: FlowNode ${quoteNodeId(flowNodeId)} wraps the artifact-review gate ${quoteNodeId(found.gateId)}, ` +
+          `which FlowNode ${quoteNodeId(first)} also wraps; the gate's id must name one pause of the flow`,
+      };
+    }
+    embeddingOfGate.set(found.gateId, flowNodeId);
+  }
 
   const agentSteps: CompiledAgentOasStep[] = expandedEntries.map(({ id, gateStep }, idx) => {
     const stepNumber = idx + 1;
