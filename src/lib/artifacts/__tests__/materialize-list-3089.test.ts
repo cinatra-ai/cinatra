@@ -7,15 +7,17 @@
  * driven for real over a transaction double in the last describe. The module graph is mocked as
  * materialize-tool-artifact.test.ts mocks it.
  *
- *   S1  N members: one batch, the set's header and N member rows finalized together, the set in member order
+ *   S1  N members: one batch, the set's header, its digest and N member rows finalized together, the set in member order
  *   S2  a fault at member k of n inside the transaction stores nothing; the identical retry files the set once
  *   S3  an identical retry after success answers the stored set and writes nothing
- *   S4  a retry that differs in any member (bytes, title, typed data in either direction, count) is refused, naming the member
+ *   S4  a retry that differs in any member (bytes, title, typed data in either direction, count) is refused; where the bytes or the count differ it names the member
  *   S5  a member refused before the write (schema, MIME, authorization) stores nothing
  *   S6  50 members are ONE transaction
  *   S7  a marked gate receives every member as a target, and every member is the gate's write
  *   S8  typed data per member; the same fields as a single filing when none is declared
- *   S9  the send fan-out reuses the batch-written bodies (type, title and correlation must match)
+ *   S9  main's hash-only fan-out selection never matches a list member's row (a member is bound only by its member key)
+ *   I1  the set's identity is the digest recorded with it, never the live objects: an edit changes neither the original retry nor the edited retry's verdict
+ *   Q1  all-or-nothing admission: a list that does not fit the quota stores nothing, and its identical retry needs no more than the first attempt did
  *   D1  members that repeat their bytes (even in the whole identity) are artifacts of their own, by position
  *   E1  an exception that is not a refusal of the call is not turned into one; the named refusals have fixed texts
  *   R1  two DIFFERING calls for one (run, node, extension), concurrent: one commits, the other is refused, nothing of it stored
@@ -25,7 +27,10 @@
  *   npx vitest run src/lib/artifacts/__tests__/materialize-list-3089.test.ts
  */
 import { createHash } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   poolQueryMock,
@@ -136,6 +141,7 @@ import {
   planPerArtifactReviewGates,
   resolveDeclaredReviewTargets,
 } from "../artifact-review-target";
+import { toolSetDigest } from "../materialization-ledger";
 import { MATERIALIZE_LIST_ENVELOPE_FIELDS } from "../../../../packages/agents/src/artifact-binding";
 import { compileDataEqualsClause } from "@/lib/objects-store";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
@@ -423,8 +429,12 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
     expect(createSemanticArtifactsMock).toHaveBeenCalledTimes(1);
     expect(commits).toEqual([3]);
     // The set's header, then each member's place in it; a header has no hash of a member and no position.
+    const digest = toolSetDigest(
+      members().map((m) => ({ title: m.title, typedData: m.typedData ?? {}, contentHash: sha256(m.content) })),
+    );
     expect(ledger.map((r) => [r.outputId, r.contentHash])).toEqual([
       [`cinatra:set/"${NODE}"/header`, "set"],
+      [`cinatra:set/"${NODE}"/digest/${digest}`, "set-digest"],
       ...DRAFTS.map((d, i) => [`cinatra:set/"${NODE}"/${i + 1}`, sha256(d.body)]),
     ]);
     expect(finalizedRows().map((r) => r.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
@@ -467,14 +477,15 @@ describe("cinatra#3089 — the list is filed as ONE UNIT", () => {
   // red-first-expect: materializeToolArtifactSet is not a function
   it.each([
     ["a member's bytes", members((m, i) => (i === 1 ? { ...m, content: "Dear Bob, REVISED" } : m)), 2, "member 2: bytes"],
-    ["a member's title", members((m, i) => (i === 2 ? { ...m, title: "Hello Cy Lovelace" } : m)), 3, "member 3: title"],
-    ["a member's corrected contact", members((m, i) => (i === 0 ? { ...m, typedData: { ...m.typedData, contactId: "c-CORRECTED" } } : m)), 1, "member 1: keys: contactId"],
-    ["a typed key REMOVED from a member (an otherwise identical retry)", members((m, i) => (i === 0 ? { ...m, typedData: { contactId: m.typedData!.contactId, runId: "run-1" } } : m)), 1, "member 1: keys: campaignId"],
-    ["a typed key ADDED to a member", members((m, i) => (i === 1 ? { ...m, typedData: { ...m.typedData, region: "eu" } } : m)), 2, "member 2: keys: region"],
-    ["every typed key removed from every member", members((m) => ({ title: m.title, content: m.content })), 1, "member 1: keys: contactId, campaignId, runId"],
+    ["a member's title", members((m, i) => (i === 2 ? { ...m, title: "Hello Cy Lovelace" } : m)), undefined, "titles or typed data of the members"],
+    ["a member's corrected contact", members((m, i) => (i === 0 ? { ...m, typedData: { ...m.typedData, contactId: "c-CORRECTED" } } : m)), undefined, "titles or typed data of the members"],
+    ["a typed key REMOVED from a member (an otherwise identical retry)", members((m, i) => (i === 0 ? { ...m, typedData: { contactId: m.typedData!.contactId, runId: "run-1" } } : m)), undefined, "titles or typed data of the members"],
+    ["a typed key ADDED to a member", members((m, i) => (i === 1 ? { ...m, typedData: { ...m.typedData, region: "eu" } } : m)), undefined, "titles or typed data of the members"],
+    ["every typed key removed from every member", members((m) => ({ title: m.title, content: m.content })), undefined, "titles or typed data of the members"],
+    ["two members swapped (the same members in another order)", (() => { const l = members(); return [l[1]!, l[0]!, l[2]!]; })(), 1, "member 1: bytes"],
     ["a member more", [...members(), { title: "Hello Di", content: "Dear Di", typedData: { contactId: "c-4", campaignId: "camp-1", runId: "run-1" } }], 4, "count (filed 3, call 4)"],
     ["a member fewer", members().slice(0, 2), undefined, "count (filed 3, call 2)"],
-  ])("S4 a retry that differs in %s is a different set: refused, naming the member and never the values; nothing is written or changed", async (_n, changed, member, what) => {
+  ])("S4 a retry that differs in %s is a different set: refused, never naming a value; nothing is written or changed", async (_n, changed, member, what) => {
     await fileSet();
     createSemanticArtifactsMock.mockClear();
     const before = JSON.stringify([...storedObjects]);
@@ -631,9 +642,9 @@ describe("cinatra#3089 — members that repeat their bytes", () => {
     expect(new Set(finalizedRows().map((r) => r.contentHash)).size).toBe(1);
     expect(storedObjects.size).toBe(2);
     expect(await fileSet(same(2))).toEqual({ ok: true, deduped: true, artifacts: EXPECTED.slice(0, 2) });
-    // The member that differs from the stored one is named even though its bytes equal its neighbour's.
+    // A member that differs from the stored one in its typed data only (its bytes equal its neighbour's) is a different set.
     expect(await fileSet(same(2, (i) => (i === 1 ? { typedData: { contactId: "c-9" } } : {})))).toMatchObject({
-      ok: false, code: "materialize_list_set_differs", failedMember: 2,
+      ok: false, code: "materialize_list_set_differs",
     });
   });
 
@@ -1056,6 +1067,191 @@ describe("cinatra#3089 — the creation path's batch entry point (createSemantic
     expect(count(batch, "artifact_audit")).toBe(1);
     expect(count(batch, "UPDATE finalize")).toBe(1);
     expect(count(batch, "artifact_produced_outbox")).toBe(1);
+  });
+});
+
+describe("cinatra#3089 — the fan-out's hash-only selection never matches a list member's row", () => {
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("S9 two members with identical bodies and different titles are never selected by content hash; a single filing of the same bytes still is", async () => {
+    const real = await vi.importActual<typeof import("../materialization-ledger")>("../materialization-ledger");
+    const body = "Dear all, the same text for two recipients";
+    await fileSet([
+      { title: "For Ada", content: body, typedData: { contactId: "c-1" } },
+      { title: "For Bob", content: body, typedData: { contactId: "c-2" } },
+    ]);
+    // The ledger table as the statement's own text selects it: the clauses it states are the ones applied.
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (text.includes("m.path IN")) {
+        const [runId, ext, hash] = values as string[];
+        const excluded = [...text.matchAll(/m\.output_id NOT LIKE '([^']*)%'/g)].map((m) => m[1]!);
+        const hit = ledger.filter(
+          (r) => r.runId === runId && r.extension === ext && r.contentHash === hash && r.finalized && r.artifactId
+            && ["materialize_tool", "end_node_binding"].includes(r.path)
+            && !excluded.some((prefix) => r.outputId.startsWith(prefix))
+            && !ledger.some((f) => f.path === "email_fanout" && f.artifactId === r.artifactId),
+        );
+        return { rows: hit.map((r) => ({ artifact_id: r.artifactId, representation_revision_id: r.representationRevisionId })) };
+      }
+      return base(text, values);
+    });
+    const ask = () => real.findFinalizedMidRunMaterialization({ orgId: "org-a", runId: "run-1", extension: EXT, contentHash: sha256(body) });
+    // Both members' rows carry this hash, in the set's namespace: neither is eligible, whichever the recipient.
+    expect(ledger.filter((r) => r.contentHash === sha256(body))).toHaveLength(2);
+    expect(await ask()).toBeNull();
+    // A single filing of the same bytes (an ordinary node's row) is eligible as before.
+    ledger.push({
+      ledgerId: "single-1", runId: "run-1", outputId: "drafting_step", path: "materialize_tool", extension: EXT,
+      contentHash: sha256(body), artifactId: "art-single", representationRevisionId: "rep-single", finalized: true,
+    });
+    expect(await ask()).toEqual({ artifactId: "art-single", representationRevisionId: "rep-single" });
+  });
+});
+
+describe("cinatra#3089 — the set's identity is the digest recorded with it, never the live objects", () => {
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("I1 after an authorised edit of a member, the original retry is the same set (nothing changed) and the edited values are a different set", async () => {
+    await fileSet();
+    // An authorised update merges new data into a stored object and retitles it.
+    const second = storedObjects.get("art-2")!;
+    second.data = { ...second.data, title: "Edited title", region: "eu" };
+    createSemanticArtifactsMock.mockClear();
+    const original = await fileSet();
+    expect(original).toEqual({ ok: true, deduped: true, artifacts: EXPECTED });
+    expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
+    expect(storedObjects.get("art-2")!.data).toMatchObject({ title: "Edited title", region: "eu" });
+    // The edited values are not the set that was filed: refused, nothing written or changed.
+    const edited = await fileSet(members((m, i) => (i === 1 ? { ...m, title: "Edited title", typedData: { ...m.typedData, region: "eu" } } : m)));
+    expect(edited).toMatchObject({ ok: false, code: "materialize_list_set_differs" });
+    expect(createSemanticArtifactsMock).not.toHaveBeenCalled();
+  });
+
+  it("I1 the digest has no live-object input, and covers each member's key, title, typed data and bytes, in order", () => {
+    const m = (title: string, typedData: Record<string, unknown>, contentHash: string) => ({ title, typedData, contentHash });
+    const base = [m("A", { a: 1, b: 2 }, "h1"), m("B", { a: 1 }, "h2")];
+    const same = toolSetDigest([m("A", { b: 2, a: 1 }, "h1"), m("B", { a: 1 }, "h2")]);
+    expect(toolSetDigest(base)).toBe(same);
+    for (const other of [
+      [m("A", { a: 1, b: 2 }, "h1")],
+      [base[1]!, base[0]!],
+      [m("A!", { a: 1, b: 2 }, "h1"), base[1]!],
+      [m("A", { a: 1, b: 3 }, "h1"), base[1]!],
+      [m("A", { a: 1 }, "h1"), base[1]!],
+      [m("A", { a: 1, b: 2 }, "h9"), base[1]!],
+    ]) expect(toolSetDigest(other)).not.toBe(toolSetDigest(base));
+  });
+});
+
+describe("cinatra#3089 — all-or-nothing admission over a real quota", () => {
+  const envKeys = ["CINATRA_ARTIFACT_DATA_ROOT", "CINATRA_ARTIFACT_ORG_QUOTA_BYTES", "CINATRA_ARTIFACT_QUOTA_MODE"] as const;
+  let saved: Array<string | undefined>;
+  let root: string;
+  /** The organization's blob rows by substance key: what the quota counts. */
+  let rows: Map<string, { resource_id: string; blob_id: string; storage_key: string; size: number }>;
+  const usedBytes = () => [...rows.values()].reduce((sum, r) => sum + r.size, 0);
+  const filesOnDisk = () => {
+    const out: string[] = [];
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === ".staging") continue;
+        if (e.isDirectory()) walk(path.join(dir, e.name));
+        else out.push(path.join(dir, e.name));
+      }
+    };
+    if (existsSync(root)) walk(root);
+    return out;
+  };
+
+  beforeEach(async () => {
+    saved = envKeys.map((k) => process.env[k]);
+    root = mkdtempSync(path.join(tmpdir(), "list-3089-quota-"));
+    process.env.CINATRA_ARTIFACT_DATA_ROOT = root;
+    process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES = "100";
+    process.env.CINATRA_ARTIFACT_QUOTA_MODE = "enforce";
+    rows = new Map([["blob:seed", { resource_id: "res-seed", blob_id: "blob-seed", storage_key: "orgs/org-a/seed.bin", size: 40 }]]);
+    const actual = await vi.importActual<typeof import("../local-disk-blob-store")>("../local-disk-blob-store");
+    const real = actual.createLocalDiskBlobStore({ getOrgUsageBytes: () => usedBytes() });
+    blobPutMock.mockImplementation((input: Parameters<typeof real.put>[0]) => real.put(input));
+    const creation = await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation");
+    createSemanticArtifactsMock.mockImplementation(creation.createSemanticArtifacts);
+    let resources = 0;
+    pgSyncMock.mockImplementation((input: { queries: Array<{ text: string; values?: unknown[] }> }) => {
+      const first = input.queries[0]!;
+      // The usage the quota reads: the sum of the organization's blob rows.
+      if (first.text.includes("SUM(size_bytes)")) return [{ rows: [{ total: usedBytes() }], rowCount: 1 }];
+      if (first.text.includes("WITH resource_op")) {
+        const v = first.values as string[];
+        const existing = rows.get(v[2]!);
+        if (existing) return [{ rows: [{ ...existing, mime: "text/markdown", size_bytes: existing.size, is_new: false }], rowCount: 1 }];
+        resources += 1;
+        const row = { resource_id: `res-${resources}`, blob_id: v[6]!, storage_key: v[7]!, size: Number(v[4]) };
+        rows.set(v[2]!, row);
+        return [{ rows: [{ ...row, mime: "text/markdown", size_bytes: row.size, is_new: true }], rowCount: 1 }];
+      }
+      if (first.text.includes("artifact_blobs")) return [{ rows: [{ "?column?": 1 }], rowCount: 1 }];
+      return input.queries.map(() => ({ rows: [], rowCount: 0 }));
+    });
+    const base = poolQueryMock.getMockImplementation()!;
+    poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+      if (text.includes('FROM "public"."resource"') && text.includes("substance_key")) {
+        const keys = (values as [string, string[]])[1];
+        return { rows: keys.filter((k) => rows.has(k)).map((k) => ({ substance_key: k })) };
+      }
+      return base(text, values);
+    });
+  });
+  afterEach(() => {
+    envKeys.forEach((k, i) => {
+      if (saved[i] === undefined) delete process.env[k];
+      else process.env[k] = saved[i];
+    });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  const list = (): ToolArtifactSetMember[] => [
+    { title: "A", content: "a".repeat(36), typedData: { contactId: "c-1" } },
+    { title: "B", content: "b".repeat(36), typedData: { contactId: "c-2" } },
+  ];
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q1 the first member takes over half the headroom and the second would not fit: nothing is stored, and the identical retry needs what the first attempt did", async () => {
+    const before = usedBytes();
+    const refused = await fileSet(list());
+    expect(refused).toMatchObject({ ok: false, code: "materialize_list_quota_exceeded" });
+    expect((refused as { error: string }).error).toContain("nothing was filed");
+    // Nothing of the call is kept: no blob row (what the quota counts), no file.
+    expect(rows.size).toBe(1);
+    expect(usedBytes()).toBe(before);
+    expect(filesOnDisk()).toEqual([]);
+    // The same call again is refused for the same reason and costs the same: no growth between attempts.
+    expect(await fileSet(list())).toMatchObject({ ok: false, code: "materialize_list_quota_exceeded" });
+    expect(usedBytes()).toBe(before);
+    // When the room is there the identical call files the set.
+    process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES = "200";
+    expect(await fileSet(list())).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(before + 72);
+  });
+
+  // red-first-expect: materializeToolArtifactSet is not a function
+  it("Q1 bytes the organization already holds are counted for nothing: the list is admitted for what it would ADD", async () => {
+    const heldContent = "h".repeat(30);
+    rows.set(`blob:${sha256(heldContent)}`, { resource_id: "res-held", blob_id: "blob-held", storage_key: "orgs/org-a/held.bin", size: 30 });
+    // 70 are used, 30 are left. The list has 60 bytes in all, 30 of them already held: it adds 30, which fit.
+    expect(usedBytes()).toBe(70);
+    const filed = await fileSet([
+      { title: "A", content: heldContent, typedData: { contactId: "c-1" } },
+      { title: "B", content: "n".repeat(30), typedData: { contactId: "c-2" } },
+    ]);
+    expect(filed).toMatchObject({ ok: true, deduped: false });
+    expect(usedBytes()).toBe(100);
+  });
+
+  it("Q1 a quota that is not set, or not enforced, asks nothing of the list", async () => {
+    delete process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES;
+    expect(await fileSet(list())).toMatchObject({ ok: true });
+    process.env.CINATRA_ARTIFACT_ORG_QUOTA_BYTES = "10";
+    process.env.CINATRA_ARTIFACT_QUOTA_MODE = "warn";
+    expect(await fileSet(list(), { runId: "run-2" })).toMatchObject({ ok: true });
   });
 });
 

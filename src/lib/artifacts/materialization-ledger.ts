@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import { getPooledDb } from "@/lib/db/pooled";
 import {
@@ -567,6 +567,12 @@ export async function findFinalizedDeclarativeMaterialization(input: {
  * already bound to a message of this run (a finalized `email_fanout` row) is
  * never handed to a second message: two messages with the same bytes keep one
  * body each.
+ *
+ * A row of a list filing's set (an output id in the reserved set namespace, see
+ * `toolSetOutputId`) is NEVER eligible here: it is the filing of one member of a
+ * list, identified by its place in its set, and two members of one list may have
+ * identical bytes and belong to different recipients. A hash alone cannot tell
+ * them apart, so a member is bound to a message only by its member key.
  */
 export async function findFinalizedMidRunMaterialization(input: {
   orgId: string;
@@ -582,6 +588,7 @@ export async function findFinalizedMidRunMaterialization(input: {
   WHERE m.run_id = $1 AND m.extension = $2 AND m.content_hash = $3
     AND m.org_id = $4 AND m.path IN ('materialize_tool', 'end_node_binding')
     AND m.phase = 'finalized'
+    AND m.output_id NOT LIKE '${MATERIALIZE_RESERVED_NODE_ID_PREFIX}%'
     AND NOT EXISTS (
       SELECT 1 FROM "${s}"."artifact_materializations" f
        WHERE f.run_id = $1 AND f.org_id = $4 AND f.path = 'email_fanout'
@@ -660,10 +667,47 @@ export async function findFinalizedFanoutMessageMaterialization(input: {
 // ordinary node's output id (a node id is the output id as it is): the prefix is reserved
 // (MATERIALIZE_RESERVED_NODE_ID_PREFIX, refused for node ids at compile time and at the road), and the node
 // is JSON-quoted, which is self-delimiting, so two different (node, suffix) pairs never produce one string.
+//
+// THE IDENTITY OF THE SET'S CONTENT is recorded once, with the set, in the same transaction: a DIGEST row
+//   digest  output_id = <prefix><json(node)>/digest/<digest>   content_hash = "set-digest"
+// whose digest is `toolSetDigest` of the members as the first call gave them (each member's key, title, typed
+// data and bytes, in order). Rows are only ever inserted, never updated, so the digest cannot change. A retry
+// is the same set if and only if its digest equals the recorded one; the stored artifacts are never read for
+// that decision, because an authorised edit of an object must neither make the original call look different
+// nor make the edited values look like the original. The digest row is inside the set's namespace, so it is
+// not a member (it has no artifact) and no other producer can write it.
 // ---------------------------------------------------------------------------
 
 /** The sentinel content hash of a set's header row (a member's is a 64-hex sha256). */
 export const TOOL_SET_HEADER_HASH = "set";
+
+/** The sentinel content hash of a set's digest row. */
+export const TOOL_SET_DIGEST_HASH = "set-digest";
+
+/** One member of a set as its identity is taken: its title (trimmed, as it is stored), its typed data and its bytes' hash. */
+export type ToolSetMemberIdentity = { title: string; typedData: Record<string, unknown>; contentHash: string };
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
+
+/**
+ * The digest of a set's content: SHA-256 over the canonical JSON of its members in order, each with its key (its
+ * 1-based place in the set), title, typed data (keys sorted, so the order a caller wrote them in is not content)
+ * and content hash. Two calls have one digest if and only if they name the same members, in the same order, with
+ * the same values.
+ */
+export function toolSetDigest(members: readonly ToolSetMemberIdentity[]): string {
+  const canonical = canonicalJson(
+    members.map((m, i) => ({ key: i + 1, title: m.title, typedData: m.typedData ?? {}, contentHash: m.contentHash })),
+  );
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
+}
 
 function toolSetPrefix(nodeId: string): string {
   return `${MATERIALIZE_RESERVED_NODE_ID_PREFIX}${JSON.stringify(nodeId)}/`;
@@ -679,6 +723,11 @@ export function toolSetHeaderOutputId(nodeId: string): string {
   return `${toolSetPrefix(nodeId)}header`;
 }
 
+/** The output id of a node's set digest row: the digest is the end of the id. */
+export function toolSetDigestOutputId(nodeId: string, digest: string): string {
+  return `${toolSetPrefix(nodeId)}digest/${digest}`;
+}
+
 export type ToolSetRow = {
   outputId: string;
   contentHash: string;
@@ -687,7 +736,8 @@ export type ToolSetRow = {
 };
 
 /** The finalized set one node filed in a run: whether its header exists and its member rows. */
-export type ToolSetRead = { header: boolean; members: ToolSetRow[] };
+/** `digest` is the one recorded with the set (`toolSetDigest` of its first call), or null when the set has none. */
+export type ToolSetRead = { header: boolean; digest: string | null; members: ToolSetRow[] };
 
 /**
  * The set one node filed in a run (cinatra#3089): its header and member rows. Rows are only ever written
@@ -710,11 +760,14 @@ export async function readToolSetRows(input: {
     [input.runId, input.orgId, input.extension, prefix],
   );
   const header = toolSetHeaderOutputId(input.nodeId);
+  const digestPrefix = `${prefix}digest/`;
   const rows = res.rows as Array<{
     output_id: string; content_hash: string; artifact_id: string | null; representation_revision_id: string | null;
   }>;
+  const digests = rows.filter((row) => row.output_id.startsWith(digestPrefix) && row.content_hash === TOOL_SET_DIGEST_HASH);
   return {
     header: rows.some((row) => row.output_id === header),
+    digest: digests.length === 1 ? digests[0]!.output_id.slice(digestPrefix.length) : null,
     members: rows
       .filter((row) => row.output_id !== header && typeof row.artifact_id === "string" && typeof row.representation_revision_id === "string")
       .map((row) => ({
@@ -729,7 +782,7 @@ export async function readToolSetRows(input: {
 /**
  * The ledger statements of ONE member of a set, for the set's transaction (the caller splices them in
  * through `additionalTx2Queries`): the member's row, already finalized, and, for the FIRST member only, the
- * set's header row ahead of it. Plain INSERTs, no ON CONFLICT: a second set for the same (run, node,
+ * set's header row and its digest row ahead of it. Plain INSERTs, no ON CONFLICT: a second set for the same (run, node,
  * extension) hits the header's key and aborts the whole transaction.
  */
 export function buildToolSetRowQueries(input: {
@@ -740,6 +793,8 @@ export function buildToolSetRowQueries(input: {
   verifiedStepId?: string | null;
   position: number;
   contentHash: string;
+  /** `toolSetDigest` of the whole set, recorded with its header by the first member's statements. */
+  setDigest: string;
   artifactId: string;
   representationRevisionId: string;
 }): Array<{ text: string; values: unknown[] }> {
@@ -752,7 +807,10 @@ export function buildToolSetRowQueries(input: {
   });
   return [
     ...(input.position === 1
-      ? [insert(toolSetHeaderOutputId(input.nodeId), TOOL_SET_HEADER_HASH, null, null, null)]
+      ? [
+          insert(toolSetHeaderOutputId(input.nodeId), TOOL_SET_HEADER_HASH, null, null, null),
+          insert(toolSetDigestOutputId(input.nodeId, input.setDigest), TOOL_SET_DIGEST_HASH, null, null, null),
+        ]
       : []),
     insert(
       toolSetOutputId(input.nodeId, input.position),

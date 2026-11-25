@@ -2,7 +2,6 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
-  MATERIALIZE_LIST_ENVELOPE_FIELDS,
   MATERIALIZE_RESERVED_NODE_ID_CODE,
   MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
   isReservedLedgerOutputId,
@@ -38,7 +37,8 @@ import {
   ObjectsTypeNotRegisteredError,
   type CreateSemanticArtifactInput,
 } from "./artifact-creation";
-import { ArtifactQuotaExceededError } from "./local-disk-blob-store";
+import { ArtifactQuotaExceededError, assertOrgQuotaRoom } from "./local-disk-blob-store";
+import { deriveSubstanceKey } from "./resource-store";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
@@ -56,6 +56,7 @@ import {
   buildToolSetRowQueries,
   isToolSetIdentityConflict,
   readToolSetRows,
+  toolSetDigest,
   toolSetOutputId,
   recordFanoutReuseMaterialization,
   restampReusedRevision,
@@ -1821,6 +1822,31 @@ export type ToolArtifactSetMember = {
   typedData?: Record<string, unknown>;
 };
 
+/** The bytes a list would ADD to the organization's stored bytes: each distinct content once (the members of a list
+ *  share one resource per content hash), and none that an existing resource of the organization already holds.
+ *  `null` when the existing resources cannot be read (the quota check is then left to the blob store, as an
+ *  unreadable usage figure is). */
+async function newBytesOfList(orgId: string, contents: readonly string[], mime: string): Promise<number | null> {
+  const sizeBySha = new Map<string, number>();
+  for (const content of contents) {
+    const facts = artifactWriteFactsOfContent(content, mime);
+    sizeBySha.set(facts.sha256, facts.sizeBytes);
+  }
+  try {
+    const s = postgresSchema.replaceAll('"', '""');
+    const res = await pool().query(
+      `SELECT substance_key FROM "${s}"."resource" WHERE org_id = $1 AND kind = 'blob' AND substance_key = ANY($2::text[])`,
+      [orgId, [...sizeBySha.keys()].map((sha256) => deriveSubstanceKey({ kind: "blob", sha256 }))],
+    );
+    const held = new Set((res.rows as Array<{ substance_key: string }>).map((r) => r.substance_key));
+    let bytes = 0;
+    for (const [sha256, size] of sizeBySha) if (!held.has(deriveSubstanceKey({ kind: "blob", sha256 }))) bytes += size;
+    return bytes;
+  } catch {
+    return null;
+  }
+}
+
 export type ToolArtifactSetResult =
   | { ok: true; artifacts: Array<{ artifactId: string; representationRevisionId: string }>; deduped: boolean }
   /** cinatra#4762: `reason` is set only for a write refused while a publishing call of the run is in flight
@@ -1841,21 +1867,24 @@ const PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL = {
  *  1. EVERY member is checked before anything is written: the write authorization, the target's accepted forms
  *     and the extension's install state, and the creation path's own check over the real envelope (the detected
  *     MIME, the type's accepts, the type's payload schema). The first refusal ends the call: nothing is stored.
- *  2. If this run already filed a set for this (node, extension), the call is compared with it as a whole, in
- *     both directions: the same members (position, bytes, title, object type, and the typed data as a whole:
- *     a key on one side only is a difference) answer the stored set and write nothing; anything else is
- *     refused, naming the member and what differs, never values. A node files one set per run; the corrected
- *     values go in a new run.
- *  3. Else every member's blob is stored, and `createSemanticArtifacts` writes ALL members (object,
- *     representation, audit, producer and binding ops, produced event) and the set's ledger rows (a header
- *     with a key that has no hash and no position, and one row per member) in ONE transaction. The header's
- *     unique key is what makes the set ONE identity per (run, node, extension) under concurrency: of two calls
- *     that file different sets at once, one commits and the other fails on that key and rolls back. A failure
- *     rolls the whole transaction back: no member exists, no
- *     review is owed, and the answer is one refusal. What the pre-check cannot see (the organization's byte
- *     quota, the persisted MIME of an existing same-substance resource, a storage or database fault) ends the
- *     call at this step with nothing stored but content-addressed blobs and their resource rows, which the next
- *     write of the same bytes reuses, as after a failed single write.
+ *  2. If this run already filed a set for this (node, extension), the call is compared with it as a whole: it is
+ *     the same set if and only if its digest (each member's key, title, typed data and bytes, in order:
+ *     `toolSetDigest`) equals the digest recorded, once and immutably, with the set when it was first written. The
+ *     stored artifacts are never read for that decision (an authorised edit of an object changes neither verdict).
+ *     The same set answers the stored artifacts and writes nothing; anything else is refused, never naming a
+ *     value (it names the first member whose bytes differ, or the count). A node files one set per run; the
+ *     corrected values go in a new run.
+ *  3. Else the organization's quota is asked ONCE for everything the list would add (so a list that does not fit
+ *     stores nothing, and its retry needs no more than the first attempt did), then every member's blob is
+ *     stored, and `createSemanticArtifacts` writes ALL members (object, representation, audit, producer and
+ *     binding ops, produced event) and the set's ledger rows (a header with a key that has no hash and no
+ *     position, the digest row, and one row per member) in ONE transaction. The header's unique key is what
+ *     makes the set ONE identity per (run, node, extension) under concurrency: of two calls that file different
+ *     sets at once, one commits and the other fails on that key and rolls back. A failure rolls the whole
+ *     transaction back: no member exists, no review is owed, and the answer is one refusal. What the pre-check
+ *     cannot see (the persisted MIME of an existing same-substance resource, a storage or database fault) ends
+ *     the call at this step with nothing stored but content-addressed blobs and their resource rows, which the
+ *     next write of the same bytes reuses, as after a failed single write.
  * A refusal is a returned error with a fixed code. A fault that is not one the call can be refused for (storage,
  * database, a bug) is thrown, to the route's fixed 500 boundary: no exception text becomes an answer.
  */
@@ -1882,6 +1911,10 @@ export async function materializeToolArtifactSet(input: {
   if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
   const titles = input.members.map((m) => m.title.trim());
   const hashes = input.members.map((m) => createHash("sha256").update(m.content, "utf8").digest("hex"));
+  // The identity of the set's content, taken from the call itself (never from stored objects): see `toolSetDigest`.
+  const callDigest = toolSetDigest(
+    input.members.map((m, i) => ({ title: titles[i]!, typedData: m.typedData ?? {}, contentHash: hashes[i]! })),
+  );
   const refuse = (member: number, why: string): ToolArtifactSetResult => ({
     ok: false,
     code: MATERIALIZE_LIST_MEMBER_REFUSED,
@@ -1940,34 +1973,19 @@ export async function materializeToolArtifactSet(input: {
   const compareWithStored = async (read: typeof stored): Promise<ToolArtifactSetResult | null> => {
     if (!read.header) return null;
     const at = new Map(read.members.map((r) => [r.outputId, r]));
+    // The same set if and only if the digest recorded when the set was first written equals this call's. What is
+    // named below only says WHERE the difference is, from the rows; it never decides.
     const problems: string[] = [];
     let firstDiffering: number | undefined;
-    const note = (member: number, what: string) => {
-      problems.push(`member ${member}: ${what}`);
-      firstDiffering ??= member;
-    };
     for (let i = 0; i < n; i++) {
       const row = at.get(toolSetOutputId(input.nodeId, i + 1));
-      if (!row || row.contentHash !== hashes[i]) note(i + 1, "bytes");
-    }
-    if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
-    if (problems.length === 0) {
-      for (let i = 0; i < n; i++) {
-        const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
-        const what = describeDifferences(
-          await reuseDifferences({
-            orgId: input.orgId,
-            artifactId: row.artifactId,
-            objectTypeId: target!.objectTypeId,
-            title: titles[i]!,
-            typedData: input.members[i]!.typedData ?? {},
-            mustCarry: Object.keys(input.members[i]!.typedData ?? {}),
-            exact: true,
-          }),
-        );
-        if (what !== null) note(i + 1, what);
+      if (!row || row.contentHash !== hashes[i]) {
+        problems.push(`member ${i + 1}: bytes`);
+        firstDiffering ??= i + 1;
       }
     }
+    if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
+    if (problems.length === 0 && read.digest !== callDigest) problems.push("titles or typed data of the members");
     if (problems.length > 0) {
       return {
         ok: false,
@@ -2008,6 +2026,13 @@ export async function materializeToolArtifactSet(input: {
   });
   let created: Array<{ artifactId: string; representationRevisionId: string }>;
   try {
+    // ALL-OR-NOTHING ADMISSION: the organization's quota is asked ONCE for everything this call would add, before
+    // the first blob is stored. Blobs are stored (and their resource rows committed) member by member, ahead of
+    // the one transaction, and those rows count against the quota; a list that does not fit must therefore fail
+    // here, with nothing stored, never after some members were (the first would then keep headroom the retry of
+    // the same call needs). Bytes the organization already holds count for nothing, so a retry never needs more
+    // than its first attempt did.
+    await assertOrgQuotaRoom(input.orgId, () => newBytesOfList(input.orgId, input.members.map((m) => m.content), input.mime));
     created = await createSemanticArtifacts(
       input.members.map((member, i) =>
         claimedCreateInput({
@@ -2031,6 +2056,7 @@ export async function materializeToolArtifactSet(input: {
               verifiedStepId: input.verifiedStepId ?? null,
               position: i + 1,
               contentHash: hashes[i]!,
+              setDigest: callDigest,
               artifactId: ids.artifactId,
               representationRevisionId: ids.representationRevisionId,
             }),
@@ -2100,49 +2126,6 @@ export async function materializeToolArtifactSet(input: {
 // ---------------------------------------------------------------------------
 // The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
 // ---------------------------------------------------------------------------
-
-/** The words of a `reuseDifferences` answer (`objectType; title; keys: a, b`), or null when nothing differs. */
-function describeDifferences(d: { objectType: boolean; title: boolean; keys: string[] }): string | null {
-  const parts = [
-    ...(d.objectType ? ["objectType"] : []),
-    ...(d.title ? ["title"] : []),
-    ...(d.keys.length > 0 ? [`keys: ${d.keys.join(", ")}`] : []),
-  ];
-  return parts.length === 0 ? null : parts.join("; ");
-}
-
-/** What of a pre-filed body differs from what the writer would have stored: the object type, the title (the
- *  subject, compared without surrounding whitespace, as it is stored) and the keys of `mustCarry` (those
- *  `typedData` holds) the live object does not carry equal. Read with the canonical, organization-scoped object
- *  read. A body that is not there, or is deleted, differs in all of them. Values are never named. */
-async function reuseDifferences(input: {
-  orgId: string;
-  artifactId: string;
-  objectTypeId: string;
-  title: string;
-  typedData: Record<string, unknown>;
-  mustCarry: readonly string[];
-  /** Compare the typed data as a whole, in both directions: a key the stored object carries that the call
-   *  does not (writer-owned fields apart) is a difference too, as is a key the call carries and it does not. */
-  exact?: boolean;
-}): Promise<{ objectType: boolean; title: boolean; keys: string[] }> {
-  const { getObjectById } = await import("@/lib/objects-store");
-  const row = getObjectById(input.artifactId, { orgId: input.orgId });
-  const data =
-    row && row.data !== null && typeof row.data === "object" && !Array.isArray(row.data)
-      ? (row.data as Record<string, unknown>)
-      : null;
-  const wanted = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
-  const owned = new Set<string>(MATERIALIZE_LIST_ENVELOPE_FIELDS);
-  const keys = input.exact
-    ? [...new Set([...wanted, ...(data === null ? [] : Object.keys(data).filter((k) => !owned.has(k)))])]
-    : wanted;
-  return {
-    objectType: row === null || row.type !== input.objectTypeId,
-    title: data === null || typeof data.title !== "string" || data.title.trim() !== input.title.trim(),
-    keys: keys.filter((k) => data === null || data[k] !== input.typedData[k]),
-  };
-}
 
 /**
  * Write ONE message body of a send as a markdown revision on the ledger: path

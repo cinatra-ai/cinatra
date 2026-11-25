@@ -18,6 +18,7 @@ import {
   ARTIFACT_STAGING_CAP_BYTES_ENV,
   ARTIFACT_STAGING_DIR_NAME,
   ArtifactQuotaExceededError,
+  assertOrgQuotaRoom,
   createLocalDiskBlobStore,
   isContentAddressedStorageKey,
   sha256FromContentAddressedKey,
@@ -372,6 +373,41 @@ describe("createLocalDiskBlobStore", () => {
         maxBytes: 1024,
       });
       expect(rec.sizeBytes).toBe(3);
+    });
+
+    describe("assertOrgQuotaRoom: the whole batch is asked of the quota before its first blob is stored", () => {
+      const enforce = (quota: number) => {
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = String(quota);
+        process.env[ARTIFACT_QUOTA_MODE_ENV] = "enforce";
+      };
+
+      // red-first-expect: assertOrgQuotaRoom is not a function
+      it("refuses a batch whose new bytes exceed the room, and admits one that exactly fills it (the boundary `put` applies)", async () => {
+        enforce(100);
+        await expect(assertOrgQuotaRoom("org1", () => 61, () => 40)).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+        await expect(assertOrgQuotaRoom("org1", () => 60, () => 40)).resolves.toBeUndefined();
+        // An organization already at its quota is refused whatever the batch adds, as `put` refuses it.
+        await expect(assertOrgQuotaRoom("org1", () => 1, () => 100)).rejects.toBeInstanceOf(ArtifactQuotaExceededError);
+      });
+
+      // red-first-expect: assertOrgQuotaRoom is not a function
+      it("asks nothing when no quota is set, and in warn mode only warns; an unreadable usage figure or size skips the check", async () => {
+        const size = vi.fn(() => 500);
+        await assertOrgQuotaRoom("org1", size, () => 40);
+        expect(size).not.toHaveBeenCalled();
+        process.env[ARTIFACT_ORG_QUOTA_BYTES_ENV] = "100";
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          await expect(assertOrgQuotaRoom("org1", () => 500, () => 40)).resolves.toBeUndefined();
+          expect(warn).toHaveBeenCalled();
+          enforce(100);
+          await expect(assertOrgQuotaRoom("org1", () => 500, () => null)).resolves.toBeUndefined();
+          await expect(assertOrgQuotaRoom("org1", () => null, () => 40)).resolves.toBeUndefined();
+          await expect(assertOrgQuotaRoom("org1", () => 0, () => 40)).resolves.toBeUndefined();
+        } finally {
+          warn.mockRestore();
+        }
+      });
     });
 
     it("staging-dir residency cap in enforce mode rejects the put", async () => {
