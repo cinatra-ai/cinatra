@@ -1372,6 +1372,60 @@ describe("XV.1: Allow waits for the items", () => {
     expect(root.querySelector("button")?.ownerDocument.body.textContent).toMatch(/Try again/);
   });
 
+  it("an island that reports busy after its drawn report makes Allow unavailable again until the next drawn report", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await drawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+    const busy = async (opts: { from?: Window | null; origin?: string; attempt?: number } = {}) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: { channel: "cinatra-review-island-progress", type: "island-busy", attempt: opts.attempt ?? Number(frame.name.split(":")[1] ?? 0) },
+          origin: opts.origin ?? window.location.origin,
+          source: opts.from === undefined ? frame.contentWindow : opts.from,
+        }));
+      });
+      await settle();
+    };
+    // From another window, origin or attempt: ignored.
+    await busy({ from: window });
+    await busy({ origin: "https://elsewhere.example" });
+    await busy({ attempt: 9 });
+    expect(allowOf(root).disabled).toBe(false);
+    await busy();
+    // red-first-expect: expected false to be true
+    expect(allowOf(root).disabled).toBe(true);
+    // The waiting reading, not the failed one: no plate, no failed line.
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).toBeNull();
+    expect(waitLine(root)).toBeNull();
+    await postDrawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("an island that reports a failure after its drawn report reads failed: Allow unavailable, Try again shown", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await drawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { channel: "cinatra-review-island-progress", type: "island-failed", attempt: Number(frame.name.split(":")[1] ?? 0) },
+        origin: window.location.origin,
+        source: frame.contentWindow,
+      }));
+    });
+    await settle();
+    // red-first-expect: expected false to be true
+    expect(allowOf(root).disabled).toBe(true);
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+  });
+
   it("a drawn report from another window, another origin or another attempt is ignored", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
     const root = await rootOf(mountOn("chat_thread", okDoor()));

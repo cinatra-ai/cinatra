@@ -116,6 +116,21 @@ function MountedDataRoad({
 }
 
 /**
+ * A DISPLAY'S PORTLETS LOAD AT ONCE (cinatra#3089). Given a data road, the
+ * composition is a display's, and a display inside the review island tells the
+ * island it is still drawing only by its marks (`aria-busy="true"` or a
+ * `role="status"` loader). A portlet loading its series draws the library's
+ * `role="status"` spinner, but a portlet waiting to scroll into view draws an
+ * unmarked placeholder, which the island would read as drawn. So, with a road,
+ * every portlet loads at once (`eagerLoad`) and is never left as an unmarked
+ * placeholder. Without a road the configuration is handed on unchanged.
+ */
+function eagerWithRoad<T>(config: T, dataRoad: ReadOnlyCompositionDataRoad | undefined): T {
+  if (!dataRoad || typeof config !== "object" || config === null) return config;
+  return { ...config, eagerLoad: true };
+}
+
+/**
  * A dashboard's portlet grid, drawn from a configuration, read-only.
  *
  * `editable={false}` is belt to the braces of mounting no editing UI: the
@@ -127,6 +142,7 @@ export function ReadOnlyComposedDashboard({ dataRoad, ...props }: ReadOnlyCompos
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
         {...(props as ComponentProps<typeof DashboardProvider>)}
+        {...(dataRoad ? { config: eagerWithRoad(props.config, dataRoad) } : {})}
         editable={false}
       >
         <div data-cinatra-read-only-composition="dashboard">
@@ -164,7 +180,7 @@ export function ReadOnlySinglePortlet({ portletId, dataRoad, ...rest }: ReadOnly
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
         {...(props as ComponentProps<typeof DashboardProvider>)}
-        config={narrowed as never}
+        config={eagerWithRoad(narrowed, dataRoad) as never}
         editable={false}
       >
         <div data-cinatra-read-only-composition="single-portlet">

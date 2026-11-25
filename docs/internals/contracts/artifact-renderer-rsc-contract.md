@@ -227,3 +227,32 @@ the widened predicate is live in `renderer-resolution.ts`. They become the
 `@cinatra-ai/json-artifact` (the dynamic fixture), which registers into the runtime
 asset registry and flows through the client loader. (The four Slice B system bases
 stay build-bundled through the SSR fast path and never touch this seam.)
+
+## 6. Drawing state inside the review island (cinatra#3089)
+
+A display drawn inside the review island can hold the reviewer's Allow until it
+has drawn its content. The host cannot see inside a display, so it reads only
+these marks inside the display's panel:
+
+- **Not finished drawing.** A display that has not finished drawing marks its
+  root, or the unfinished part, `aria-busy="true"`, or renders an element with
+  `role="status"` while it loads. It removes the mark once the content is
+  drawn. Inside a panel, `role="status"` means "still loading", so a display
+  keeps a settled message out of it (use `aria-live="polite"` instead).
+- **Cannot draw.** A display that cannot draw shows its failure state. The host
+  reads its own floors (`data-review-target-floor`,
+  `data-dynamic-renderer-floor`, `data-render-failure-class`) as a failure.
+- **Media.** The host reads each `<img>` (its `decode()`) and `<video>` (its
+  data or its `error`) itself. A failed one is a failure.
+
+The host reports the panel drawn only after every item has read drawn, without
+a change, for 250 ms. It keeps watching after that. A display that marks itself
+busy again, or an image that starts loading again, makes Allow unavailable until
+the next drawn report. A failure shows the "could not be shown" state with Try
+again.
+
+These marks are the only way a display can hold Allow. A display that draws
+asynchronously and marks nothing (an unmarked placeholder, a canvas, an
+`<object>` or a CSS image filled later) is read as drawn once its first commit
+has held for 250 ms. Marking is the display's obligation. The rule is
+implemented in `src/app/lifecycle/review-island/island-height-reporter.tsx`.
