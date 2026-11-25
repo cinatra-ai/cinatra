@@ -399,6 +399,15 @@ export type EmailFanoutBodyWrite = {
   markdown: string;
   /** The body type's own declared fields — `bodyMarkdown` carries the text. */
   typedData: Record<string, unknown>;
+  /**
+   * The keys of `typedData` a body the drafting step already filed must carry,
+   * equal, for it to stand in for this write (cinatra#3089): the correlation
+   * keys the campaign and contact queries read, and the run. `subject` and
+   * `bodyMarkdown` are not among them: the filed body's title and its bytes (the
+   * reuse is found by the content hash) are the subject and the text, and no
+   * query reads them from the body's data.
+   */
+  reuseMustCarry: string[];
 };
 
 export type EmailFanoutBodyWriteResult =
@@ -513,6 +522,7 @@ export async function materializeEmailFanout(
           title: subject.trim() !== "" ? subject : "(no subject)",
           markdown,
           typedData,
+          reuseMustCarry: ["runId", "campaignId", ...(contactId ? ["contactId"] : [])],
         });
       } catch (err) {
         throw new EmailBodyRefusedError(
@@ -583,6 +593,7 @@ async function loadDefaultEmitEmailFanout(): Promise<
             title: w.title,
             markdown: w.markdown,
             typedData: w.typedData,
+            reuseMustCarry: w.reuseMustCarry,
           });
         },
         registeredTypes,

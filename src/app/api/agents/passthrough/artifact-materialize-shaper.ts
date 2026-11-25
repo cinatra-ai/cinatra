@@ -367,12 +367,12 @@ function shapeListMembers(
       }
       for (const field of listData.fields) {
         const value = record[field];
-        if (typeof value !== "string" || value.trim().length === 0 || value.length > listData.maxValueChars) {
+        if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > listData.maxValueChars) {
           throw new Error(
             `${where} field "${field}" must be a non-blank string of at most ${listData.maxValueChars} characters`,
           );
         }
-        data[field] = value;
+        data[field] = value.trim();
       }
       Object.assign(data, listData.fixed);
     } else if (listData?.runIdField && Object.prototype.hasOwnProperty.call(record, listData.runIdField)) {

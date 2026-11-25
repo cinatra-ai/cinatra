@@ -776,7 +776,8 @@ export function materializeListMemberFieldsEqualRefusal(
 // no surrounding whitespace, never a template) and are refused when they are
 // `__proto__`, a writer-owned field of the stored object, a title or content
 // field, or used twice. At most 8 typed fields in all; a value is a non-blank
-// string of at most 512 characters.
+// string of at most 512 characters once trimmed (stored trimmed, as the title is
+// and as the send's own body stores its contact).
 
 export const MATERIALIZE_LIST_DATA_CODE = "materialize_list_data_declaration";
 export const MATERIALIZE_LIST_DATA_MAX_FIELDS = 8;
@@ -861,10 +862,10 @@ export function readMaterializeListDataDeclaration(input: Record<string, unknown
     for (const [name, value] of Object.entries(rawFixed)) {
       const problem = nameProblem(name);
       if (problem !== null) return refuse("memberData", problem);
-      if (typeof value !== "string" || value.trim().length === 0 || value.length > MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS) {
+      if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS) {
         return refuse("memberData", `a value must be a non-blank string of at most ${MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS} characters`);
       }
-      fixed[name] = value;
+      fixed[name] = value.trim();
     }
   }
 

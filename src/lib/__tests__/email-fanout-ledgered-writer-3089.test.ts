@@ -141,6 +141,19 @@ describe("cinatra#3089 — the fan-out's body write on the ledgered writer", () 
     ]);
   });
 
+  // red-first-expect: expected [ undefined, undefined ] to deeply equal
+  it("A4 a body of the fan-out that a pre-filed body would stand in for must carry the correlation keys, the contact when the draft has one", async () => {
+    const fx = makeFixture();
+    await materializeEmailFanout(
+      { ...input, drafts: [twoDrafts[0]!, { id: "d3", subject: "No contact", body: "Body three", step: 1 }], recipients: twoRecipients },
+      { writeBody: fx.writeBody, registeredTypes: ALL_TYPES },
+    );
+    expect(fx.bodyWrites.map((w) => (w as BodyWrite & { reuseMustCarry?: string[] }).reuseMustCarry)).toEqual([
+      ["runId", "campaignId", "contactId"],
+      ["runId", "campaignId"],
+    ]);
+  });
+
   it("A3 a retried fan-out over the same drafts writes nothing new and returns the same artifact ids", async () => {
     const fx = makeFixture();
     const deps = { writeBody: fx.writeBody, registeredTypes: ALL_TYPES };

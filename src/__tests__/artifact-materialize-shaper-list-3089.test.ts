@@ -216,6 +216,16 @@ describe("typed data of list members (cinatra#3089)", () => {
   });
 
   // red-first-expect: readMaterializeListDataDeclaration) is not a function
+  it("stores typed values without their surrounding whitespace, as the title is stored and as the send's own body stores its contact", () => {
+    const list = TYPED.map((m, i) => ({ ...m, recipientId: ` c-${i + 1}\t` }));
+    const shaped = shapeTyped(typedRaw({ content: JSON.stringify(list), memberData: { campaignId: " camp-1 " } }));
+    expect(shaped.members!.map((m) => m.data)).toEqual([
+      { recipientId: "c-1", campaignId: "camp-1" },
+      { recipientId: "c-2", campaignId: "camp-1" },
+    ]);
+  });
+
+  // red-first-expect: readMaterializeListDataDeclaration) is not a function
   it("gives a member no data property when the call declares none", () => {
     const shaped = shapeTyped(listRaw());
     expect(shaped.members!.every((m) => !("data" in m))).toBe(true);

@@ -13,7 +13,9 @@
  *   L2 a retry after a partial failure files nothing twice
  *   L3 a marked gate fed by the list node reviews every member's write, and
  *      plans one review leg per artifact, in order
- *   L4 the send fan-out reuses each list-filed body by its bytes
+ *   L4 the send fan-out reuses each list-filed body by its bytes when the
+ *      filing declared the correlation the send stores, and refuses one that
+ *      declared none
  *   L5 a list-filed body that declares no typed data is stored with the same
  *      fields as a single filing of the same body (a single filing takes no
  *      typed data; the send records the correlation of a body it reuses)
@@ -120,9 +122,9 @@ const NODE = "file_drafts";
 const sha256 = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 
 const DRAFTS = [
-  { id: "d1", subject: "Hello Ada", body: "Dear Ada, ..." },
-  { id: "d2", subject: "Hello Bob", body: "Dear Bob, ..." },
-  { id: "d3", subject: "Hello Cy", body: "Dear Cy, ..." },
+  { id: "d1", contactId: "c-1", subject: "Hello Ada", body: "Dear Ada, ..." },
+  { id: "d2", contactId: "c-2", subject: "Hello Bob", body: "Dear Bob, ..." },
+  { id: "d3", contactId: "c-3", subject: "Hello Cy", body: "Dear Cy, ..." },
 ];
 
 /** The list module is loaded per test, so a missing module fails each test. */
@@ -146,6 +148,8 @@ type LedgerRow = {
 let ledger: LedgerRow[];
 /** Bodies whose create fails once, as a rolled-back Tx2 does. */
 let failOnce: Set<string>;
+/** The stored `objects` rows (data) of what the creation path wrote, by artifact id. */
+let storedObjects: Map<string, Record<string, unknown>>;
 
 /** The list filing through the real tool materializer, as the route wires it. */
 async function fileList(verifiedStepId?: string) {
@@ -186,8 +190,13 @@ beforeEach(() => {
   __resetRunPackageBindingsCacheForTests();
   ledger = [];
   failOnce = new Set();
+  storedObjects = new Map();
   getAgentPackageMock.mockResolvedValue(withPayload(null));
-  poolQueryMock.mockImplementation(async (text: string) => {
+  poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+    if (text.includes('"objects"')) {
+      const data = storedObjects.get(String(values?.[0]));
+      return { rows: data ? [{ data }] : [] };
+    }
     if (text.includes("SELECT package_name")) return { rows: [{ package_name: "@test/agent" }] };
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
@@ -230,6 +239,8 @@ beforeEach(() => {
   createSemanticArtifactMock.mockImplementation(
     async (input: {
       stream: AsyncIterable<Uint8Array>;
+      title: string;
+      typedData?: Record<string, unknown>;
       additionalTx2Queries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ values: unknown[] }>;
     }) => {
       const chunks: Uint8Array[] = [];
@@ -238,6 +249,7 @@ beforeEach(() => {
       if (failOnce.delete(body)) throw new Error("tx2 rolled back");
       artifactSeq += 1;
       const ids = { artifactId: `art-${artifactSeq}`, representationRevisionId: `rep-${artifactSeq}` };
+      storedObjects.set(ids.artifactId, { ...(input.typedData ?? {}), title: input.title });
       // The Tx2 commits: the finalize lands on the claimed row.
       for (const q of input.additionalTx2Queries(ids)) {
         const f = q.values[0] as { ledgerId: string };
@@ -393,32 +405,74 @@ describe("cinatra#3089 — artifact_materialize list mode on the ledgered write 
     ]);
   });
 
-  // red-first-expect: input.title must be a non-empty string
-  it("L4 the send fan-out reuses each list-filed body by its bytes", async () => {
-    const listed = await fileList(NODE);
+  /** The send fan-out's own call for one draft, as `materializeEmailFanout` makes it. */
+  const fanOut = (draft: (typeof DRAFTS)[number]) =>
+    materializeFanoutMessageRevision({
+      runId: "run-1",
+      orgId: "org-a",
+      createdBy: "user-1",
+      objectTypeId: BODY_TYPE,
+      outputId: `email-body:run-1:${draft.id}`,
+      title: draft.subject,
+      markdown: draft.body,
+      typedData: { runId: "run-1", campaignId: "camp-1", subject: draft.subject, bodyMarkdown: draft.body, contactId: draft.contactId },
+      reuseMustCarry: ["runId", "campaignId", "contactId"],
+    });
+
+  // red-first-expect: readMaterializeListDataDeclaration is not a function
+  it("L4 the send fan-out reuses each list-filed body by its bytes when the filing declared the correlation it stores", async () => {
+    const raw = {
+      extension: EXT,
+      objectTypeId: BODY_TYPE,
+      content: JSON.stringify(DRAFTS),
+      memberContentField: "body",
+      memberTitleField: "subject",
+      memberDataFields: ["contactId"],
+      memberData: { campaignId: "camp-1" },
+      memberRunIdField: "runId",
+      declaredMime: "text/markdown",
+      node_id: NODE,
+    };
+    const declaration = readMaterializeListDataDeclaration(raw);
+    if (!declaration.ok) throw new Error(declaration.message);
+    const shaped = shapeArtifactMaterializeInput(raw, declaration);
+    const { materializeArtifactList } = await listModule();
+    const listed = await materializeArtifactList(shaped.members!, (member) =>
+      materializeToolArtifact({
+        runId: "run-1", orgId: "org-a", templateId: "tpl-1", packageVersion: "1.0.0", createdBy: "user-1",
+        nodeId: shaped.nodeId, verifiedStepId: NODE, extension: shaped.extension, objectTypeId: shaped.objectTypeId,
+        title: member.title, mime: shaped.declaredMime, content: member.content,
+        typedData: { ...member.data, [shaped.runIdField!]: "run-1" },
+      }),
+    );
     if (!listed.ok) throw new Error(listed.error);
     createSemanticArtifactMock.mockClear();
     claimMaterializationMock.mockClear();
 
-    const sent: Array<Awaited<ReturnType<typeof materializeFanoutMessageRevision>>> = [];
-    for (const draft of DRAFTS) {
-      sent.push(await materializeFanoutMessageRevision({
-        runId: "run-1",
-        orgId: "org-a",
-        createdBy: "user-1",
-        objectTypeId: BODY_TYPE,
-        outputId: `email-body:run-1:${draft.id}`,
-        title: draft.subject,
-        markdown: draft.body,
-        typedData: { subject: draft.subject, bodyMarkdown: draft.body },
-      }));
-    }
+    const sent: Array<Awaited<ReturnType<typeof fanOut>>> = [];
+    for (const draft of DRAFTS) sent.push(await fanOut(draft));
     expect(sent).toEqual(EXPECTED.map((ids) => ({ ok: true, ...ids, deduped: true })));
     // No second artifact and no fan-out claim: each message is bound to its list-filed body.
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
     expect(claimMaterializationMock).not.toHaveBeenCalled();
     expect(ledger.filter((r) => r.path === "email_fanout").map((r) => r.artifactId)).toEqual(["art-1", "art-2", "art-3"]);
   });
+
+  // red-first-expect: input.title must be a non-empty string
+  it("L4b the send fan-out refuses a list-filed body that declared no typed data: nothing is bound, the send does not report success", async () => {
+    const listed = await fileList(NODE);
+    if (!listed.ok) throw new Error(listed.error);
+    createSemanticArtifactMock.mockClear();
+    claimMaterializationMock.mockClear();
+
+    const outcome = await fanOut(DRAFTS[0]!);
+    expect(outcome).toMatchObject({ ok: false, code: "fanout_reuse_typed_data_mismatch" });
+    expect((outcome as { error: string }).error).toContain("keys: runId, campaignId, contactId");
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(claimMaterializationMock).not.toHaveBeenCalled();
+    expect(ledger.filter((r) => r.path === "email_fanout")).toEqual([]);
+  });
+
   // red-first-expect: input.title must be a non-empty string
   it("L5 a list-filed body that declares no typed data is stored with the same fields as a single filing of the same body", async () => {
     const stored = (call: unknown[]) => {

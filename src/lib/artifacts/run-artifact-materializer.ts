@@ -1530,7 +1530,7 @@ export type ToolArtifactMaterialization =
       /** true when the idempotency ledger already held finalized refs. */
       deduped: boolean;
     }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: string };
 
 /**
  * Materialize ONE artifact for a mid-flow `artifact_materialize` passthrough
@@ -1715,6 +1715,32 @@ export async function materializeToolArtifact(input: {
 // The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
 // ---------------------------------------------------------------------------
 
+export const FANOUT_REUSE_TYPED_DATA_CODE = "fanout_reuse_typed_data_mismatch";
+
+/** The keys of `mustCarry` (those `typedData` holds) that the live object `artifactId` of the organization
+ *  does not carry equal. A body that is not there, or is deleted, lacks every one. Values are never named. */
+async function reuseLackingKeys(input: {
+  orgId: string;
+  artifactId: string;
+  typedData: Record<string, unknown>;
+  mustCarry: readonly string[];
+}): Promise<string[]> {
+  const keys = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
+  if (keys.length === 0) return [];
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const res = await pool().query(
+    `SELECT data FROM "${s}"."objects" WHERE id = $1 AND org_id = $2 AND deleted_at IS NULL LIMIT 1`,
+    [input.artifactId, input.orgId],
+  );
+  const row = res.rows[0] as { data?: unknown } | undefined;
+  const stored =
+    row && row.data !== null && typeof row.data === "object" && !Array.isArray(row.data)
+      ? (row.data as Record<string, unknown>)
+      : null;
+  return keys.filter((k) => stored === null || stored[k] !== input.typedData[k]);
+}
+
 /**
  * Write ONE message body of a send as a markdown revision on the ledger: path
  * `email_fanout`, the ledger output identity = the message identity, the
@@ -1731,6 +1757,10 @@ export async function materializeToolArtifact(input: {
  * materializer derives it — from the run's template anchor, read off the run
  * itself (the fan-out carries no template id). Never throws: a refusal is a
  * returned error the send boundary makes a visible failure of the send.
+ *
+ * A body reused from the drafting step is admitted only when it already carries
+ * what this write would have stored (`reuseMustCarry`); otherwise the reuse is
+ * refused with `FANOUT_REUSE_TYPED_DATA_CODE` and nothing is bound or written.
  */
 export async function materializeFanoutMessageRevision(input: {
   runId: string;
@@ -1744,6 +1774,14 @@ export async function materializeFanoutMessageRevision(input: {
   markdown: string;
   /** The type's own declared fields (`bodyMarkdown`, `subject`, …). */
   typedData: Record<string, unknown>;
+  /**
+   * The keys of `typedData` a body that was ALREADY filed mid-run must carry,
+   * equal, to be reused (cinatra#3089). A reuse writes nothing, so a pre-filed
+   * body that lacks what this write would have stored would stay without it
+   * while the send reported success. Absent: every key of `typedData` is
+   * compared. A key that is not in `typedData` is not compared.
+   */
+  reuseMustCarry?: readonly string[];
 }): Promise<ToolArtifactMaterialization> {
   try {
     ensurePostgresSchema();
@@ -1803,6 +1841,26 @@ export async function materializeFanoutMessageRevision(input: {
     // A mid-run body not yet bound to another message is bound to this one.
     const prefiled = await findFinalizedMidRunMaterialization(messageKey);
     if (prefiled) {
+      // A reuse is admitted only when the pre-filed body already carries what this
+      // write would have stored (read from its live object, scoped to the
+      // organization): nothing is written to it, so a missing or different key
+      // would stay missing or different while the send reported success.
+      const lacking = await reuseLackingKeys({
+        orgId: input.orgId,
+        artifactId: prefiled.artifactId,
+        typedData: input.typedData,
+        mustCarry: input.reuseMustCarry ?? Object.keys(input.typedData),
+      });
+      if (lacking.length > 0) {
+        return {
+          ok: false,
+          code: FANOUT_REUSE_TYPED_DATA_CODE,
+          error:
+            `${FANOUT_REUSE_TYPED_DATA_CODE}: the body already filed for this message does not carry the typed fields ` +
+            `the send stores (keys: ${lacking.join(", ")}); declare them on the filing ` +
+            "(memberDataFields / memberData / memberRunIdField); the body was not reused",
+        };
+      }
       await recordFanoutReuseMaterialization({
         ...messageKey,
         outputId: input.outputId,

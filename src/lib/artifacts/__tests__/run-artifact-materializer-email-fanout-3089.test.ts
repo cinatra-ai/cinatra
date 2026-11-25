@@ -20,6 +20,10 @@
  *      second artifact, and bound to the message so the retry reads its own row
  *   B2 two messages with the same bytes over one pre-filed body keep one body
  *      each: the first is bound to it, the second writes its own
+ *   B4 a pre-filed body that does not carry what the send would store is NOT
+ *      reused: the send fails closed with a fixed code naming the keys, and
+ *      nothing is bound or written
+ *   B5 a pre-filed body that carries the correlation keys is reused
  *   B3 a retried message keeps its own mapping even when a mid-run body of the
  *      same bytes is filed between drives
  *   L1 the ledger reads and the reuse row the entry relies on, as SQL
@@ -142,8 +146,14 @@ function bodyInput(m: (typeof MESSAGES)[number]) {
   };
 }
 
+/** The stored `objects` rows the reuse reads back, by artifact id: `null` = no live row. */
+let storedObjects: Map<string, Record<string, unknown> | null>;
+/** What a body the fan-out would have written carries (the message's own typed data). */
+const fullData = (m: (typeof MESSAGES)[number]) => bodyInput(m).typedData;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  storedObjects = new Map();
   // The pack that declares the body type holds the winning platform claim.
   readArtifactTypeClaimsForOrgMock.mockReturnValue([
     {
@@ -160,7 +170,15 @@ beforeEach(() => {
       updatedAt: null,
     },
   ]);
-  poolQueryMock.mockImplementation(async (text: string) => {
+  poolQueryMock.mockImplementation(async (text: string, values?: unknown[]) => {
+    if (text.includes('"objects"')) {
+      // The reuse's read: the live row's data, scoped to the organization.
+      expect(text).toContain("org_id = $2");
+      expect(text).toContain("deleted_at IS NULL");
+      expect(values?.[1]).toBe("org-a");
+      const data = storedObjects.get(String(values?.[0])) ?? null;
+      return { rows: data ? [{ data }] : [] };
+    }
     if (text.includes("SELECT template_id")) return { rows: [{ template_id: "tpl-1" }] };
     if (text.includes("owner_level")) return { rows: [{ owner_level: "organization", owner_id: "org-a" }] };
     if (text.includes("project_id")) return { rows: [{ project_id: null }] };
@@ -314,6 +332,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
   });
 
   it("B1 a fan-out over a body already filed under the same identity key returns that artifact and writes no second one", async () => {
+    storedObjects.set("prefiled-1", { ...fullData(MESSAGES[0]), title: "Hello One" });
     findFinalizedMidRunMaterializationMock.mockResolvedValue({
       artifactId: "prefiled-1",
       representationRevisionId: "prefiled-rep-1",
@@ -353,6 +372,7 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
   });
 
   it("B2 two messages with the same bytes over one pre-filed body keep one body each", async () => {
+    storedObjects.set("prefiled-1", fullData(MESSAGES[0]));
     // The mid-run read never hands out an artifact already bound to a message
     // of the run (the NOT EXISTS clause L1 pins).
     findFinalizedMidRunMaterializationMock.mockImplementation(async () =>
@@ -371,6 +391,83 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     expect(claimMaterializationMock.mock.calls[0][0]).toMatchObject({
       outputId: MESSAGES[1].outputId,
       path: "email_fanout",
+    });
+  });
+
+  describe("a pre-filed body is reused only when it carries what the send would store (cinatra#3089)", () => {
+    const CODE = "fanout_reuse_typed_data_mismatch";
+    const CORRELATION = ["runId", "campaignId"];
+    const prefile = (data: Record<string, unknown> | null) => {
+      storedObjects.set("prefiled-1", data);
+      findFinalizedMidRunMaterializationMock.mockResolvedValue({
+        artifactId: "prefiled-1",
+        representationRevisionId: "prefiled-rep-1",
+      });
+    };
+    const nothingWritten = () => {
+      expect(recordFanoutReuseMaterializationMock).not.toHaveBeenCalled();
+      expect(claimMaterializationMock).not.toHaveBeenCalled();
+      expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    };
+
+    // red-first-expect: expected true to be false
+    it.each([
+      ["a list-filed body with no typed data", { title: "Hello One" }, ["runId", "campaignId"]],
+      ["a body with the run but not the campaign", { runId: "run-1" }, ["campaignId"]],
+      ["a body of another campaign", { runId: "run-1", campaignId: "camp-OTHER" }, ["campaignId"]],
+      ["a body of another run", { runId: "run-OTHER", campaignId: "camp-1" }, ["runId"]],
+    ])("B4 refuses %s, naming the keys and never the values, and binds and writes nothing", async (_n, stored, keys) => {
+      prefile(stored);
+      const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(outcome.ok).toBe(false);
+      if (outcome.ok) throw new Error("expected a refusal");
+      expect(outcome).toMatchObject({ code: CODE });
+      expect(outcome.error).toContain(`keys: ${keys.join(", ")}`);
+      expect(outcome.error).toContain("memberDataFields / memberData / memberRunIdField");
+      for (const value of ["camp-1", "camp-OTHER", "run-OTHER", "Body one"]) expect(outcome.error).not.toContain(value);
+      nothingWritten();
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B4 requires the contact when the writer has one, and a body that is gone or deleted is refused", async () => {
+      prefile({ runId: "run-1", campaignId: "camp-1" });
+      const withContact = {
+        ...bodyInput(MESSAGES[0]),
+        typedData: { ...bodyInput(MESSAGES[0]).typedData, contactId: "c-1" },
+        reuseMustCarry: [...CORRELATION, "contactId"],
+      };
+      const refused = await materializeFanoutMessageRevision(withContact);
+      expect(refused).toMatchObject({ ok: false, code: CODE });
+      expect((refused as { error: string }).error).toContain("keys: contactId");
+
+      prefile(null);
+      const gone = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(gone).toMatchObject({ ok: false, code: CODE });
+      nothingWritten();
+    });
+
+    // red-first-expect: to match object { ok: false
+    it("B4 compares every key the writer would store when the caller names none", async () => {
+      prefile({ runId: "run-1", campaignId: "camp-1" });
+      const outcome = await materializeFanoutMessageRevision(bodyInput(MESSAGES[0]));
+      expect(outcome).toMatchObject({ ok: false, code: CODE });
+      expect((outcome as { error: string }).error).toContain("keys: subject, bodyMarkdown");
+      nothingWritten();
+    });
+
+    it("B5 reuses a body that carries the correlation keys, and binds it to the message", async () => {
+      prefile({ runId: "run-1", campaignId: "camp-1", extra: "kept" });
+      const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(outcome).toEqual({ ok: true, artifactId: "prefiled-1", representationRevisionId: "prefiled-rep-1", deduped: true });
+      expect(recordFanoutReuseMaterializationMock).toHaveBeenCalledTimes(1);
+      expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    });
+
+    it("B6 a fresh write, with no pre-filed body, is unchanged and stores the writer's own typed data", async () => {
+      const outcome = await materializeFanoutMessageRevision({ ...bodyInput(MESSAGES[0]), reuseMustCarry: CORRELATION });
+      expect(outcome).toMatchObject({ ok: true, deduped: false });
+      expect(createSemanticArtifactMock.mock.calls[0]![0].typedData).toEqual(fullData(MESSAGES[0]));
+      expect(poolQueryMock.mock.calls.some(([t]) => String(t).includes('"objects"'))).toBe(false);
     });
   });
 
