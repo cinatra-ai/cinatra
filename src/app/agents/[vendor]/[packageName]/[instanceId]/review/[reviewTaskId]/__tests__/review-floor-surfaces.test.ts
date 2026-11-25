@@ -148,7 +148,10 @@ describe("item 1 — every surface mounts that one floor, and adds none of its o
   });
 });
 
-describe("item 7 — the host mounts displays with no Regenerate and no floor of their own (displays' sources: border gate rule (f))", () => {
+// What this block proves: the HOST mounts displays with no Regenerate and no
+// floor of its own. A display's own source is read by border gate rule (f)
+// (scripts/extensions/self-rendering-extensions-border-gate.mjs), not here.
+describe("item 7 — no artifact renderer carries a Regenerate control", () => {
   it("the display ISLAND inside a third-party application stays display-only", () => {
     const code = stripComments(ISLAND);
     expect(code).not.toContain("ReviewDecisionBar");
