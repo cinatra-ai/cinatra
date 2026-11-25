@@ -545,8 +545,14 @@ import { parkRunOnHumanGate } from "./human-gate-park";
 import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
+  getMergedFieldRendererBindings,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, rendererGateStepsOf, RENDERER_GATE_STEP_GATE_COUNT_LIMIT } from "./orchestrator-gate-predicate";
+import {
+  stepFiresRendererGate,
+  rendererGateStepsOf,
+  RENDERER_GATE_STEP_GATE_COUNT_LIMIT,
+  LIST_STEP_REFRESH_VALUE_SCHEMA_KEY,
+} from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -3144,7 +3150,25 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // key (the gate's pendingApproval when the step has no schema, or a pack's
     // own step schema) loses it, so a gate cannot withhold run inputs itself.
     const gateSchemaSource = (wayflowSchema ?? interruptPayload) as Record<string, unknown>;
-    const gateSchemaBase = withoutGateKeysList(gateSchemaSource);
+    // cinatra#3562: the refresh value this pause's renderer binding declares now
+    // is recorded with the gate, and a refresh of this pause sends exactly that
+    // value (review-task-actions.ts), whatever a later deployment declares. Only
+    // the host writes the key: the gate's own schema loses it first. A binding
+    // that cannot be read records none, and the pause then takes no refresh.
+    const declaredRefreshValue: unknown = (() => {
+      try {
+        const binding = getMergedFieldRendererBindings().find((b) => b.id === wayflowXRenderer);
+        return (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
+      } catch {
+        return undefined;
+      }
+    })();
+    const gateSchemaBase = {
+      ...withoutKeys(withoutGateKeysList(gateSchemaSource), [LIST_STEP_REFRESH_VALUE_SCHEMA_KEY]),
+      ...(typeof declaredRefreshValue === "string" && declaredRefreshValue.trim().length > 0
+        ? { [LIST_STEP_REFRESH_VALUE_SCHEMA_KEY]: declaredRefreshValue }
+        : {}),
+    };
     const enrichedValues: Record<string, unknown> = {
       ...withoutKeys(gateRunInputs, keysWithheldFromRunInputs),
       ...gateInputValues,

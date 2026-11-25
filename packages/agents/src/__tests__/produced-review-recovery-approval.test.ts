@@ -123,6 +123,8 @@ vi.mock("@cinatra-ai/a2a", async (orig) => {
   return {
     ...actual,
     createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskSpy })),
+    // cinatra#3562: every real answer removes its task's refresh note before the send.
+    forgetWayflowRendererGateRepeat: vi.fn(async () => undefined),
     resolveRunIdByWayflowTaskId: vi.fn(async () => null),
     resolveLatestWayflowGateTaskId: vi.fn(async () => "task-1"),
     rememberLatestWayflowGateTask: vi.fn(async () => undefined),

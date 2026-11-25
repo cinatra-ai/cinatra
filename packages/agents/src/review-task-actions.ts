@@ -39,7 +39,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
 import { readListStepRefreshAsk, listStepRefreshAccepted, listStepRefreshIsRequest, isListStepRefreshPayloadShape } from "./hitl-gate-submit";
-import { stepFiresRendererGate, rendererGateIndexOfRenderer, rendererGateStepsOf } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, rendererGateIndexOfRenderer, rendererGateStepsOf, recordedListStepRefreshValue } from "./orchestrator-gate-predicate";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -1002,9 +1002,12 @@ export async function approveReviewTaskInternal(
         //    a binding that ships its own component: such a binding mounts that
         //    component (register-default-renderers.ts, the
         //    `hasFieldRendererComponent` branch).
-        const { getMergedFieldRendererBindings } = await import("./field-renderer-bindings.server");
-        const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
-        const declaredRefreshValue = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
+        // The value is the one the binding declared when this pause was recorded
+        // (the gate record's schema, execution.ts), never the process's binding
+        // now: a deployment that changes or removes it while the run waits does
+        // not send another value into the waiting flow. A pause recorded without
+        // one takes no refresh.
+        const declaredRefreshValue = recordedListStepRefreshValue(gate.inputSchema);
         if (
           !isListStepRefreshPayloadShape(values) ||
           !listStepRefreshAccepted({ reviewTaskId, gateXRenderer: gate.xRenderer, declaredRefreshValue, requested: refreshKeyValue }) ||
@@ -1232,10 +1235,12 @@ export async function approveReviewTaskInternal(
       // that two steps share gives no place there. A refusal, a failure, or a
       // place that is not known, is handled as the mint's failure is: nothing is
       // sent, the gate is put back, and the step waits as it did before.
-      // A real answer in a flow that maps pauses by place first removes a refresh
-      // note that names this task (left by a refresh of it that was not sent):
-      // the answer moves the run on, so the next pause is a new step. A failure
-      // is handled the same way.
+      // Every real answer first removes a refresh note that names this task (left
+      // by a refresh of it that was not sent), whatever the steps say and even
+      // when they cannot be read: the answer moves the run on, so the next pause
+      // is a new step. The removal is keyed by run and task, and changes nothing
+      // when there is no such note. When it fails, nothing is sent and the gate
+      // is put back.
       const answerHasPayload = typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0;
       // Steps that cannot be read (any fault of the read) refuse a refresh below
       // and leave a real answer as it was.
@@ -1248,7 +1253,7 @@ export async function approveReviewTaskInternal(
       const rendererGatePolicySteps = rendererGateStepsOf(runPolicySteps);
       const rendererSteps = rendererGatePolicySteps?.filter(stepFiresRendererGate) ?? null;
       const mapsPausesByPlace = rendererSteps !== null && rendererSteps.length > 1;
-      if (listStepRefreshAsk !== undefined || answerHasPayload || mapsPausesByPlace) {
+      {
         try {
           if (listStepRefreshAsk !== undefined) {
             const refreshedStepIsAmongSteps =
@@ -1268,7 +1273,7 @@ export async function approveReviewTaskInternal(
                 rendererGateIndexOfRenderer(rendererGatePolicySteps!, listStepRefreshRenderer!),
               );
             }
-          } else if (mapsPausesByPlace) {
+          } else {
             await (await import("@cinatra-ai/a2a")).forgetWayflowRendererGateRepeat(run.id, taskId);
           }
           if (listStepRefreshAsk === undefined && answerHasPayload) {

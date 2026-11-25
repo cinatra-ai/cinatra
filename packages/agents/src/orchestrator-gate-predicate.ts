@@ -27,6 +27,23 @@ export function stepFiresRendererGate(step: RendererGateStepShape): boolean {
 }
 
 /**
+ * cinatra#3562: the schema key under which a paused gate's durable record
+ * carries the refresh value its list step's binding declared when the pause
+ * was recorded (`params.refreshValue`). Only the host writes it: a gate's own
+ * schema loses the key before the record is made. A refresh of that pause
+ * sends this value, so a later deployment that changes or removes the
+ * declaration does not change what the waiting flow receives.
+ */
+export const LIST_STEP_REFRESH_VALUE_SCHEMA_KEY = "x-cinatra-list-step-refresh-value";
+
+/** cinatra#3562: the refresh value a gate's recorded schema carries; undefined when none (or blank). */
+export function recordedListStepRefreshValue(schema: unknown): string | undefined {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema)) return undefined;
+  const value = (schema as Record<string, unknown>)[LIST_STEP_REFRESH_VALUE_SCHEMA_KEY];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+/**
  * cinatra#3562: a stored policy's `steps` as a list of step objects, or null
  * when the list cannot be read: `steps` is no list (absent, or a policy saved
  * as `{}`), or an entry is no object. An unreadable list is never read as a

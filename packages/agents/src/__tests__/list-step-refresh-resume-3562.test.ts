@@ -77,9 +77,18 @@ vi.mock("../agent-run-hitl-prompts", () => ({
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input);
     return "captured-prompt";
   },
+  // The record carries the refresh value the gate's binding declared when the
+  // pause was recorded (execution.ts records it): here, the test's bindings.
   readDurableHitlGateForContinue: async () => {
     if (durableGate.fail) throw new Error("gate record read failed");
-    return durableGate.value;
+    const gate = durableGate.value;
+    if (!gate) return gate;
+    const { getMergedFieldRendererBindings } = await import("../field-renderer-bindings.server");
+    const { LIST_STEP_REFRESH_VALUE_SCHEMA_KEY } = await import("../orchestrator-gate-predicate");
+    const binding = getMergedFieldRendererBindings().find((b) => b.id === gate.xRenderer);
+    const declared = (binding?.params as { refreshValue?: unknown } | undefined)?.refreshValue;
+    if (typeof declared !== "string") return gate;
+    return { ...gate, inputSchema: { ...(gate.inputSchema as Record<string, unknown>), [LIST_STEP_REFRESH_VALUE_SCHEMA_KEY]: declared } };
   },
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",

@@ -53,11 +53,17 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
   };
 });
 
-const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown> }));
+/**
+ * The gate records: `rows` holds what the real park seam wrote (by review task
+ * id), which the resume road reads first; `value` is the fallback a test sets.
+ */
+const durableGate = vi.hoisted(() => ({ value: null as null | Record<string, unknown>, rows: new Map<string, Record<string, unknown>>() }));
+/** The list step's binding as the process declares it now; a test can change it after a pause. */
+const listBinding = vi.hoisted(() => ({ params: { refreshValue: "refresh" } as Record<string, unknown> }));
 vi.mock("../field-renderer-bindings.server", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   getMergedFieldRendererBindings: () => [
-    { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, params: { refreshValue: "refresh" } },
+    { id: "@cinatra-ai/email-outreach-agent:list-picker", kind: "list-picker", priority: 90, params: listBinding.params },
   ],
 }));
 
@@ -78,6 +84,9 @@ const storeMock = vi.hoisted(() => ({
     return { written: true };
   }),
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
+  writeDurableHitlGateArtifact: vi.fn(async (artifact: Record<string, unknown>) => {
+    durableGate.rows.set(String(artifact.reviewTaskId), JSON.parse(JSON.stringify(artifact)) as Record<string, unknown>);
+  }),
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));
@@ -92,7 +101,7 @@ vi.mock("../publish-decision-store", async (orig) => ({
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async () => "captured-prompt",
-  readDurableHitlGateForContinue: async () => durableGate.value,
+  readDurableHitlGateForContinue: async (_runId: string, reviewTaskId: string) => durableGate.rows.get(reviewTaskId) ?? durableGate.value,
   recordSuccessfulContinue: async () => {},
   continueBindingDigest: () => "",
   continueGateDigest: () => "",
@@ -340,6 +349,11 @@ function arrange() {
   // A refused send leaves its queued answer behind: drop it.
   sendTask.mockReset();
   durableGate.value = null;
+  durableGate.rows.clear();
+  listBinding.params = { refreshValue: "refresh" };
+  storeMock.writeDurableHitlGateArtifact.mockImplementation(async (artifact: Record<string, unknown>) => {
+    durableGate.rows.set(String(artifact.reviewTaskId), JSON.parse(JSON.stringify(artifact)) as Record<string, unknown>);
+  });
   storeMock.readAgentRunByTaskId.mockImplementation(async () => liveRun());
   storeMock.readAgentRunById.mockImplementation(async () => liveRun());
   storeMock.readAgentTemplateById.mockResolvedValue(TEMPLATE);
@@ -1038,6 +1052,86 @@ describe("cinatra#3562 — a step that cannot be told is never refreshed and nev
     storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [{ stepNumber: 1, requiresApproval: true }] } });
     await firstPause("task-plain-1");
     expect(renderers()).toEqual([SCHEMA_FIELD_FALLBACK_RENDERER_ID]);
+    expect(row.status).toBe("pending_approval");
+  });
+});
+
+describe("cinatra#3562 — a refresh note never outlives the answer to its step, and the refresh value is the one the pause recorded", () => {
+  const REPEAT_KEY = `cinatra:wayflow:renderer-gate-repeat:${RUN.id}`;
+  const [listStep, secondStep] = TEMPLATE.approvalPolicy.steps;
+  const answerList = (taskId: string) =>
+    approveReviewTaskInternal(`wayflow-${taskId}`, RUN.runBy, { approved: true, userResponse: JSON.stringify({ listIds: ["list-a"], listNames: ["List A"] }) });
+
+  it("a note left by an unsent refresh is removed by the real answer even when the run's steps cannot be read at that moment, so the next pause takes its own step", async () => {
+    runPin.packageVersion = "1.0.0";
+    const bySemver = async (templateId: string, semver: string) =>
+      ({ templateId, semver, snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: TEMPLATE.approvalPolicy } }) as never;
+    const semverMock = storeMock.readAgentTemplateVersionBySemver as unknown as {
+      mockImplementation: (f: typeof bySemver) => void;
+      mockImplementationOnce: (f: () => Promise<never>) => void;
+    };
+    semverMock.mockImplementation(bySemver);
+    await firstPause("task-list-1");
+    // An unsent refresh of this step left its note.
+    redis.store.set(REPEAT_KEY, JSON.stringify({ taskId: "task-list-1", index: 0 }));
+    // The answer's read of the run's steps fails once.
+    semverMock.mockImplementationOnce(async () => {
+      throw new Error("the version store is unreachable");
+    });
+    const noteAtSend: boolean[] = [];
+    sendTask.mockImplementationOnce(async () => {
+      noteAtSend.push(redis.store.has(REPEAT_KEY));
+      return pauseTask("task-second-1");
+    });
+    // red-first-expect: expected [ true ] to deeply equal [ false ]
+    await answerList("task-list-1");
+    expect(noteAtSend).toEqual([false]);
+    expect(renderers()).toEqual([LIST_STEP_ID, SECOND_STEP_ID]);
+  });
+
+  it("a real answer whose note removal fails is not sent, and the step waits again", async () => {
+    storeMock.readAgentTemplateById.mockResolvedValue({ ...TEMPLATE, approvalPolicy: { steps: [listStep] } });
+    await firstPause("task-list-1");
+    const get = vi.spyOn(redis.FakeRedis.prototype, "get").mockImplementation(async (key: string) => {
+      if (key === REPEAT_KEY) throw new Error("Connection is closed.");
+      return redis.store.get(key) ?? null;
+    });
+    try {
+      // red-first-expect: to throw error including 'Connection is closed.' but got 'Continue task identity mismatch'
+      await expect(answerList("task-list-1")).rejects.toThrow("Connection is closed.");
+    } finally {
+      get.mockRestore();
+    }
+    expect(sendTask).not.toHaveBeenCalled();
+    expect(row.status).toBe("pending_approval");
+  });
+
+  it("the pause records its list step's refresh value; a later change of the binding does not change what Try again sends", async () => {
+    await firstPause("task-list-1");
+    // The deployment now declares another value.
+    listBinding.params = { refreshValue: "reload" };
+    // The new value is not taken for a pause recorded under the old one.
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(
+      approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("reload")),
+    ).rejects.toThrow("takes no such list step refresh");
+    expect(sendTask).not.toHaveBeenCalled();
+    // The recorded value is taken and sent, and the next pause keeps the list step.
+    sendTask.mockResolvedValueOnce(pauseTask("task-list-2"));
+    await approveReviewTaskInternal("wayflow-task-list-1", RUN.runBy, buildListStepRefreshPayload("refresh"));
+    expect(sendTask).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(sendTask.mock.calls[0])).toContain('"refresh"');
+    expect(JSON.stringify(sendTask.mock.calls[0])).not.toContain("reload");
+    expect(renderers()).toEqual([LIST_STEP_ID, LIST_STEP_ID]);
+  });
+
+  it("a pause recorded while no binding declared a refresh value takes no refresh, even after a deployment declares one", async () => {
+    listBinding.params = {};
+    await firstPause("task-list-1");
+    listBinding.params = { refreshValue: "refresh" };
+    // red-first-expect: buildListStepRefreshPayload is not a function
+    await expect(refresh("task-list-1", "task-list-2")).rejects.toThrow("takes no such list step refresh");
+    expect(sendTask).not.toHaveBeenCalled();
     expect(row.status).toBe("pending_approval");
   });
 });
