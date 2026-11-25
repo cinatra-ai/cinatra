@@ -1,5 +1,17 @@
 import type { VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { verifyRunExecutedSource } from "@cinatra-ai/agents/store";
+import {
+  ARTIFACT_IMAGE_TOOL,
+  ARTIFACT_MATERIALIZE_TOOL,
+  ARTIFACT_PAGE_CAPTURE_TOOL,
+  isArtifactMaterializeListInput,
+  isReservedLedgerOutputId,
+  MATERIALIZE_RESERVED_NODE_ID_CODE,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  materializeListMemberFieldsEqualRefusal,
+  materializeListResultIdFieldRefusal,
+  readMaterializeListDataDeclaration,
+} from "@cinatra-ai/agents/artifact-binding";
 import "server-only";
 import { NextResponse } from "next/server";
 
@@ -26,6 +38,14 @@ import {
   shapeArtifactMaterializeInput,
   type ShapedArtifactMaterializeInput,
 } from "./artifact-materialize-shaper";
+import {
+  isMaterializeListInputTooLarge,
+  materializeListAnswer,
+  MATERIALIZE_LIST_INPUT_TOO_LARGE,
+  materializeListInputTooLargeError,
+  MATERIALIZE_LIST_IN_REGENERATE_RUN,
+  MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR,
+} from "./artifact-materialize-list";
 import {
   shapeArtifactImageInput,
   type ShapedArtifactImageInput,
@@ -337,8 +357,15 @@ const TOOL_INPUT_SHAPERS: Record<string, InputShaper> = {
 // straight to {extension, content, declaredMime, title, node_id}
 // (+ optional contentJsonField parse-then-project). A shaper throw
 // surfaces as a 400 via the existing shaper-throw contract.
-TOOL_INPUT_SHAPERS.artifact_materialize = (raw) =>
-  shapeArtifactMaterializeInput(raw);
+TOOL_INPUT_SHAPERS.artifact_materialize = (raw) => {
+  // The typed-data declaration (cinatra#3089) is read by the package's one reader
+  // (the compile check reads it too) and handed to the shaper, which keeps no
+  // project imports. The route refuses a malformed one, with its code, before
+  // this runs; a throw here is the same refusal reached by another caller.
+  const declaration = readMaterializeListDataDeclaration(raw);
+  if (!declaration.ok) throw new Error(declaration.message);
+  return shapeArtifactMaterializeInput(raw, declaration);
+};
 
 // The image tool's seam shaper (cinatra#3032) — pure module in
 // ./artifact-image-shaper, same generic posture: flow variables wire straight to
@@ -483,6 +510,55 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
   }
 
+  // cinatra#3089: the ledger namespace of a list filing's rows is not a node's: a node id inside it is
+  // refused for every call of every filing tool (the ledger refuses it again at each claim).
+  if (
+    (tool === ARTIFACT_MATERIALIZE_TOOL || tool === ARTIFACT_IMAGE_TOOL || tool === ARTIFACT_PAGE_CAPTURE_TOOL) &&
+    typeof rawInput.node_id === "string" &&
+    isReservedLedgerOutputId(rawInput.node_id)
+  ) {
+    return NextResponse.json(
+      { error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE },
+      { status: 400 },
+    );
+  }
+
+  // cinatra#3089: a list call is bounded AS RECEIVED, before the shaper parses
+  // its list: the shaped call keeps only each member's title and content, so the
+  // argument check below would never see the rest (artifact-materialize-list.ts).
+  // The size of a list call has ONE answer: a list call whose input as received,
+  // or whose shaped call below, is larger than the limit of a run tool call's
+  // arguments is refused with this 400 and code before anything is filed, so the
+  // preparation's own size check (`action_json_limit`, a 403) never meets a list.
+  let listLimitBytes: number | null = null;
+  if (tool === "artifact_materialize" && isArtifactMaterializeListInput(rawInput)) {
+    const { ACTION_JSON_MAX_BYTES } = await import("@/lib/extension-host-context");
+    listLimitBytes = ACTION_JSON_MAX_BYTES;
+    if (isMaterializeListInputTooLarge(rawInput, ACTION_JSON_MAX_BYTES)) {
+      return NextResponse.json(
+        { error: materializeListInputTooLargeError(ACTION_JSON_MAX_BYTES), code: MATERIALIZE_LIST_INPUT_TOO_LARGE },
+        { status: 400 },
+      );
+    }
+    // A title that is the whole body files each value twice (as title and as
+    // content), so the shaped call can be twice the size of the call received.
+    const sameField = materializeListMemberFieldsEqualRefusal(rawInput);
+    if (sameField !== null) {
+      return NextResponse.json({ error: sameField.message, code: sameField.code }, { status: 400 });
+    }
+  }
+
+  // The typed member data a call declares (cinatra#3089) is read by the one
+  // reader the compile check uses; a malformed declaration, or typed data on a
+  // call that is not a list call, is refused here with ONE code before anything
+  // is shaped or filed.
+  if (tool === "artifact_materialize") {
+    const typedData = readMaterializeListDataDeclaration(rawInput);
+    if (!typedData.ok) {
+      return NextResponse.json({ error: typedData.message, code: typedData.code }, { status: 400 });
+    }
+  }
+
   const shaper = TOOL_INPUT_SHAPERS[tool];
   let input: Record<string, unknown>;
   try {
@@ -493,6 +569,26 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
     // downstream artifact.
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: message }, { status: 400 });
+  }
+  // The shaped list call is the call the preparation copies and measures: the
+  // same measure, the same limit, the same answer as the raw check above.
+  if (listLimitBytes !== null && isMaterializeListInputTooLarge(input, listLimitBytes)) {
+    return NextResponse.json(
+      { error: materializeListInputTooLargeError(listLimitBytes), code: MATERIALIZE_LIST_INPUT_TOO_LARGE },
+      { status: 400 },
+    );
+  }
+  // cinatra#3089: a list call files one artifact per member, so it has no
+  // single id to answer under `result_id_field`. A step that names one expects
+  // ONE id; it is refused here, before anything is filed, never answered with a
+  // null or the first member's id. A list answers `artifacts` and `reviewTargets`.
+  // The compile check refuses the same pair through the same function.
+  const listRefusal =
+    tool === "artifact_materialize"
+      ? materializeListResultIdFieldRefusal(rawInput, body.result_id_field)
+      : null;
+  if (listRefusal !== null) {
+    return NextResponse.json({ error: listRefusal.message, code: listRefusal.code }, { status: 400 });
   }
 
   // Resolve actor from the agent_run row — same authority the originating
@@ -625,12 +721,64 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
 
+      // THE LIST MODE (cinatra#3089): the members are filed as ONE unit. Every member is
+      // checked, then all are written in one transaction with the ledger finalized for
+      // all; a refusal or a fault stores nothing and answers one refusal (see
+      // `materializeToolArtifactSet`). The answer is the set, in member order.
+      if (shaped.members !== undefined) {
+        // A Regenerate run takes one production: a list is refused before anything is filed. Whether a run
+        // is one is read from the durable repair row, by the classifier the run executor uses: a repair
+        // run whose row names an intent, is missing or cannot be read is refused (it fails closed); the
+        // run's request payload is no authority.
+        const { isRegenerateSegmentRun } = await import("@cinatra-ai/agents/regenerate-segment");
+        if (await isRegenerateSegmentRun({ id: run.id, sourceType: run.sourceType })) {
+          return NextResponse.json(
+            { error: MATERIALIZE_LIST_IN_REGENERATE_RUN_ERROR, code: MATERIALIZE_LIST_IN_REGENERATE_RUN },
+            { status: 400 },
+          );
+        }
+        const { materializeToolArtifactSet } = await import("@/lib/artifacts/run-artifact-materializer");
+        const filedSet = await materializeToolArtifactSet({
+          runId: run.id,
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          createdBy: run.runBy,
+          nodeId: shaped.nodeId,
+          ...(verifiedStepId ? { verifiedStepId } : {}),
+          extension: shaped.extension,
+          objectTypeId: shaped.objectTypeId,
+          mime: shaped.declaredMime,
+          members: shaped.members.map((member) => ({
+            title: member.title,
+            content: member.content,
+            // The member's typed data and the id of THIS run under the field the call names for
+            // it: the run the binding proved, never a value the call carries.
+            typedData:
+              member.data !== undefined || shaped.runIdField !== undefined
+                ? { ...member.data, ...(shaped.runIdField !== undefined ? { [shaped.runIdField]: run.id } : {}) }
+                : undefined,
+          })),
+        });
+        if (!filedSet.ok) {
+          // cinatra#4762: a publishing call in flight is a conflict the node may retry.
+          if (filedSet.reason === "publish_call_in_flight") {
+            return NextResponse.json({ error: filedSet.error, reason: filedSet.reason }, { status: 409 });
+          }
+          return NextResponse.json(
+            { error: filedSet.error, code: filedSet.code,
+              ...(filedSet.failedMember !== undefined ? { failedMember: filedSet.failedMember } : {}) },
+            { status: 400 },
+          );
+        }
+        result = materializeListAnswer(filedSet.artifacts);
+
       // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
       // an existing artifact AND the revision it read appends the next revision
       // instead of creating a second artifact. A base another write has already
       // built on is answered 409 — the caller re-reads and appends again; every
       // other refusal keeps the 400 the create path uses.
-      if (
+      } else if (
         typeof shaped.artifactId === "string" &&
         typeof shaped.baseRepresentationRevisionId === "string"
       ) {
@@ -988,17 +1136,25 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         result && typeof result === "object" && !Array.isArray(result)
           ? (result as Record<string, unknown>)
           : {};
-      const echoFields =
-        tool === "objects_save"
+      // cinatra#3089: a filed list is the one call whose echo is the input AS
+      // RECEIVED (`rawInput`): the shaped call carries each member cut down to its
+      // title and content and an empty `content` (the list is counted once against
+      // the argument limit), so echoing it would hand the next step a mutilated copy.
+      const filedList = tool === "artifact_materialize" && input.members !== undefined;
+      const echoFields = filedList
+        ? rawInput
+        : tool === "objects_save"
           ? (input.rawData && typeof input.rawData === "object"
               ? (input.rawData as Record<string, unknown>)
               : {})
           : input;
       const savedObjectId = tool === "objects_save" ? resultObj.objectId : undefined;
-      const shaped: Record<string, unknown> = {
-        ...echoFields,
-        [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null,
-      };
+      // A filed list keeps its whole answer beside the echo — the artifacts and
+      // the review targets the next review step reads — and gets no id field (a
+      // list has no single id; a named one is refused above).
+      const shaped: Record<string, unknown> = filedList
+        ? { ...echoFields, artifacts: resultObj.artifacts, reviewTargets: resultObj.reviewTargets }
+        : { ...echoFields, [idField]: resultObj.id ?? resultObj[idField] ?? savedObjectId ?? null };
       // THE FILED REVIEW SET RIDES OUT ON THE ECHO, for every extension alike:
       // a declared module that filed review targets gets them back at the top
       // level under the dispatch's reserved key, as JSON TEXT, because a marked

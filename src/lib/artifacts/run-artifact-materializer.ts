@@ -2,12 +2,17 @@ import "server-only";
 import { createHash } from "node:crypto";
 import type { Pool } from "pg";
 import {
+  MATERIALIZE_LIST_ENVELOPE_FIELDS,
+  MATERIALIZE_RESERVED_NODE_ID_CODE,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  isReservedLedgerOutputId,
   ARTIFACT_IMAGE_TOOL,
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
   readArtifactReviewTargetsInput,
+  readApiNodeDataObject,
   readFlowControlTopology,
   type CollectedArtifactBinding,
   type PersistedArtifactBindingDeclaration,
@@ -25,7 +30,16 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { createSemanticArtifact } from "./artifact-creation";
+import {
+  artifactWriteFactsOfContent,
+  artifactWriteRefusal,
+  createSemanticArtifact,
+  createSemanticArtifacts,
+  ObjectsTypeNotRegisteredError,
+  type CreateSemanticArtifactInput,
+} from "./artifact-creation";
+import { ArtifactQuotaExceededError } from "./local-disk-blob-store";
+import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
@@ -39,8 +53,13 @@ import {
   readFinalizedMaterialization,
   findFinalizedFanoutMessageMaterialization,
   findFinalizedMidRunMaterialization,
+  buildToolSetRowQueries,
+  isToolSetIdentityConflict,
+  readToolSetRows,
+  toolSetOutputId,
   recordFanoutReuseMaterialization,
   restampReusedRevision,
+  restampReusedRevisions,
   type MaterializationDetection,
 } from "./materialization-ledger";
 
@@ -406,7 +425,9 @@ function readReviewedWriteNodeIds(doc: Record<string, unknown>): ReadonlySet<str
   const apiTool = (id: string): string | undefined | null => {
     const node = refs[id];
     if (!isRecord(node) || node.component_type !== "ApiNode") return null;
-    const tool = isRecord(node.data) ? node.data.tool : undefined;
+    // The node's data as the binding reads it (an object, or the JSON text of one).
+    const data = readApiNodeDataObject(node.data);
+    const tool = data === null ? undefined : data.tool;
     return typeof tool === "string" ? tool : undefined;
   };
   const isWriter = (id: string): boolean => {
@@ -836,6 +857,84 @@ async function* asUtf8Stream(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
 }
 
+/** The refusal of a write by the target's accepted forms and the extension's install state, or null. The same
+ *  gate for one write and for every member of a set; it depends on nothing in the member's bytes. */
+async function writeGateRefusal(input: {
+  orgId: string;
+  extension: string;
+  mime: string;
+  resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
+  mimeDescription: string;
+}): Promise<string | null> {
+  const acceptedMimes = input.resolvedTarget.acceptedFileMimeTypes;
+  if (!acceptedMimes.includes(input.mime)) {
+    return (
+      `object type "${input.resolvedTarget.objectTypeId}" (extension "${input.extension}") accepts ` +
+      `[${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`
+    );
+  }
+  if (!(await isArtifactExtensionWriteAllowed(input.extension, input.orgId))) {
+    return `artifact extension "${input.extension}" is not write-allowed for this org (archived/ungoverned-denied install state)`;
+  }
+  return null;
+}
+
+/** The creation input of one ledgered write (its ledger statements run in the SAME transaction as the artifact).
+ *  One builder for the single filing and for every member of a set. */
+function claimedCreateInput(input: {
+  orgId: string;
+  runId: string;
+  createdBy: string | null;
+  extension: string;
+  title: string;
+  mime: string;
+  content: string;
+  ownership: ScopeDerivedOwnership;
+  resolvedTarget: { objectTypeId: string; acceptedFileMimeTypes: string[] };
+  originKind?: "agent_generated" | "live_generator";
+  typedData?: Record<string, unknown>;
+  /** The ledger statements of this write, committed in the SAME transaction as the artifact. */
+  ledgerQueries: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
+  extraTx2Queries?: (ids: { artifactId: string; representationRevisionId: string }) => Array<{ text: string; values: unknown[] }>;
+}): CreateSemanticArtifactInput {
+  return {
+    orgId: input.orgId,
+    // The EXACT declared object type resolved from the binding/produces
+    // discriminator (cinatra#1454) — no longer discarded (epic #1785 wave A3).
+    objectType: input.resolvedTarget.objectTypeId,
+    // The resolved accepts so the writer enforces the MIME even for a
+    // claim-backed host type that carries no `isArtifact.accepts` on its def.
+    expectedAcceptMimes: input.resolvedTarget.acceptedFileMimeTypes,
+    createdBy: input.createdBy,
+    // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple,
+    // no longer hard-coded organization-wide.
+    ownerLevel: input.ownership.ownerLevel,
+    ownerId: input.ownership.ownerId,
+    visibility: input.ownership.visibility,
+    title: input.title,
+    declaredMime: input.mime,
+    originKind: input.originKind ?? "agent_generated",
+    ...(input.typedData ? { typedData: input.typedData } : {}),
+    stream: asUtf8Stream(input.content),
+    // Server-side provenance: the actually-executing run id. The
+    // existing cross-org validation inside the creation path yields
+    // validatedRunId:null on any mismatch — never a caller-smuggled id.
+    createdByRunId: input.runId,
+    // The producer assertion is the deterministic classification;
+    // scoped to THIS extension (multi-produce agents must not stamp
+    // every declared type onto every output).
+    producerAssertionExtension: input.extension,
+    skipFallbackClassification: true,
+    additionalTx2Queries: (ids) => [
+      ...input.ledgerQueries(ids),
+      // cinatra#1893: the derived_output path's token-guarded outbox settle,
+      // committed atomically with the artifact + finalize (a stale lease aborts
+      // the whole Tx). Empty for every other caller.
+      ...(input.extraTx2Queries?.(ids) ?? []),
+    ],
+  };
+}
+
 /**
  * cinatra#4762 — THE ONE RESULT of a write that hands back a finalized revision it did not write (a ledger hit, the
  * winner of a concurrent drive, a fan-out message's own or bound mid-run body). Every such return goes through here,
@@ -924,23 +1023,16 @@ export async function writeClaimedArtifact(input: {
       representationRevisionId: string;
       deduped: boolean;
     }
-  | { ok: false; error: string }
+  | { ok: false; error: string; code?: string }
 > {
-  const acceptedMimes = input.resolvedTarget.acceptedFileMimeTypes;
-  if (!acceptedMimes.includes(input.mime)) {
-    return {
-      ok: false,
-      error:
-        `object type "${input.resolvedTarget.objectTypeId}" (extension "${input.extension}") accepts ` +
-        `[${acceptedMimes.join(", ")}]; ${input.mimeDescription} "${input.mime}"`,
-    };
-  }
-  if (!(await isArtifactExtensionWriteAllowed(input.extension, input.orgId))) {
-    return {
-      ok: false,
-      error: `artifact extension "${input.extension}" is not write-allowed for this org (archived/ungoverned-denied install state)`,
-    };
-  }
+  const gateRefusal = await writeGateRefusal({
+    orgId: input.orgId,
+    extension: input.extension,
+    mime: input.mime,
+    resolvedTarget: input.resolvedTarget,
+    mimeDescription: input.mimeDescription,
+  });
+  if (gateRefusal !== null) return { ok: false, error: gateRefusal };
 
   // ------------------------------------------------------------------
   // Ledger claim → write-through (finalize atomic with the write).
@@ -982,47 +1074,30 @@ export async function writeClaimedArtifact(input: {
 
   let created: { artifactId: string; representationRevisionId: string };
   try {
-    created = await createSemanticArtifact({
-      orgId: input.orgId,
-      // The EXACT declared object type resolved from the binding/produces
-      // discriminator (cinatra#1454) — no longer discarded (epic #1785 wave A3).
-      objectType: input.resolvedTarget.objectTypeId,
-      // The resolved accepts so the writer enforces the MIME even for a
-      // claim-backed host type that carries no `isArtifact.accepts` on its def.
-      expectedAcceptMimes: input.resolvedTarget.acceptedFileMimeTypes,
-      createdBy: input.createdBy,
-      // Scope-derived ownership (#1885 C1 / D10) — the run's anchor tuple,
-      // no longer hard-coded organization-wide.
-      ownerLevel: input.ownership.ownerLevel,
-      ownerId: input.ownership.ownerId,
-      visibility: input.ownership.visibility,
-      title: input.title,
-      declaredMime: input.mime,
-      originKind: input.originKind ?? "agent_generated",
-      ...(input.typedData ? { typedData: input.typedData } : {}),
-      stream: asUtf8Stream(input.content),
-      // Server-side provenance: the actually-executing run id. The
-      // existing cross-org validation inside the creation path yields
-      // validatedRunId:null on any mismatch — never a caller-smuggled id.
-      createdByRunId: input.runId,
-      // The producer assertion is the deterministic classification;
-      // scoped to THIS extension (multi-produce agents must not stamp
-      // every declared type onto every output).
-      producerAssertionExtension: input.extension,
-      skipFallbackClassification: true,
-      additionalTx2Queries: (ids) => [
-        buildFinalizeMaterializationQuery({
-          ledgerId: claim.ledgerId,
-          orgId: input.orgId,
-          artifactId: ids.artifactId,
-          representationRevisionId: ids.representationRevisionId,
-        }),
-        // cinatra#1893: the derived_output path's token-guarded outbox settle,
-        // committed atomically with the artifact + finalize (a stale lease aborts
-        // the whole Tx). Empty for every other caller.
-        ...(input.extraTx2Queries?.(ids) ?? []),
-      ],
-    });
+    created = await createSemanticArtifact(
+      claimedCreateInput({
+        orgId: input.orgId,
+        runId: input.runId,
+        createdBy: input.createdBy,
+        extension: input.extension,
+        title: input.title,
+        mime: input.mime,
+        content: input.content,
+        ownership: input.ownership,
+        resolvedTarget: input.resolvedTarget,
+        originKind: input.originKind,
+        typedData: input.typedData,
+        ledgerQueries: (ids) => [
+          buildFinalizeMaterializationQuery({
+            ledgerId: claim.ledgerId,
+            orgId: input.orgId,
+            artifactId: ids.artifactId,
+            representationRevisionId: ids.representationRevisionId,
+          }),
+        ],
+        extraTx2Queries: input.extraTx2Queries,
+      }),
+    );
   } catch (err) {
     // Concurrent-double-drive loser (codex round 0): a parallel drive
     // finalized this claim first; OUR Tx2 (artifact included) rolled
@@ -1542,7 +1617,7 @@ export type ToolArtifactMaterialization =
     }
   /** cinatra#4762: `reason` is set only for a write refused while a publishing call of the run is in flight
    *  (temporary: the same call is taken once that call has ended); every other refusal carries none. */
-  | { ok: false; error: string; reason?: typeof PUBLISH_CALL_IN_FLIGHT_CODE };
+  | { ok: false; error: string; code?: string; reason?: typeof PUBLISH_CALL_IN_FLIGHT_CODE };
 
 /** cinatra#4762: the answer to a write the in-flight fence refused. */
 const PUBLISH_CALL_IN_FLIGHT_REFUSAL = {
@@ -1668,6 +1743,9 @@ export async function materializeToolArtifact(input: {
   mime: string;
   content: string;
 }): Promise<ToolArtifactMaterialization> {
+  if (isReservedLedgerOutputId(input.nodeId)) {
+    return { ok: false, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE, code: MATERIALIZE_RESERVED_NODE_ID_CODE };
+  }
   try {
     // The SHARED write authorization (produces, text-authorable form, the cap
     // and the declared target type) — the same one the append path takes.
@@ -1728,8 +1806,343 @@ export async function materializeToolArtifact(input: {
 }
 
 // ---------------------------------------------------------------------------
+// The LIST MODE of the tool: one SET of artifacts, filed as ONE unit (cinatra#3089).
+// ---------------------------------------------------------------------------
+
+export const MATERIALIZE_LIST_MEMBER_REFUSED = "materialize_list_member_refused";
+export const MATERIALIZE_LIST_SET_DIFFERS = "materialize_list_set_differs";
+export const MATERIALIZE_LIST_SET_BUSY = "materialize_list_set_busy";
+export const MATERIALIZE_LIST_QUOTA_EXCEEDED = "materialize_list_quota_exceeded";
+
+export type ToolArtifactSetMember = {
+  title: string;
+  content: string;
+  /** The member's typed data (its declared member fields, the call-wide values, the run's id). */
+  typedData?: Record<string, unknown>;
+};
+
+export type ToolArtifactSetResult =
+  | { ok: true; artifacts: Array<{ artifactId: string; representationRevisionId: string }>; deduped: boolean }
+  /** cinatra#4762: `reason` is set only for a write refused while a publishing call of the run is in flight
+   *  (temporary: the same call is taken once that call has ended). */
+  | { ok: false; code: string; error: string; failedMember?: number; reason?: typeof PUBLISH_CALL_IN_FLIGHT_CODE };
+
+/** cinatra#4762: the answer of a list call the in-flight fence refused. */
+const PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL = {
+  ok: false,
+  code: PUBLISH_CALL_IN_FLIGHT_CODE,
+  reason: PUBLISH_CALL_IN_FLIGHT_CODE,
+  error: "a publishing call of this run is in flight; try again once it has ended",
+} as const;
+
+/**
+ * File the members of a list call as ONE unit. The call's identity is the whole set.
+ *
+ *  1. EVERY member is checked before anything is written: the write authorization, the target's accepted forms
+ *     and the extension's install state, and the creation path's own check over the real envelope (the detected
+ *     MIME, the type's accepts, the type's payload schema). The first refusal ends the call: nothing is stored.
+ *  2. If this run already filed a set for this (node, extension), the call is compared with it as a whole, in
+ *     both directions: the same members (position, bytes, title, object type, and the typed data as a whole:
+ *     a key on one side only is a difference) answer the stored set and write nothing; anything else is
+ *     refused, naming the member and what differs, never values. A node files one set per run; the corrected
+ *     values go in a new run.
+ *  3. Else every member's blob is stored, and `createSemanticArtifacts` writes ALL members (object,
+ *     representation, audit, producer and binding ops, produced event) and the set's ledger rows (a header
+ *     with a key that has no hash and no position, and one row per member) in ONE transaction. The header's
+ *     unique key is what makes the set ONE identity per (run, node, extension) under concurrency: of two calls
+ *     that file different sets at once, one commits and the other fails on that key and rolls back. A failure
+ *     rolls the whole transaction back: no member exists, no
+ *     review is owed, and the answer is one refusal. What the pre-check cannot see (the organization's byte
+ *     quota, the persisted MIME of an existing same-substance resource, a storage or database fault) ends the
+ *     call at this step with nothing stored but content-addressed blobs and their resource rows, which the next
+ *     write of the same bytes reuses, as after a failed single write.
+ * A refusal is a returned error with a fixed code. A fault that is not one the call can be refused for (storage,
+ * database, a bug) is thrown, to the route's fixed 500 boundary: no exception text becomes an answer.
+ */
+export async function materializeToolArtifactSet(input: {
+  runId: string;
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  createdBy: string | null;
+  /** The calling ApiNode's id: the identity of the set, with the run and the extension. */
+  nodeId: string;
+  /** cinatra#3035: the runtime's signed step of the call, when it verified (as `materializeToolArtifact`). */
+  verifiedStepId?: string;
+  extension: string;
+  objectTypeId?: string;
+  mime: string;
+  members: readonly ToolArtifactSetMember[];
+}): Promise<ToolArtifactSetResult> {
+  // The ledger namespace of a set's rows is not a node's: no node id begins with its prefix.
+  if (isReservedLedgerOutputId(input.nodeId)) {
+    return { ok: false, code: MATERIALIZE_RESERVED_NODE_ID_CODE, error: MATERIALIZE_RESERVED_NODE_ID_MESSAGE };
+  }
+  const n = input.members.length;
+  if (n === 0) return { ok: false, code: MATERIALIZE_LIST_MEMBER_REFUSED, error: "a list call files at least one member; nothing was filed" };
+  const titles = input.members.map((m) => m.title.trim());
+  const hashes = input.members.map((m) => createHash("sha256").update(m.content, "utf8").digest("hex"));
+  const refuse = (member: number, why: string): ToolArtifactSetResult => ({
+    ok: false,
+    code: MATERIALIZE_LIST_MEMBER_REFUSED,
+    failedMember: member,
+    error: `artifact_materialize list member ${member} of ${n} was refused: ${why} — nothing was filed`,
+  });
+
+  // 1. Every member, before anything is written.
+  let target: { objectTypeId: string; acceptedFileMimeTypes: string[] } | null = null;
+  let reviewed = false;
+  for (const [i, member] of input.members.entries()) {
+    if (titles[i]!.length === 0) return refuse(i + 1, "title must be a non-empty string");
+    const authorized = await authorizeToolMaterializeWrite({
+      orgId: input.orgId,
+      templateId: input.templateId,
+      packageVersion: input.packageVersion,
+      extension: input.extension,
+      objectTypeId: input.objectTypeId,
+      mime: input.mime,
+      content: member.content,
+      // cinatra#3035: the review is read only for the verified calling step.
+      ...(input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId ? { nodeId: input.nodeId } : {}),
+    });
+    if (!authorized.ok) return refuse(i + 1, authorized.error);
+    target = authorized.target;
+    reviewed = authorized.reviewed;
+    const envelope = artifactWriteRefusal(
+      {
+        objectType: authorized.target.objectTypeId,
+        expectedAcceptMimes: authorized.target.acceptedFileMimeTypes,
+        typedData: member.typedData,
+        title: titles[i]!,
+        originKind: authorized.reviewed ? "live_generator" : "agent_generated",
+      },
+      artifactWriteFactsOfContent(member.content, input.mime),
+    );
+    if (envelope !== null) return refuse(i + 1, envelope);
+  }
+  if (target === null) return refuse(1, "no write target resolved");
+  const gate = await writeGateRefusal({
+    orgId: input.orgId,
+    extension: input.extension,
+    mime: input.mime,
+    resolvedTarget: target,
+    mimeDescription: "the call declared MIME",
+  });
+  if (gate !== null) return refuse(1, gate);
+
+  // 2. A set this run already filed for this node: answer it, or refuse the difference.
+  const stored = await readToolSetRows({
+    orgId: input.orgId,
+    runId: input.runId,
+    nodeId: input.nodeId,
+    extension: input.extension,
+  });
+  const compareWithStored = async (read: typeof stored): Promise<ToolArtifactSetResult | null> => {
+    if (!read.header) return null;
+    const at = new Map(read.members.map((r) => [r.outputId, r]));
+    const problems: string[] = [];
+    let firstDiffering: number | undefined;
+    const note = (member: number, what: string) => {
+      problems.push(`member ${member}: ${what}`);
+      firstDiffering ??= member;
+    };
+    for (let i = 0; i < n; i++) {
+      const row = at.get(toolSetOutputId(input.nodeId, i + 1));
+      if (!row || row.contentHash !== hashes[i]) note(i + 1, "bytes");
+    }
+    if (read.members.length !== n) problems.push(`count (filed ${read.members.length}, call ${n})`);
+    if (problems.length === 0) {
+      for (let i = 0; i < n; i++) {
+        const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
+        const what = describeDifferences(
+          await reuseDifferences({
+            orgId: input.orgId,
+            artifactId: row.artifactId,
+            objectTypeId: target!.objectTypeId,
+            title: titles[i]!,
+            typedData: input.members[i]!.typedData ?? {},
+            mustCarry: Object.keys(input.members[i]!.typedData ?? {}),
+            exact: true,
+          }),
+        );
+        if (what !== null) note(i + 1, what);
+      }
+    }
+    if (problems.length > 0) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_SET_DIFFERS,
+        ...(firstDiffering !== undefined ? { failedMember: firstDiffering } : {}),
+        error:
+          `${MATERIALIZE_LIST_SET_DIFFERS}: this run already filed a set for this node and this call is not that set ` +
+          `(${problems.join("; ")}); it was not changed and nothing was filed. File the corrected values in a new run`,
+      };
+    }
+    const artifacts = Array.from({ length: n }, (_, i) => {
+      const row = at.get(toolSetOutputId(input.nodeId, i + 1))!;
+      return { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId };
+    });
+    // cinatra#4762: answering the stored set writes no revision, so each member's existing produced event is
+    // restamped for the attempt this call runs in (as every reuse road does), or the call is refused while a
+    // publishing call of the run is in flight.
+    // ALL members in one transaction or none (`restampReusedRevisions`), the in-flight fence checked inside it.
+    try {
+      await restampReusedRevisions({ runId: input.runId, orgId: input.orgId, revisions: artifacts });
+    } catch (err) {
+      if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL;
+      throw err;
+    }
+    return { ok: true, deduped: true, artifacts };
+  };
+  const already = await compareWithStored(stored);
+  if (already !== null) return already;
+
+  // 3. One unit: every blob, then ONE transaction that writes every member AND the set's ledger rows
+  // (a header and one row per member, already finalized). The set read above is a courtesy, not the
+  // guard: the header's unique key (run, node, extension; no hash, no position) is. A call that filed a
+  // different set meanwhile makes this transaction fail on that key and roll back as a whole.
+  const ownership = await resolveRunScopeOwnership({
+    templateId: input.templateId,
+    runId: input.runId,
+    orgId: input.orgId,
+  });
+  let created: Array<{ artifactId: string; representationRevisionId: string }>;
+  try {
+    created = await createSemanticArtifacts(
+      input.members.map((member, i) =>
+        claimedCreateInput({
+          orgId: input.orgId,
+          runId: input.runId,
+          createdBy: input.createdBy,
+          extension: input.extension,
+          title: titles[i]!,
+          mime: input.mime,
+          content: member.content,
+          ownership,
+          resolvedTarget: target!,
+          originKind: reviewed ? "live_generator" : undefined,
+          typedData: member.typedData,
+          ledgerQueries: (ids) =>
+            buildToolSetRowQueries({
+              orgId: input.orgId,
+              runId: input.runId,
+              nodeId: input.nodeId,
+              extension: input.extension,
+              verifiedStepId: input.verifiedStepId ?? null,
+              position: i + 1,
+              contentHash: hashes[i]!,
+              artifactId: ids.artifactId,
+              representationRevisionId: ids.representationRevisionId,
+            }),
+        }),
+      ),
+    );
+  } catch (err) {
+    // Another call filed this node's set first: the whole transaction rolled back, nothing of this call
+    // exists. The set that won decides: an identical call is answered with it, a different one refused.
+    if (isToolSetIdentityConflict(err)) {
+      const winner = await compareWithStored(
+        await readToolSetRows({ orgId: input.orgId, runId: input.runId, nodeId: input.nodeId, extension: input.extension }),
+      );
+      if (winner !== null) return winner;
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_SET_BUSY,
+        error: `${MATERIALIZE_LIST_SET_BUSY}: another call of this run is filing this node's set; nothing was filed by this call, retry it`,
+      };
+    }
+    // cinatra#4762: a publishing call of the run is in flight: the whole transaction rolled back, temporary.
+    if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_SET_REFUSAL;
+    // The refusals the creation path itself names, each with a fixed text (no exception text, no figures):
+    // the write was rolled back as a whole.
+    if (err instanceof ObjectsTypeNotRegisteredError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_MEMBER_REFUSED,
+        error: `artifact_materialize list was not filed: ${err.message} — nothing was filed`,
+      };
+    }
+    if (err instanceof ArtifactQuotaExceededError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_QUOTA_EXCEEDED,
+        error: `${MATERIALIZE_LIST_QUOTA_EXCEEDED}: the organization's artifact storage quota would be exceeded; nothing was filed`,
+      };
+    }
+    if (err instanceof BlobTooLargeError) {
+      return {
+        ok: false,
+        code: MATERIALIZE_LIST_MEMBER_REFUSED,
+        error: "artifact_materialize list was not filed: a member is larger than the artifact size limit — nothing was filed",
+      };
+    }
+    // Any other fault (storage, database, a bug) is not a refusal of this call: it propagates to the route's
+    // fixed boundary, which answers one fixed sentence and logs the failure without its text.
+    throw err;
+  }
+  // The meaning matcher, post-commit, best-effort, as for a single filing.
+  const { enqueueArtifactMatchRun } = await import("./matcher-enqueue");
+  for (const artifact of created) {
+    await enqueueArtifactMatchRun({
+      orgId: input.orgId,
+      artifactId: artifact.artifactId,
+      representationRevisionId: artifact.representationRevisionId,
+      createdByRunId: input.runId,
+    });
+  }
+  return {
+    ok: true,
+    deduped: false,
+    artifacts: created.map((c) => ({ artifactId: c.artifactId, representationRevisionId: c.representationRevisionId })),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
 // ---------------------------------------------------------------------------
+
+/** The words of a `reuseDifferences` answer (`objectType; title; keys: a, b`), or null when nothing differs. */
+function describeDifferences(d: { objectType: boolean; title: boolean; keys: string[] }): string | null {
+  const parts = [
+    ...(d.objectType ? ["objectType"] : []),
+    ...(d.title ? ["title"] : []),
+    ...(d.keys.length > 0 ? [`keys: ${d.keys.join(", ")}`] : []),
+  ];
+  return parts.length === 0 ? null : parts.join("; ");
+}
+
+/** What of a pre-filed body differs from what the writer would have stored: the object type, the title (the
+ *  subject, compared without surrounding whitespace, as it is stored) and the keys of `mustCarry` (those
+ *  `typedData` holds) the live object does not carry equal. Read with the canonical, organization-scoped object
+ *  read. A body that is not there, or is deleted, differs in all of them. Values are never named. */
+async function reuseDifferences(input: {
+  orgId: string;
+  artifactId: string;
+  objectTypeId: string;
+  title: string;
+  typedData: Record<string, unknown>;
+  mustCarry: readonly string[];
+  /** Compare the typed data as a whole, in both directions: a key the stored object carries that the call
+   *  does not (writer-owned fields apart) is a difference too, as is a key the call carries and it does not. */
+  exact?: boolean;
+}): Promise<{ objectType: boolean; title: boolean; keys: string[] }> {
+  const { getObjectById } = await import("@/lib/objects-store");
+  const row = getObjectById(input.artifactId, { orgId: input.orgId });
+  const data =
+    row && row.data !== null && typeof row.data === "object" && !Array.isArray(row.data)
+      ? (row.data as Record<string, unknown>)
+      : null;
+  const wanted = [...new Set(input.mustCarry)].filter((k) => Object.prototype.hasOwnProperty.call(input.typedData, k));
+  const owned = new Set<string>(MATERIALIZE_LIST_ENVELOPE_FIELDS);
+  const keys = input.exact
+    ? [...new Set([...wanted, ...(data === null ? [] : Object.keys(data).filter((k) => !owned.has(k)))])]
+    : wanted;
+  return {
+    objectType: row === null || row.type !== input.objectTypeId,
+    title: data === null || typeof data.title !== "string" || data.title.trim() !== input.title.trim(),
+    keys: keys.filter((k) => data === null || data[k] !== input.typedData[k]),
+  };
+}
 
 /**
  * Write ONE message body of a send as a markdown revision on the ledger: path

@@ -359,6 +359,26 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * An ApiNode's `data` as an object, the ONE reading of it: the object itself,
+ * or the JSON text of an object (the fleet authors objects; a JSON string is
+ * statically equivalent when it parses). Anything else (text that is not JSON,
+ * JSON text of an array, a string, null or a number, or no data) is not a data
+ * block and reads as null. The compile collectors, the list-node reading and
+ * the run materializer's reading of which node writes all use it, so that they
+ * cannot disagree on what a node's data is (cinatra#3089).
+ */
+export function readApiNodeDataObject(raw: unknown): Record<string, unknown> | null {
+  if (isPlainObject(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Collect + validate every `outputs[].cinatra.artifact` annotation on the
  * TOP-LEVEL EndNode components of an OAS Flow document (matching the scope
  * of the EndNode output-source runtime-invariant scan — subflow EndNodes do not surface
@@ -443,6 +463,13 @@ export function collectArtifactBindingsFromOasDocument(
           `${where}: a bound output may not be named "${title}" — a trailing ` +
             "[index] is reserved for the members of a fanned-out list",
         );
+        continue;
+      }
+
+      // The ledger namespace of a list filing's rows is no output's: a bound output named inside it would
+      // collide with a set's row (the unique key has no path).
+      if (isReservedLedgerOutputId(title)) {
+        errors.push(`${where}: ${MATERIALIZE_RESERVED_NODE_ID_MESSAGE}`);
         continue;
       }
 
@@ -698,6 +725,10 @@ export function resolveArtifactBindingObjectType(
 //       "contentJsonField": "body"                       // optional LITERAL: parse-then-project
 //     } }
 //
+// The LIST MODE (cinatra#3089) replaces `title` with two LITERALS,
+// `memberContentField` and `memberTitleField`: `content` is then a JSON array
+// and the call files one artifact per member, in order, under this node.
+//
 // The host materializes through the SAME core + idempotency ledger as the
 // run-completion path (`path:'materialize_tool'`, ledger `output_id` = the
 // calling node id). This collector is the compile-time validator: statics
@@ -706,6 +737,192 @@ export function resolveArtifactBindingObjectType(
 // ---------------------------------------------------------------------------
 
 export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
+
+/**
+ * cinatra#3089 — the LIST MODE of `artifact_materialize` and its response
+ * fields, ONE definition for the compile check (this file) and the passthrough
+ * route, which imports it. A call is a list call when its input names a member
+ * content field or a member title field; the call files one artifact per member
+ * and so has no single id to answer under the node's `result_id_field`. The
+ * route refuses that pair before anything is filed; the compile check refuses
+ * it so that a flow which can never run does not compile.
+ */
+export const MATERIALIZE_LIST_RESULT_ID_FIELD_CODE = "materialize_list_result_id_field";
+export const MATERIALIZE_LIST_RESULT_ID_FIELD_MESSAGE =
+  "artifact_materialize: a list call files one artifact per member and has no single id; " +
+  "remove result_id_field and read artifacts (or reviewTargets) from the answer";
+
+export const MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE = "materialize_list_member_fields_equal";
+export const MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_MESSAGE =
+  "artifact_materialize: memberContentField and memberTitleField name the same member field; " +
+  "a title that is the whole body is not a filing, name two fields; nothing was filed";
+
+/** The refusal for a list call whose title field and content field are the SAME member field (read as written, never trimmed), or null. */
+export function materializeListMemberFieldsEqualRefusal(
+  input: Record<string, unknown>,
+): { code: typeof MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE; message: string } | null {
+  const content = input.memberContentField;
+  return typeof content === "string" && content === input.memberTitleField
+    ? { code: MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_CODE, message: MATERIALIZE_LIST_MEMBER_FIELDS_EQUAL_MESSAGE }
+    : null;
+}
+
+// THE TYPED DATA OF LIST MEMBERS (cinatra#3089). A list call may store typed
+// data on every artifact it files, so that a body carries the correlation the
+// steps after it read (who it is for, which campaign it belongs to) in its
+// object's own data. Three literal inputs, ONE reading of them for the compile
+// check, the passthrough route and the shaper, and ONE refusal code:
+//   - `memberDataFields`: names of member fields, each copied into that
+//     member's data (the member supplies the value);
+//   - `memberData`: an object of call-wide values the HOST stamps on every
+//     member (a member that carries a field of the same name is refused, so a
+//     model-written member cannot set it);
+//   - `memberRunIdField`: the name of a field the host fills with the CALLING
+//     RUN's id, never one the caller supplies.
+// Names follow the rule of the title and content fields (a non-blank string with
+// no surrounding whitespace, never a template) and are refused when they are
+// `__proto__`, a writer-owned field of the stored object, a title or content
+// field, or used twice. At most 8 typed fields in all; a value is a non-blank
+// string of at most 512 characters once trimmed (stored trimmed, as the title is
+// and as the send's own body stores its contact).
+
+/**
+ * The ledger namespace of a LIST filing's rows (cinatra#3089). A set's rows (its header and its members) carry an
+ * `output_id` that begins with this prefix. EVERY source of an `output_id` value in the ledger is refused this prefix
+ * through ONE predicate (`isReservedLedgerOutputId`): a tool node's id (compile time, the route, both materializer
+ * entry points), a bound end-node output's name (compile time; its fanned-out members are `<name>[i]`), the image
+ * and page-capture tools' node ids, and every claim and record in the ledger itself (`claimMaterialization`,
+ * `recordFanoutReuseMaterialization`, `recordLlmEmitMaterialization`). The other producers write ids of a fixed
+ * form of their own: `default_road` (`default-road:<name>` and `run-file:<path>`), `email_fanout`
+ * (`email-body:<run>:<item>`), `materialize_tool` append (`<node>#append:…`, which begins with a node id).
+ */
+export const MATERIALIZE_RESERVED_NODE_ID_PREFIX = "cinatra:set/";
+export const MATERIALIZE_RESERVED_NODE_ID_CODE = "materialize_node_id_reserved";
+export const MATERIALIZE_RESERVED_NODE_ID_MESSAGE =
+  `a node id or an output name may not begin with "${MATERIALIZE_RESERVED_NODE_ID_PREFIX}" (the ledger namespace of a list filing's rows)`;
+
+/** Whether `value` is in the ledger namespace of a list filing's rows: no node id and no output name may be. */
+export function isReservedLedgerOutputId(value: string): boolean {
+  return value.startsWith(MATERIALIZE_RESERVED_NODE_ID_PREFIX);
+}
+
+export const MATERIALIZE_LIST_DATA_CODE = "materialize_list_data_declaration";
+export const MATERIALIZE_LIST_DATA_MAX_FIELDS = 8;
+export const MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS = 512;
+
+/** The fields the creation path writes over a caller's typed data (`artifact-creation.ts`, the object's data
+ *  is `{ ...typedData, <these> }`): a caller can add to the object and never restate them. A drift test
+ *  compares this list with that block. */
+export const MATERIALIZE_LIST_ENVELOPE_FIELDS: readonly string[] = [
+  "artifactType",
+  "latestRepresentationRevisionId",
+  "latestDigest",
+  "mime",
+  "size",
+  "originKind",
+  "viewerHint",
+  "title",
+];
+
+export type MaterializeListDataDeclaration = {
+  /** Member fields copied into each member's data. */
+  fields: string[];
+  /** Call-wide values stamped on every member by the host. */
+  fixed: Record<string, string>;
+  /** The field the host fills with the calling run's id, or null. */
+  runIdField: string | null;
+  /** The bound of a value, for the member values the shaper reads. */
+  maxValueChars: number;
+};
+
+export type MaterializeListDataRead =
+  | ({ ok: true } & MaterializeListDataDeclaration)
+  | { ok: false; code: typeof MATERIALIZE_LIST_DATA_CODE; field: string; message: string };
+
+const MATERIALIZE_LIST_DATA_INPUTS = ["memberDataFields", "memberData", "memberRunIdField"] as const;
+
+/** Reads the typed-data inputs of an `artifact_materialize` input (as authored, or as the route receives it).
+ *  A call without them reads as an empty declaration; on a call that is not a list call they are refused. */
+export function readMaterializeListDataDeclaration(input: Record<string, unknown>): MaterializeListDataRead {
+  const refuse = (field: string, why: string): MaterializeListDataRead => ({
+    ok: false,
+    code: MATERIALIZE_LIST_DATA_CODE,
+    field,
+    message: `artifact_materialize: ${field} is not valid (${why}); nothing was filed`,
+  });
+  const empty: MaterializeListDataRead = { ok: true, fields: [], fixed: {}, runIdField: null, maxValueChars: MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS };
+  const present = MATERIALIZE_LIST_DATA_INPUTS.filter((k) => input[k] !== undefined);
+  if (present.length === 0) return empty;
+  if (!isArtifactMaterializeListInput(input)) {
+    return refuse(present[0]!, "only a list call (memberContentField + memberTitleField) takes typed member data");
+  }
+  const titleField = input.memberTitleField;
+  const contentField = input.memberContentField;
+  const used = new Set<string>();
+  const nameProblem = (name: unknown): string | null => {
+    if (typeof name !== "string" || name.trim().length === 0 || name !== name.trim() || isTemplated(name)) {
+      return "a name must be a literal field name with no surrounding whitespace";
+    }
+    if (name === "__proto__") return "a name may not be __proto__";
+    if (MATERIALIZE_LIST_ENVELOPE_FIELDS.includes(name)) return "a name may not be a field the writer owns";
+    if (name === titleField || name === contentField) return "a name may not be the title field or the content field";
+    if (used.has(name)) return "a name may be used once";
+    used.add(name);
+    return null;
+  };
+
+  const fields: string[] = [];
+  const rawFields = input.memberDataFields;
+  if (rawFields !== undefined) {
+    if (!Array.isArray(rawFields)) return refuse("memberDataFields", "must be an array of field names");
+    for (const name of rawFields) {
+      const problem = nameProblem(name);
+      if (problem !== null) return refuse("memberDataFields", problem);
+      fields.push(name as string);
+    }
+  }
+
+  const fixed: Record<string, string> = {};
+  const rawFixed = input.memberData;
+  if (rawFixed !== undefined) {
+    if (!isPlainObject(rawFixed)) return refuse("memberData", "must be an object of field names and string values");
+    for (const [name, value] of Object.entries(rawFixed)) {
+      const problem = nameProblem(name);
+      if (problem !== null) return refuse("memberData", problem);
+      if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS) {
+        return refuse("memberData", `a value must be a non-blank string of at most ${MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS} characters`);
+      }
+      fixed[name] = value.trim();
+    }
+  }
+
+  let runIdField: string | null = null;
+  if (input.memberRunIdField !== undefined) {
+    const problem = nameProblem(input.memberRunIdField);
+    if (problem !== null) return refuse("memberRunIdField", problem);
+    runIdField = input.memberRunIdField as string;
+  }
+
+  if (used.size > MATERIALIZE_LIST_DATA_MAX_FIELDS) {
+    return refuse(present[0]!, `at most ${MATERIALIZE_LIST_DATA_MAX_FIELDS} typed fields in all`);
+  }
+  return { ok: true, fields, fixed, runIdField, maxValueChars: MATERIALIZE_LIST_DATA_MAX_VALUE_CHARS };
+}
+
+/** Whether an `artifact_materialize` input (as authored, or as the route receives it) is a list call. */
+export function isArtifactMaterializeListInput(input: Record<string, unknown>): boolean {
+  return input.memberContentField !== undefined || input.memberTitleField !== undefined;
+}
+
+/** The refusal for a list call whose node also names `result_id_field` (any value: the route reads it by presence), or null. */
+export function materializeListResultIdFieldRefusal(
+  input: Record<string, unknown>,
+  resultIdField: unknown,
+): { code: typeof MATERIALIZE_LIST_RESULT_ID_FIELD_CODE; message: string } | null {
+  return isArtifactMaterializeListInput(input) && resultIdField !== undefined
+    ? { code: MATERIALIZE_LIST_RESULT_ID_FIELD_CODE, message: MATERIALIZE_LIST_RESULT_ID_FIELD_MESSAGE }
+    : null;
+}
 
 /** The host's image tool on the passthrough route (cinatra#3032): a prompt in, a
  *  picture filed under the extension the call names. */
@@ -749,18 +966,27 @@ function isTemplated(value: string): boolean {
   return value.includes("{{");
 }
 
+/**
+ * Whether ONE component is an ApiNode on the host's passthrough route: THE condition under which the host runs a
+ * node's `data` as a tool call, and so the one the materialization collector walks by. A node on any other URL
+ * speaks another protocol and files nothing through the host, whatever its payload looks like.
+ */
+export function isPassthroughApiNode(node: unknown): boolean {
+  return (
+    isPlainObject(node) &&
+    node.component_type === "ApiNode" &&
+    typeof node.url === "string" &&
+    node.url.includes(AGENTS_PASSTHROUGH_URL_MARKER)
+  );
+}
+
 function walkPassthroughApiNodes(
   doc: Record<string, unknown>,
   visit: (node: Record<string, unknown>, refKey: string, path: string) => void,
 ): void {
   function go(value: unknown, refKey: string, path: string): void {
     if (!isPlainObject(value)) return;
-    if (value.component_type === "ApiNode") {
-      const url = value.url;
-      if (typeof url === "string" && url.includes(AGENTS_PASSTHROUGH_URL_MARKER)) {
-        visit(value, refKey, path);
-      }
-    }
+    if (isPassthroughApiNode(value)) visit(value, refKey, path);
     const refs = value.$referenced_components;
     if (isPlainObject(refs)) {
       for (const [k, v] of Object.entries(refs)) {
@@ -817,17 +1043,9 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
     const where = `${path} (ApiNode "${nodeId}")`;
 
-    let data: unknown = node.data;
-    if (typeof data === "string") {
-      // The fleet authors object-shaped data blocks; a JSON string is
-      // statically equivalent when it parses.
-      try {
-        const parsed: unknown = JSON.parse(data);
-        if (isPlainObject(parsed)) data = parsed;
-      } catch {
-        // fall through — handled below
-      }
-      if (typeof data === "string") {
+    const data = readApiNodeDataObject(node.data);
+    if (data === null) {
+      if (typeof node.data === "string") {
         // FAIL CLOSED on ANY string data block that does not parse to an
         // object (codex round 1): a fully-templated block (e.g.
         // "{{ passthrough_payload }}") could resolve to an
@@ -841,8 +1059,8 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         );
         return;
       }
+      return; // no data block — cannot select a tool
     }
-    if (!isPlainObject(data)) return; // no data block — cannot select a tool
 
     const tool = data.tool;
     if (typeof tool !== "string" || tool.length === 0 || isTemplated(tool)) {
@@ -947,9 +1165,66 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       );
     }
     const isAppend = hasArtifactId && hasBase;
+
+    // THE LIST MODE'S CALL GRAMMAR (cinatra#3089). `memberContentField` and
+    // `memberTitleField` name, as LITERALS, the content and the title field of
+    // each member of the JSON-array `content`; the call files one artifact per
+    // member. Together or not at all, and never with an append, with
+    // `contentJsonField` or with a top-level title (each member has its own).
+    const hasMemberContent = input.memberContentField !== undefined;
+    const hasMemberTitle = input.memberTitleField !== undefined;
+    if (hasMemberContent !== hasMemberTitle) {
+      fieldError(
+        hasMemberContent ? "memberTitleField" : "memberContentField",
+        "a list call names the content AND the title field of every member — " +
+          "declare both (memberContentField + memberTitleField) or neither",
+      );
+    }
+    const isList = isArtifactMaterializeListInput(input);
+    for (const field of ["memberContentField", "memberTitleField"] as const) {
+      const value = input[field];
+      // The runtime reads the member property by exactly this name, so a blank
+      // name (it names no property) or a padded one (it would not be the
+      // property the author sees) is refused here, as the runtime refuses it.
+      if (
+        value !== undefined &&
+        (typeof value !== "string" || value.trim().length === 0 || value !== value.trim() || isTemplated(value))
+      ) {
+        fieldError(
+          field,
+          `when present, must be a literal field name with no surrounding whitespace (got ${JSON.stringify(value)})`,
+        );
+      }
+    }
+    const equalNames = materializeListMemberFieldsEqualRefusal(input);
+    if (equalNames !== null) fieldError("memberTitleField", equalNames.message);
+    const typedData = readMaterializeListDataDeclaration(input);
+    if (!typedData.ok) fieldError(typedData.field, typedData.message);
+    if (isList) {
+      for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
+        if (input[field] !== undefined) {
+          fieldError(
+            field,
+            "cannot be combined with a list call (memberContentField + memberTitleField) — " +
+              "every member is a new artifact with its own title",
+          );
+        }
+      }
+    }
+
+    // The node's response fields sit beside `input` in `data`, where the route
+    // reads them; a list call answers no single id (the shared refusal above).
+    const listRefusal = materializeListResultIdFieldRefusal(input, data.result_id_field);
+    if (listRefusal !== null) {
+      errors.push(`${where}.data.result_id_field: ${listRefusal.message}`);
+      valid = false;
+    }
+
     const requiredStrings = isAppend
       ? (["content", "artifactId", "baseRepresentationRevisionId"] as const)
-      : (["content", "title"] as const);
+      : isList
+        ? (["content"] as const)
+        : (["content", "title"] as const);
     for (const field of requiredStrings) {
       const value = input[field];
       if (typeof value !== "string" || value.length === 0) {
@@ -979,6 +1254,9 @@ export function collectArtifactMaterializeNodesFromOasDocument(
           "same-byte outputs into one artifact",
       );
     }
+    if (typeof declaredNodeId === "string" && isReservedLedgerOutputId(declaredNodeId)) {
+      fieldError("node_id", MATERIALIZE_RESERVED_NODE_ID_MESSAGE);
+    }
 
     const contentJsonField = input.contentJsonField;
     if (contentJsonField !== undefined) {
@@ -1005,6 +1283,35 @@ export function collectArtifactMaterializeNodesFromOasDocument(
   });
 
   return { nodes, errors };
+}
+
+/**
+ * cinatra#3089: whether ONE component is an ApiNode whose `data` (an object, or
+ * JSON text of one) is shaped as an `artifact_materialize` call in the LIST MODE,
+ * so that one call would file one artifact per member. It counts when it carries
+ * `memberContentField` OR `memberTitleField` (the collector above refuses one
+ * without the other; this reading fails closed on either), and whatever its
+ * `url`: it describes the PAYLOAD only. A caller that asks whether the host files
+ * artifacts through the node uses `isArtifactMaterializeListFiling`. It reads the
+ * one component it is given, so the caller decides which scope it came from.
+ */
+export function isArtifactMaterializeListNode(node: unknown): boolean {
+  return isPlainObject(node) && node.component_type === "ApiNode" && isArtifactMaterializeListData(node.data);
+}
+
+/**
+ * cinatra#3089: whether ONE component files a LIST through the host: the collector's own condition (an ApiNode on the
+ * passthrough route, `isPassthroughApiNode`) composed with the list-shaped payload. A custom ApiNode on another URL
+ * that happens to carry the same payload shape is not a list filing.
+ */
+export function isArtifactMaterializeListFiling(node: unknown): boolean {
+  return isPassthroughApiNode(node) && isArtifactMaterializeListNode(node);
+}
+
+function isArtifactMaterializeListData(raw: unknown): boolean {
+  const data = readApiNodeDataObject(raw);
+  if (data === null || data.tool !== ARTIFACT_MATERIALIZE_TOOL || !isPlainObject(data.input)) return false;
+  return isArtifactMaterializeListInput(data.input);
 }
 
 export type CollectedArtifactImageNode = {
@@ -1044,16 +1351,8 @@ export function collectArtifactImageNodesFromOasDocument(
     const nodeId =
       typeof node.id === "string" && node.id.length > 0 ? node.id : refKey;
 
-    let data: unknown = node.data;
-    if (typeof data === "string") {
-      try {
-        const parsed: unknown = JSON.parse(data);
-        if (isPlainObject(parsed)) data = parsed;
-      } catch {
-        return;
-      }
-    }
-    if (!isPlainObject(data) || typeof data.tool !== "string") return;
+    const data = readApiNodeDataObject(node.data);
+    if (data === null || typeof data.tool !== "string") return;
     const requiredText = FILING_TOOL_REQUIRED_TEXT.get(data.tool);
     if (requiredText === undefined) return;
 
@@ -1070,7 +1369,8 @@ export function collectArtifactImageNodesFromOasDocument(
     if (
       typeof declaredNodeId !== "string" ||
       isTemplated(declaredNodeId) ||
-      declaredNodeId !== nodeId
+      declaredNodeId !== nodeId ||
+      isReservedLedgerOutputId(declaredNodeId)
     ) {
       return;
     }

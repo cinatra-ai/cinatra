@@ -8,6 +8,11 @@ import {
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import {
+  isReservedLedgerOutputId,
+  MATERIALIZE_RESERVED_NODE_ID_MESSAGE,
+  MATERIALIZE_RESERVED_NODE_ID_PREFIX,
+} from "@cinatra-ai/agents/artifact-binding";
+import {
   maybeBuildProducedEventInsertOp,
   producerAttemptForRun,
   producerRunLockOps,
@@ -40,6 +45,13 @@ import {
 // declarative path writes that provenance), so the emit returns the existing
 // refs instead of creating a duplicate.
 // ---------------------------------------------------------------------------
+
+/** The ledger namespace of a list filing's rows is no claim's: every claim and record of the ledger refuses an
+ *  output id inside it, whoever the producer is (a node id, an output name, a step id). Only the set's own
+ *  statements (`buildToolSetRowQueries`) write it. */
+function assertOutputIdNotReserved(outputId: string): void {
+  if (isReservedLedgerOutputId(outputId)) throw new Error(MATERIALIZE_RESERVED_NODE_ID_MESSAGE);
+}
 
 export type MaterializationPath =
   | "end_node_binding"
@@ -144,6 +156,7 @@ export async function claimMaterialization(input: {
    *  value stays: a re-drive hits the key and writes nothing. */
   verifiedStepId?: string | null;
 }): Promise<MaterializationClaim> {
+  assertOutputIdNotReserved(input.outputId);
   ensurePostgresSchema();
   const s = schema();
   const id = randomUUID();
@@ -337,28 +350,50 @@ export async function restampReusedRevision(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
-  if (!input.runId) return;
+  await restampReusedRevisions({
+    runId: input.runId,
+    orgId: input.orgId,
+    revisions: [{ artifactId: input.artifactId, representationRevisionId: input.representationRevisionId }],
+  });
+}
+
+/**
+ * The restamp of SEVERAL revisions of one run (the members of a stored set), ALL in one transaction or none: the run
+ * row FOR KEY SHARE once, then each revision's event statement, then COMMIT. The run row lock is held to the commit,
+ * so a publish check cannot begin its in-flight claim between two members; a claim that committed earlier is seen by
+ * the first event statement, which aborts the transaction, so no member moves and the caller receives
+ * PublishCallInFlightError. A set is therefore never visible to publishing or review partly restamped.
+ */
+export async function restampReusedRevisions(input: {
+  runId: string | null | undefined;
+  orgId: string;
+  revisions: ReadonlyArray<{ artifactId: string; representationRevisionId: string }>;
+}): Promise<void> {
+  if (!input.runId || input.revisions.length === 0) return;
   const producerAttempt = producerAttemptForRun(input.runId);
   if (!producerAttempt) return;
   const s = schema();
-  const op = maybeBuildProducedEventInsertOp(s, {
-    orgId: input.orgId,
-    artifactId: input.artifactId,
-    representationRevisionId: input.representationRevisionId,
-    emitter: "createSemanticArtifact",
-    originKind: "agent_generated",
-    producerRunId: input.runId,
-    producerAgentId: null,
-    producerAttempt,
-  }, {
-    whereExistsSql: `EXISTS (SELECT 1 FROM "${s}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+  const ops = input.revisions.flatMap((revision) => {
+    const op = maybeBuildProducedEventInsertOp(s, {
+      orgId: input.orgId,
+      artifactId: revision.artifactId,
+      representationRevisionId: revision.representationRevisionId,
+      emitter: "createSemanticArtifact",
+      originKind: "agent_generated",
+      producerRunId: input.runId,
+      producerAgentId: null,
+      producerAttempt,
+    }, {
+      whereExistsSql: `EXISTS (SELECT 1 FROM "${s}"."artifact_produced_outbox" WHERE event_id = $1::text)`,
+    });
+    return op ? [op] : [];
   });
-  if (!op) return;
+  if (ops.length === 0) return;
   const client = await pool().connect();
   try {
     await client.query("BEGIN");
-    for (const lock of producerRunLockOps(s, input.runId, op)) await client.query(lock.text, lock.values);
-    await client.query(op.text, op.values);
+    for (const lock of producerRunLockOps(s, input.runId, ops[0]!)) await client.query(lock.text, lock.values);
+    for (const op of ops) await client.query(op.text, op.values);
     await client.query("COMMIT");
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
@@ -611,6 +646,130 @@ export async function findFinalizedFanoutMessageMaterialization(input: {
   };
 }
 
+// ---------------------------------------------------------------------------
+// THE LEDGER IDENTITY OF A LIST FILING'S SET (cinatra#3089).
+//
+// One set per (run, node, extension), decided by the database, not by a read. A set is written by ONE
+// transaction that inserts, already finalized, a HEADER row and one row per member:
+//   header  output_id = <prefix><json(node)>/header   content_hash = "set"
+//   member  output_id = <prefix><json(node)>/<position>  content_hash = the member's bytes
+// The table's unique key (run, output id, extension, content hash) therefore holds ONE header per
+// (run, node, extension) (it has no hash and no position in it): two calls that file different sets
+// concurrently insert the same header key, the second blocks until the first commits and then fails with
+// a unique violation, and its whole transaction rolls back. The encoding cannot be confused with an
+// ordinary node's output id (a node id is the output id as it is): the prefix is reserved
+// (MATERIALIZE_RESERVED_NODE_ID_PREFIX, refused for node ids at compile time and at the road), and the node
+// is JSON-quoted, which is self-delimiting, so two different (node, suffix) pairs never produce one string.
+// ---------------------------------------------------------------------------
+
+/** The sentinel content hash of a set's header row (a member's is a 64-hex sha256). */
+export const TOOL_SET_HEADER_HASH = "set";
+
+function toolSetPrefix(nodeId: string): string {
+  return `${MATERIALIZE_RESERVED_NODE_ID_PREFIX}${JSON.stringify(nodeId)}/`;
+}
+
+/** The output id of a member of a node's set: its 1-based position. */
+export function toolSetOutputId(nodeId: string, position: number): string {
+  return `${toolSetPrefix(nodeId)}${position}`;
+}
+
+/** The output id of a node's set header. */
+export function toolSetHeaderOutputId(nodeId: string): string {
+  return `${toolSetPrefix(nodeId)}header`;
+}
+
+export type ToolSetRow = {
+  outputId: string;
+  contentHash: string;
+  artifactId: string;
+  representationRevisionId: string;
+};
+
+/** The finalized set one node filed in a run: whether its header exists and its member rows. */
+export type ToolSetRead = { header: boolean; members: ToolSetRow[] };
+
+/**
+ * The set one node filed in a run (cinatra#3089): its header and member rows. Rows are only ever written
+ * finalized, by the one transaction that writes the set, so what is read is a whole set or nothing.
+ */
+export async function readToolSetRows(input: {
+  orgId: string;
+  runId: string;
+  nodeId: string;
+  extension: string;
+}): Promise<ToolSetRead> {
+  ensurePostgresSchema();
+  const s = schema();
+  const prefix = toolSetPrefix(input.nodeId);
+  const res = await pool().query(
+    `SELECT output_id, content_hash, artifact_id, representation_revision_id
+   FROM "${s}"."artifact_materializations"
+  WHERE run_id = $1 AND org_id = $2 AND extension = $3 AND path = 'materialize_tool' AND phase = 'finalized'
+    AND left(output_id, length($4::text)) = $4::text`,
+    [input.runId, input.orgId, input.extension, prefix],
+  );
+  const header = toolSetHeaderOutputId(input.nodeId);
+  const rows = res.rows as Array<{
+    output_id: string; content_hash: string; artifact_id: string | null; representation_revision_id: string | null;
+  }>;
+  return {
+    header: rows.some((row) => row.output_id === header),
+    members: rows
+      .filter((row) => row.output_id !== header && typeof row.artifact_id === "string" && typeof row.representation_revision_id === "string")
+      .map((row) => ({
+        outputId: row.output_id,
+        contentHash: row.content_hash,
+        artifactId: row.artifact_id as string,
+        representationRevisionId: row.representation_revision_id as string,
+      })),
+  };
+}
+
+/**
+ * The ledger statements of ONE member of a set, for the set's transaction (the caller splices them in
+ * through `additionalTx2Queries`): the member's row, already finalized, and, for the FIRST member only, the
+ * set's header row ahead of it. Plain INSERTs, no ON CONFLICT: a second set for the same (run, node,
+ * extension) hits the header's key and aborts the whole transaction.
+ */
+export function buildToolSetRowQueries(input: {
+  orgId: string;
+  runId: string;
+  nodeId: string;
+  extension: string;
+  verifiedStepId?: string | null;
+  position: number;
+  contentHash: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Array<{ text: string; values: unknown[] }> {
+  const s = schema();
+  const insert = (outputId: string, hash: string, artifactId: string | null, revisionId: string | null, verified: string | null) => ({
+    text: `INSERT INTO "${s}"."artifact_materializations"
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash, artifact_id, representation_revision_id, phase, verified_step_id)
+ VALUES ($1, $2, $3, $4, $5, 'materialize_tool', $6, $7, $8, $9, 'finalized', $10)`,
+    values: [randomUUID(), input.orgId, input.runId, outputId, input.nodeId, input.extension, hash, artifactId, revisionId, verified],
+  });
+  return [
+    ...(input.position === 1
+      ? [insert(toolSetHeaderOutputId(input.nodeId), TOOL_SET_HEADER_HASH, null, null, null)]
+      : []),
+    insert(
+      toolSetOutputId(input.nodeId, input.position),
+      input.contentHash,
+      input.artifactId,
+      input.representationRevisionId,
+      verifiedFilingStep(input.nodeId, input.verifiedStepId),
+    ),
+  ];
+}
+
+/** Whether an error of the set's transaction is the unique key of the ledger firing: another set of this
+ *  (run, node, extension) committed first (or an aliasing row exists). The transaction rolled back as a whole. */
+export function isToolSetIdentityConflict(err: unknown): boolean {
+  return err instanceof Error && err.message.includes("artifact_materializations_identity_idx");
+}
+
 /**
  * Bind a mid-run body the fan-out reused to its message (cinatra#3089): a
  * finalized `email_fanout` row under the message identity pointing at the
@@ -626,6 +785,7 @@ export async function recordFanoutReuseMaterialization(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
+  assertOutputIdNotReserved(input.outputId);
   ensurePostgresSchema();
   const s = schema();
   await pool().query(
@@ -662,6 +822,7 @@ export async function recordLlmEmitMaterialization(input: {
   artifactId: string;
   representationRevisionId: string;
 }): Promise<void> {
+  assertOutputIdNotReserved(input.authoringStepId);
   ensurePostgresSchema();
   const s = schema();
   await pool().query(

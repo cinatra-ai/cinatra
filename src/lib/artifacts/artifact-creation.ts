@@ -1,5 +1,5 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
@@ -21,7 +21,7 @@ import { mimeAcceptedByAccepts } from "./upload-artifact-type-map";
 /** The registry definition shape (or null) — a local alias so this module needs
  *  no type-only barrel import (avoids the heavy objects barrel graph). */
 type ResolvedObjectTypeDef = ReturnType<typeof objectTypeRegistry.resolve>;
-import { createLocalDiskBlobStore } from "./local-disk-blob-store";
+import { createLocalDiskBlobStore, sniffMime } from "./local-disk-blob-store";
 import { deriveSubstanceKey } from "./resource-store";
 import { buildArtifactWriterWitnessOp } from "./artifact-writer-witness";
 import { buildObjectsWithOutboxQuery } from "@/lib/objects-store";
@@ -324,6 +324,101 @@ function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolea
 }
 
 /**
+ * The object data of an artifact, composed in ONE place for the pre-storage check, the post-storage check
+ * and the row (item 0.28): the caller's typed data is the BASE and the writer's own fields are spread over
+ * it, so a caller can add to the object and can never restate or forge the digest, size, revision id,
+ * detected MIME, origin or title. A check that builds this any other way checks another shape than the one
+ * that is stored.
+ */
+export function buildArtifactObjectData(input: {
+  typedData?: Record<string, unknown>;
+  representationRevisionId: string;
+  digest: string;
+  mime: string;
+  size: number;
+  originKind: ArtifactOriginKind;
+  title?: string;
+}): ArtifactObjectData {
+  return {
+    ...(input.typedData ?? {}),
+    artifactType: "file",
+    latestRepresentationRevisionId: input.representationRevisionId,
+    latestDigest: input.digest,
+    mime: input.mime,
+    size: input.size,
+    originKind: input.originKind,
+    viewerHint: "mime",
+    title: input.title,
+  } as ArtifactObjectData;
+}
+
+/** What the blob store derives from the bytes of a write: the MIME its sniffer reads from the first 512 bytes
+ *  and the declared MIME, the sha256 and the size. A pure function of the bytes and the declaration, so a
+ *  refusal that depends on them can be found before the bytes are stored. */
+export function artifactWriteFactsOfContent(
+  content: string,
+  declaredMime: string,
+): { mimeDetected: string; sha256: string; sizeBytes: number } {
+  const bytes = new TextEncoder().encode(content);
+  return {
+    mimeDetected: sniffMime(bytes.subarray(0, 512), declaredMime),
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    sizeBytes: bytes.byteLength,
+  };
+}
+
+/**
+ * The refusal of a write that needs no storage to be known (epic #1785, wave A3), or null: the type is a
+ * writable artifact type, the detected MIME is one it accepts, and the caller's typed data under the writer's
+ * own envelope satisfies the type's payload schema. The creation path asks it after it has stored the bytes
+ * (`facts` from the store); a list filing asks it of every member before the first is stored
+ * (`artifactWriteFactsOfContent`). What it cannot see, because it needs the store or the database: the
+ * organization's byte quota, the persisted MIME of an existing same-substance resource, and storage faults.
+ */
+export function artifactWriteRefusal(
+  input: {
+    objectType: string;
+    expectedAcceptMimes?: readonly string[];
+    typedData?: Record<string, unknown>;
+    title?: string;
+    originKind: ArtifactOriginKind;
+    /** The writer's own revision id; absent (a check before any write) it is generated, a UUID as the writer's is. */
+    representationRevisionId?: string;
+  },
+  facts: { mimeDetected: string; sha256: string; sizeBytes: number },
+): string | null {
+  const preDef = objectTypeRegistry.resolve(input.objectType);
+  if (!preDef || !isArtifactWritableType(preDef)) {
+    return `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`;
+  }
+  const declaredAccepts = preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
+  if (
+    Array.isArray(declaredAccepts) &&
+    declaredAccepts.length > 0 &&
+    !mimeAcceptedByAccepts(declaredAccepts, facts.mimeDetected)
+  ) {
+    return `detected MIME "${facts.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`;
+  }
+  // The envelope the writer composes, built by the writer's own builder with values of
+  // the same form: a revision id of the form the writer generates (a UUID), the digest,
+  // size and detected MIME of the bytes.
+  const previewEnvelope = buildArtifactObjectData({
+    typedData: input.typedData,
+    representationRevisionId: input.representationRevisionId ?? randomUUID(),
+    digest: facts.sha256,
+    mime: facts.mimeDetected,
+    size: facts.sizeBytes,
+    originKind: input.originKind,
+    title: input.title,
+  });
+  const parsed = preDef.schema.safeParse(previewEnvelope);
+  if (!parsed.success) {
+    return `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`;
+  }
+  return null;
+}
+
+/**
  * Validate a REQUIRED object type at the write boundary BEFORE any blob IO
  * (epic #1785, wave A3). Refuses via {@link ObjectsTypeNotRegisteredError} when
  * the type is a retired generic literal, has no installed `kind:"artifact"`
@@ -372,9 +467,36 @@ async function assertWritableArtifactType(
   return def;
 }
 
-export async function createSemanticArtifact(
+type Tx2Results = ReturnType<typeof runPostgresQueriesSync>;
+
+/** One statement of a transaction (the shape `runPostgresQueriesSync` takes). */
+type Tx2Query = { text: string; values?: unknown[] };
+
+/** Everything of ONE artifact's write that is decided before its transaction opens (the bytes
+ *  stored, the resource row committed, the producer plan resolved) and the queries of its
+ *  transaction. */
+type PreparedArtifactWrite = {
+  input: CreateSemanticArtifactInput;
+  artifactId: string;
+  representationRevisionId: string;
+  blobStore: ReturnType<typeof createLocalDiskBlobStore>;
+  newBlob: Awaited<ReturnType<ReturnType<typeof createLocalDiskBlobStore>["put"]>>;
+  authoritative: { resourceId: string; mime: string; sizeBytes: number; storageKey: string; blobId: string; isDedupe: boolean };
+  originKind: ArtifactOriginKind;
+  persistedRunId: string | null;
+  planProduces: string[];
+  producerSplice: ReturnType<typeof buildAssertSemanticTypeQueries>[];
+  /** Where this artifact's producer ops begin among its own queries (the lock, the run lock, objects, representation, audit). */
+  producerOpsOffset: number;
+  tx2Queries: Tx2Query[];
+};
+
+
+async function prepareArtifactWrite(
   input: CreateSemanticArtifactInput,
-): Promise<CreateSemanticArtifactResult> {
+): Promise<PreparedArtifactWrite> {
+
+
   ensurePostgresSchema();
   const schema = postgresSchema.replaceAll('"', '""');
 
@@ -442,46 +564,20 @@ export async function createSemanticArtifact(
   // second accepts check AFTER Tx1 resolves `authoritative.mime`.)
   // -------------------------------------------------------------------
   try {
-    const preDef = objectTypeRegistry.resolve(input.objectType);
-    if (!preDef || !isArtifactWritableType(preDef)) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
-      );
-    }
-    const declaredAccepts =
-      preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
-    if (
-      Array.isArray(declaredAccepts) &&
-      declaredAccepts.length > 0 &&
-      !mimeAcceptedByAccepts(declaredAccepts, newBlob.mimeDetected)
-    ) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
-      );
-    }
-    // The caller's typed data UNDER the envelope (item 0.28): the writer's own
-    // facts always win, so the payload the schema sees carries the type's
-    // declared fields and an unforgeable envelope.
-    const previewEnvelope = {
-      ...(input.typedData ?? {}),
-      artifactType: "file",
-      latestRepresentationRevisionId: representationRevisionId,
-      latestDigest: newBlob.sha256,
-      mime: newBlob.mimeDetected,
-      size: newBlob.sizeBytes,
-      originKind,
-      viewerHint: "mime",
-      title: input.title,
-    } as ArtifactObjectData;
-    const parsed = preDef.schema.safeParse(previewEnvelope);
-    if (!parsed.success) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
-      );
-    }
+    // ONE function decides it, and the list filing asks it of every member before
+    // it stores the first (`artifactWriteRefusal`): nothing here needs the store.
+    const refusal = artifactWriteRefusal(
+      {
+        objectType: input.objectType,
+        expectedAcceptMimes: input.expectedAcceptMimes,
+        typedData: input.typedData,
+        title: input.title,
+        originKind,
+        representationRevisionId,
+      },
+      { mimeDetected: newBlob.mimeDetected, sha256: newBlob.sha256, sizeBytes: newBlob.sizeBytes },
+    );
+    if (refusal !== null) throw new ObjectsTypeNotRegisteredError(input.objectType, refusal);
   } catch (err) {
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })
@@ -797,17 +893,15 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     }),
   );
 
-  const objectData = {
-    ...(input.typedData ?? {}),
-    artifactType: "file",
-    latestRepresentationRevisionId: representationRevisionId,
-    latestDigest: newBlob.sha256,
+  const objectData = buildArtifactObjectData({
+    typedData: input.typedData,
+    representationRevisionId,
+    digest: newBlob.sha256,
     mime: authoritative.mime,
     size: authoritative.sizeBytes,
     originKind,
-    viewerHint: "mime",
     title: input.title,
-  } as ArtifactObjectData;
+  });
 
   // -------------------------------------------------------------------
   // Dedupe-delta re-validation (epic #1785, wave A3). The pre-Tx1 validation
@@ -999,25 +1093,11 @@ WHERE org_id = $1 AND id = $2 LIMIT 1`,
     orgId: input.orgId,
     artifactId,
   });
-  // `tx2Results` is hoisted OUT of the try so producer-outcome parsing
-  // happens POST-COMMIT in a best-effort block. A parse/offset throw must
-  // NOT be conflated with a Tx2 failure, which would create a false
-  // failed-upload and duplicate on retry.
-  let tx2Results:
-    | ReturnType<typeof runPostgresQueriesSync>
-    | undefined;
-
-  try {
-    // ---------------------------------------------------------------
-    // Tx 2 — held-lock artifact creation. The advisory lock on
-    // hashtext(artifactId) keeps the floor-rebalance correct against
-    // the live state, mirroring the canonical pattern in
-    // `semantic-assertion-store.ts:runOneLockedTx`.
-    // ---------------------------------------------------------------
-    tx2Results = runPostgresQueriesSync({
-      connectionString: getPostgresConnectionString(),
-      transaction: true,
-      queries: [
+  // The queries of ONE artifact's transaction, in this fixed order (lock, objects + outbox,
+  // representation, audit, producer ops, binding ops, authoring link, the caller's follow-ons, the
+  // produced event). `createSemanticArtifact` runs them as ONE transaction; `createSemanticArtifacts`
+  // concatenates N artifacts' lists into ONE transaction: the row writers are these, not copies.
+  const tx2Queries: Tx2Query[] = [
         {
           text: `SELECT pg_advisory_xact_lock(hashtext($1))`,
           values: [artifactId],
@@ -1149,33 +1229,46 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
         // its result is never parsed. The run lock taken before the first write
         // covers the rows above it.
         ...(producedEventOp ? [producedEventOp] : []),
-      ],
-    });
-  } catch (err) {
-    // Tx2 failed AFTER Tx1 committed.
-    //  - DEDUPE hit (isDedupe=true): the new blob bytes on disk were
-    //    NEVER bound to any DB row (no artifact_blobs INSERT happened;
-    //    the existing resource still owns the canonical bytes). The new
-    //    bytes are an unreferenced duplicate — delete.
-    //  - FRESH Tx1 (isDedupe=false): the new resource row AND the new
-    //    artifact_blobs row are committed and point at this storage_key.
-    //    Deleting the bytes would poison future dedupe hits (a same-
-    //    substance upload would dedupe to a resource whose canonical
-    //    bytes were deleted). DO NOT delete — the artifact_blobs row
-    //    owns the bytes for future dedupes; only the artifact rollup
-    //    (objects + representation + audit) failed and is rolled back.
-    if (authoritative.isDedupe && newBlob.storageKey !== authoritative.storageKey) {
-      await blobStore
-        .deleteByStorageKey({
-          orgId: input.orgId,
-          storageKey: newBlob.storageKey,
-        })
-        .catch(() => {});
-    }
-    // cinatra#4762: the in-flight fence of the produced event is surfaced typed
-    // (PublishCallInFlightError); any other failure is thrown as it was.
-    throw publishCallInFlightOr(err);
+  ];
+  return {
+    input,
+    artifactId,
+    representationRevisionId,
+    blobStore,
+    newBlob,
+    authoritative,
+    originKind,
+    persistedRunId,
+    planProduces,
+    producerSplice,
+    producerOpsOffset: PRODUCER_OPS_OFFSET,
+    tx2Queries,
+  };
+}
+
+
+/** A write whose transaction did not commit (or never ran): the new bytes are an unreferenced
+ *  duplicate only on a DEDUPE hit, and only then are they deleted. A FRESH Tx1 committed the
+ *  resource row and the artifact_blobs row that own the bytes for future dedupes (deleting
+ *  them would poison a later same-substance write); only the artifact rollup rolled back. */
+async function abandonArtifactWrite(p: PreparedArtifactWrite): Promise<void> {
+  if (p.authoritative.isDedupe && p.newBlob.storageKey !== p.authoritative.storageKey) {
+    await p.blobStore
+      .deleteByStorageKey({ orgId: p.input.orgId, storageKey: p.newBlob.storageKey })
+      .catch(() => {});
   }
+}
+
+/** What follows a COMMITTED transaction of one artifact: the dedupe-duplicate blob cleanup, the
+ *  producer-outcome log, the matcher enqueue and the result. `queryBase` is where this artifact's
+ *  queries begin in the transaction's result list. Nothing here may fail the committed write. */
+async function finishArtifactWrite(
+  p: PreparedArtifactWrite,
+  tx2Results: ReturnType<typeof runPostgresQueriesSync> | undefined,
+  queryBase: number,
+): Promise<CreateSemanticArtifactResult> {
+  const { input, artifactId, representationRevisionId, blobStore, newBlob, authoritative, originKind, persistedRunId, planProduces, producerSplice } = p;
+  const PRODUCER_OPS_OFFSET = p.producerOpsOffset;
 
   // -------------------------------------------------------------------
   // Post-tx: if dedupe won, the new blob bytes on disk are an
@@ -1202,10 +1295,10 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
   // duplicate-artifact retry.
   if (tx2Results && producerSplice.length > 0) {
     try {
-      producerSplice.forEach((p, i) => {
-        const outcome: AssertSemanticTypeResult = p.parseResult(
-          tx2Results as ReturnType<typeof runPostgresQueriesSync>,
-          PRODUCER_OPS_OFFSET + i * 2,
+      producerSplice.forEach((splice, i) => {
+        const outcome: AssertSemanticTypeResult = splice.parseResult(
+          tx2Results as Tx2Results,
+          queryBase + PRODUCER_OPS_OFFSET + i * 2,
         );
         const ext = planProduces[i];
         console.info(
@@ -1262,6 +1355,78 @@ VALUES ($1::text, $2::text, $3::text, $4::text)`,
     representationRevision: 1,
     ref,
   };
+}
+
+
+/**
+ * Create ONE semantic artifact: its blob stored, then ONE held-lock transaction for its rows.
+ */
+/**
+ * Run the queries of N prepared artifacts as ONE transaction (the single place the artifact rows are
+ * committed, for one artifact and for a batch): a failure rolls every artifact back, and what each
+ * abandoned write keeps is `abandonArtifactWrite`'s. `tx2Results` is returned to the caller so the
+ * producer-outcome parsing happens POST-COMMIT in a best-effort block: a parse or offset throw must
+ * NOT be conflated with a Tx2 failure, which would create a false failed-upload and duplicate on retry.
+ */
+async function commitArtifactWrites(
+  prepared: readonly PreparedArtifactWrite[],
+): Promise<Array<CreateSemanticArtifactResult>> {
+  let tx2Results: ReturnType<typeof runPostgresQueriesSync>;
+  try {
+    tx2Results = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries: prepared.flatMap((p) => p.tx2Queries),
+    });
+  } catch (err) {
+    // The transaction failed AFTER the resource rows (Tx1) committed.
+    for (const p of prepared) await abandonArtifactWrite(p);
+    // cinatra#4762: the in-flight fence of the produced event is surfaced typed
+    // (PublishCallInFlightError); any other failure is thrown as it was.
+    throw publishCallInFlightOr(err);
+  }
+  const results: CreateSemanticArtifactResult[] = [];
+  let base = 0;
+  for (const p of prepared) {
+    results.push(await finishArtifactWrite(p, tx2Results, base));
+    base += p.tx2Queries.length;
+  }
+  return results;
+}
+
+/** Create ONE semantic artifact: its blob stored, then ONE held-lock transaction for its rows. */
+export async function createSemanticArtifact(
+  input: CreateSemanticArtifactInput,
+): Promise<CreateSemanticArtifactResult> {
+  const [created] = await commitArtifactWrites([await prepareArtifactWrite(input)]);
+  return created!;
+}
+
+/**
+ * Create N semantic artifacts in ONE transaction (cinatra#3089): every artifact is prepared as
+ * `createSemanticArtifact` prepares one (type and envelope checked, bytes stored, resource row
+ * committed, producer plan resolved) and then the queries of ALL of them run as ONE transaction,
+ * so either every artifact's rows (object + outbox, representation, audit, producer and binding
+ * ops, the caller's follow-ons such as the ledger rows, the produced event) commit together or
+ * none does. The row writers are `prepareArtifactWrite`'s and the commit is `commitArtifactWrites`:
+ * the single and the batch path share both. Blobs stored before a rolled-back transaction are
+ * content-addressed and keep the resource rows that own them, exactly as after a failed single write.
+ *
+ * The statements of one artifact are ~10; the batch is bounded by its caller (50 members) and by
+ * the synchronous bridge's ceiling (`POSTGRES_SYNC_TIMEOUT_MS`, 30 s). Fresh artifact ids contend
+ * with nothing, so the per-artifact advisory locks cannot deadlock in any order.
+ */
+export async function createSemanticArtifacts(
+  inputs: readonly CreateSemanticArtifactInput[],
+): Promise<CreateSemanticArtifactResult[]> {
+  const prepared: PreparedArtifactWrite[] = [];
+  try {
+    for (const input of inputs) prepared.push(await prepareArtifactWrite(input));
+  } catch (err) {
+    for (const p of prepared) await abandonArtifactWrite(p);
+    throw err;
+  }
+  return commitArtifactWrites(prepared);
 }
 
 // Canonical default visibility per owner level (cinatra#1428). The owner axis

@@ -1646,6 +1646,12 @@ import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context
 import { assertRunStepToolAllowed, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal } from "@cinatra-ai/agents/store";
 import { isProxy } from "node:util/types";
 
+/** The limit of a run tool call's arguments as JSON text, in bytes: the
+ * argument copy below refuses a larger one (`action_json_limit`). The
+ * passthrough route bounds a list filing's raw input by the same number before
+ * it parses the list (cinatra#3089). */
+export const ACTION_JSON_MAX_BYTES = 262144;
+
 export class ArtifactActionCheckRefusal extends Error {
   constructor(readonly code: string) { super(code); this.name = "ArtifactActionCheckRefusal"; }
 }
@@ -1691,7 +1697,7 @@ export function immutableActionJson(value: unknown): ActionJson {
     } finally { active.delete(v); }
   }
   const result = copy(value, 0);
-  if (Buffer.byteLength(JSON.stringify(result)) > 262144) throw new ArtifactActionCheckRefusal("action_json_limit");
+  if (Buffer.byteLength(JSON.stringify(result)) > ACTION_JSON_MAX_BYTES) throw new ArtifactActionCheckRefusal("action_json_limit");
   return result;
 }
 export class OutwardActionRefusal extends Error {
