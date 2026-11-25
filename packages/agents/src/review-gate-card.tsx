@@ -145,6 +145,7 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type RefObject,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -171,6 +172,7 @@ import {
   reviewTargetPairKey,
   reviewTargetRevisionMarker,
   sameReviewTargetIslandAddresses,
+  sourceLinkHref,
   type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleSuggestion,
@@ -2412,6 +2414,14 @@ function ReviewTargetIsland({
     return () => window.removeEventListener("message", onMessage);
   }, [identity]);
 
+  // THE OPEN-IN-THE-CMS ROAD (cinatra#3092). The frame's sandbox withholds
+  // popups and stays as it is. The island's host code takes the click on a
+  // display's `open-in-cms` link whose address the pinned targets hold, and
+  // posts it here; this card opens the tab after it checks the source frame,
+  // the origin, the exact payload and an https address without credentials.
+  // See `useIslandOpenInCmsRoad` at the end of this file.
+  useIslandOpenInCmsRoad(frameRef);
+
   const state: IslandLoadState = refused
     ? "timed-out"
     : load.loaded
@@ -3241,4 +3251,113 @@ export function ReviewGateSettledExchange({
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// THE OPEN-IN-THE-CMS ROAD, CARD HALF (cinatra#3092). Kept in this file, beside
+// the island frame it serves.
+//
+// THE DEFECT. A CMS page display draws "Open in the CMS" as a plain link that
+// opens a new tab (`target="_blank"`). On the artifact page the display is
+// mounted inline and the link works. In the review card the display is drawn
+// inside the island frame, whose sandbox withholds popups on purpose (see the
+// module header of `review-gate-card.tsx`), so the browser dropped the click
+// and nothing happened.
+//
+// THE ROAD. The sandbox is NOT widened. The island document's own host code
+// (`src/app/lifecycle/review-island/island-open-link.tsx`) takes the click on
+// an anchor whose design action is `open-in-cms`, and only when the anchor's
+// address is one of the addresses the island's server read from the pinned
+// targets' own data. It prevents the default and posts ONE message to
+// this card. The card, which is not sandboxed, opens the tab.
+//
+// WHAT THE CARD ACCEPTS. All of these, or nothing happens:
+//   - the message came from THIS card's own frame (`event.source` is the
+//     frame's `contentWindow`), never from a sibling frame or the page;
+//   - its origin is this document's own origin (the island is this app's own
+//     route; a frame on another origin is not the island);
+//   - the payload is exactly `{ type, url }`, with the fixed type and a string
+//     url, and no other field;
+//   - the url passes the ONE source-link rule (`sourceLinkHref`, the mirror of
+//     the artifact service's rule for "Open in source application": http or
+//     https, in parsed form), carries no user name or password, and is already
+//     in that parsed form (what the island sends). An http address of a
+//     self-hosted or LAN CMS opens, as its source link does.
+// Then `window.open(url, "_blank", "noopener,noreferrer")`: the new tab gets no
+// handle on the app and no referrer.
+//
+// WHERE THE EXACT ADDRESS CHECK LIVES. The address must equal one the host read
+// from the pinned targets. That set is known to the island's server render, not
+// to the card: the card loads target headers, never target content, and
+// reading content into the card would be a new fetch of every target's data.
+// So the island's host listener refuses any other address, and the card checks
+// everything it can check from the message alone. This is no weaker in fact:
+// the frame is same-origin with `allow-scripts`, so a script inside it can reach
+// this document directly and no card-side list could stop it (the module header
+// of `review-gate-card.tsx` says the frame is not an isolation boundary). What
+// the island's check stops is markup: an anchor that a display draws from data
+// cannot make the card open an address the pinned data does not hold.
+//
+// USER ACTIVATION. The click inside the frame activates this window too: the
+// HTML user activation rules extend the activation notification to the active
+// window of every ANCESTOR navigable of the clicked document. The message
+// arrives a task later, well inside the transient activation window, so
+// `window.open` here runs with transient activation. A browser that still
+// blocks it shows its own blocked-popup notice; with `noopener` the call
+// returns null by definition, so the card cannot detect a block and draws
+// nothing of its own.
+// ---------------------------------------------------------------------------
+
+/** The one message type the island posts for this road. The island half of this
+ *  literal lives in `src/app/lifecycle/review-island/island-open-link.tsx`;
+ *  the two suites pin the same text. */
+export const REVIEW_ISLAND_OPEN_IN_CMS_MESSAGE_TYPE = "cinatra.review-island.open-in-cms";
+
+/**
+ * The address a message from the island asks the card to open, or null.
+ * Pure: it reads only the payload.
+ */
+export function readIslandOpenInCmsRequest(data: unknown): string | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  const keys = Object.keys(data);
+  if (keys.length !== 2 || !Object.hasOwn(data, "type") || !Object.hasOwn(data, "url")) return null;
+  const message = data as { type: unknown; url: unknown };
+  if (message.type !== REVIEW_ISLAND_OPEN_IN_CMS_MESSAGE_TYPE) return null;
+  const url = message.url;
+  // The island sends the parsed form. Anything else was not sent by it.
+  if (typeof url !== "string" || sourceLinkHref(url) !== url) return null;
+  const parsed = new URL(url);
+  if (parsed.username !== "" || parsed.password !== "") return null;
+  return url;
+}
+
+/**
+ * Opens the address when the message passes every check above, and answers
+ * whether it did. `frame` is this card's own island frame.
+ */
+export function openIslandCmsAddress(
+  event: MessageEvent,
+  frame: HTMLIFrameElement | null,
+  ownOrigin: string,
+  open: (url: string, target: string, features: string) => unknown,
+): boolean {
+  if (event.origin !== ownOrigin) return false;
+  if (!frame || !frame.contentWindow || event.source !== frame.contentWindow) return false;
+  const url = readIslandOpenInCmsRequest(event.data);
+  if (url === null) return false;
+  open(url, "_blank", "noopener,noreferrer");
+  return true;
+}
+
+/** The card's listener for its own frame's open-in-the-CMS messages. */
+export function useIslandOpenInCmsRoad(frameRef: RefObject<HTMLIFrameElement | null>): void {
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      openIslandCmsAddress(event, frameRef.current, window.location.origin, (url, target, features) =>
+        window.open(url, target, features),
+      );
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [frameRef]);
 }
