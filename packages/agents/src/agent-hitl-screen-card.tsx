@@ -145,6 +145,7 @@ import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
+import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   gateAwaitsRendererValue,
@@ -1184,6 +1185,11 @@ export function AgentHitlScreenCard({
   // does not hold the card composes its own body instead, under the rules
   // above, rather than drawing nothing.
   const hostSuppliesScreen = screen !== undefined && cookieSession;
+  // THE RUNTIME-INSTALLED BINDINGS, as the run panel and the stepper load them.
+  // The card decides from the registry whether a step can be answered, so it
+  // draws nothing (as before its read lands) until they are loaded: a screen
+  // only a runtime-installed pack declares is never shown as retired.
+  const runtimeBindingsLoaded = useRuntimeFieldRendererBindings(present && !hostSuppliesScreen);
 
   // Hooks run unconditionally (rules of hooks); a surface with no declared host —
   // or one that supplies its own screen — asks for nothing, because the empty
@@ -1548,12 +1554,13 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
+    runtimeBindingsLoaded,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the
   // collapse of every denial, exactly as the audit card's `absent` is. A
   // host-supplied screen is past both: its host already decided.
-  if (!present || !asking) return null;
+  if (!present || !asking || !runtimeBindingsLoaded) return null;
 
   return (
     <div

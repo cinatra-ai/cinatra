@@ -50,11 +50,21 @@ vi.mock("../agent-hitl-screen-actions", () => ({
 const approveMock = vi.fn(
   async (_taskId: string, _values?: unknown, _fieldName?: string) => ({ ok: true as const }),
 );
+// What the runtime-installed packages declare, as the session-guarded action
+// answers it (none unless a case installs one).
+const runtimeBindings = vi.hoisted(() => ({
+  list: [] as Array<{ id: string; kind: string; priority: number; midRunHitl?: boolean }>,
+  calls: 0,
+}));
 vi.mock("../server-actions", () => ({
   getFieldRendererContextForAgentBuilderAction: async () => ({
     connectedApps: [],
     gmailAliases: [],
   }),
+  getRuntimeFieldRendererBindingsAction: async () => {
+    runtimeBindings.calls += 1;
+    return runtimeBindings.list;
+  },
 }));
 
 vi.mock("../hitl-actions", () => ({
@@ -86,7 +96,6 @@ vi.mock("@/lib/generated/agent-bindings", async (orig) => {
 
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { fieldRendererRegistry } from "../field-renderer-registry";
-import * as registration from "../register-default-renderers";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
 import * as midRun from "../orchestrator-mid-run-hitl";
@@ -112,6 +121,8 @@ const ASKING = {
 let originalFetch: typeof globalThis.fetch;
 
 beforeEach(() => {
+  runtimeBindings.list = [];
+  runtimeBindings.calls = 0;
   fieldRendererRegistry.clear();
   ensureDefaultFieldRenderersRegistered();
   screenStateMock.mockImplementation(async () => ASKING);
@@ -283,16 +294,35 @@ const OLD_PUBLISH_SCREENS = [
 describe("AgentHitlScreenCard — a publish pack's own confirmation screen after an upgrade", () => {
   for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
     for (const screen of OLD_PUBLISH_SCREENS) {
-      it(`${host}: ${screen.id}: a runtime-installed older pack that declares it keeps the step answerable`, async () => {
+      // red-first-expect: expected null not to be null
+      it(`${host}: ${screen.id}: on a fresh mount, the card loads the runtime-installed older pack that declares it, and the step stays answerable`, async () => {
         expect(fieldRendererRegistry.list().some((e) => e.id === screen.id)).toBe(false);
-        registration.registerFieldRendererBindings([{ id: screen.id, kind: screen.kind, priority: 90, midRunHitl: true }]);
+        // Only the runtime-installed pack declares it: the card loads it itself.
+        runtimeBindings.list = [{ id: screen.id, kind: screen.kind, priority: 90, midRunHitl: true }];
         askingFor(screen.id, { inputSchema: { type: "string", title: "Answer" }, fieldName: "answer" });
         const { container } = mountOn(host);
+        // Never shown as retired, not even before the bindings land.
+        const seenRetired = { value: false };
+        const observer = new MutationObserver(() => {
+          if (/no renderer configured/.test(container.textContent ?? "")) seenRetired.value = true;
+        });
+        observer.observe(container, { childList: true, subtree: true, characterData: true });
         await settle();
         await waitFor(() => expect(container.querySelector("#field-answer")).not.toBeNull());
-        expect(container.textContent ?? "").not.toMatch(/no renderer configured/);
         await waitFor(() => expect(continues(container).length).toBeGreaterThan(0));
+        observer.disconnect();
+        expect(runtimeBindings.calls).toBeGreaterThan(0);
+        expect(seenRetired.value).toBe(false);
       });
     }
   }
+  it("an id no installed pack declares still ends refused once the bindings are loaded", async () => {
+    runtimeBindings.list = [{ id: "@acme/other:output", kind: "linkedin-draft-review", priority: 90, midRunHitl: true }];
+    const id = "@acme/nobody-declares:output";
+    askingFor(id);
+    const { container } = mountOn("run_card");
+    await settle();
+    await waitFor(() => expect(runtimeBindings.calls).toBeGreaterThan(0));
+    await expectRefused(container, id);
+  });
 });
