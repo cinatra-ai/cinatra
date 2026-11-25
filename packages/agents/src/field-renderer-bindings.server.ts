@@ -32,6 +32,11 @@ import {
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
 import {
+  DECLARED_SCREEN_KEY,
+  declaredHitlCardOfBinding,
+} from "./hitl-gate-submit";
+import { declaredScreenDigest } from "./declared-screen-digest.server";
+import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
 } from "@cinatra-ai/agent-ui-protocol/server";
@@ -200,4 +205,24 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
     if (!binding?.a2uiTranslator) return undefined;
     return A2UI_MID_RUN_TRANSLATOR_KINDS[binding.a2uiTranslator];
   };
+}
+
+/**
+ * THE ONE WRITER OF THE CARD A STEP PAUSES WITH (cinatra#3470). Called when a
+ * pause is recorded (human-gate-park.ts), before the frame is emitted and the
+ * gate row written, so both carry it: the BUNDLED binding's checked card for
+ * the step's renderer, under `DECLARED_SCREEN_KEY` of the step's schema, with
+ * its digest. This is the only moment the build's current bindings decide a
+ * step's card. A key the agent's own schema carried is dropped: only this
+ * writer puts one there.
+ */
+export function withDeclaredScreenOfStep<T extends { schema: Record<string, unknown>; xRenderer: string }>(
+  artifact: T,
+): T {
+  const { [DECLARED_SCREEN_KEY]: _incoming, ...schema } = artifact.schema ?? {};
+  void _incoming;
+  const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === artifact.xRenderer);
+  const card = binding?.screen !== undefined ? declaredHitlCardOfBinding(binding) : null;
+  if (card === null) return { ...artifact, schema };
+  return { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: { screen: card, digest: declaredScreenDigest(card) } } };
 }

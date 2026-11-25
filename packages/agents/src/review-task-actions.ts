@@ -38,13 +38,10 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
-import {
-  declaredHitlCardOfBinding,
-  declaredHitlCheckedAnswer,
-  readWayflowSubmittedValues,
-  type DeclaredHitlCard,
-} from "./hitl-gate-submit";
+import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { declaredHitlCheckedAnswer, storedDeclaredCardOf, type DeclaredHitlCard } from "./hitl-gate-submit";
 import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import { declaredScreenDigest } from "./declared-screen-digest.server";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -76,20 +73,23 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
 ]);
 
 /**
- * THE DECLARED CARD OF THE STEP AN ANSWER GOES TO (cinatra#3470), read on the
- * server from the step's own gate row and the BUNDLED bindings (a package
- * installed at runtime declares no screen the host draws). `"unknown"` when the
- * gate row could not be read and the run's agent declares a screen on any of
- * its bindings: which step is open, and so whether its card must answer it,
- * cannot be told, and the answer is refused (fail closed).
+ * THE DECLARED CARD OF THE STEP AN ANSWER GOES TO (cinatra#3470): the card the
+ * step PAUSED WITH, stored in its gate row's schema (`storedDeclaredCardOf`),
+ * never the build's current bindings, so a build deployed while the run waits
+ * cannot change or drop what the step asks for. A row that stored none is no
+ * card, as before this was recorded. `"unknown"` (the answer is refused, fail
+ * closed) when what is stored is not a card or its digest does not match, and
+ * when the gate row could not be read and the run's agent declares a screen
+ * on any of its bindings now: whether the open step has a card cannot be told.
  */
 export function declaredCardOfStep(
-  gate: { xRenderer: string } | null,
+  gate: { xRenderer: string; inputSchema?: Record<string, unknown> } | null,
   packageName: string,
 ): DeclaredHitlCard | "unknown" | null {
   if (gate !== null) {
-    const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === gate.xRenderer);
-    return binding ? declaredHitlCardOfBinding(binding) : null;
+    const stored = storedDeclaredCardOf(gate.inputSchema, gate.xRenderer);
+    if (stored === null) return null;
+    return stored === "invalid" || declaredScreenDigest(stored.card) !== stored.digest ? "unknown" : stored.card;
   }
   const declares = GENERATED_FIELD_RENDERER_BINDINGS.some(
     (b) => b.screen !== undefined && (b.declaredBy === packageName || b.id.startsWith(`${packageName}:`)),
@@ -1122,6 +1122,10 @@ export async function approveReviewTaskInternal(
     let fencedAt = 0;
     let settled = false;
     let capturedPromptId: string | null = null;
+    // The schema recorded with a declared card's answer is the step's own stored
+    // one (it carries the card the step paused with), never the client's copy, so
+    // the read-only replay draws the card the step was answered on.
+    let recordedSchema = schemaSnapshot ?? null;
     try {
       // cinatra#4150: a run held at a publish decision goes on only by that decision. Read under
       // the pause claim and before the fence (cinatra#4245), so a decision parked before the claim is
@@ -1140,6 +1144,7 @@ export async function approveReviewTaskInternal(
         userResponseRaw = checked.values.userResponse;
         resumeText = checked.values.userResponse as string;
         submittedValues = readWayflowSubmittedValues(checked.values);
+        recordedSchema = gateSnapshot?.inputSchema ?? null;
       }
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the
@@ -1279,7 +1284,7 @@ export async function approveReviewTaskInternal(
         stepKey: taskId,
         message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
         submittedValues,                                // null when no structured payload at all
-        schemaSnapshot: schemaSnapshot ?? null,
+        schemaSnapshot: recordedSchema,
         excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
       }).catch((e) => {
         // The first argument of a console call is a CONSTANT: a caller-derived

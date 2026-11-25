@@ -134,12 +134,8 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import {
-  continueAwaitsAPick,
-  declaredCardEntryOf,
-  fieldRendererRegistry,
-  type FieldRendererContext,
-} from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
+import { declaredCardEntryOf } from "./declared-hitl-screen-renderer";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
@@ -555,7 +551,7 @@ function classifyHitlGate(gate: AgentHitlScreenGate): {
 } {
   // THE ONE DECISION FIRST (cinatra#3470): a declared card is a mid-run step,
   // never a grouped setup form, whatever its id ends with.
-  if (declaredCardEntryOf(gate.xRenderer) !== null) return { isMidRun: true, isGroupedSetup: false };
+  if (declaredCardEntryOf(gate.xRenderer, gate.inputSchema) !== null) return { isMidRun: true, isGroupedSetup: false };
   return {
     isMidRun: gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
@@ -569,7 +565,7 @@ function classifyHitlGate(gate: AgentHitlScreenGate): {
  */
 function presentationHintOf(gate: AgentHitlScreenGate): PresentationHint | null {
   // A declared card draws its step (cinatra#3470): a hint beside it is not read.
-  if (declaredCardEntryOf(gate.xRenderer) !== null) return null;
+  if (declaredCardEntryOf(gate.xRenderer, gate.inputSchema) !== null) return null;
   const candidate = (gate.currentValues as { presentation?: unknown }).presentation;
   if (
     candidate !== null &&
@@ -722,7 +718,7 @@ function resolveHitlGateEntry(runId: string, gate: AgentHitlScreenGate) {
     xRenderer: gate.xRenderer,
   };
   return (
-    declaredCardEntryOf(gate.xRenderer) ??
+    declaredCardEntryOf(gate.xRenderer, gate.inputSchema) ??
     fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ??
     null
   );
@@ -796,7 +792,7 @@ export function AgentHitlScreenFields({
   const entry =
     hint || withholdRenderer === true
       ? null
-      : (declaredCardEntryOf(gate.xRenderer) ??
+      : (declaredCardEntryOf(gate.xRenderer, gate.inputSchema) ??
         fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context));
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
@@ -995,14 +991,14 @@ export function AgentHitlScreenContinue({
       // A gate that carries a presentation hint is drawn through the generic
       // dispatch renderer, which writes nothing, so it is out of the rule.
       awaitingRendererValue={
-        declaredCardEntryOf(gate.xRenderer) === null &&
+        declaredCardEntryOf(gate.xRenderer, gate.inputSchema) === null &&
         presentationHintOf(gate) === null &&
         gateAwaitsRendererValue(gate.inputSchema, buffered)
       }
       onPress={async () => {
         // A declared card (cinatra#3470): its readiness held this control, and
         // its staged answer is what is sent; no rule below applies to it.
-        const stepCard = declaredCardEntryOf(gate.xRenderer);
+        const stepCard = declaredCardEntryOf(gate.xRenderer, gate.inputSchema);
         if (stepCard) {
           if (stepCard.continueReady?.(buffered) !== true) return;
           await onContinue(declaredCardContinuePayload(buffered));

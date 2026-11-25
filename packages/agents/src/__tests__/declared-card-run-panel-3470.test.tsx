@@ -44,11 +44,6 @@ const CARD_ID = "@acme/card-fixture-agent:brief";
 const LIST_ID = "@acme/card-fixture-agent:list-picker";
 /** A presentation hint beside the card: the card draws the step, not the hint. */
 const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
-const CASES: Array<[string, string, Record<string, unknown>]> = [
-  ["a plain declared card", CARD_ID, {}],
-  ["a declared card beside a presentation hint", CARD_ID, HINT],
-  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
-];
 const SCREEN = {
   layout: "card",
   sections: [
@@ -59,12 +54,24 @@ const SCREEN = {
   carry: ["topic"],
 };
 
-function cardStream(id: string = CARD_ID, extra: Record<string, unknown> = {}) {
+/** The same renderer in a newer build: its field is another one. */
+const SCREEN_V2 = { layout: "card", sections: [{ type: "field", key: "hook", label: "Hook" }] };
+/** The card the step paused with, as the server stored it in the step's schema. */
+const STORED = { "x-declared-screen": { screen: SCREEN, digest: "sha256:fixture" } };
+// [case, renderer id, extra run values, the screen the build declares NOW (null: no binding)]
+const CASES: Array<[string, string, Record<string, unknown>, Record<string, unknown> | null]> = [
+  ["the card it paused with, its binding since removed", CARD_ID, {}, null],
+  ["the card it paused with, its binding since changed", CARD_ID, {}, SCREEN_V2],
+  ["the card it paused with, beside a presentation hint", CARD_ID, HINT, SCREEN],
+  ["the card it paused with, on a binding id ending in :list-picker", LIST_ID, {}, SCREEN],
+];
+
+function cardStream(id: string = CARD_ID, extra: Record<string, unknown> = {}, stored = true) {
   return {
     status: "pending_approval", error: null, presentationHint: null, isLive: true, streamedText: "",
     interruptContext: {
       xRenderer: id,
-      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } } },
+      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } }, ...(stored ? STORED : {}) },
       values: { stepNumber: 1, topic: "Audit trails for agent runs", ...extra },
       reviewTaskId: "gate-card-3470",
     },
@@ -77,10 +84,6 @@ function continueButtons(): HTMLButtonElement[] {
 
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
-  registerFieldRendererBindings([
-    { id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
-    { id: LIST_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
-  ]);
   stream.current = cardStream();
 });
 afterEach(() => {
@@ -94,13 +97,15 @@ afterAll(() => {
 });
 
 describe("the run panel draws a declared card and holds its Continue until the field is written", () => {
-  it.each(CASES)("%s: shows the declared note, fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra) => {
+  it.each(CASES)("%s: shows the declared note, fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra, deployed) => {
+    if (deployed) registerFieldRendererBindings([{ id, kind: "cta", priority: 90, midRunHitl: true, screen: deployed }]);
     stream.current = cardStream(id, extra);
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
     await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     const screen = document.querySelector("[data-declared-hitl-screen]")!;
     expect(document.body.textContent).not.toContain("Hint item");
+    expect(document.body.textContent).not.toContain("Hook");
     expect(screen.textContent).toContain("Check the brief before it is written.");
     expect(screen.querySelector('[data-conformance-id="hitl-declared-facts"]')?.textContent).toContain("Audit trails for agent runs");
     expect(continueButtons()).toHaveLength(1);
@@ -122,5 +127,16 @@ describe("the run panel draws a declared card and holds its Continue until the f
     expect(payload).toMatchObject({ ...answer, userResponse: JSON.stringify(answer) });
     const declared = new Set(["topic", "angle", "userResponse", "approved", "approvedAt", "stepNumber"]);
     expect(Object.keys(payload).filter((k) => !declared.has(k))).toEqual([]);
+  });
+});
+
+describe("a step that stored no card (paused before the card was recorded) is drawn as before", () => {
+  it("the run panel draws no declared card, whatever the build's binding declares now", async () => {
+    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+    stream.current = cardStream(CARD_ID, {}, false);
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
+    await waitFor(() => expect(continueButtons().length).toBeGreaterThan(0));
+    expect(document.querySelector("[data-declared-hitl-screen]")).toBeNull();
   });
 });

@@ -220,9 +220,10 @@ async function resume(): Promise<unknown> {
   } as never);
 }
 
-const { CARD_ID, PLAIN_ID } = vi.hoisted(() => ({
-  CARD_ID: "@cinatra-ai/web-research-agent:brief",
-  PLAIN_ID: "@cinatra-ai/web-research-agent:confirm",
+const { CARD_ID, PLAIN_ID, CARD_SCREEN } = vi.hoisted(() => ({
+  CARD_ID: "@acme/card-agent:brief",
+  PLAIN_ID: "@acme/card-agent:confirm",
+  CARD_SCREEN: { layout: "card", sections: [{ type: "field", key: "angle", label: "Angle" }] },
 }));
 vi.mock("@/lib/generated/agent-bindings", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -232,27 +233,46 @@ vi.mock("@/lib/generated/agent-bindings", async (orig) => ({
       kind: "cta",
       priority: 90,
       midRunHitl: true,
-      screen: { layout: "card", sections: [{ type: "field", key: "angle", label: "Angle" }] },
-      declaredBy: "@cinatra-ai/web-research-agent",
+      screen: CARD_SCREEN,
+      declaredBy: "@acme/card-agent",
     },
-    { id: PLAIN_ID, kind: "cta", priority: 90, midRunHitl: true, declaredBy: "@cinatra-ai/web-research-agent" },
+    { id: PLAIN_ID, kind: "cta", priority: 90, midRunHitl: true, declaredBy: "@acme/card-agent" },
   ],
 }));
-const gateRow = vi.hoisted(() => ({ read: "row" as "row" | "missing" | "throws", xRenderer: "" }));
+const gateRow = vi.hoisted(() => ({
+  read: "row" as "row" | "missing" | "throws",
+  xRenderer: "",
+  inputSchema: {} as Record<string, unknown>,
+}));
 vi.mock("../agent-run-hitl-prompts", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readDurableHitlGateForContinue: async (runId: string, reviewTaskId: string) => {
     if (gateRow.read === "throws") throw new Error("fixture gate store down");
     if (gateRow.read === "missing") return null;
-    return { runId, reviewTaskId, xRenderer: gateRow.xRenderer, inputSchema: {}, values: {}, materializedAt: "2026-01-01T00:00:00.000Z" };
+    return { runId, reviewTaskId, xRenderer: gateRow.xRenderer, inputSchema: gateRow.inputSchema, values: {}, materializedAt: "2026-01-01T00:00:00.000Z" };
   },
 }));
+
+import { createHash } from "node:crypto";
+
+/** The stored form of a card, as the pause records it: the card and the sha-256 of its canonical JSON. */
+const canon = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(canon).join(",")}]`
+    : v !== null && typeof v === "object"
+      ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`).join(",")}}`
+      : JSON.stringify(v);
+const storedCard = (screen: unknown) => ({
+  "x-declared-screen": { screen, digest: `sha256:${createHash("sha256").update(canon(screen)).digest("hex")}` },
+});
 
 describe("agent_run_resume and a declared card's step (cinatra#3470)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gateRow.read = "row";
     gateRow.xRenderer = CARD_ID;
+    // The pause was recorded with the card: the one writer stamped the row's schema.
+    gateRow.inputSchema = { type: "object", ...storedCard(CARD_SCREEN) };
     authSessionMock.getAuthSession.mockResolvedValue(null);
     authSessionMock.isPlatformAdmin.mockReturnValue(false);
     authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
@@ -260,7 +280,7 @@ describe("agent_run_resume and a declared card's step (cinatra#3470)", () => {
     storeMock.readAgentRunById.mockResolvedValue(pausedRun());
     storeMock.readAgentTemplateById.mockResolvedValue({
       id: "tmpl-1",
-      packageName: "@cinatra-ai/web-research-agent",
+      packageName: "@acme/card-agent",
       sourceType: "internal",
       agentAuthPolicy: null,
     });
@@ -286,8 +306,15 @@ describe("agent_run_resume and a declared card's step (cinatra#3470)", () => {
     },
   );
 
+  it("a row that stored no card (paused before the card was recorded) is resumed as before", async () => {
+    gateRow.inputSchema = { type: "object" };
+    await resume().catch(() => undefined);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("a step with no declared card is resumed as before", async () => {
     gateRow.xRenderer = PLAIN_ID;
+    gateRow.inputSchema = { type: "object" };
     await resume().catch(() => undefined);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });

@@ -50,7 +50,14 @@
 // Fully dependency-injected and free of DB / Redis / transport imports: the
 // seam is a pure decision function over four effects, so the invariant is unit
 // testable without a store, a queue, or a running runtime.
+//
+// One step is not injected: the card a step pauses with is stamped into the
+// built artifact's schema here (`withDeclaredScreenOfStep`, cinatra#3470), so
+// every park writes it to the frame and the row alike, with no call site able
+// to skip it. It reads only the build's bundled bindings.
 // ---------------------------------------------------------------------------
+
+import { withDeclaredScreenOfStep } from "./field-renderer-bindings.server";
 
 /**
  * Stable prefix of the named failure recorded on `agent_runs.error` when a gate
@@ -209,7 +216,8 @@ export async function parkRunOnHumanGate(
 
   let artifact: HumanGateArtifact;
   try {
-    artifact = await buildArtifact();
+    // The card the step pauses with is written with it (cinatra#3470).
+    artifact = withDeclaredScreenOfStep(await buildArtifact());
   } catch (err) {
     return fail(`the gate payload could not be built (${describe(err)})`);
   }

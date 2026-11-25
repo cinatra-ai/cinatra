@@ -21,8 +21,14 @@ import { useEffect, useId, type ComponentType, type ReactNode } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { FieldRendererProps } from "./field-renderer-registry";
-import { declaredHitlStage, type DeclaredHitlCard, type DeclaredHitlSection } from "./hitl-gate-submit";
+import type { FieldRendererEntry, FieldRendererProps } from "./field-renderer-registry";
+import {
+  declaredHitlCardReady,
+  declaredHitlStage,
+  storedDeclaredCardOf,
+  type DeclaredHitlCard,
+  type DeclaredHitlSection,
+} from "./hitl-gate-submit";
 
 /** V.1 `nf-label` of a read-only value: the small uppercase mono label. */
 const READ_ONLY_LABEL_CLASS = "font-mono text-badge-2xs uppercase text-muted-foreground";
@@ -118,4 +124,47 @@ export function makeDeclaredHitlScreenRenderer(card: DeclaredHitlCard): Componen
   }
   DeclaredHitlScreenRenderer.displayName = "DeclaredHitlScreenRenderer";
   return DeclaredHitlScreenRenderer;
+}
+
+/** One entry per stored card, so a step keeps one component identity across renders. */
+const CARD_ENTRIES = new Map<string, FieldRendererEntry>();
+
+/**
+ * WHICH RENDERER DRAWS A STEP, AND WHICH SUBMIT RULE APPLIES (cinatra#3470) —
+ * the one decision every host asks first, before any older special case.
+ *
+ * (1) The step's schema carries the card it PAUSED WITH (`storedDeclaredCardOf`,
+ *     written once when the pause was recorded): this returns the host's one
+ *     generic card for it. The card draws the step and its rule alone governs
+ *     readiness (`continueReady`), staging and the answer sent: no
+ *     presentation-hint dispatch, no rule keyed on the id's suffix or on a kind
+ *     (the list step, the grouped setup form, the context selector), and no
+ *     approval-note lift. It needs no binding: a build that has since changed
+ *     or dropped the renderer still draws the card the step asks with.
+ * (2) Otherwise null (no card stored, or a stored value this host does not
+ *     draw), and the host keeps today's order unchanged.
+ */
+export function declaredCardEntryOf(
+  xRenderer: string | null | undefined,
+  schema: unknown,
+): FieldRendererEntry | null {
+  if (!xRenderer) return null;
+  const stored = storedDeclaredCardOf(schema, xRenderer);
+  if (stored === null || stored === "invalid") return null;
+  const key = `${xRenderer}\u0000${stored.digest}`;
+  const known = CARD_ENTRIES.get(key);
+  if (known) return known;
+  const card = stored.card;
+  const entry: FieldRendererEntry = {
+    id: xRenderer,
+    priority: 0,
+    condition: () => false,
+    renderer: makeDeclaredHitlScreenRenderer(card),
+    // Pure host drawing: no server action, no registry lookup.
+    credentialSafe: true,
+    midRunHitl: true,
+    continueReady: (staged) => declaredHitlCardReady(card, staged),
+  };
+  CARD_ENTRIES.set(key, entry);
+  return entry;
 }

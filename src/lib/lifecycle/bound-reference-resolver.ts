@@ -77,7 +77,7 @@ import {
   scheduleFormValues,
 } from "@/lib/lifecycle/schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
-import { GENERATED_FIELD_RENDERER_BINDINGS } from "@/lib/generated/agent-bindings";
+import { DECLARED_SCREEN_KEY } from "@cinatra-ai/agents/hitl-gate-submit";
 
 // ---------------------------------------------------------------------------
 // THE ARMED FORM'S OWN TWO FACTS, from the two functions that already own them
@@ -747,12 +747,10 @@ export function controlsLentBy(
   if (resolution.kind === "review") return ["comment", "regenerate", "approve"];
   // A STEP A DECLARED CARD DRAWS LENDS NOTHING (cinatra#3470): the assistant's
   // fill and submit do not write a card's answer, so the person answers it on
-  // the card itself. Any declared screen on the step's binding counts.
+  // the card itself. The card is the one the step paused with, stored in its
+  // schema; anything stored there counts.
   if (resolution.kind === "hitl_screen") {
-    const declared = GENERATED_FIELD_RENDERER_BINDINGS.some(
-      (b) => b.id === resolution.xRenderer && b.screen !== undefined,
-    );
-    return declared ? [] : ["fill", "submit"];
+    return Object.hasOwn(resolution.form?.schema ?? {}, DECLARED_SCREEN_KEY) ? [] : ["fill", "submit"];
   }
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];

@@ -49,7 +49,8 @@ import {
   type PublishDecisionCardRead,
 } from "./publish-decision-card-view";
 import { StatusPill } from "@/components/ui/status-pill";
-import { continueAwaitsAPick, declaredCardEntryOf, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { declaredCardEntryOf } from "./declared-hitl-screen-renderer";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import { ArrowRight } from "lucide-react";
@@ -1502,7 +1503,7 @@ export function AgenticRunPanel({
       if (gateValidity.isHeld(gateKey)) return;
       // cinatra#3470: a step a declared card draws is answered by the card's
       // own Continue only (`declaredCardEntryOf`); the composer sends it nothing.
-      if (declaredCardEntryOf(ctx.xRenderer) !== null) throw new Error(DECLARED_CARD_ANSWERED_ON_CARD);
+      if (declaredCardEntryOf(ctx.xRenderer, ctx.inputSchema) !== null) throw new Error(DECLARED_CARD_ANSWERED_ON_CARD);
       const { payload, payloadFieldName } = buildChatGateSubmitPayload({
         reviewTaskId: ctx.reviewTaskId,
         fieldName: ctx.fieldName,
@@ -2093,7 +2094,7 @@ export function AgenticRunPanel({
   // valid card is drawn and answered by that card alone. Every special case
   // below (the presentation hint, the list step, the approval-note lift, the
   // context selector, the declared-schema rule) applies only when this is null.
-  const stepCard = isPendingApproval ? declaredCardEntryOf(effectiveHitlContext?.xRenderer) : null;
+  const stepCard = isPendingApproval ? declaredCardEntryOf(effectiveHitlContext?.xRenderer, effectiveHitlContext?.inputSchema) : null;
 
   // Resolve renderer entry for inline HITL bubble.
   const hitlRendererEntry = (() => {

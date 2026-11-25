@@ -1,30 +1,14 @@
 // A STEP A DECLARED CARD DRAWS LENDS NOTHING (cinatra#3470). The assistant's
 // fill and submit do not write a declared card's answer, so the person answers
 // it on the card: the lent road names no control for that step, and its grant
-// names none. A step whose binding declares no screen still lends both.
+// names none. The card is the one the step paused with, stored in its schema;
+// a step that stored none (paused before the card was recorded, or with no
+// card) still lends both, whatever the build's bindings say now.
 
 import { describe, expect, it, vi } from "vitest";
 
 process.env.BETTER_AUTH_SECRET ??= "test-secret-for-declared-card-lends";
 
-const { CARD_ID, PLAIN_ID } = vi.hoisted(() => ({
-  CARD_ID: "@acme-test/card-agent:brief",
-  PLAIN_ID: "@acme-test/plain-agent:confirm",
-}));
-vi.mock("@/lib/generated/agent-bindings", async (orig) => ({
-  ...(await orig<Record<string, unknown>>()),
-  GENERATED_FIELD_RENDERER_BINDINGS: [
-    {
-      id: CARD_ID,
-      kind: "cta",
-      priority: 90,
-      midRunHitl: true,
-      screen: { layout: "card", sections: [{ type: "field", key: "angle", label: "Angle" }] },
-      declaredBy: "@acme-test/card-agent",
-    },
-    { id: PLAIN_ID, kind: "cta", priority: 90, midRunHitl: true, declaredBy: "@acme-test/plain-agent" },
-  ],
-}));
 vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   enforceReviewRunAccess: vi.fn(async () => ({ ok: true })),
   readGatePinnedTargets: vi.fn(),
@@ -35,18 +19,28 @@ vi.mock("@cinatra-ai/agents/trigger-store", () => ({ readRunTriggerByRunId: vi.f
 import { controlsLentBy } from "../bound-reference-resolver";
 import { grantedControlFor, primaryControlFor } from "../bound-card-binding";
 
+const ID = "@acme/card-agent:brief";
+const STORED = {
+  type: "object",
+  "x-declared-screen": {
+    screen: { layout: "card", sections: [{ type: "field", key: "angle", label: "Angle" }] },
+    digest: "sha256:fixture",
+  },
+};
+
 type Resolution = Parameters<typeof controlsLentBy>[0];
-const screen = (xRenderer: string) => ({ kind: "hitl_screen", runId: "run-1", xRenderer }) as unknown as Resolution;
+const screen = (schema: Record<string, unknown>) =>
+  ({ kind: "hitl_screen", runId: "run-1", screenRef: "wayflow-1", xRenderer: ID, form: { schema, values: {} } }) as unknown as Resolution;
 
 describe("the lent road and a declared card's step (cinatra#3470)", () => {
-  it("lends no fill and no submit, and the grant names no control", () => {
-    expect(controlsLentBy(screen(CARD_ID))).toEqual([]);
-    expect(primaryControlFor(screen(CARD_ID))).toBeNull();
-    expect(grantedControlFor(screen(CARD_ID))).toBeNull();
+  it("a step that paused with a card lends no fill and no submit, and the grant names no control", () => {
+    expect(controlsLentBy(screen(STORED))).toEqual([]);
+    expect(primaryControlFor(screen(STORED))).toBeNull();
+    expect(grantedControlFor(screen(STORED))).toBeNull();
   });
 
-  it("a step whose binding declares no screen still lends fill and submit", () => {
-    expect(controlsLentBy(screen(PLAIN_ID))).toEqual(["fill", "submit"]);
-    expect(primaryControlFor(screen(PLAIN_ID))).toBe("submit");
+  it("a step that stored no card still lends fill and submit", () => {
+    expect(controlsLentBy(screen({ type: "object" }))).toEqual(["fill", "submit"]);
+    expect(primaryControlFor(screen({ type: "object" }))).toBe("submit");
   });
 });

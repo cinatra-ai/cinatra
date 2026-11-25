@@ -162,7 +162,8 @@ import {
 } from "./run-surface-status";
 import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
-import { continueAwaitsAPick, declaredCardEntryOf, fieldRendererRegistry } from "./field-renderer-registry";
+import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
+import { declaredCardEntryOf } from "./declared-hitl-screen-renderer";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -942,7 +943,7 @@ function HitlApprovalCard({
   // rules below (mid-run classification, the grouped setup form, the
   // approval-note lifts, the context selector, the declared-schema rule)
   // apply only when this is null.
-  const stepCard = declaredCardEntryOf(interruptContext.xRenderer);
+  const stepCard = declaredCardEntryOf(interruptContext.xRenderer, interruptContext.schema);
   const entry =
     stepCard ??
     fieldRendererRegistry.resolve(
@@ -2226,7 +2227,7 @@ function ReadOnlyHitlReplay(props: {
     };
     // A declared card replays as the card that asked (cinatra#3470).
     const entry =
-      declaredCardEntryOf(props.xRenderer) ??
+      declaredCardEntryOf(props.xRenderer, props.schema) ??
       fieldRendererRegistry.resolve(
         HITL_PLACEHOLDER_FIELD_NAME,
         fieldSchema,

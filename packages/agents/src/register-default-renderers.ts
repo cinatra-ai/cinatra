@@ -57,8 +57,6 @@ import {
 } from "./agent-builder-ids";
 import { hasFieldRendererComponent } from "./field-renderer-components";
 import { makeExtensionFieldRenderer } from "./extension-field-renderer";
-import { makeDeclaredHitlScreenRenderer } from "./declared-hitl-screen-renderer";
-import { declaredHitlCardOfBinding, declaredHitlCardReady } from "./hitl-gate-submit";
 
 // ---------------------------------------------------------------------------
 // The normalized binding shape this module registers from. Mirrors
@@ -73,7 +71,9 @@ export type FieldRendererBindingInput = {
   readonly a2uiTranslator?: string;
   readonly params?: Readonly<Record<string, unknown>>;
   /** A bundled binding's declared HITL screen (cinatra#3470); the runtime
-   *  collector drops it for a package installed at runtime. */
+   *  collector drops it for a package installed at runtime. Never read here:
+   *  a step draws the card it paused with (`declaredCardEntryOf`), and a binding
+   *  registers through its kind as if it declared none. */
   readonly screen?: Readonly<Record<string, unknown>>;
 };
 
@@ -290,28 +290,6 @@ export function registerFieldRendererBindings(
   bindings: ReadonlyArray<FieldRendererBindingInput>,
 ): void {
   for (const b of bindings) {
-    // A DECLARED CARD (cinatra#3470) is drawn by the host's one generic card,
-    // matched by its own exact id only (never a kind's bare alias). A
-    // declaration that is refused registers the binding as if it declared no
-    // screen: the step gets the host's plain drawing, never a blank card.
-    const card = declaredHitlCardOfBinding(b);
-    if (card !== null) {
-      fieldRendererRegistry.register({
-        id: b.id,
-        priority: b.priority,
-        condition: (_fieldName, schema) => xRendererOf(schema) === b.id,
-        // Pure host drawing: no server action, no registry lookup (the
-        // credential-safety bar reads the factory's module).
-        renderer: makeDeclaredHitlScreenRenderer(
-          card,
-        ),
-        credentialSafe: true,
-        midRunHitl: true,
-        continueReady: (staged) => declaredHitlCardReady(card, staged),
-        declaredCard: true,
-      });
-      continue;
-    }
     // S8 spine (cinatra#1625): a binding whose component has migrated into its
     // claiming extension (declared cinatra.fieldRenderers[].component and is in
     // THIS build) resolves to the extension-shipped component via the generated

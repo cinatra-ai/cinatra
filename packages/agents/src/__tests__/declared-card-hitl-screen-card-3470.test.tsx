@@ -41,13 +41,19 @@ const SCREEN = {
 const LIST_ID = "@acme/card-fixture-agent:list-picker";
 /** A presentation hint beside the card: the card draws the step, not the hint. */
 const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
-const CASES: Array<[string, string, Record<string, unknown>]> = [
-  ["a plain declared card", CARD_ID, {}],
-  ["a declared card beside a presentation hint", CARD_ID, HINT],
-  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
+/** The same renderer in a newer build: its field is another one. */
+const SCREEN_V2 = { layout: "card", sections: [{ type: "field", key: "hook", label: "Hook" }] };
+/** The card the step paused with, as the server stored it in the step's schema. */
+const stored = (screen: Record<string, unknown> = SCREEN) => ({ "x-declared-screen": { screen, digest: "sha256:fixture" } });
+// [case, renderer id, extra run values, the screen the build declares NOW (null: no binding)]
+const CASES: Array<[string, string, Record<string, unknown>, Record<string, unknown> | null]> = [
+  ["the card it paused with, its binding since removed", CARD_ID, {}, null],
+  ["the card it paused with, its binding since changed", CARD_ID, {}, SCREEN_V2],
+  ["the card it paused with, beside a presentation hint", CARD_ID, HINT, SCREEN],
+  ["the card it paused with, on a binding id ending in :list-picker", LIST_ID, {}, SCREEN],
 ];
 
-function askingFor(id: string, extra: Record<string, unknown> = {}) {
+function askingFor(id: string, extra: Record<string, unknown> = {}, schemaExtra: Record<string, unknown> = stored()) {
   return {
     state: "asking" as const,
     runId: RUN_ID,
@@ -55,7 +61,7 @@ function askingFor(id: string, extra: Record<string, unknown> = {}) {
     gate: {
       reviewTaskId: "task-3470",
       xRenderer: id,
-      inputSchema: { type: "object", properties: { angle: { type: "string", title: "Angle" } } },
+      inputSchema: { type: "object", properties: { angle: { type: "string", title: "Angle" } }, ...schemaExtra },
       currentValues: { topic: "Audit trails for agent runs", ...extra },
       fieldName: undefined,
     },
@@ -101,14 +107,15 @@ function mount(host: LifecycleCardHost) {
 const cardContinue = (c: HTMLElement) => c.querySelector<HTMLButtonElement>('[data-action="submit-hitl-screen"]');
 
 describe("AgentHitlScreenCard draws a declared card (cinatra#3470)", () => {
-  it.each(CASES)("chat_thread, %s: the Continue is held until the field holds text, then sends the one staged answer", async (_name, id, extra) => {
+  it.each(CASES)("chat_thread, %s: the Continue is held until the field holds text, then sends the one staged answer", async (_name, id, extra, deployed) => {
     asking = askingFor(id, extra);
-    registerFieldRendererBindings([{ id, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+    if (deployed) registerFieldRendererBindings([{ id, kind: "cta", priority: 90, midRunHitl: true, screen: deployed }]);
     const { container } = mount("chat_thread");
     await settle();
     await waitFor(() => expect(container.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     expect(container.textContent).toContain("Check the brief before it is written.");
     expect(container.textContent).not.toContain("Hint item");
+    expect(container.textContent).not.toContain("Hook");
     await waitFor(() => expect(cardContinue(container)).not.toBeNull());
     expect(cardContinue(container)!.disabled).toBe(true);
 
@@ -125,14 +132,24 @@ describe("AgentHitlScreenCard draws a declared card (cinatra#3470)", () => {
     expect(Object.keys(payload).filter((k) => !declared.has(k))).toEqual([]);
   });
 
-  it("a refused declaration (a decision) draws no declared card and never a blank one", async () => {
+  it("a refused stored declaration (a decision) draws no declared card and never a blank one", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const refused = { ...SCREEN, sections: [...SCREEN.sections, { type: "decision", key: "d" }] };
-    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: refused }]);
+    asking = askingFor(CARD_ID, {}, stored(refused));
+    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true }]);
     const { container } = mount("chat_thread");
     await settle();
     await waitFor(() => expect(cardContinue(container)).not.toBeNull());
     expect(container.querySelector("[data-declared-hitl-screen]")).toBeNull();
     expect(errors.mock.calls.some((c) => String(c[0]).includes("declared screen refused"))).toBe(true);
+  });
+
+  it("a step that stored no card (paused before the card was recorded) draws no declared card, whatever the build declares now", async () => {
+    asking = askingFor(CARD_ID, {}, {});
+    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+    const { container } = mount("chat_thread");
+    await settle();
+    await waitFor(() => expect(cardContinue(container)).not.toBeNull());
+    expect(container.querySelector("[data-declared-hitl-screen]")).toBeNull();
   });
 });

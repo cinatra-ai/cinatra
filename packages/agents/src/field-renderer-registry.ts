@@ -115,12 +115,6 @@ export type FieldRendererEntry = {
    * holds text.
    */
   continueReady?: (staged: Record<string, unknown>) => boolean;
-  /**
-   * THIS ENTRY IS A STEP'S DECLARED CARD (cinatra#3470): set only by the
-   * registration of a binding whose declared screen passed the allow-list.
-   * Read through `declaredCardEntryOf`, never directly.
-   */
-  declaredCard?: true;
 };
 
 class FieldRendererRegistryImpl {
@@ -177,23 +171,4 @@ export function continueAwaitsAPick(
   if (entry?.holdsContinueUntilPicked !== true) return false;
   const pick = buffered.userResponse;
   return !(typeof pick === "string" && pick.length > 0);
-}
-
-/**
- * WHICH RENDERER DRAWS A STEP, AND WHICH SUBMIT RULE APPLIES (cinatra#3470) —
- * the one decision every host asks first, before any older special case.
- *
- * (1) The step's binding declares a valid card: this returns the card's entry.
- *     The card draws the step and its rule alone governs readiness
- *     (`continueReady`), staging and the answer sent: no presentation-hint
- *     dispatch, no rule keyed on the id's suffix or on a kind (the list step,
- *     the grouped setup form, the context selector), and no approval-note lift.
- * (2) Otherwise null, and the host keeps today's order unchanged.
- *
- * Read by its exact id: a binding has one entry (registration replaces by id),
- * so a kind's bare alias or a higher-priority condition never hides a card.
- */
-export function declaredCardEntryOf(xRenderer: string | null | undefined): FieldRendererEntry | null {
-  if (!xRenderer) return null;
-  return fieldRendererRegistry.list().find((e) => e.id === xRenderer && e.declaredCard === true) ?? null;
 }

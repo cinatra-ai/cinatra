@@ -23,7 +23,7 @@ vi.mock("lucide-react", () => {
 vi.mock("@/lib/cinatra-toast", () => ({ toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
-  usePathname: () => "/agents/cinatra-ai/blog-pipeline-agent/run-3035",
+  usePathname: () => "/agents/acme/card-fixture-agent/run-3470",
 }));
 const ok = vi.hoisted(() => async () => ({ ok: true }));
 vi.mock("../orchestrator-actions", () => ({ cancelOrchestratorAction: vi.fn(ok), resumeStoppedOrchestratorAction: vi.fn(ok) }));
@@ -54,11 +54,6 @@ const CARD_ID = "@acme/card-fixture-agent:brief";
 const LIST_ID = "@acme/card-fixture-agent:list-picker";
 /** A presentation hint beside the card: the card draws the step, not the hint. */
 const HINT = { presentation: { type: "card_list", title: "Hint title", items: [{ title: "Hint item", description: "d" }] } };
-const CASES: Array<[string, string, Record<string, unknown>]> = [
-  ["a plain declared card", CARD_ID, {}],
-  ["a declared card beside a presentation hint", CARD_ID, HINT],
-  ["a declared card whose binding id ends in :list-picker", LIST_ID, {}],
-];
 const SCREEN = {
   layout: "card",
   sections: [
@@ -67,6 +62,17 @@ const SCREEN = {
   ],
   carry: ["topic"],
 };
+/** The same renderer in a newer build: its field is another one. */
+const SCREEN_V2 = { layout: "card", sections: [{ type: "field", key: "hook", label: "Hook" }] };
+/** The card the step paused with, as the server stored it in the step's schema. */
+const STORED = { "x-declared-screen": { screen: SCREEN, digest: "sha256:fixture" } };
+// [case, renderer id, extra run values, the screen the build declares NOW (null: no binding)]
+const CASES: Array<[string, string, Record<string, unknown>, Record<string, unknown> | null]> = [
+  ["the card it paused with, its binding since removed", CARD_ID, {}, null],
+  ["the card it paused with, its binding since changed", CARD_ID, {}, SCREEN_V2],
+  ["the card it paused with, beside a presentation hint", CARD_ID, HINT, SCREEN],
+  ["the card it paused with, on a binding id ending in :list-picker", LIST_ID, {}, SCREEN],
+];
 type PanelProps = import("../orchestrator-stepper-panel").OrchestratorStepperPanelProps;
 
 function panelProps(id: string = CARD_ID): PanelProps {
@@ -84,10 +90,6 @@ function continueButtons(): HTMLButtonElement[] {
 
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
-  registerFieldRendererBindings([
-    { id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
-    { id: LIST_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN },
-  ]);
   const body = JSON.stringify({ reviewGate: { ref: null, awaiting: false } });
   vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "Content-Type": "application/json" } })));
 });
@@ -103,10 +105,11 @@ afterAll(() => {
 });
 
 describe("the run page draws a declared card and holds its Continue until the field is written", () => {
-  it.each(CASES)("%s: shows the declared fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra) => {
+  it.each(CASES)("%s: shows the declared fact and field; Continue waits for text and then sends the one staged answer", async (_name, id, extra, deployed) => {
+    if (deployed) registerFieldRendererBindings([{ id, kind: "cta", priority: 90, midRunHitl: true, screen: deployed }]);
     stream.interruptContext = {
       xRenderer: id,
-      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } } },
+      schema: { type: "object", "x-renderer": id, properties: { angle: { type: "string", title: "Angle" } }, ...STORED },
       values: { stepNumber: 1, topic: "Audit trails for agent runs", ...extra },
       reviewTaskId: "gate-card-3470",
     };
@@ -114,6 +117,7 @@ describe("the run page draws a declared card and holds its Continue until the fi
     await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
     const screen = document.querySelector("[data-declared-hitl-screen]")!;
     expect(document.body.textContent).not.toContain("Hint item");
+    expect(document.body.textContent).not.toContain("Hook");
     expect(screen.textContent).toContain("Audit trails for agent runs");
     expect(continueButtons()).toHaveLength(1);
     expect(continueButtons()[0]!.disabled).toBe(true);
@@ -133,5 +137,20 @@ describe("the run page draws a declared card and holds its Continue until the fi
     expect(payload).toMatchObject({ ...answer, userResponse: JSON.stringify(answer) });
     const declared = new Set(["topic", "angle", "userResponse", "approved", "approvedAt", "stepNumber"]);
     expect(Object.keys(payload).filter((k) => !declared.has(k))).toEqual([]);
+  });
+});
+
+describe("a step that stored no card (paused before the card was recorded) is drawn as before", () => {
+  it("the run page draws no declared card, whatever the build's binding declares now", async () => {
+    registerFieldRendererBindings([{ id: CARD_ID, kind: "cta", priority: 90, midRunHitl: true, screen: SCREEN }]);
+    stream.interruptContext = {
+      xRenderer: CARD_ID,
+      schema: { type: "object", "x-renderer": CARD_ID, properties: { angle: { type: "string", title: "Angle" } } },
+      values: { stepNumber: 1, topic: "Audit trails for agent runs" },
+      reviewTaskId: "gate-card-3470",
+    };
+    render(<OrchestratorStepperPanel {...panelProps(CARD_ID)} />);
+    await waitFor(() => expect(continueButtons().length).toBeGreaterThan(0));
+    expect(document.querySelector("[data-declared-hitl-screen]")).toBeNull();
   });
 });
