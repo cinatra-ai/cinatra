@@ -513,7 +513,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -2397,19 +2397,19 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
     // cinatra#3089: ONE read of the template for this pause, used for every
     // decision below. A step that names its gate's node is the step of a pause
-    // by the pause's verified node, never by position. Without a verified node,
-    // or without a readable template, it cannot be told whether this pause is
-    // such a review: the run is stopped failed, the pause offered as no approval.
+    // by the pause's verified node, never by position. Without a verified node it
+    // cannot be told whether this pause is such a review: the run is stopped
+    // failed, the pause offered as no approval. A read that throws is retried
+    // briefly first (nothing re-drives a dropped report); only then the stop.
     const stopUnplacedPause = (error: string) =>
       transitionRunStatus(runId, fromStatus, "failed", { error, completedAt: new Date() }, authority)
         .catch((err: unknown) => { if ((err as { code?: unknown } | null)?.code !== "stale_from_status") throw err; });
-    let pauseTemplate: Awaited<ReturnType<typeof readAgentTemplateById>>;
-    try {
-      pauseTemplate = await readAgentTemplateById(run.templateId);
-    } catch {
+    const pauseRead = await readPausePolicyWithRetry(() => readAgentTemplateById(run.templateId), `run=${runId} task=${task.id}`);
+    if (!pauseRead.ok) {
       await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
       return;
     }
+    const pauseTemplate = pauseRead.value;
     const reviewNodeSteps = reviewGateNodeSteps(pauseTemplate?.approvalPolicy?.steps);
     const verifiedGateNode = reviewNodeSteps.length === 0 ? null
       : verifyGateNodeClaim({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY, contextId: task.contextId ?? run.a2aContextId, taskId: task.id, claim: gateNodeClaim });

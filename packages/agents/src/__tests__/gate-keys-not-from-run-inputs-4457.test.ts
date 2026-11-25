@@ -289,8 +289,19 @@ async function emitAndRead(
   return { emitted, ctx: ctx! };
 }
 
-// cinatra#3089: a pause whose template cannot be read is offered as no
-// approval: the run is stopped failed and no gate is drawn on either road.
+// cinatra#3089: a template read that throws is retried inside the handler; a
+// read that then works decides the pause as on main (here: no template found).
+// The publish classification's own read takes the first fault, the pause's
+// first read the second.
+function faultThenAbsent() {
+  storeMock.readAgentTemplateById
+    .mockRejectedValueOnce(new Error("template store unavailable"))
+    .mockRejectedValueOnce(new Error("template store unavailable"))
+    .mockResolvedValue(null);
+}
+
+// cinatra#3089: a pause whose template cannot be read in any attempt is offered
+// as no approval: the run is stopped failed and no gate is drawn on either road.
 async function expectStoppedUnread(_road: Road, task: ReturnType<typeof gateTask>, run: AgentRunRecord = makeRun()) {
   await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task });
   expect(onInterruptSpy).not.toHaveBeenCalled();
@@ -465,7 +476,14 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.currentValues.output).toBe("cut {");
     });
 
-    it("the template read fails before the sole gate is known: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
+    it("the template read fails before the sole gate is known, then works: no run input fills the gate", async () => {
+      faultThenAbsent();
+      const { emitted, ctx } = await emitAndRead(road, gateTask(undefined));
+      expect(ctx.xRenderer).toBe(FALLBACK_RENDERER);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("the template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
       storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
       await expectStoppedUnread(road, gateTask(undefined));
     });
@@ -580,7 +598,14 @@ describe("cinatra#4457 — a value-surfacing gate's keys never come from run inp
       expect(ctx.inputSchema[GATE_KEYS_NOT_FROM_RUN_INPUTS]).toEqual(["campaignId"]);
     });
 
-    it("a context-shaped message whose template read fails: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
+    it("a context-shaped message whose template read fails, then works: no run input fills it", async () => {
+      faultThenAbsent();
+      const { emitted, ctx } = await emitAndRead(road, gateTask(CONTEXT_MESSAGE));
+      expect(ctx.currentValues.selectedRefs).toEqual([]);
+      expectNoRunInput(emitted, ctx);
+    });
+
+    it("a context-shaped message whose template read fails in every attempt: no gate is drawn, so no run input fills one (cinatra#3089)", async () => {
       storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store unavailable"));
       await expectStoppedUnread(road, gateTask(CONTEXT_MESSAGE));
     });

@@ -485,7 +485,24 @@ describe("every other pause keeps today's road", () => {
     ["no claim", undefined],
     ["an unverified claim of another step", sign("review_step", "another-key")],
     ["a verified claim of another step", sign("review_step")],
-  ])("a template that cannot be read stops the run for %s: no decision, no interrupt (cinatra#3089)", async (_label, claim) => {
+  ])("a template read that fails and then works keeps today's road for %s: not failed, the interrupt is offered once (cinatra#3089)", async (_label, claim) => {
+    // cinatra#3089: a read fault is retried inside the handler (nothing else
+    // re-drives the report); the read that works decides the pause as on main.
+    storeMock.readAgentTemplateById
+      .mockRejectedValueOnce(new Error("template store down"))
+      .mockRejectedValueOnce(new Error("template store down"))
+      .mockResolvedValue(makeTemplate([]));
+    await pause(claim);
+    expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
+    expect(transitions().map((m) => m.to)).not.toContain("failed");
+    expect(onInterruptSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no claim", undefined],
+    ["an unverified claim of another step", sign("review_step", "another-key")],
+    ["a verified claim of another step", sign("review_step")],
+  ])("a template that cannot be read in any attempt stops the run for %s: no decision, no interrupt (cinatra#3089)", async (_label, claim) => {
     // cinatra#3089: the pause cannot be told from an artifact review without
     // the flow's steps, so it is offered as no approval.
     storeMock.readAgentTemplateById.mockRejectedValue(new Error("template store down"));

@@ -60,8 +60,27 @@ export const ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT =
   "so it cannot be told whether this pause is that review; the pause was not offered as an approval and the run was stopped";
 export const PAUSE_POLICY_UNREAD = "PAUSE_POLICY_UNREAD";
 export const PAUSE_POLICY_UNREAD_TEXT =
-  `${PAUSE_POLICY_UNREAD}: the steps of this flow could not be read for this pause, so it cannot be told whether this pause ` +
-  "is an artifact review; the pause was not offered as an approval and the run was stopped";
+  `${PAUSE_POLICY_UNREAD}: the steps of this flow could not be read for this pause in any of its read attempts, so it cannot be ` +
+  "told whether this pause is an artifact review; the pause was not offered as an approval and the run was stopped";
+/** cinatra#3089: the waits between the attempts of a pause's template read. Nothing re-drives a pause report the
+ *  handler drops (the dispatch's blocking send returns it once), so a fault is retried here, briefly, before a stop. */
+export const PAUSE_POLICY_READ_WAITS_MS: readonly number[] = [250, 1000];
+/** Reads with the waits above between attempts. `ok: false` only when every attempt threw; a value (also `null`) is returned. */
+export async function readPausePolicyWithRetry<T>(
+  read: () => Promise<T>,
+  label: string,
+  waitsMs: readonly number[] = PAUSE_POLICY_READ_WAITS_MS,
+): Promise<{ ok: true; value: T } | { ok: false }> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return { ok: true, value: await read() };
+    } catch (err) {
+      console.warn(`[pause-policy] ${label} template read attempt ${attempt + 1}/${waitsMs.length + 1} failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (attempt >= waitsMs.length) return { ok: false };
+      await new Promise((resolve) => setTimeout(resolve, waitsMs[attempt]));
+    }
+  }
+}
 export function reviewGateNodeSteps(steps: unknown): ReviewGateNodeStep[] {
   if (!Array.isArray(steps)) return [];
   const found: ReviewGateNodeStep[] = [];

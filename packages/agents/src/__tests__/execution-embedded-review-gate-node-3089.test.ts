@@ -19,6 +19,7 @@ import { createHmac } from "node:crypto";
 
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID, SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 import { GATE_KEYS_NOT_FROM_RUN_INPUTS } from "../gate-keys-not-from-run-inputs";
+import { PAUSE_POLICY_READ_WAITS_MS } from "../orchestrator-gate-predicate";
 
 const { enrichSpy, onInterruptSpy, gateIndexSpy } = vi.hoisted(() => {
   const enrichSpy = vi.fn(async (schema: unknown) => ({ ...(schema as object) }));
@@ -367,21 +368,33 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     expect(emitSpy).not.toHaveBeenCalled();
   });
 
-  it("one template read serves the pause: a failed read stops the run, also when a later read would succeed", async () => {
+  it("a template read that throws is retried in the handler: the read that works decides the pause by its node as usual", async () => {
     storeMock.readAgentTemplateById.mockReset();
-    // The publish classification reads the template on its own first; the
-    // pause's one read then fails, and any later read would succeed.
+    // The claim verifies, so the publish classification reads nothing; the
+    // pause's first read fails and its retry succeeds.
     storeMock.readAgentTemplateById
-      .mockResolvedValueOnce(makeTemplate(OUTREACH))
       .mockRejectedValueOnce(new Error("store blip"))
       .mockResolvedValue(makeTemplate(OUTREACH));
+    gateIndexSpy.mockResolvedValue(0);
+    const run = makeRun({ ...RUN_INPUTS, reviewTargets: TARGETS });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(run.id, "running", "failed", expect.anything(), expect.anything());
+    // red-first-expect: expected "vi.fn()" to be called at least once
+    expect(emitSpy).toHaveBeenCalled();
+    expect(routedToReview()).toBe(true);
+  });
+
+  it("a template read that throws in every attempt stops the run after the bounded retries: nothing is offered", async () => {
+    storeMock.readAgentTemplateById.mockReset();
+    storeMock.readAgentTemplateById.mockRejectedValue(new Error("store down"));
     gateIndexSpy.mockResolvedValue(1);
     const run = makeRun({ ...RUN_INPUTS });
-    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(null) });
+    await handleWayflowTaskState({ authority: TEST_AUTHORITY, runId: run.id, run, fromStatus: "running", task: pausedTask(signedClaim("drafts-approval_gate")) });
     expect(emitSpy).not.toHaveBeenCalled();
     expect(onInterruptSpy).not.toHaveBeenCalled();
     stoppedWith("PAUSE_POLICY_UNREAD");
-    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(2);
+    // The pause's first read and its retries (the verified claim needs no publish read).
+    expect(storeMock.readAgentTemplateById).toHaveBeenCalledTimes(1 + PAUSE_POLICY_READ_WAITS_MS.length);
   });
 
   it("a claim another runtime signed for its own task (a child agent's pause) does not verify here: the run is stopped", async () => {
