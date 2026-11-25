@@ -71,7 +71,9 @@ const storeMock = vi.hoisted(() => ({
   // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
   readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
     const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
+    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
+    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
   }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
@@ -532,6 +534,8 @@ describe("cinatra#3007 — the mid-run human gate's failure callback asks first"
     // cinatra#4150: the publish classification reads the template first and fails a run whose
     // template is not found; this one lists no publishing step. Later reads answer null as before.
     storeMock.readAgentTemplateById.mockResolvedValueOnce({ publishingSteps: [] } as never);
+    // cinatra#3089: the steps bound at this run's dispatch: a flow whose policy lists no step.
+    storeMock.readRunPauseSteps.mockResolvedValueOnce({ packageVersion: null, approvalPolicy: { steps: [] } });
     await handleWayflowTaskState({
       authority: TEST_AUTHORITY,
       runId: "run-3007",

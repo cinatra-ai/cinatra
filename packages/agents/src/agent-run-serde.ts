@@ -883,6 +883,7 @@ export async function readRunPauseSteps(runId: string, orgId: string): Promise<R
     ? Object.getOwnPropertyDescriptor(bound.policy, RUN_PAUSE_STEPS_KEY)?.value as Record<string, unknown> | undefined : undefined;
   if (!record || typeof record !== "object" || record.version !== 1 || record.settled !== true ||
       !Object.prototype.hasOwnProperty.call(record, "approvalPolicy") ||
+      record.approvalPolicy === null || typeof record.approvalPolicy !== "object" ||
       !(record.packageVersion === null || typeof record.packageVersion === "string")) {
     throw new Error(`no settled pause steps are bound to run ${runId}`);
   }

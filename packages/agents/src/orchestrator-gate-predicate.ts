@@ -62,21 +62,20 @@ export const PAUSE_POLICY_UNREAD = "PAUSE_POLICY_UNREAD";
 export const PAUSE_POLICY_UNREAD_TEXT =
   `${PAUSE_POLICY_UNREAD}: the steps of this flow could not be read for this pause in any of its read attempts, so it cannot be ` +
   "told whether this pause is an artifact review; the pause was not offered as an approval and the run was stopped";
-// cinatra#3089: the flow that runs is the INSTALLED package, one unversioned
-// directory per package name; the install writes that directory and the live
-// template row's packageVersion in one transaction (install-from-package.ts).
-// A run pinned to another version than the installed one ran the installed
-// flow. When the two versions' policies differ, the pause is classified by
-// neither (never degraded to an ordinary approval): the run stops.
+// cinatra#3089: the flow that runs is the INSTALLED package (one unversioned
+// directory per package name); its steps are bound with its source at dispatch.
+// A run pinned to a snapshot whose steps are not those bound steps ran another
+// flow than the snapshot's: the pause is classified by neither (never degraded
+// to an ordinary approval), and the run stops.
 export const PAUSE_POLICY_VERSION_MISMATCH = "PAUSE_POLICY_VERSION_MISMATCH";
 export const PAUSE_POLICY_VERSION_MISMATCH_TEXT =
-  `${PAUSE_POLICY_VERSION_MISMATCH}: this run is pinned to another version of this flow than the installed one, and the two ` +
-  "versions have different steps, so it cannot be told which version's steps this pause belongs to; the pause was not offered " +
-  "as an approval and the run was stopped";
+  `${PAUSE_POLICY_VERSION_MISMATCH}: the steps of the version this run is pinned to are not the steps of the installed flow ` +
+  "that ran, so it cannot be told which steps this pause belongs to; the pause was not offered as an approval and the run " +
+  "was stopped";
 export class PausePolicyVersionMismatchError extends Error {
   readonly code = PAUSE_POLICY_VERSION_MISMATCH;
   constructor(readonly pinnedVersion: string | null, readonly installedVersion: string | null) {
-    super(`${PAUSE_POLICY_VERSION_MISMATCH}: pinned ${String(pinnedVersion)}, installed ${String(installedVersion)}`);
+    super(`${PAUSE_POLICY_VERSION_MISMATCH}: pinned snapshot of package ${String(pinnedVersion)}, installed ${String(installedVersion)}`);
     this.name = "PausePolicyVersionMismatchError";
   }
 }

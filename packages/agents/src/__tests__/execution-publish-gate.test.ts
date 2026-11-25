@@ -46,7 +46,9 @@ const storeMock = vi.hoisted(() => ({
   // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
   readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
     const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
+    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
+    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
   }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
@@ -526,6 +528,8 @@ describe("every other pause keeps today's road", () => {
     ["a verified claim of another step", sign("review_step")],
   ])("a template that is not found keeps today's road for %s: no decision, the interrupt is offered", async (_label, claim) => {
     storeMock.readAgentTemplateById.mockResolvedValue(null);
+    // cinatra#3089: the row was removed after the dispatch, which bound its steps (a policy with no step).
+    storeMock.readRunPauseSteps.mockResolvedValueOnce({ packageVersion: null, approvalPolicy: { steps: [] } });
     await pause(claim);
     expect(decisions.insertParkedDecision).not.toHaveBeenCalled();
     expect(transitions().map((m) => m.to)).not.toContain("failed");

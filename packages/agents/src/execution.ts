@@ -217,6 +217,8 @@ export type PinnedRunSnapshotFields = {
   /** cinatra#3089: the approval policy captured in this snapshot. The worker's
    *  dispatch overlay ignores it; a pause of the run is classified by it. */
   approvalPolicy?: unknown;
+  /** cinatra#3089: the package version the snapshot records (not the snapshot's own number); named in a refusal only. */
+  snapshotPackageVersion?: string | null;
 };
 
 export type ResolvePinnedRunSnapshotDeps = {
@@ -324,6 +326,7 @@ export async function resolvePinnedRunSnapshot(
       taskSpec?: string | null;
       executionEnvironment?: unknown;
       approvalPolicy?: unknown;
+      packageVersion?: unknown;
     };
     // (5) EXECUTION-FIELD COMPLETENESS — a required pin FULLY replaces the
     //     execution plan, so an ABSENT or `undefined` compiledPlan cannot pin
@@ -342,6 +345,7 @@ export async function resolvePinnedRunSnapshot(
       taskSpec: s.taskSpec ?? null,
       executionEnvironment: s.executionEnvironment ?? null,
       approvalPolicy: s.approvalPolicy,
+      snapshotPackageVersion: typeof s.packageVersion === "string" ? s.packageVersion : undefined,
     };
   }
 
@@ -357,6 +361,7 @@ export async function resolvePinnedRunSnapshot(
       taskSpec?: string | null;
       executionEnvironment?: unknown;
       approvalPolicy?: unknown;
+      packageVersion?: unknown;
     };
     // A RESOLVED best-effort snapshot is authoritative for this run exactly as
     // it is for compiledPlan/taskSpec above — the environment does not fall back
@@ -367,6 +372,7 @@ export async function resolvePinnedRunSnapshot(
       taskSpec: s.taskSpec,
       executionEnvironment: s.executionEnvironment ?? null,
       approvalPolicy: s.approvalPolicy,
+      snapshotPackageVersion: typeof s.packageVersion === "string" ? s.packageVersion : undefined,
     };
   }
 
@@ -375,14 +381,14 @@ export async function resolvePinnedRunSnapshot(
 }
 
 /**
- * cinatra#3089: the steps a pause is classified by: those of the version whose
- * flow ran. The dispatch runs the INSTALLED package (resolveWayflowUrl by package
- * name) and binds, beside the source it selected, the installed version and steps
- * it read (readRunPauseSteps; never the mutable template row, which a later
- * install or recompile rewrites while a task runs). A run served a pinned
- * snapshot is classified by the snapshot's steps when the pinned version is the
- * bound one, or when the bound steps are the same; else the bound flow may have
- * produced the pause under other steps, and PausePolicyVersionMismatchError is
+ * cinatra#3089: the steps a pause is classified by: those of the flow that ran.
+ * The dispatch runs the INSTALLED package (resolveWayflowUrl by package name) and
+ * binds, beside the source it selected, the installed steps it read
+ * (readRunPauseSteps; never the mutable template row, which a later install or
+ * recompile rewrites while a task runs). A run served a pinned snapshot is
+ * classified by the snapshot's steps only when they ARE the bound steps (by
+ * content: canonicalPolicyText); no version string decides it (a snapshot's
+ * number is not its package version). Else PausePolicyVersionMismatchError is
  * thrown (no retry; the run stops). No bound steps, a required pin that cannot be
  * served, a snapshot read that throws, or a served snapshot with no approval
  * policy throws: the caller retries, then stops; it never falls back to the live
@@ -397,9 +403,8 @@ export async function readPausePolicyTemplate(
   if (pinned.approvalPolicy === undefined) {
     throw new Error(`the pinned snapshot of ${run.templateId}@${run.packageVersion} carries no approval policy`);
   }
-  // Another version ran: the two policies must be the same, else it is not known which produced the pause.
-  if (bound.packageVersion !== run.packageVersion && canonicalPolicyText(bound.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
-    throw new PausePolicyVersionMismatchError(run.packageVersion, bound.packageVersion);
+  if (canonicalPolicyText(bound.approvalPolicy) !== canonicalPolicyText(pinned.approvalPolicy)) {
+    throw new PausePolicyVersionMismatchError(pinned.snapshotPackageVersion ?? null, bound.packageVersion);
   }
   return { approvalPolicy: pinned.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
 }

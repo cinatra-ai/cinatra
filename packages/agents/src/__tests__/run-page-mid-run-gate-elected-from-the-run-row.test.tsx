@@ -95,7 +95,9 @@ const storeMock = vi.hoisted(() => ({
   // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
   readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
     const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
+    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
+    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
   }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),

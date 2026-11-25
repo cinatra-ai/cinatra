@@ -61,6 +61,11 @@ describe("the pause steps bound beside the source (cinatra#3089)",()=>{
    await expect((await serde()).readRunPauseSteps("run","org")).rejects.toThrow("no settled pause steps");
   }
  });
+ it("a row whose steps are no object (null) binds nothing the pause can use: the pause read fails",async()=>{
+  h.template={packageVersion:"1.0.0",approvalPolicy:"null"};
+  await bindRunStepToolPolicy({...input(),dispatchTemplateRead:{packageVersion:"1.0.0",approvalPolicy:null}} as never);
+  await expect((await serde()).readRunPauseSteps("run","org")).rejects.toThrow("no settled pause steps");
+ });
  it("a run bound without them (before they were bound): the pause read fails; the source binding itself is unchanged",async()=>{
   await bindRunStepToolPolicy(input());
   expect((h.bound as {policy:unknown}).policy).toEqual(policy);

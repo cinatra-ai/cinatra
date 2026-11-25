@@ -63,7 +63,9 @@ const storeMock = vi.hoisted(() => ({
   // cinatra#3089: a pause reads the steps its dispatch bound beside the source; here those of the template row.
   readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
     const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-    return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+    // As the real reader: a settled record with a policy, or the refusal (no steps bound).
+    if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
+    return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
   }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
@@ -289,7 +291,9 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
     // The steps bound at the dispatch are those of the template row, unless a test binds others.
     storeMock.readRunPauseSteps.mockImplementation(async () => {
       const t = (await storeMock.readAgentTemplateById("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
-      return { packageVersion: t?.packageVersion ?? null, approvalPolicy: t?.approvalPolicy };
+      // As the real reader: a settled record with a policy, or the refusal (no steps bound).
+      if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
+      return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
     });
     bindSeam();
   });
@@ -414,7 +418,14 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   delete V2_DRAFTS.artifactReviewTargetsInput;
   delete V2_DRAFTS.artifactReviewGateNode;
   const UNMARKED = [RECIPIENTS_STEP, V2_DRAFTS, SEND_STEP];
-  const v1Row = (steps: Array<Record<string, unknown>>) => ({ templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: { compiledPlan: [], taskSpec: null, approvalPolicy: { steps } } });
+  // A version row as the store keeps it: its own number (`semver`, what a run pins) and the snapshot
+  // buildSnapshotFromTemplate wrote, which records the package version it was taken from.
+  const snapshotOf = (steps: Array<Record<string, unknown>> | undefined, packageVersion: string | null) => ({
+    name: "Reviewer", description: null, sourceNl: "", compiledPlan: [], inputSchema: { properties: {}, required: [] }, outputSchema: null,
+    ...(steps ? { approvalPolicy: { steps } } : {}), type: "orchestrator", taskSpec: null, packageVersion, lgGraphCode: null, lgGraphId: null,
+  });
+  const v1Row = (steps: Array<Record<string, unknown>>, packageVersion: string | null = "1.0.0") =>
+    ({ templateId: "tmpl-rev-1", semver: "1.0.0", snapshot: snapshotOf(steps, packageVersion) });
   const V1_ROW = v1Row(OUTREACH);
   type Installed = { version: string | null; steps: Array<Record<string, unknown>> };
   // `installed`: what the dispatch bound beside the source it selected. `liveNow`: the template row at the pause
@@ -453,6 +464,15 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
 
   it("a review marker only the installed version 2 carries is never degraded to an ordinary approval of version 1", async () => {
     await pinnedPause(v1Row(UNMARKED), { version: "2.0.0", steps: OUTREACH });
+    expect(onInterruptSpy).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), "pending_approval", expect.anything(), expect.anything(),
+    );
+    stoppedWith("PAUSE_POLICY_VERSION_MISMATCH");
+  });
+
+  it("a snapshot numbered 1.0.0 taken from package 0.9.0 (no marker), installed package 1.0.0 marked: the equal numbers decide nothing; the run stops", async () => {
+    await pinnedPause(v1Row(UNMARKED, "0.9.0"), { version: "1.0.0", steps: OUTREACH });
     expect(onInterruptSpy).not.toHaveBeenCalled();
     expect(storeMock.transitionRunStatus).not.toHaveBeenCalledWith(
       expect.anything(), expect.anything(), "pending_approval", expect.anything(), expect.anything(),
@@ -510,7 +530,7 @@ describe("cinatra#3089 — an embedded review gate's marker follows the verified
   });
 
   it("a pinned run whose snapshot is missing, unreadable or carries no policy stops after the retries; the live policy is never used", async () => {
-    const noPolicy = { ...V1_ROW, snapshot: { compiledPlan: [], taskSpec: null } };
+    const noPolicy = { ...V1_ROW, snapshot: snapshotOf(undefined, "1.0.0") };
     for (const row of [null, new Error("snapshot store down"), noPolicy]) {
       storeMock.transitionRunStatus.mockClear();
       onInterruptSpy.mockClear();

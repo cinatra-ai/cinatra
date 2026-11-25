@@ -84,7 +84,7 @@ const storeMock = vi.hoisted(() => {
     readRunPauseSteps: vi.fn(async (): Promise<unknown> => {
       const t = (await (storeMock.readAgentTemplateById as (id: string) => Promise<unknown>)("")) as { packageVersion?: string | null; approvalPolicy?: unknown } | null | undefined;
       // No template: no steps were bound (a dispatch needs the row), so the pause read fails.
-      if (!t) throw new Error("no pause steps are bound to the run");
+      if (!t || t.approvalPolicy === undefined || t.approvalPolicy === null) throw new Error("no settled pause steps are bound to the run");
       return { packageVersion: t.packageVersion ?? null, approvalPolicy: t.approvalPolicy };
     }),
     readAgentTemplates: vi.fn(async () => []),
