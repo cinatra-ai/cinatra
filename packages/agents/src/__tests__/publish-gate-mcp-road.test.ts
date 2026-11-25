@@ -4,7 +4,7 @@
 // Since cinatra#4245 the road takes the pause claim before its fence; the hold is read
 // before the claim and, on a publishing template or for a run with a decision, again
 // under the claim and before the fence.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
 // cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
@@ -311,7 +311,7 @@ describe("agent_run_resume and a publish decision", () => {
   });
 });
 
-// A RETIRED STEP IS ANSWERED BY NOTHING (`retiredParkedStep`): a tombstoned id,
+// A RETIRED STEP IS ANSWERED BY NOTHING (`unanswerableParkedStep`): a tombstoned id,
 // or a package's own screen that no binding of this build and no installed
 // package declares any more. The run stays parked; the person starts a new run.
 describe("agent_run_resume and a retired step", () => {
@@ -342,6 +342,10 @@ describe("agent_run_resume and a retired step", () => {
     // An earlier suite resets the claim fake; the claim wins here.
     pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
     pauseClaimFake.releasePauseClaim.mockReset().mockImplementation(async () => "released");
+  });
+  // The suites below park no step.
+  afterEach(() => {
+    durableRead.mockReset().mockResolvedValue(null);
   });
   const parkAt = (xRenderer: string) => durableRead.mockResolvedValue(parkedRow("run-1", "wayflow-task-1", xRenderer));
   const nothingMoved = () => {
@@ -390,14 +394,20 @@ describe("agent_run_resume and a retired step", () => {
     });
   }
 
-  it("an ordinary step, a step with no row and an unreadable row are resumed as before", async () => {
+  it("an ordinary step and a step with no row are resumed as before", async () => {
     parkAt("@cinatra-ai/agent-builder:schema-field-fallback");
     await resume().catch(() => undefined);
     durableRead.mockResolvedValue(null);
     await resume().catch(() => undefined);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(2);
+  });
+
+  // red-first-expect: to be 'Run run-1 cannot be resumed: its paus
+  it("a step whose row cannot be read is refused and nothing is sent", async () => {
     durableRead.mockRejectedValue(new Error("permission denied"));
-    await resume().catch(() => undefined);
-    expect(sendTaskSpy).toHaveBeenCalledTimes(3);
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe("Run run-1 cannot be resumed: its paused step could not be read.");
+    nothingMoved();
   });
 });
 

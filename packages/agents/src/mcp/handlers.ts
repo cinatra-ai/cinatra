@@ -65,7 +65,7 @@ import {
   type SetTriggerForActorArgs,
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
-import { resumeWayflowUnderPauseClaim, retiredParkedStep, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
+import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim, unanswerableParkedStep } from "../run-resume-under-claim";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -2148,8 +2148,9 @@ async function handleAgentBuilderRunResume(
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
       }
-      // A retired step is answered by nothing (`retiredParkedStep`); the run stays parked.
-      const retired = run.a2aTaskId ? await retiredParkedStep(run.id, `wayflow-${run.a2aTaskId}`) : null;
+      // A step no screen draws is answered by nothing (`unanswerableParkedStep`); nor is one whose record cannot be read.
+      let retired: string | null;
+      try { ({ unanswerable: retired } = await unanswerableParkedStep(run.id, `wayflow-${run.a2aTaskId}`)); } catch { return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` }; }
       if (retired !== null) return { error: `Run ${runId} is paused at a retired step; it can no longer be answered.` };
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");

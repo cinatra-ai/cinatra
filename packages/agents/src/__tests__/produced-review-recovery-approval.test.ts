@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
+// The paused step has no durable row here: the answer goes on as before.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
+
 vi.mock("../publish-decision-store", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readLatestDecisionForRun: async () => null,

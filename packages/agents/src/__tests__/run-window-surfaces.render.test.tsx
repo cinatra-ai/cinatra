@@ -37,6 +37,7 @@ import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 // window is drawn, it carries the reading's own sentence, and a person the run
 // would refuse is shown none — only the frame it is drawn in moved.
 import { RunPageChrome } from "../run-page-chrome";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 /**
  * IS A BOX DRAWN AT ALL. Every reading of the window opens its sentence the
@@ -203,6 +204,10 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 }));
 
 beforeEach(() => {
+  // The renderers a real install registers at boot (src/app/field-renderer-init.tsx):
+  // the host's own entries and every generated binding, the gate's
+  // `@cinatra-ai/email-recipient-selection-agent:output` among them.
+  ensureDefaultFieldRenderersRegistered();
   cleanup();
   document.body.innerHTML = "";
   // The shared panel portals into <main>.

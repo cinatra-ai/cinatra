@@ -176,11 +176,16 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 }));
 
 import { RunPageChrome } from "../run-page-chrome";
+import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 import { sendRunWindowTurn } from "../run-window-actions";
 import { approveReviewTask } from "../hitl-actions";
 import { useRunWindowScreen } from "../run-window-screen-context";
 
 beforeEach(() => {
+  // The renderers a real install registers at boot (src/app/field-renderer-init.tsx):
+  // the host's own entries and every generated binding, the gate's
+  // `@cinatra-ai/email-recipient-selection-agent:output` among them.
+  ensureDefaultFieldRenderersRegistered();
   selectedGate.current = OPEN_GATE;
   cleanup();
   document.body.innerHTML = "";

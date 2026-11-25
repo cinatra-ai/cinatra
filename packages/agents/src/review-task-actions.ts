@@ -31,7 +31,7 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, retiredParkedStep, settleSendOrDescribe } from "./run-resume-under-claim";
+import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe, unanswerableParkedStep } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -201,6 +201,27 @@ function isBlankSetupValue(value: unknown): boolean {
 }
 
 /**
+ * Refuses an answer to a parked step no screen draws (`unanswerableParkedStep`)
+ * with `HitlStepNotAnswerableError`, and one whose record cannot be read with
+ * the road's fixed text. A step with no record goes on as before.
+ */
+async function refuseUnanswerableStep(
+  runId: string,
+  reviewTaskId: string,
+  text: { unreadable: string; retired: string },
+): Promise<void> {
+  let unanswerable: string | null;
+  try {
+    ({ unanswerable } = await unanswerableParkedStep(runId, reviewTaskId));
+  } catch {
+    throw new Error(text.unreadable);
+  }
+  if (unanswerable !== null) {
+    throw new HitlStepNotAnswerableError({ runId, xRenderer: unanswerable, message: text.retired });
+  }
+}
+
+/**
  * cinatra#3582 — a declared MINIMUM LENGTH, refused here as well as on the
  * screen, because the screen is only one door into a run's inputs. Measured on
  * the trimmed value and only on a value that is not blank: emptiness is the
@@ -342,6 +363,13 @@ export async function approveReviewTaskInternal(
         message: `Setup approval rejected: run ${runId} is not pending_approval (current status: ${run.status})`,
       });
     }
+
+    // A setup step records its renderer too: one no screen draws is refused the
+    // same way, before any write.
+    await refuseUnanswerableStep(runId, reviewTaskId, {
+      unreadable: `Setup approval rejected: the paused step of run ${runId} could not be read`,
+      retired: `Setup approval rejected: run ${runId} is paused at a retired step; it can no longer be answered`,
+    });
 
     // cinatra#2485 C — the install-scope run gate, asserted HERE because this
     // branch is a genuine dispatch that reaches NEITHER layer-2 chokepoint:
@@ -930,16 +958,13 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
-    // A RETIRED STEP is answered by nothing (`retiredParkedStep`): refused before
-    // the pause is claimed, so nothing is recorded or sent and the run stays parked.
-    const retiredRenderer = await retiredParkedStep(run.id, reviewTaskId);
-    if (retiredRenderer !== null) {
-      throw new HitlStepNotAnswerableError({
-        runId: run.id,
-        xRenderer: retiredRenderer,
-        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
-      });
-    }
+    // A step no screen draws is answered by nothing (`unanswerableParkedStep`):
+    // refused before the pause is claimed, so nothing is recorded or sent and
+    // the run stays parked; so is a step whose record cannot be read.
+    await refuseUnanswerableStep(run.id, reviewTaskId, {
+      unreadable: `WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`,
+      retired: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
+    });
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts
       // persists task.contextId immediately after the initial sendTask succeeds.

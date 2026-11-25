@@ -498,7 +498,7 @@ export class GateNotPendingError extends Error {
 
 /**
  * A generic answer refused because the paused step takes none: a RETIRED step
- * (`hitlStepIsRetired`), which nothing answers any more; the person starts a
+ * (`hitlStepScreenIsAnswerable` says no screen draws it), which nothing answers any more; the person starts a
  * new run. Thrown before the pause is claimed, so nothing is recorded or sent
  * and the run stays parked.
  */

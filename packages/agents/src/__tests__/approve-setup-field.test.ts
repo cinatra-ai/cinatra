@@ -139,6 +139,15 @@ vi.mock("@/lib/auth-session", async (orig) => ({
   resolveOrgRoleForUser: vi.fn(async () => "member"),
 }));
 
+// The paused step's durable row (none unless a case parks one).
+const durableRead = vi.hoisted(() => vi.fn(async (_runId: string, _reviewTaskId: string): Promise<unknown> => null));
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: durableRead,
+}));
+// No package is installed at run time here.
+vi.mock("../field-renderer-bindings.server", () => ({ collectInstalledFieldRendererBindings: () => [] }));
+
 import { approveReviewTaskInternal } from "../review-task-actions";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
@@ -174,6 +183,26 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     // resetAllMocks cleared the implementation — re-arm the membership read so
     // the resuming principal is a member (the guarded write's happy path).
     vi.mocked(resolveOrgRoleForUser).mockResolvedValue("member");
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a setup step whose pack screen no binding declares any more is refused, nothing written", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-gone", templateId: "tpl-s1", status: "pending_approval", inputParams: {},
+    });
+    durableRead.mockResolvedValue({
+      runId: "run-gone", reviewTaskId: "setup-run-gone", xRenderer: "@acme/removed-pack:setup-form",
+      inputSchema: { type: "object" }, values: {}, materializedAt: "2026-11-25T00:00:00.000Z",
+    });
+    await expect(
+      approveReviewTaskInternal("setup-run-gone", "actor-1", { name: "Alice" }, "name"),
+    ).rejects.toMatchObject({
+      name: "HitlStepNotAnswerableError",
+      message: "Setup approval rejected: run run-gone is paused at a retired step; it can no longer be answered",
+    });
+    expect(durableRead).toHaveBeenCalledWith("run-gone", "setup-run-gone");
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 
   it("merges single-field value into inputParams and re-enqueues AGENT_BUILDER_EXECUTION", async () => {

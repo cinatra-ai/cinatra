@@ -52,6 +52,8 @@ vi.mock("../run-pause-claim", async (orig) => ({
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // The paused step has no durable row here: the answer goes on as before.
+  readDurableHitlGateForContinue: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
   },

@@ -67,6 +67,12 @@ const H = vi.hoisted(() => ({
   seq: 0,
 }));
 
+// The paused step has no durable row here: the answer goes on as before.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
+
 vi.mock("@/lib/background-jobs", () => ({
   BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "agent-builder-execution" },
   enqueueBackgroundJob: vi.fn(

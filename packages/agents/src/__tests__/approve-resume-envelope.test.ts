@@ -318,7 +318,7 @@ describe("a list step's picks reach the run (cinatra#3562)", () => {
   });
 });
 
-// A RETIRED STEP IS ANSWERED BY NOTHING (`retiredParkedStep`): a tombstoned id,
+// A RETIRED STEP IS ANSWERED BY NOTHING (`unanswerableParkedStep`): a tombstoned id,
 // or a package's own screen that no binding of this build and no installed
 // package declares any more. Refused before the pause is claimed: nothing is
 // recorded or sent, and the person starts a new run.
@@ -373,13 +373,34 @@ describe("the generic answer and a retired step", () => {
     });
   }
 
-  it("an ordinary step, a step with no row and an unreadable row are answered as before", async () => {
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a bare id the host has never seen is refused, as every page hides it", async () => {
+    parkAt("never-seen");
+    await expect(answer()).rejects.toMatchObject({ name: "HitlStepNotAnswerableError", message: RETIRED });
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("a bare compat id that a declared binding names as its kind is answered", async () => {
+    parkAt("list-picker");
+    await answer();
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ordinary step and a step with no row are answered as before", async () => {
     parkAt("@cinatra-ai/agent-builder:schema-field-fallback");
     await answer();
     durableRead.mockResolvedValue(null);
     await answer();
+    expect(sendTaskMock).toHaveBeenCalledTimes(2);
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a step whose row cannot be read is refused and nothing is sent", async () => {
     durableRead.mockRejectedValue(new Error("permission denied"));
-    await answer();
-    expect(sendTaskMock).toHaveBeenCalledTimes(3);
+    await expect(answer()).rejects.toThrow(
+      "WayFlow approval rejected: the paused step of gate task-r1 on run run-r1 could not be read",
+    );
+    expect(sendTaskMock).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
   });
 });

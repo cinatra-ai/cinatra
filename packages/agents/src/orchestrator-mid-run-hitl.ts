@@ -19,7 +19,6 @@ import {
   type FieldRendererEntry,
 } from "./field-renderer-registry";
 import {
-  AGENT_BUILDER_ID_SCOPE,
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
@@ -115,34 +114,39 @@ export function isTombstonedHitlRendererId(xRenderer: string): boolean {
 }
 
 /**
- * IS THIS PARKED STEP RETIRED: can nothing answer it any more? One definition,
- * read by every host (`parkedHitlStepIsAnswerable`) and by the server's generic
- * answer roads (`currentHitlGateRefusal`, run-resume-under-claim.ts). Yes for:
- *   - a tombstoned id (`isTombstonedHitlRendererId`);
- *   - a package's own screen (`<package>:<screen>`, outside the host's own
- *     agent-builder scope) that no binding declares any more, unless its values
- *     carry a presentation hint (drawn by the host's generic renderer). Its
- *     package no longer ships that screen, so the flow installed under the run
- *     changed: answering the old step would answer a screen the running flow no
- *     longer has (a pack's own confirmation, for example, in place of the
- *     host's publish approval, cinatra#4150). The person starts a new run.
- * `declared(id)` says whether a binding declares exactly that id where the
- * answer is read: on a page, an entry of its registry claims it (the bindings
- * of this build and of the packages installed at run time); on the server, a
- * binding of this build or of an installed package declares it. So the same
- * step stays answerable in a workspace whose installed package still declares
- * the screen (its old flow is the one that runs), and is retired where no
- * package declares it, whatever the order in which packages change.
+ * DOES A SCREEN STILL DRAW THIS PARKED STEP? The ONE predicate for "this step
+ * can be answered", read by every page (`parkedHitlStepIsAnswerable`) and by
+ * the server's answer roads (`unanswerableParkedStep`, run-resume-under-claim.ts),
+ * so a step a page hides is a step the server refuses. Yes when, and only when:
+ *   - the step is recorded with no renderer id (a tool-call approval, answered
+ *     by the host's own Approve);
+ *   - it is recorded under the plain form's own id
+ *     (`SCHEMA_FIELD_FALLBACK_RENDERER_ID`);
+ *   - `declared(id)` holds for its recorded renderer id; or
+ *   - its values carry a presentation hint (drawn by the host's generic
+ *     renderer without a registry entry).
+ * Never for a tombstoned id (`isTombstonedHitlRendererId`). Anything else (a
+ * pack screen its package no longer ships, such as a pack's own confirmation
+ * in place of the host's publish approval, cinatra#4150, or an id the host has
+ * never seen) is answered by nothing; the person starts a new run.
+ *
+ * `declared(id)` reads the sources a page's registry is filled from: on a page,
+ * an entry of its registry claims the id; on the server, the host's own scope,
+ * a binding of this build or of a package installed at run time names it (or,
+ * for a bare compat id, names it as its kind). So a step stays answerable in a
+ * workspace whose installed package still declares the screen, whatever the
+ * order in which packages change.
  */
-export function hitlStepIsRetired(
+export function hitlStepScreenIsAnswerable(
   xRenderer: string,
   values: unknown,
   declared: (id: string) => boolean,
 ): boolean {
-  if (isTombstonedHitlRendererId(xRenderer)) return true;
-  const colon = xRenderer.indexOf(":");
-  const namesPackageScreen = colon > 0 && xRenderer.slice(0, colon) !== AGENT_BUILDER_ID_SCOPE;
-  return namesPackageScreen && !gateCarriesPresentationHint(values) && !declared(xRenderer);
+  if (xRenderer === "") return true;
+  if (isTombstonedHitlRendererId(xRenderer)) return false;
+  if (xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return true;
+  if (declared(xRenderer)) return true;
+  return gateCarriesPresentationHint(values);
 }
 
 /**
@@ -187,20 +191,11 @@ export function resolveHitlGateRenderer(
  * MAY THIS PARKED STEP BE ANSWERED HERE? The one answer every page surface
  * asks before it offers a control for a parked step: the run page's stepper
  * (its Continue), the run panel (its Continue and the gate it hands the chat
- * composer) and the HITL screen card (its Continue). It reads the page's
- * registry; the server does not ask it.
- *
- * Yes when, and only when, a screen draws the step:
- *   - the step is recorded under the plain form's own id
- *     (`SCHEMA_FIELD_FALLBACK_RENDERER_ID`);
- *   - an entry claims the step's recorded renderer id (`claim`: the entry
- *     `resolveHitlGateRenderer` resolves); or
- *   - the step carries a presentation hint in its values, which the host draws
- *     through its own generic renderer without a registry entry.
- * A step recorded with no renderer id (a tool-call approval) is answered by
- * the host's own Approve. Never for a tombstoned id, nor for the display-only
- * artifact-review redirect. A step that no screen draws shows "no renderer
- * configured for this step" and no control on the page.
+ * composer) and the HITL screen card (its Continue). It is
+ * `hitlStepScreenIsAnswerable` with the page's registry as the declaration
+ * (`claim`: the entry `resolveHitlGateRenderer` resolves), and never for the
+ * display-only artifact-review redirect. A step that no screen draws shows "no
+ * renderer configured for this step" and no control on the page.
  *
  * The mid-run classification by name (`classifyMidRunHitl`) decides how a
  * drawn step buffers its answer and where its Continue sits; it never makes a
@@ -211,16 +206,8 @@ export function parkedHitlStepIsAnswerable(
   claim: { readonly id: string } | null | undefined,
   values?: unknown,
 ): boolean {
-  // A step recorded with no renderer id is a tool-call approval: the host
-  // answers it with its own Approve, with no screen.
-  if (xRenderer === "") return true;
-  // A retired step (`hitlStepIsRetired`): a page's registry declares what an
-  // entry of it claims.
-  if (hitlStepIsRetired(xRenderer, values, () => claim != null)) return false;
-  // The artifact-review redirect is display-only: it goes on only by the
-  // review's own decision, whatever its values carry.
+  // The artifact-review redirect is display-only on a page: it goes on only by
+  // the review's own decision, whatever its values carry.
   if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return false;
-  if (xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID) return true;
-  if (claim != null) return true;
-  return gateCarriesPresentationHint(values);
+  return hitlStepScreenIsAnswerable(xRenderer, values, () => claim != null);
 }

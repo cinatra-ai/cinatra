@@ -40,6 +40,12 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/re
 // Stub lucide-react so jsdom does not hit React-version mismatches.
 // (Same pattern as schema-field-renderer-multiline.test.tsx.)
 // ---------------------------------------------------------------------------
+// The paused step has no durable row here: the answer goes on as before.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
+
 vi.mock("lucide-react", async (orig) => ({
   ...(await orig<typeof import("lucide-react")>()),
   ArrowRight: ({ className }: { className?: string }) =>
