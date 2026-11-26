@@ -56,9 +56,15 @@ import "server-only";
 
 import type { HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
 import { normalizeDelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
+import type { LoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 
 /** A version-keyed MCP tool, carrying the authoritative provider identity. */
-export type RetainedVersionKeyedMcpTool = HostMcpToolRegistration & { packageName: string };
+export type RetainedVersionKeyedMcpTool = HostMcpToolRegistration & {
+  packageName: string;
+  /** cinatra#3745: the loaded identity of the attempt that retained this handler
+   * (written by the host ctx after the tool's own fields), or null/absent. */
+  loadedIdentity?: LoadedExtensionIdentity | null;
+};
 
 /** A version-keyed capability provider (identity already host-bound by the port). */
 export type RetainedVersionKeyedCapabilityProvider = { packageName: string; impl: unknown };

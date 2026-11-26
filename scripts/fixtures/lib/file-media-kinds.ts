@@ -121,3 +121,69 @@ export async function seedMediaKindReviewRun(
   }
   return { runId, reviewTaskId: base.reviewTaskId, status: base.status, pinned: pinned.length };
 }
+
+const MEDIA_KINDS = new Set<string>(["image", "video", "audio", "pdf", "document", "archive"]);
+
+/** `--promote <kind>=<extension>`: one filed kind and the extension whose
+ *  meaning the person would confirm for it in the type picker. */
+export function parsePromoteOption(value: string): { kind: MediaKindSample["kind"]; extension: string } {
+  const parts = value.split("=");
+  const kind = parts[0]?.trim() ?? "", extension = parts[1]?.trim() ?? "";
+  if (parts.length !== 2 || !MEDIA_KINDS.has(kind) || !extension) {
+    throw new Error(`--promote takes <kind>=<extension> with one of the six kinds (got ${JSON.stringify(value)})`);
+  }
+  return { kind: kind as MediaKindSample["kind"], extension };
+}
+
+/** The type picker's confirmation, as the fixture runs it (injectable for tests). */
+export interface PickerConfirmation {
+  /** Run `fn` in the user's own session in the organization. */
+  runAs<T>(ids: { orgId: string; userId: string }, fn: () => Promise<T>): Promise<T>;
+  /** The picker's server action (`assertUploadMeaning`). */
+  confirm(input: { artifactId: string; extension: string }): Promise<
+    | { ok: true; promotion?: { promoted: true; toType: string; representationRevisionId: string; revision: number | null } | { promoted: false; reason: string } }
+    | { ok: false; reason: string; message: string }
+  >;
+}
+
+/**
+ * Promote one filed upload into an extension's own type, as the person does in
+ * the library's type picker (specs/app-artifacts.html §VI.1): the fixture calls
+ * the picker's own server action, `assertUploadMeaning`, in the user's session.
+ * That action validates the choice against the installed candidates, writes the
+ * person's meaning and runs the typed promotion road, which retypes the same
+ * artifact and appends a revision that shares the stored bytes. Nothing here
+ * writes a row itself. It fails unless the action reports a promotion that
+ * landed: a refused choice or a confirmation that retyped nothing is an error.
+ */
+export async function promoteFiledUpload(
+  input: { orgId: string; userId: string; filed: FiledMediaKind[]; kind: MediaKindSample["kind"]; extension: string },
+  picker?: PickerConfirmation,
+) {
+  assertMediaFixtureRuntime();
+  const ids = normalizeFixtureIds(input);
+  const upload = input.filed.find((f) => f.kind === input.kind);
+  if (!upload) throw new Error(`There is no filed ${input.kind} upload to promote`);
+  const p = picker ?? await defaultPickerConfirmation();
+  const target = { artifactId: upload.artifactId, extension: input.extension };
+  const answer = await p.runAs(ids, () => p.confirm(target));
+  if (!answer.ok) {
+    throw new Error(`The type picker refused ${input.extension} for ${upload.artifactId}: ${answer.reason}: ${answer.message}`);
+  }
+  if (!answer.promotion) throw new Error(`The type picker's confirmation of ${input.extension} retyped nothing`);
+  if (!answer.promotion.promoted) {
+    throw new Error(`${upload.artifactId} was not promoted: ${answer.promotion.reason}`);
+  }
+  const { toType, representationRevisionId, revision } = answer.promotion;
+  return { kind: input.kind, artifactId: upload.artifactId, extension: input.extension, toType, representationRevisionId, revision };
+}
+
+async function defaultPickerConfirmation(): Promise<PickerConfirmation> {
+  // The fixture's loader (picker-action-session.mjs) gives the action the
+  // session module below; any other loader leaves the action without a session.
+  const [{ runAsPickerUser }, { assertUploadMeaning }] = await Promise.all([
+    import("./picker-session"),
+    import("@/app/artifacts/upload-typing-actions"),
+  ]);
+  return { runAs: runAsPickerUser, confirm: assertUploadMeaning };
+}

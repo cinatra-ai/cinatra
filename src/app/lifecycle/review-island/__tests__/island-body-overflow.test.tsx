@@ -79,7 +79,7 @@ vi.mock("../island-height-reporter", () => ({
 
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
-import { islandBodyClassName } from "../island-color-scheme";
+import { ISLAND_SOLE_PDF_FLOOR_CLASSES, islandBodyClassName } from "../island-color-scheme";
 import ReviewTargetIslandPage from "../page";
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
@@ -109,7 +109,6 @@ beforeEach(() => {
           props: null,
           mount: { kind: "floor" as const },
         }),
-        capturePair: Promise.resolve(null),
       },
     ],
     permissions: Promise.resolve({ canDecide: true, canComment: true }),
@@ -152,6 +151,9 @@ async function islandBody(scheme?: "light" | "dark"): Promise<Element> {
 
 const classesOf = (el: Element): string[] => Array.from(el.classList);
 
+// Before the fix the streamed body still unwraps a pinned pair with React's
+// `use`, and the target the loader mock hands it carries none:
+// red-first-expect: An unsupported type was passed to use(): undefined
 describe("the island body is the container a wide representation scrolls inside", () => {
   it("the body wrapper is a horizontal scroll container", async () => {
     // "a wide representation scrolls inside its own container rather than
@@ -196,7 +198,8 @@ describe("the island body is the container a wide representation scrolls inside"
   });
 
   it("the class list the module states is the class list the document draws", async () => {
-    expect((await islandBody()).className).toBe(islandBodyClassName(null));
-    expect((await islandBody("dark")).className).toBe(islandBodyClassName("dark"));
+    // One target and no summary: the body also carries its pdf floor state (cinatra#3459).
+    expect((await islandBody()).className).toBe(`${islandBodyClassName(null)} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
+    expect((await islandBody("dark")).className).toBe(`${islandBodyClassName("dark")} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
   });
 });

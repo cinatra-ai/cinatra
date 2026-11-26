@@ -219,14 +219,6 @@
       "count": 1,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
-    "src/lib/artifacts/cms-preview-capture-store.ts :: name :: cms": {
-      "count": 1,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
-    "src/lib/artifacts/cms-preview-capture-view.ts :: name :: cms": {
-      "count": 1,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
     "src/lib/artifacts/cms-preview-inertness.ts :: name :: cms": {
       "count": 1,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
@@ -519,14 +511,6 @@
     },
     "src/lib/artifacts/cms-preview-capture-policy.ts": {
       "count": 2,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
-    "src/lib/artifacts/cms-preview-capture-store.ts": {
-      "count": 12,
-      "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
-    },
-    "src/lib/artifacts/cms-preview-capture-view.ts": {
-      "count": 9,
       "owner": "@cinatra-ai/wordpress-agent and @cinatra-ai/drupal-agent (the content-editor agents that stage the change); display by @cinatra-ai/cms-snapshot-artifact"
     },
     "src/lib/artifacts/cms-preview-inertness.ts": {

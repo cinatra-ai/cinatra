@@ -22,6 +22,8 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
 import { createSessionObjectsClient } from "@cinatra-ai/objects";
 import {
+  applyTokenReplacements,
+  buildLazyDefaultDeps,
   createTriggerEmailSendUseCases,
   planTestSendSelection,
 } from "@/lib/trigger-email-send-use-cases";
@@ -30,8 +32,10 @@ import type {
   TestDeliveryPortRun,
   TestDeliveryPrepareResult,
   TestDeliveryPerformResult,
+  TestDeliveryPinnedPerformResult,
   TestDeliverySendFailureReason,
 } from "@cinatra-ai/agents/test-delivery-send-port";
+import { testDraftRevision, testSendPreview, testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 
 const SENT_EMAIL_TYPE = "@cinatra-ai/email:sent-email";
 
@@ -91,7 +95,106 @@ export const testDeliverySendPortImpl: TestDeliverySendPort = {
     if (!plan.ok) {
       return { ok: false, reason: plan.reason };
     }
-    return { ok: true, recipientEmail: plan.recipientEmail, selectedDraftIds: plan.selectedDraftIds };
+    return {
+      ok: true,
+      recipientEmail: plan.recipientEmail,
+      selectedDraftIds: plan.selectedDraftIds,
+      // cinatra#4150: what a publish card shows of the plan: the From, and each draft (in send order) with the revision
+      // the pinned send checks, its subject and a short preview of its body.
+      sender: plan.sender,
+      drafts: await Promise.all(
+        plan.selectedDrafts.map(async (d) => ({
+          id: d.id,
+          revision: await testDraftRevision(d),
+          subject: d.subject,
+          preview: testSendPreview(applyTokenReplacements(d.body)),
+        })),
+      ),
+    };
+  },
+
+  async performPinnedSend(params): Promise<TestDeliveryPinnedPerformResult> {
+    // cinatra#4150: the pinned plan, sent exactly (same sender, recipient, drafts at their revisions) from the run
+    // OWNER's mailbox; any difference answers plan_changed before any message goes out. The owner's access to the
+    // campaign is read again first, as prepareSend reads it: access may have ended since the plan was made.
+    const ownerCtx = await buildActorContextFromRun(params.run);
+    let object: unknown = null;
+    try {
+      const res = (await createSessionObjectsClient(ownerCtx).get(params.plan.campaignId)) as { object?: unknown } | null;
+      object = res && typeof res === "object" ? (res as { object?: unknown }).object : null;
+    } catch (err) {
+      if (!(err instanceof AuthzError)) throw err;
+    }
+    if (!object) {
+      return { ok: false, reason: "campaign_access_denied", message: "You do not have access to this campaign.", deliveredDraftIds: [] };
+    }
+    // The campaign and the plan's drafts are read again: the sender must be the plan's, every draft must still belong
+    // to the campaign and still be at the plan's revision; else nothing is sent. What is checked is what is sent (the
+    // drafts are read once, checked, and sent from that read). A campaign that is not found is an invariant fault.
+    const { plan, submissionId } = params;
+    const deps = buildLazyDefaultDeps();
+    const campaign = await deps.getCampaign(plan.campaignId);
+    if (!campaign) throw new Error("Campaign not found.");
+    const recipient = testSendRecipient(plan.recipientEmail);
+    if (recipient === null || recipient !== plan.recipientEmail) {
+      return {
+        ok: false,
+        reason: "invalid_recipient",
+        message: "Enter a valid recipient email address for the test send.",
+        deliveredDraftIds: [],
+      };
+    }
+    const changed = {
+      ok: false as const,
+      reason: "plan_changed" as const,
+      message: "The test send no longer matches what was approved (a draft or the sender changed). Nothing was sent.",
+      deliveredDraftIds: [],
+    };
+    if ((campaign.senderEmail ?? "") !== plan.sender.email || (campaign.senderName ?? "") !== plan.sender.name) return changed;
+    const campaignDraftIds = new Set(campaign.draftIds ?? []);
+    const ids = plan.drafts.map((d) => d.id);
+    if (ids.length === 0 || new Set(ids).size !== ids.length || !ids.every((id) => campaignDraftIds.has(id))) return changed;
+    const byId = new Map((await deps.getDraftsByIds(ids)).map((d) => [d.id, d] as const));
+    const shown = params.shownDrafts;
+    if (shown !== undefined && shown.length !== plan.drafts.length) return changed;
+    const toSend: Array<{ id: string; subject: string; body: string }> = [];
+    for (const [i, pinned] of plan.drafts.entries()) {
+      const draft = byId.get(pinned.id);
+      if (!draft || (await testDraftRevision(draft)) !== pinned.revision) return changed;
+      // What the approved card showed of this draft is what is mailed: its subject, and its preview computed again
+      // from the body read here by the one preview rule.
+      const seen = shown?.[i];
+      if (seen && (seen.subject !== draft.subject || seen.preview !== testSendPreview(applyTokenReplacements(draft.body)))) {
+        return changed;
+      }
+      toSend.push(draft);
+    }
+    const actor = ownerSendActor(params.run);
+    const deliveredDraftIds: string[] = [];
+    try {
+      for (const draft of toSend) {
+        await deps.sendEmail(
+          {
+            to: [recipient],
+            subject: `[Test] ${draft.subject}`,
+            textBody: applyTokenReplacements(draft.body),
+            fromName: campaign.senderName,
+            fromEmail: campaign.senderEmail,
+            replyTo: campaign.senderEmail,
+          },
+          {
+            userId: actor.userId,
+            orgId: actor.orgId ?? undefined,
+            correlation: { campaignId: plan.campaignId, submissionId, draftId: draft.id },
+          },
+        );
+        deliveredDraftIds.push(draft.id);
+      }
+      return { ok: true, sentTo: recipient, sentCount: deliveredDraftIds.length, deliveredDraftIds, message: `Test email sent to ${recipient}.` };
+    } catch (err) {
+      // A transport failure part way: the drafts that did go out are reported, so a later send never repeats them.
+      return { ok: false, reason: "send_failed", deliveredDraftIds, message: err instanceof Error ? err.message : "The test send failed." };
+    }
   },
 
   async performSend(params): Promise<TestDeliveryPerformResult> {
