@@ -103,47 +103,57 @@ for (const d of readdirSync(\`\${ROOT}/extensions/\${scope}\`)) check(d);`;
     expect(pins({ [`${T}fleet.test.ts`]: src })).toEqual([]);
   });
 
-  it("does not find a synthetic tree a test builds in a temporary directory, nor a stand-in absolute path", () => {
-    const js = `const tmp = mkdtempSync(path.join(os.tmpdir(), "x-"));
-const repoRoot = path.join(tmp, "repo");
-mkdirSync(path.join(repoRoot, "extensions/example-org/demo-agent"), { recursive: true });
-expect(map("@example-org/demo-agent")).toBe(path.resolve("/repo/extensions/example-org/demo-agent"));`;
-    const py = `source = tmp_path / "extensions"\nseed(source / "example-org" / "demo-agent")\n`;
-    expect(pins({ [`${T}tmp.test.ts`]: js, "docker/wayflow/tests/test_tmp.py": py })).toEqual([]);
-  });
-
-  describe("a temporary root is exempt only when its binding is sound", () => {
-    const READ = (v) => `readFileSync(join(${v}, "extensions/example-org/demo-agent/oas.json"));`;
+  describe("no temporary-root exemption: a pinned pack's path counts wherever it is rooted", () => {
     const DEMO = "@example-org/demo-agent";
-    const cases = {
-      reassignedAfterUse: `let root = mkdtempSync(join(tmpdir(), "x-"));\n${READ("root")}\nroot = REPO_ROOT;`,
-      reassignedBeforeUse: `let root = REPO_ROOT;\nroot = mkdtempSync(join(tmpdir(), "x-"));\n${READ("root")}`,
-      shadowedInFunction: `const root = REPO_ROOT;\nfunction build() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  return root;\n}\n${READ("root")}`,
-      shadowingInFunction: `const root = REPO_ROOT;\nfunction build() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  ${READ("root")}\n}`,
-      shadowedInBlock: `const root = mkdtempSync(join(tmpdir(), "x-"));\n{\n  const root = REPO_ROOT;\n  ${READ("root")}\n}`,
-      parameter: `const root = mkdtempSync(join(tmpdir(), "x-"));\nfunction load(root) {\n  return ${READ("root")}\n}\nload(REPO_ROOT);`,
-      destructured: `const { tmpRoot } = setup();\n${READ("tmpRoot")}`,
-      tmpByNameOnly: `const tmpDir = REPO_ROOT;\n${READ("tmpDir")}`,
-    };
-    const sound = {
-      singleConst: `const work = mkdtempSync(join(tmpdir(), "x-"));\nconst root = join(work, "repo");\n${READ("root")}`,
-      singleAssignment: `let tmpRoot;\nfunction make() {\n  ${READ("tmpRoot")}\n}\nbeforeEach(() => {\n  tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "x-")));\n});`,
-      siblingScopes: `function a() {\n  const root = REPO_ROOT;\n  return root;\n}\nfunction b() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  ${READ("root")}\n}`,
-    };
 
-    it("reports a root that is reassigned, shadowed, a parameter, destructured or temporary by name only; keeps a sound one exempt", () => {
-      const files = {};
-      for (const [k, v] of Object.entries({ ...cases, ...sound })) files[`${T}${k}.test.ts`] = v;
-      expect(pins(files)).toEqual(Object.keys(cases).sort().map((k) => `read :: ${T}${k}.test.ts :: ${DEMO}`));
+    it("finds a root whose name or callee only looks temporary (a local tmpdir(), resolve(tmpdir(), REPO_ROOT))", () => {
+      const localTmpdir = `function tmpdir() {\n  return REPO_ROOT;\n}\nreadFileSync(join(tmpdir(), "extensions/example-org/demo-agent/oas.json"));`;
+      const resolveOverTmp = `readFileSync(join(resolve(tmpdir(), REPO_ROOT), "extensions/example-org/demo-agent/oas.json"));`;
+      expect(pins({ [`${T}localTmpdir.test.ts`]: localTmpdir, [`${T}resolveOverTmp.test.ts`]: resolveOverTmp })).toEqual([
+        `read :: ${T}localTmpdir.test.ts :: ${DEMO}`,
+        `read :: ${T}resolveOverTmp.test.ts :: ${DEMO}`,
+      ]);
     });
 
-    it("reports a Python pytest temporary fixture the file rebinds, and a name that is temporary by name only", () => {
-      const rebound = `tmp_path = _REPO_ROOT\nseed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
-      const named = `tmp = _REPO_ROOT\nseed(tmp / "extensions" / "example-org" / "demo-agent")\n`;
-      const kept = `def test_x(tmp_path):\n    seed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
+    it("finds a pytest fixture name rebound by an annotated assignment", () => {
+      const src = `def test_x(tmp_path):\n    tmp_path: Path = REPO_ROOT\n    seed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
+      expect(pins({ "docker/wayflow/tests/test_annotated.py": src })).toEqual([`read :: docker/wayflow/tests/test_annotated.py :: ${DEMO}`]);
+    });
+
+    it("finds a path spelled in a triple-quoted Python string, and a pack named in a docstring", () => {
+      const path = `OAS = REPO_ROOT / """extensions/example-org/demo-agent/oas.json"""\n`;
+      const doc = `def test_x():\n    """Reads \`extensions/example-org/demo-agent\`."""\n    assert True\n`;
+      expect(pins({ "docker/wayflow/tests/test_triple.py": path, "docker/wayflow/tests/test_doc.py": doc })).toEqual([
+        `read :: docker/wayflow/tests/test_doc.py :: ${DEMO}`,
+        `read :: docker/wayflow/tests/test_triple.py :: ${DEMO}`,
+      ]);
+    });
+
+    it("finds a pinned pack's tree rebuilt in a real temporary directory, a stand-in absolute path or a core directory; not a made-up pack", () => {
+      // red-first-expect: expected [] to deeply equal [ …(4) ]
+      const js = `const tmp = mkdtempSync(path.join(os.tmpdir(), "x-"));
+mkdirSync(path.join(tmp, "extensions/example-org/demo-agent"), { recursive: true });`;
+      const abs = `expect(map("x")).toBe(path.resolve("/repo/extensions/example-org/demo-agent"));`;
+      const core = `const a = "src/components/extensions/example-org/demo-agent/x.ts";`;
+      const py = `def test_x(tmp_path):\n    seed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
+      // A test that needs a made-up pack uses a made-up name: no lock pins it.
+      const madeUpJs = js.replace("demo-agent", "made-up-agent");
+      const madeUpPy = py.replace("demo-agent", "made-up-agent");
       expect(
-        pins({ "docker/wayflow/tests/test_rebound.py": rebound, "docker/wayflow/tests/test_named.py": named, "docker/wayflow/tests/test_kept.py": kept }),
-      ).toEqual([`read :: docker/wayflow/tests/test_named.py :: ${DEMO}`, `read :: docker/wayflow/tests/test_rebound.py :: ${DEMO}`]);
+        pins({
+          [`${T}tmp.test.ts`]: js,
+          [`${T}abs.test.ts`]: abs,
+          [`${T}core.test.ts`]: core,
+          "docker/wayflow/tests/test_tmp.py": py,
+          [`${T}madeup.test.ts`]: madeUpJs,
+          "docker/wayflow/tests/test_madeup.py": madeUpPy,
+        }),
+      ).toEqual([
+        `read :: docker/wayflow/tests/test_tmp.py :: ${DEMO}`,
+        `read :: ${T}abs.test.ts :: ${DEMO}`,
+        `read :: ${T}core.test.ts :: ${DEMO}`,
+        `read :: ${T}tmp.test.ts :: ${DEMO}`,
+      ]);
     });
   });
 
@@ -187,9 +197,8 @@ expect(route("/extensions/upload")).toBe(true);`;
     expect(pins({ [`${T}label.test.ts`]: src })).toEqual([]);
   });
 
-  it("ignores comments, a core directory named extensions, and packs no lock pins", () => {
+  it("ignores comments and packs no lock pins", () => {
     const src = `// reads extensions/example-org/demo-agent/cinatra/oas.json
-const a = "src/components/extensions/example-org/demo-agent/x.ts";
 const b = "../../../../extensions/example-org/unpinned-agent/oas.json";`;
     expect(pins({ [`${T}c.test.ts`]: src })).toEqual([]);
   });

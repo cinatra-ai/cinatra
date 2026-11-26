@@ -98,6 +98,16 @@
     },
     {
       "rule": "read",
+      "file": "docker/wayflow/tests/test_loader_marker_readonly_mount.py",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_loader_marker_readonly_mount.py",
+      "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
       "file": "docker/wayflow/tests/test_repo_agents_load.py",
       "pack": "@cinatra-ai/email-outreach-agent"
     },
@@ -255,6 +265,21 @@
       "rule": "read",
       "file": "packages/agents/src/__tests__/email-recipient-selection-list-only.test.ts",
       "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/ensure-agent-package-declared-tables-activation.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/ensure-agent-package-first-import-install-record.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/ensure-agent-package-install-record-gate.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
     },
     {
       "rule": "read",
@@ -474,6 +499,11 @@
     {
       "rule": "read",
       "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/lint-policy-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
       "pack": "@cinatra-ai/planner-agent"
     },
     {
@@ -525,6 +555,36 @@
       "rule": "read",
       "file": "packages/agents/src/__tests__/web-scrape-agent-validates.test.ts",
       "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/cinatra-dev-extensions.test.mjs",
+      "pack": "@cinatra-ai/anthropic-connector"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/cinatra-dev-extensions.test.mjs",
+      "pack": "@cinatra-ai/chat-assistant-core-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/cinatra-dev-extensions.test.mjs",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/cinatra-dev-extensions.test.mjs",
+      "pack": "@cinatra-ai/nango-connector"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/cinatra-dev-extensions.test.mjs",
+      "pack": "@cinatra-ai/resend-connector"
+    },
+    {
+      "rule": "read",
+      "file": "packages/cli/src/__tests__/dev-repo-sync-network-retry.test.mjs",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
     },
     {
       "rule": "read",
@@ -838,6 +898,16 @@
     },
     {
       "rule": "read",
+      "file": "packages/llm/src/__tests__/extension-agent-skill-load.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/marketplace-mcp-client/tests/http-client.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
       "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
       "pack": "@cinatra-ai/dashboard-artifact"
     },
@@ -998,6 +1068,21 @@
     },
     {
       "rule": "read",
+      "file": "packages/skills/src/recommendation/recommend.server.test.ts",
+      "pack": "@cinatra-ai/blog-post-matcher-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/skill-id-vendor-names.test.ts",
+      "pack": "@cinatra-ai/blog-content-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/skill-id-vendor-names.test.ts",
+      "pack": "@cinatra-ai/blog-writing-skill"
+    },
+    {
+      "rule": "read",
       "file": "src/__tests__/mcp-server-tool-count.test.ts",
       "pack": "@cinatra-ai/blog-connector"
     },
@@ -1015,6 +1100,16 @@
       "rule": "read",
       "file": "src/__tests__/passthrough-wordpress-review-gate-gets-its-targets.test.ts",
       "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/api/a2a/agents/[...slug]/__tests__/route-auth.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/api/a2a/agents/[...slug]/__tests__/route.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
     },
     {
       "rule": "read",
@@ -1323,8 +1418,28 @@
     },
     {
       "rule": "read",
+      "file": "src/lib/__tests__/dev-fleet-boot-materialize.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
       "file": "src/lib/__tests__/extension-install-first-party-e2e.test.ts",
       "pack": "@cinatra-ai/nango-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/extension-install-record-heal.anchor.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/extension-load-guard.test.ts",
+      "pack": "@cinatra-ai/media-feeds-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/extensions-dev-watcher-matcher-skill-owner.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
     },
     {
       "rule": "read",

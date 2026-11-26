@@ -4,11 +4,15 @@
 //
 // THE RULE. A core test or fixture proves generic rules on synthetic input; it
 // does not pin one pinned pack. A core test or fixture PINS a pack when
-//   (read)  a core test file reads, imports or resolves a path inside the
-//           materialized `extensions/` tree that names ONE pinned pack: the path reaches `extensions/<scope>/
-//           <name>` with `<scope>/<name>` spelled in the file, or the file
-//           imports `@<scope>/<name>` (or a subpath) — where `@<scope>/<name>`
-//           is a package a committed extension lock pins;
+//   (read)  a core test file names a path into ONE pinned pack: a path that
+//           spells `extensions/<scope>/<name>`, WHEREVER it is rooted (the
+//           repository, a temporary directory, an absolute stand-in, a core
+//           directory; a Python docstring counts too), or the file imports
+//           `@<scope>/<name>` (or a subpath) — where `@<scope>/<name>` is a
+//           package a committed extension lock pins. A test that rebuilds a
+//           pinned pack's tree in a temporary folder still names that pack in
+//           core; a test that needs a made-up pack uses a made-up name, which
+//           matches no lock and is no finding;
 //   (flow)  a core fixture file parses as an agent flow (it holds an object
 //           with `component_type: "Flow"`) and carries a pinned-pack marker: a
 //           package name a lock pins, or the first 7 or more hex digits of a
@@ -28,7 +32,8 @@
 // `__fixtures__`, `__mocks__`, `tests`, `test`, `fixtures`) or whose name marks
 // it (`*.test.*`, `*.spec.*`, `test_*.py`, `*_test.py`, `conftest.py`). The
 // materialized `extensions/` tree, `node_modules/` and build output are never
-// walked. Comments are not code: they are masked before any read.
+// walked. Comments are not code: they are masked before any read (a Python
+// string, triple-quoted or not, is code and is read).
 //
 // THE FLOOR (scripts/audit/core-test-pack-pin-gate.baseline.json) is
 // SHRINK-ONLY. It holds the pins that stood on main when the gate landed, one
@@ -168,24 +173,11 @@ export function listCoreTestFiles(root = REPO_ROOT) {
 // ---------------------------------------------------------------------------
 
 export const HOLE = Symbol("hole");
-/** A hole whose value is a temporary directory: a synthetic tree, not the repository's. */
-export const TMP_HOLE = Symbol("tmp-hole");
-
-/**
- * A Python name that is a temporary directory: the pytest fixtures `tmp_path`,
- * `tmp_path_factory` and `tmpdir`, exempt only while the file never rebinds them.
- */
-export const PY_TMP_FIXTURES = new Set(["tmp_path", "tmp_path_factory", "tmpdir"]);
-
-/** A call that makes or names a temporary directory (Node `mkdtemp`, `os.tmpdir`). */
-export const TMP_CALLS = new Set(["mkdtemp", "mkdtempSync", "tmpdir"]);
 
 /** The start of a new expression: the chain after it begins at no root. */
 export const START = Symbol("start");
 
 const PATH_JOINERS = new Set(["join", "resolve", "normalize", "posix", "relative"]);
-/** A call whose value is its first argument's directory (`realpathSync(mkdtempSync(...))`). */
-const SAME_DIR_CALLS = new Set([...PATH_JOINERS, "realpath", "realpathSync"]);
 
 function calleeName(expr) {
   if (ts.isIdentifier(expr)) return expr.text;
@@ -193,159 +185,43 @@ function calleeName(expr) {
   return null;
 }
 
-const DECLARING = (n) =>
-  ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isBindingElement(n) || ts.isFunctionDeclaration(n) ||
-  ts.isFunctionExpression(n) || ts.isClassDeclaration(n) || ts.isClassExpression(n) || ts.isImportClause(n) ||
-  ts.isImportSpecifier(n) || ts.isNamespaceImport(n) || ts.isImportEqualsDeclaration(n) || ts.isEnumDeclaration(n) ||
-  ts.isModuleDeclaration(n);
-
-const isAssignmentOp = (k) => k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
-
-/** Every identifier inside a node (a destructuring target, conservatively all of them). */
-function identifiersIn(node, out = []) {
-  if (ts.isIdentifier(node)) out.push(node);
-  ts.forEachChild(node, (c) => identifiersIn(c, out));
-  return out;
-}
-
 /**
- * The bindings of a file, for a SOUND temporary-root reading: every declaration
- * of each name (any scope, any kind) and every write to it (an assignment of
- * any operator, `++`/`--`, a destructuring or for-in/of target).
+ * The pieces (strings and HOLEs) an expression evaluates to, as far as literals
+ * tell. A value held in a variable is a HOLE, whatever the variable holds: the
+ * gate never infers where a root points.
  */
-function bindingsOf(sf) {
-  const decls = new Map();
-  const writes = new Map();
-  const push = (m, name, v) => (m.has(name) ? m.get(name).push(v) : m.set(name, [v]));
-  const walk = (n) => {
-    if (DECLARING(n) && n.name && ts.isIdentifier(n.name)) push(decls, n.name.text, n);
-    if (ts.isBinaryExpression(n) && isAssignmentOp(n.operatorToken.kind)) {
-      const plain = n.operatorToken.kind === ts.SyntaxKind.EqualsToken;
-      if (ts.isIdentifier(n.left)) push(writes, n.left.text, { node: n, value: plain ? n.right : null });
-      else for (const id of identifiersIn(n.left)) push(writes, id.text, { node: n, value: null });
-    }
-    if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
-      (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)) {
-      for (const id of identifiersIn(n.operand)) push(writes, id.text, { node: n, value: null });
-    }
-    if ((ts.isForInStatement(n) || ts.isForOfStatement(n)) && !ts.isVariableDeclarationList(n.initializer)) {
-      for (const id of identifiersIn(n.initializer)) push(writes, id.text, { node: n, value: null });
-    }
-    ts.forEachChild(n, walk);
-  };
-  walk(sf);
-  return { decls, writes };
-}
-
-const isScopeNode = (n, blockScoped) =>
-  ts.isSourceFile(n) || ts.isFunctionLike(n) || ts.isClassStaticBlockDeclaration(n) ||
-  (blockScoped && (ts.isBlock(n) || ts.isModuleBlock(n) || ts.isCaseBlock(n)));
-
-/** The node a declaration binds its name in: block scope for let/const and the like, function scope for var. */
-function scopeOfDeclaration(decl) {
-  if (ts.isParameter(decl)) return decl.parent;
-  if (ts.isBindingElement(decl)) {
-    let root = decl.parent;
-    while (root && !ts.isVariableDeclaration(root) && !ts.isParameter(root)) root = root.parent;
-    return root ? scopeOfDeclaration(root) : null;
-  }
-  if (ts.isFunctionExpression(decl) || ts.isClassExpression(decl)) return decl;
-  if (ts.isImportClause(decl) || ts.isImportSpecifier(decl) || ts.isNamespaceImport(decl)) return decl.getSourceFile();
-  if (ts.isVariableDeclaration(decl)) {
-    if (ts.isCatchClause(decl.parent)) return decl.parent;
-    const list = decl.parent;
-    const blockScoped = (list.flags & ts.NodeFlags.BlockScoped) !== 0;
-    if (blockScoped && (ts.isForStatement(list.parent) || ts.isForInStatement(list.parent) || ts.isForOfStatement(list.parent))) return list.parent;
-    for (let n = list.parent; n; n = n.parent) if (isScopeNode(n, blockScoped)) return n;
-    return null;
-  }
-  for (let n = decl.parent; n; n = n.parent) if (isScopeNode(n, true)) return n;
-  return null;
-}
-
-const within = (scope, node) => !!scope && scope.pos <= node.pos && node.end <= scope.end;
-
-/**
- * The one value an identifier holds at its use, or null when the scanner cannot
- * prove it. Exactly one declaration of the name may enclose the use (a name
- * shadowed in an inner scope, or shadowing an outer one, is refused; a sibling
- * scope's declaration of the same name does not reach the use), and it must be
- * a plain variable (no parameter, destructured, imported or catch binding),
- * bound exactly once inside its scope: its initializer or one plain `=`
- * assignment. A name with a single binding can only ever hold that value (or
- * be unset, which a path join refuses), so the binding's place in the source
- * does not matter. Fails towards null.
- */
-function soleValueAt(id, bindings) {
-  const enclosing = (bindings.decls.get(id.text) ?? []).filter((d) => within(scopeOfDeclaration(d), id));
-  if (enclosing.length !== 1) return null;
-  const decl = enclosing[0];
-  if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name) || ts.isCatchClause(decl.parent)) return null;
-  const scope = scopeOfDeclaration(decl);
-  const writes = (bindings.writes.get(id.text) ?? []).filter((w) => within(scope, w.node));
-  const all = [...(decl.initializer ? [{ node: decl, value: decl.initializer }] : []), ...writes];
-  if (all.length !== 1 || !all[0].value) return null;
-  return all[0].value;
-}
-
-/**
- * True when an expression's value is a temporary directory: a call that makes
- * one (`mkdtempSync(...)`, `os.tmpdir()`), a path that starts at one, or a
- * variable whose sole sound binding is one (soleValueAt). A name alone is never
- * enough; anything the scanner cannot resolve is not temporary.
- */
-function isTmpExpr(node, bindings, seen = new Set()) {
-  if (ts.isParenthesizedExpression(node) || ts.isAwaitExpression(node) || ts.isAsExpression(node) ||
-    ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) return isTmpExpr(node.expression, bindings, seen);
-  if (ts.isCallExpression(node)) {
-    const name = calleeName(node.expression) ?? "";
-    if (TMP_CALLS.has(name)) return true;
-    return SAME_DIR_CALLS.has(name) && node.arguments.length > 0 && isTmpExpr(node.arguments[0], bindings, seen);
-  }
-  if (ts.isTemplateExpression(node)) return node.head.text === "" && isTmpExpr(node.templateSpans[0].expression, bindings, seen);
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return isTmpExpr(node.left, bindings, seen);
-  if (ts.isIdentifier(node)) {
-    if (seen.has(node.text)) return false;
-    const value = soleValueAt(node, bindings);
-    return value !== null && isTmpExpr(value, bindings, new Set([...seen, node.text]));
-  }
-  return false;
-}
-
-/** The pieces (strings, HOLEs and TMP_HOLEs) an expression evaluates to, as far as literals tell. */
-function piecesOf(node, bindings) {
-  const hole = (n) => (isTmpExpr(n, bindings) ? TMP_HOLE : HOLE);
-  if (ts.isParenthesizedExpression(node)) return piecesOf(node.expression, bindings);
+function piecesOf(node) {
+  if (ts.isParenthesizedExpression(node)) return piecesOf(node.expression);
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return [node.text];
   if (ts.isTemplateExpression(node)) {
     const out = [node.head.text];
-    for (const span of node.templateSpans) out.push(hole(span.expression), span.literal.text);
+    for (const span of node.templateSpans) out.push(HOLE, span.literal.text);
     return out;
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    return [...piecesOf(node.left, bindings), ...piecesOf(node.right, bindings)];
+    return [...piecesOf(node.left), ...piecesOf(node.right)];
   }
   if (ts.isCallExpression(node) && PATH_JOINERS.has(calleeName(node.expression) ?? "")) {
     const out = [];
     node.arguments.forEach((a, i) => {
       if (i > 0) out.push("/");
-      out.push(...piecesOf(a, bindings));
+      out.push(...piecesOf(a));
     });
     return out;
   }
-  return [hole(node)];
+  return [HOLE];
 }
 
 /**
  * Split pieces into chains: `{ text, after }`, `after` the hole the chain
- * follows (`null` at the start, `HOLE` or `TMP_HOLE`).
+ * follows (`null` at the start, `HOLE` after a value held in a variable).
  */
 export function chainsOf(pieces) {
   const chains = [];
   let text = "";
   let after = null;
   for (const p of pieces) {
-    if (p === HOLE || p === TMP_HOLE || p === START) {
+    if (p === HOLE || p === START) {
       if (text !== "") chains.push({ text, after });
       text = "";
       after = p === START ? null : p;
@@ -356,38 +232,37 @@ export function chainsOf(pieces) {
 }
 
 /**
- * What one chain reaches in the materialized tree. A chain reaches the tree
- * when it holds the segment `extensions` and every segment before it is `.`
- * or `..` (relative to the working directory or the test's own directory), or
- * the chain follows a hole (a root held in a variable). Not the tree:
- * `src/components/extensions/...` (a core directory), an absolute literal
- * `/repo/extensions/...` (a stand-in path), and a chain after a temporary
- * directory (a synthetic tree a test builds). Returns `{ packs, reachesTree }`:
- * `packs` the pinned packs whose directory `extensions/<scope>/<name>` the
- * chain spells; `reachesTree` true when the chain stops at the tree or a scope
- * directory, the name left to a variable (the bare word `extensions` with no
- * root before it is not a path).
+ * What one chain names in an extensions tree. Returns `{ packs, reachesTree }`:
+ * `packs` every pinned pack whose directory `extensions/<scope>/<name>` the
+ * chain spells, WHEREVER the chain is rooted (the repository, a temporary
+ * directory, an absolute literal, a variable): a test that names a pinned
+ * pack's tree names that pack in core, and a test that needs a made-up pack
+ * uses a made-up name, which no lock pins. `reachesTree` is true when the chain
+ * stops at the tree or a scope directory with the name left to a variable;
+ * it only decides whether the file's whole literals are read as pack names
+ * (packsOfFile), so the bare word `extensions` with no root before it (a route
+ * segment, a key) does not set it.
  */
 export function packsInChain({ text, after = null }, pinned) {
   const packs = new Set();
   let reachesTree = false;
-  if (after === TMP_HOLE) return { packs, reachesTree };
-  const segs = text.replace(/\\/g, "/").replace(/\/{2,}/g, "/").split("/");
+  // Whitespace, quotes, brackets and commas separate too (none can be part of a
+  // scope or a name), so prose (`reads \`extensions/<scope>/<name>\`.`) counts.
+  const segs = text.replace(/\\/g, "/").replace(/[\s'"`()<>[\]{},;]+/g, "/").replace(/\/{2,}/g, "/").split("/");
   for (let i = 0; i < segs.length; i++) {
     if (segs[i] !== "extensions") continue;
     const before = segs.slice(0, i);
-    if (after === null && before[0] === "") continue; // an absolute literal path
-    if (!before.every((s) => s === "" || s === "." || s === "..")) continue;
     const scope = (segs[i + 1] ?? "").replace(/^@/, "");
     const name = segs[i + 2] ?? "";
-    if (!scope || !name) {
-      // The bare word `extensions` with no root before it is a word (a route
-      // segment, a key), not a path; after a root, a `..` or with its scope
-      // it is the tree.
-      if (after === HOLE || before.some((s) => s === "." || s === "..") || scope) reachesTree = true;
+    if (scope && name) {
+      for (const n of [name, name.replace(/[.:!?]+$/, "")]) if (pinned.names.has(`@${scope}/${n}`)) packs.add(`@${scope}/${n}`);
       continue;
     }
-    if (pinned.names.has(`@${scope}/${name}`)) packs.add(`@${scope}/${name}`);
+    // The tree with the name left to a variable: rooted in a variable or a
+    // relative `.`/`..`. An absolute or prefixed `extensions/<word>` is as often
+    // a URL route or a core directory, so it does not widen the rule.
+    const relativeRoot = before.every((s) => s === "" || s === "." || s === "..") && !(after === null && before[0] === "");
+    if (relativeRoot && (after === HOLE || before.some((s) => s === "." || s === "..") || scope)) reachesTree = true;
   }
   return { packs, reachesTree };
 }
@@ -474,7 +349,6 @@ export function scanScriptText(rel, text, pinned) {
   const found = new Set();
   const chains = [];
   const literals = [];
-  const bindings = bindingsOf(sf);
   const visit = (node) => {
     // An import, export-from, dynamic import, require, require.resolve or
     // vi.importActual whose specifier is a pinned package.
@@ -501,7 +375,7 @@ export function scanScriptText(rel, text, pinned) {
       ts.isBinaryExpression(node) ||
       (ts.isCallExpression(node) && PATH_JOINERS.has(calleeName(node.expression) ?? "")))
     ) {
-      chains.push(...chainsOf(piecesOf(node, bindings)));
+      chains.push(...chainsOf(piecesOf(node)));
     }
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push(node.text);
     ts.forEachChild(node, visit);
@@ -512,23 +386,16 @@ export function scanScriptText(rel, text, pinned) {
 }
 
 /**
- * The string literals of a Python file as pieces in order: comments and
- * triple-quoted strings (docstrings) are masked; an f-string's `{...}` is a
- * hole; literals joined by `/`, `,` or `+` (Path `/`, os.path.join) continue a
- * chain, anything else is a hole.
+ * The string literals of a Python file as pieces in order: comments are
+ * masked; every string is read, triple-quoted ones (docstrings) included; an
+ * f-string's `{...}` is a hole; literals joined by `/`, `,` or `+` (Path `/`,
+ * os.path.join) continue a chain, anything else is a hole.
  */
 export function pythonPieces(text) {
   const pieces = [];
   let i = 0;
   const n = text.length;
   let lastEnd = -1;
-  // A pytest temporary fixture the file rebinds (`tmp_path = ...`, `for tmp_path in`,
-  // `as tmp_path`, `tmp_path := ...`) is not a temporary root any more.
-  const rebound = new Set(
-    [...PY_TMP_FIXTURES].filter((w) =>
-      new RegExp(`(?:^|[^\\w.])${w}\\s*(?:[-+*/%&|^@:]|//|\\*\\*|<<|>>)?=(?!=)|\\b(?:for|as)\\s+${w}\\b`, "m").test(text),
-    ),
-  );
   const gapJoins = (from, to) => /^[\s/,+\\]*$/.test(text.slice(from, to)) && !/\n\s*\n/.test(text.slice(from, to));
   while (i < n) {
     const c = text[i];
@@ -565,18 +432,12 @@ export function pythonPieces(text) {
         i++;
       }
       i += q.length;
-      if (q.length === 3) {
-        lastEnd = -1;
-        pieces.push(START);
-        continue;
-      }
       const joined = lastEnd >= 0 && gapJoins(lastEnd, start);
       if (!joined) {
         // A literal after `name /` or `name,` continues a path rooted in that
         // variable (Path `/`, os.path.join); any other literal starts afresh.
         const lead = /([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*[/,]\s*$/.exec(text.slice(text.lastIndexOf("\n", start - 1) + 1, start));
-        if (!lead) pieces.push(START);
-        else pieces.push(PY_TMP_FIXTURES.has(lead[1].split(".")[0]) && !rebound.has(lead[1].split(".")[0]) ? TMP_HOLE : HOLE);
+        pieces.push(lead ? HOLE : START);
       }
       else if (/[/,]/.test(text.slice(lastEnd, start))) pieces.push("/");
       if (prefix.includes("f")) {
