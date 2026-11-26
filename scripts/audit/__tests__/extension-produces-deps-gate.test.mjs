@@ -920,7 +920,6 @@ test("live: tools named in the flow (ApiNode data.tool, a step's metadata.cinatr
   }
 });
 
-// red-first-expect: The input did not match the regular expression /\[undeclaredPortUses\] NEW @cinatra-ai\/consumer-agent :: src\/alias\.ts/
 test("live: code that references the primitive-call port in any form needs a cinatra.consumes declaration; comments and tests are not read", () => {
   const files = {
     // An alias: no call through the method name at all.
@@ -961,7 +960,6 @@ test("live: code that references the primitive-call port in any form needs a cin
   }
 });
 
-// red-first-expect: required use + optional edge: [extension-produces-deps] OK — ... tool-owner rule: 1 tool uses, 0 undeclaredToolOwnerDeps, 0 unownedTools, 0 dynamicToolNames listed.
 test("live: a declared owner backs a use exactly as the dependency validator accepts it", () => {
   const edge = (requirement, edgeType = "runtime") => ({ ...ownerEdge, requirement, edgeType });
   const cases = [
@@ -994,7 +992,6 @@ test("live: a declared owner backs a use exactly as the dependency validator acc
   }
 });
 
-// red-first-expect: [extension-produces-deps] OK — ... tool-owner rule: 3 tool uses, 0 undeclaredToolOwnerDeps, 0 unownedTools, 0 dynamicToolNames listed.
 test("live: tools named like Object.prototype keys are findings like any other", () => {
   const names = ["constructor", "__proto__", "toString"];
   const root = makeFixtureRoot({
