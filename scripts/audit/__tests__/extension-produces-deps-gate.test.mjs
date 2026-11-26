@@ -398,7 +398,7 @@ const EMPTY_TOOL_CLASSES = { undeclaredToolOwnerDeps: {}, unownedTools: {}, dyna
 function makeFixtureRoot({ extensions, baseline, inventory = { primitives: [] } }) {
   const root = mkdtempSync(join(tmpdir(), "produces-deps-gate-"));
   for (const [name, { packageJson, oasJson, files }] of Object.entries(extensions)) {
-    const dir = join(root, "extensions", "cinatra-ai", name);
+    const dir = join(root, "extensions", "example-org", name);
     mkdirSync(dir, { recursive: true });
     if (typeof packageJson === "string") writeFileSync(join(dir, "package.json"), packageJson);
     else writeJson(join(dir, "package.json"), packageJson);
@@ -761,8 +761,8 @@ test("discoverExtensionDirs finds vendor/name dirs with a manifest and skips the
     },
   });
   try {
-    mkdirSync(join(root, "extensions", "cinatra-ai", "no-manifest"), { recursive: true });
-    mkdirSync(join(root, "extensions", "cinatra-ai", "node_modules"), { recursive: true });
+    mkdirSync(join(root, "extensions", "example-org", "no-manifest"), { recursive: true });
+    mkdirSync(join(root, "extensions", "example-org", "node_modules"), { recursive: true });
     const dirs = discoverExtensionDirs(join(root, "extensions")).map((d) => d.split("/").pop());
     assert.deepEqual(dirs, ["producer-agent", "target-artifact"]);
     assert.deepEqual(discoverExtensionDirs(join(root, "does-not-exist")), []);
@@ -801,7 +801,7 @@ const consumerPkg = (deps, consumes = []) => ({
 /** The inventory: one tool of the owner pack, one core tool. */
 const toolInventory = {
   primitives: [
-    { primitiveName: "owner_tool", file: "extensions/cinatra-ai/owner-connector/src/mcp/module.ts", line: 1 },
+    { primitiveName: "owner_tool", file: "extensions/example-org/owner-connector/src/mcp/module.ts", line: 1 },
     { primitiveName: "core_tool", file: "packages/core-thing/src/mcp/schemas.ts", line: 1 },
   ],
 };
@@ -868,7 +868,7 @@ test("live: an inventory file outside every pack of the tree is an unknown owner
   const root = makeFixtureRoot({
     extensions: { "consumer-agent": { packageJson: consumerPkg([], [consume("gone_tool")]) } },
     baseline: NO_PRODUCES_FINDINGS,
-    inventory: { primitives: [{ primitiveName: "gone_tool", file: "extensions/cinatra-ai/retired-connector/src/x.ts" }] },
+    inventory: { primitives: [{ primitiveName: "gone_tool", file: "extensions/example-org/retired-connector/src/x.ts" }] },
   });
   try {
     const res = runGate(root);
@@ -906,7 +906,7 @@ test("live: tools named in the flow (ApiNode data.tool, a step's metadata.cinatr
     inventory: {
       primitives: [
         ...toolInventory.primitives,
-        { primitiveName: "second_owner_tool", file: "extensions/cinatra-ai/owner-connector/src/mcp/other.ts" },
+        { primitiveName: "second_owner_tool", file: "extensions/example-org/owner-connector/src/mcp/other.ts" },
       ],
     },
   });
@@ -959,13 +959,13 @@ test("live: an unreadable manifest, flow, step tool list, code file or inventory
     {
       name: "manifest",
       ext: { packageJson: "{ not json" },
-      expect: /unreadable JSON at extensions\/cinatra-ai\/consumer-agent\/package\.json/,
+      expect: /unreadable JSON at extensions\/example-org\/consumer-agent\/package\.json/,
       status: 2,
     },
     {
       name: "flow",
       ext: { packageJson: consumerPkg([]), oasJson: "{ not json" },
-      expect: /unreadable JSON at extensions\/cinatra-ai\/consumer-agent\/cinatra\/oas\.json/,
+      expect: /unreadable JSON at extensions\/example-org\/consumer-agent\/cinatra\/oas\.json/,
       status: 2,
     },
     {
@@ -1054,7 +1054,7 @@ test("live: the shared floor base guard — the introducing change seeds once, g
   };
   const root = makeFixtureRoot({ extensions, baseline: NO_PRODUCES_FINDINGS, inventory: toolInventory });
   const baselinePath = join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json");
-  const consumerPath = join(root, "extensions", "cinatra-ai", "consumer-agent", "package.json");
+  const consumerPath = join(root, "extensions", "example-org", "consumer-agent", "package.json");
   // The base holds the produced-artifact classes only: the tool classes are new there.
   writeJson(baselinePath, NO_PRODUCES_FINDINGS);
   const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
