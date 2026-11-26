@@ -1,5 +1,6 @@
 /**
- * Allowlist for documented OAS-RUNTIME findings — CURRENTLY EMPTY.
+ * Allowlist for documented OAS-RUNTIME findings. Shrink-only: an entry is
+ * deleted in the PR that pins the cured pack (the sweep fails on a clean entry).
  *
  * This map encodes any "runtime-backed-agent" design exception, where a
  * context-using agent declares a `contextRefs` EndNode output with NO
@@ -43,7 +44,18 @@ export type AllowlistEntry = {
   reason: string;
 };
 
-export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {};
+export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {
+  // cinatra#4150: the pinned pack's publishing model step declares no tools, so
+  // the run refuses its WordPress call after Publish. Delete this entry in the
+  // PR that pins the pack's cure.
+  "blog-wordpress-publish-agent": {
+    phase: "cinatra#4150",
+    expectedCodes: ["OAS-RUNTIME-015"],
+    expectedBlockerCount: 1,
+    expectedLocations: ['Model-bridge step "publish" of the publishing node "publish"'],
+    reason: "the pinned pack's publishing model step declares no tools",
+  },
+};
 
 /**
  * Asserts that structured `findings` for `slug` match the documented

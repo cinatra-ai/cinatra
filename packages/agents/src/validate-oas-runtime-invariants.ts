@@ -74,7 +74,9 @@
  *                     steps only), or when two model-bridge steps share one id
  *                     and one of them declares (a declaration is read by the
  *                     step's id). A flow that declares nothing yields no
- *                     finding of this code.
+ *                     finding of this code, except: a model-bridge step of a
+ *                     `publishes: true` node whose toolbox reaches the
+ *                     product's tools must declare them (cinatra#4150).
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -454,14 +456,24 @@ function walkBridgeApiNodes(
   });
 }
 
-/** Every ApiNode of a flow document, nested subflows included, whatever its target. */
+/**
+ * Every ApiNode of a flow document, nested subflows included, whatever its target.
+ * With `seen`, each object is entered at most once across every walk that shares
+ * the set; `startPath` names where the walk starts.
+ */
 function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
+  seen?: Set<object>,
+  startPath = "$",
 ): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
+    if (seen) {
+      if (seen.has(o)) return;
+      seen.add(o);
+    }
     if (o.component_type === "ApiNode") {
       visit(o, path);
     }
@@ -484,7 +496,7 @@ function walkApiNodes(
       });
     }
   }
-  go(parsed, "$");
+  go(parsed, startPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -811,7 +823,86 @@ function scanForStepToolDeclarations(
       source: "deterministic",
     });
   }
+  findings.push(...scanForUndeclaredPublishingSteps(parsed));
   return findings;
+}
+
+// (d) cinatra#4150: a model-bridge step that the run reads as a step of a
+// `publishes: true` node, and whose toolbox reaches the product's tool boundary,
+// declares its tools. After Publish the run refuses every outward call of a step
+// that does not declare the call's tool (action_decision_step_undeclared).
+//
+// The steps judged are those found by ONE walk that starts at each top-level
+// node (the root `nodes` list) declaring `publishes: true` on an action kind and
+// follows exactly the children walkApiNodes (the run's step reader) follows. The
+// walks share one visited set, so each object is entered once in total and the
+// work is linear in the document; a step under two publishing nodes is judged
+// once. One finding per step id at most.
+//
+// Limits: this rule does not judge a step the run cannot read, a step that two
+// publishing nodes share (that ambiguity is itself the run's refusal), or a
+// passthrough publisher; the run refuses those itself (tracked in cinatra#4897).
+
+/** A mirror of BUILT_IN_BRIDGE_TOOLS (src/app/api/llm-bridge/route.ts:145); a test fails on drift. */
+export const BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS: ReadonlySet<string> = new Set(["web_search"]);
+
+let publishingStepScanVisits = 0;
+/** The number of objects the last publishing-step scan entered (for the linear-bound test). */
+export function publishingStepScanVisitsForTests(): number {
+  return publishingStepScanVisits;
+}
+
+function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  const seen = new Set<object>();
+  const judged = new Set<string>();
+  for (const entry of Array.isArray(parsed.nodes) ? parsed.nodes : []) {
+    const key = resolveComponentRef(entry);
+    if (key === null || !Object.prototype.hasOwnProperty.call(rootRefs, key)) continue;
+    const top = rootRefs[key];
+    if (!isPlainObject(top) || typeof top.component_type !== "string" || !PUBLISHING_ACTION_KINDS.has(top.component_type)) continue;
+    const cinatra = isPlainObject(top.metadata) && isPlainObject(top.metadata.cinatra) ? top.metadata.cinatra : null;
+    if (cinatra === null || cinatra.publishes !== true) continue;
+    walkApiNodes(top, (step, path) => {
+      if (!isModelBridgeApiNode(step)) return;
+      const id = typeof step.id === "string" ? step.id : (step.name as string) ?? "<unknown>";
+      if (judged.has(id)) return;
+      const data = isPlainObject(step.data) ? step.data : {};
+      const ids = data.toolbox_ids;
+      // The bridge's body schema is `toolbox_ids: z.array(z.string()).optional()`
+      // (route.ts:198): any other value is refused before the call runs.
+      if (ids !== undefined && (!Array.isArray(ids) || ids.some((t) => typeof t !== "string"))) {
+        judged.add(id);
+        findings.push(publishingStepFinding(id, path, key,
+          "carries a data.toolbox_ids that is not a list of texts, so the bridge refuses this step's call " +
+          "(its body schema is z.array(z.string()), src/app/api/llm-bridge/route.ts:198). Give a list of toolbox ids."));
+        return;
+      }
+      // Absent: the bridge reads ["cinatra-mcp"] (route.ts:1924). Every id that is
+      // not provider-native goes to the MCP toolboxes, the product's tool boundary.
+      if (Array.isArray(ids) && ids.every((t) => BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS.has(t as string))) return;
+      const reading = readStepToolDeclaration(step);
+      if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) return;
+      judged.add(id);
+      findings.push(publishingStepFinding(id, path, key,
+        "reaches the product's tools and declares no tools in metadata.cinatra.tools. After Publish the run " +
+        "refuses every outward call of a step that does not declare the call's tool " +
+        "(action_decision_step_undeclared). Declare the tools the step calls."));
+    }, seen, `$.$referenced_components.${key}`);
+  }
+  publishingStepScanVisits = seen.size;
+  return findings;
+}
+
+function publishingStepFinding(id: string, path: string, key: string, why: string): ReviewFinding {
+  return {
+    code: "OAS-RUNTIME-015",
+    severity: "blocker",
+    message: `Model-bridge step "${id}" of the publishing node "${key}" (metadata.cinatra.publishes: true) ${why}`,
+    location: path,
+    source: "deterministic",
+  };
 }
 
 // ---------------------------------------------------------------------------
