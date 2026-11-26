@@ -66,7 +66,7 @@ import {
   agentRuns,
   artifactReviewActionConsumptions,
 } from "./schema";
-import { CURRENT_ATTEMPT, decodeStoredPublishDecision, type PublishDecisionRow } from "./publish-decision-store";
+import { CURRENT_ATTEMPT, decodeStoredPublishDecision, releasedDecisionText, type PublishDecisionRow } from "./publish-decision-store";
 import { findPublishingAncestor } from "./validate-oas-runtime-invariants";
 import { publishRowKind } from "./publish-decision-card";
 import { normalizeReviewTargets } from "@/lib/artifacts/artifact-review-target";
@@ -104,11 +104,19 @@ export type ConsumeRunActionDecisionInput = {
   readonly publishDecisionId?: string;
   /**
    * The call's own arguments, for a call whose every argument is one of the step's inputs (a direct passthrough
-   * publishing step, cinatra#3745): each must be a value the released decision surfaced under the same name
-   * (`callArgumentsReleased`). Absent: the call's arguments are not compared.
+   * publishing step, cinatra#3745), with the tool's own split of its argument names (`callArgumentsReleased`).
+   * Absent: the call's arguments are not compared.
    */
-  readonly arguments?: unknown;
+  readonly arguments?: { readonly values: unknown } & CallArgumentRoles;
 };
+
+/**
+ * cinatra#3745: a tool's split of its argument names, declared with the tool by its package. `shown` names what is
+ * mailed or published (a sender, recipients, bodies): the released card must have DISPLAYED it on a declared row.
+ * `routing` names opaque ids no person can judge (a campaign id, bundle references): the card declares no row for
+ * them, so they are bound only by equality to the value frozen with the decision, never as reviewed.
+ */
+export type CallArgumentRoles = { readonly shown: readonly string[]; readonly routing: readonly string[] };
 
 export type RunActionDecisionConsumption = {
   /** The consumption row's key: the decision's kind and id. */
@@ -187,14 +195,36 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 /**
- * cinatra#3745: true when the call's arguments are what the person was shown: a plain object whose every own argument
- * has a value the decision surfaced under the same name, equal as JSON. An argument the decision did not surface, or
- * one that differs from it, is not released; the call's arguments then bind nothing the person reviewed.
+ * cinatra#3745: the call's arguments against the released decision. Every argument must be named by the tool's split
+ * (`roles`): a `shown` argument must be the text a declared row of the card DISPLAYED for that name
+ * (releasedDecisionText; a value surfaced without a row is one no person saw, and is refused); a `routing` argument
+ * must equal, as JSON, the value the decision froze under that name. A routing argument is NOT reviewed by the
+ * person: the answer names it in `frozenNotDisplayed`, and what it points at is checked by the send itself (the
+ * bundles' content against the released list, cinatra#4832).
  */
-export function callArgumentsReleased(surfaced: Readonly<Record<string, unknown>>, args: unknown): boolean {
-  if (!args || typeof args !== "object" || Array.isArray(args)) return false;
-  return Object.keys(args).every((name) => Object.prototype.hasOwnProperty.call(surfaced, name) &&
-    sameJson((args as Record<string, unknown>)[name], surfaced[name]));
+export function callArgumentsReleased(
+  decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">,
+  args: unknown,
+  roles: CallArgumentRoles,
+): { ok: true; displayed: string[]; frozenNotDisplayed: string[] } | { ok: false } {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return { ok: false };
+  const displayed: string[] = [];
+  const frozenNotDisplayed: string[] = [];
+  const surfaced = decision.surfacedValues;
+  for (const name of Object.keys(args)) {
+    const value = (args as Record<string, unknown>)[name];
+    if (roles.shown.includes(name)) {
+      const shown = releasedDecisionText({ decision, input: name });
+      if (!shown.ok || shown.value === null || shown.value !== value) return { ok: false };
+      displayed.push(name);
+    } else if (roles.routing.includes(name)) {
+      if (!Object.prototype.hasOwnProperty.call(surfaced, name) || !sameJson(value, surfaced[name])) return { ok: false };
+      frozenNotDisplayed.push(name);
+    } else {
+      return { ok: false };
+    }
+  }
+  return { ok: true, displayed, frozenNotDisplayed };
 }
 
 /** The top-level publishing node of the bound graph whose decision covers the step; refused when there is none, more
@@ -234,8 +264,8 @@ function readDecisionNode(source: string, stepId: string): string {
  *     is absent or not a string;
  *   - `action_subject_not_released`: the call's item and revision are not among the items the released decision
  *     surfaced;
- *   - `action_arguments_not_released`: the call names its arguments and one of them is not the value the released
- *     decision surfaced under its name (callArgumentsReleased);
+ *   - `action_arguments_not_released`: the call names its arguments and one of them is not one its card displayed
+ *     (a shown argument) or not the value the decision froze (a routing argument) (callArgumentsReleased);
  *   - `action_person_decision_already_consumed`: it was used before (by this or any other action);
  *   - `action_person_decision_unavailable`: a store failure.
  */
@@ -312,9 +342,9 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
       // The call acts on the item and revision the person released, compared under the decision row's lock, in the
       // transaction that marks the decision used: a refusal here consumes nothing.
       if (subject && !decisionReleasedSubject(decision, subject)) refuse("action_subject_not_released");
-      if (input.arguments !== undefined && !callArgumentsReleased(decision.surfacedValues, input.arguments)) {
-        refuse("action_arguments_not_released");
-      }
+      const argumentsReading = input.arguments === undefined ? null
+        : callArgumentsReleased(decision, input.arguments.values, input.arguments);
+      if (argumentsReading && !argumentsReading.ok) refuse("action_arguments_not_released");
       const consumptionKey = `${PUBLISH_DECISION_CONSUMPTION_PREFIX}${decision.id}`;
       const used = await tx.select({ gateId: artifactReviewActionConsumptions.gateId })
         .from(artifactReviewActionConsumptions).where(eq(artifactReviewActionConsumptions.gateId, consumptionKey));
@@ -327,7 +357,8 @@ export async function consumeRunActionDecision(input: ConsumeRunActionDecisionIn
       }).onConflictDoNothing().returning({ gateId: artifactReviewActionConsumptions.gateId });
       if (inserted.length !== 1 || inserted[0]!.gateId !== consumptionKey) refuse("action_person_decision_already_consumed");
       return Object.freeze({ consumptionKey, decisionId: decision.id, decidedBy: decision.decidedBy as string,
-        stepId: p.stepId, decisionNodeId, action });
+        stepId: p.stepId, decisionNodeId, action,
+        ...(argumentsReading?.ok ? { argumentsFrozenNotDisplayed: Object.freeze(argumentsReading.frozenNotDisplayed) } : {}) });
     });
   } catch (err) {
     if (err instanceof RunStepToolPolicyRefusal) throw err;

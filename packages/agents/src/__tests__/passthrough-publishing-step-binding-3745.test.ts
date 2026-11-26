@@ -5,8 +5,8 @@
  * (1) The step-tool reader (findStepToolDeclaration, read by the single-use consumption and by the passthrough's
  *     argument preparation) reads a top-level `/api/agents/passthrough` ApiNode that declares `publishes: true` as
  *     declaring exactly its literal `data.tool`. Every other shape declares nothing, as before.
- * (2) callArgumentsReleased, the consumption's check of a call that names its arguments: every argument must be the
- *     value the released decision surfaced under the same name.
+ * (2) callArgumentsReleased, the consumption's check of a call that names its arguments: a shown argument must be the
+ *     text a declared row of the card displayed; a routing id must equal the value frozen with the decision.
  */
 import { describe, expect, it } from "vitest";
 
@@ -64,32 +64,35 @@ describe("a direct passthrough publishing step declares the tool its request nam
   });
 });
 
-describe("a call that names its arguments is bound to the values the decision surfaced", () => {
-  const surfaced = {
-    campaignId: "c-1",
-    senderEmail: "me@example.com",
-    emailBodies: [{ artifactId: "a-1", representationRevisionId: "r-1" }],
-  };
+describe("a call that names its arguments is bound to what the card displayed, and its routing ids to the frozen values", () => {
+  const ROLES = { shown: ["senderEmail"], routing: ["campaignId", "approvedDraftBundleRef"] };
+  const surfaced = { campaignId: "c-1", senderEmail: "me@example.com", approvedDraftBundleRef: "b-1" };
+  const decision = (declaredRows: Array<{ label: string; input: string }>) =>
+    ({ status: "released", decidedBy: "user-1", surfacedValues: surfaced, declaredRows }) as never;
+  const shownSender = decision([{ label: "Sender", input: "senderEmail" }]);
 
-  it("admits arguments that are each the surfaced value under the same name", () => {
-    // red-first-expect: callArgumentsReleased is not a function
-    expect(consumption.callArgumentsReleased(surfaced, { campaignId: "c-1", senderEmail: "me@example.com" })).toBe(true);
-    expect(consumption.callArgumentsReleased(surfaced, {
-      emailBodies: [{ representationRevisionId: "r-1", artifactId: "a-1" }],
-    })).toBe(true);
+  it("admits a shown argument its card displayed and routing ids equal to the frozen values, and names the latter", () => {
+    expect(consumption.callArgumentsReleased(shownSender,
+      { campaignId: "c-1", senderEmail: "me@example.com", approvedDraftBundleRef: "b-1" }, ROLES))
+      .toEqual({ ok: true, displayed: ["senderEmail"], frozenNotDisplayed: ["campaignId", "approvedDraftBundleRef"] });
   });
 
-  it("refuses an argument the decision did not surface, or one that differs from it", () => {
-    // red-first-expect: callArgumentsReleased is not a function
-    expect(consumption.callArgumentsReleased(surfaced, { campaignId: "c-2" })).toBe(false);
-    expect(consumption.callArgumentsReleased(surfaced, { campaignId: "c-1", senderEmail: "other@example.com" })).toBe(false);
-    expect(consumption.callArgumentsReleased(surfaced, { campaignId: "c-1", approvedDraftBundleRef: "b-1" })).toBe(false);
-    expect(consumption.callArgumentsReleased(surfaced, {
-      emailBodies: [{ artifactId: "a-1", representationRevisionId: "r-2" }],
-    })).toBe(false);
-    expect(consumption.callArgumentsReleased(surfaced, { campaignId: ["c-1"] })).toBe(false);
+  it("refuses a shown argument the decision surfaced but no row of its card displayed", () => {
+    // Before: the surfaced value alone was enough, whether or not a row showed it.
+    expect(consumption.callArgumentsReleased(decision([]), { campaignId: "c-1", senderEmail: "me@example.com" }, ROLES))
+      .toEqual({ ok: false });
+    expect(consumption.callArgumentsReleased(decision([{ label: "Campaign", input: "campaignId" }]),
+      { senderEmail: "me@example.com" }, ROLES)).toEqual({ ok: false });
+  });
+
+  it("refuses a differing value, an unsurfaced routing id, an argument the tool does not split, and a non-object", () => {
+    expect(consumption.callArgumentsReleased(shownSender, { senderEmail: "other@example.com" }, ROLES)).toEqual({ ok: false });
+    expect(consumption.callArgumentsReleased(shownSender, { campaignId: "c-2" }, ROLES)).toEqual({ ok: false });
+    expect(consumption.callArgumentsReleased(shownSender, { campaignId: ["c-1"] }, ROLES)).toEqual({ ok: false });
+    expect(consumption.callArgumentsReleased(shownSender, { approvedDraftBundleRef: "b-1", confirmedRecipientsRef: "r-1" }, ROLES))
+      .toEqual({ ok: false });
     for (const args of [null, undefined, "c-1", ["c-1"]]) {
-      expect(consumption.callArgumentsReleased(surfaced, args)).toBe(false);
+      expect(consumption.callArgumentsReleased(shownSender, args, ROLES)).toEqual({ ok: false });
     }
   });
 });

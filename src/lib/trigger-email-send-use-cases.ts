@@ -716,6 +716,18 @@ function resolveRunScopeId(
   return fromEnv(draftEnv) ?? fromEnv(recipEnv);
 }
 
+export const INITIAL_SEND_INPUT_REFUSAL = "approvedDraftBundleRef and confirmedRecipientsRef are required";
+
+/**
+ * The inputs the initial send refuses up front (INITIAL_SEND_INPUT_REFUSAL) are present (cinatra#3745: the passthrough
+ * publishing step reads this before it uses the person's decision, so an input the send refuses uses no decision).
+ */
+export function initialSendInputsPresent<T extends { approvedDraftBundleRef?: string; confirmedRecipientsRef?: string }>(
+  input: T,
+): input is T & { approvedDraftBundleRef: string; confirmedRecipientsRef: string } {
+  return !!input.approvedDraftBundleRef && !!input.confirmedRecipientsRef;
+}
+
 async function runInitialSend(args: {
   input: {
     campaignId: string;
@@ -740,9 +752,8 @@ async function runInitialSend(args: {
     sentCount: 0,
   });
 
-  if (!input.approvedDraftBundleRef || !input.confirmedRecipientsRef) {
-    const errorMessage =
-      "approvedDraftBundleRef and confirmedRecipientsRef are required";
+  if (!initialSendInputsPresent(input)) {
+    const errorMessage = INITIAL_SEND_INPUT_REFUSAL;
     return {
       status: "failed",
       startedAt,

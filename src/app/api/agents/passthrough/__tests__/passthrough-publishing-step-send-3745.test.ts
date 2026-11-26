@@ -17,6 +17,7 @@ const h = vi.hoisted(() => {
   return {
     RunStepToolPolicyRefusal,
     order: [] as string[],
+    consumed: new Set<string>(),
     claim: true,
     readAgentRunById: vi.fn(),
     readAgentRunByContextId: vi.fn(),
@@ -46,7 +47,9 @@ vi.mock("@cinatra-ai/agents/store", () => ({
 vi.mock("@/lib/org-write/run-authority-mint", () => ({
   mintRunWriteAuthorityForMcp: vi.fn(async () => Object.freeze({ authority: "run-authority-under-test" })),
 }));
-vi.mock("@/lib/trigger-email-send-use-cases", () => ({
+vi.mock("@/lib/trigger-email-send-use-cases", async () => ({
+  // The send's own up-front input check is the real one; its use cases are doubles.
+  ...(await vi.importActual<typeof import("@/lib/trigger-email-send-use-cases")>("@/lib/trigger-email-send-use-cases")),
   createTriggerEmailSendUseCases: () => ({ startInitialSend: h.startInitialSend }),
 }));
 vi.mock("@cinatra-ai/a2a", () => ({ resolveLatestWayflowGateTaskId: vi.fn(async () => null) }));
@@ -85,12 +88,22 @@ const INPUT = {
 };
 const ATTEST_BEFORE = process.env.CINATRA_CONTEXT_ATTEST_KEY;
 
-function sourceHeaders(): Record<string, string> {
+function sourceHeaders(decision?: { id: string; sig?: string | null }): Record<string, string> {
   const expiry = Math.floor(Date.now() / 1000) + 300;
   const sig = createHmac("sha256", ATTEST_KEY)
     .update(`s2\n${CTX}\n${NODE}\nattempt-1\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n${SOURCE.declarationSourceSha256}\n${expiry}`)
     .digest("hex");
+  // The runtime's signed decision of this visit (s3), over the same pair; `sig: null` sends no signature.
+  const decisionHeaders: Record<string, string> = {};
+  if (decision) {
+    decisionHeaders["x-cinatra-publish-decision"] = decision.id;
+    const s3 = decision.sig !== undefined ? decision.sig : createHmac("sha256", ATTEST_KEY)
+      .update(`s3\n${CTX}\n${NODE}\nattempt-1\n${SOURCE.sourceSha256}\n${SOURCE.executedSourceSha256}\n` +
+        `${SOURCE.declarationSourceSha256}\n${decision.id}\n${sig}\n${expiry}`).digest("hex");
+    if (s3 !== null) decisionHeaders["x-cinatra-publish-decision-attestation"] = `s3:${expiry}:${s3}`;
+  }
   return {
+    ...decisionHeaders,
     "x-cinatra-step-node": NODE,
     "x-cinatra-execution-attempt": "attempt-1",
     "x-cinatra-step-attestation": `s2:${expiry}:${sig}`,
@@ -120,6 +133,7 @@ beforeEach(() => {
   h.readAgentRunById.mockReset().mockResolvedValue(RUN);
   h.readAgentRunByContextId.mockReset().mockImplementation(async (ctx: string) => (ctx === CTX ? RUN : null));
   h.verifyRunExecutedSource.mockReset().mockResolvedValue(VERIFIED_SOURCE);
+  h.consumed.clear();
   h.consumeRunActionDecision.mockReset().mockImplementation(async () => { h.order.push("consumed"); return {}; });
   h.startInitialSend.mockReset().mockImplementation(async () => { h.order.push("sent"); return { status: "completed" }; });
   process.env.CINATRA_CONTEXT_ATTEST_KEY = ATTEST_KEY;
@@ -143,7 +157,11 @@ describe("the campaign send on the passthrough road", () => {
       authority: { authority: "run-authority-under-test" },
       proof: VERIFIED_SOURCE,
       subject: null,
-      arguments: INPUT,
+      arguments: {
+        values: INPUT,
+        shown: ["senderEmail"],
+        routing: ["serviceId", "campaignId", "approvedDraftBundleRef", "confirmedRecipientsRef"],
+      },
       action: {
         toolName: TOOL,
         packageName: HOST_PRIMITIVE_OWNER_PACKAGE,
@@ -199,5 +217,51 @@ describe("the campaign send on the passthrough road", () => {
     expect(res.status).not.toBe(200);
     expect(h.consumeRunActionDecision).not.toHaveBeenCalled();
     expect(h.startInitialSend).not.toHaveBeenCalled();
+  });
+
+  /** The consumption as the store answers when the step's node holds two current decisions in the attempt. */
+  function twoDecisionsOfOneStep(): void {
+    h.consumeRunActionDecision.mockImplementation(async (used: { publishDecisionId?: string }) => {
+      if (used.publishDecisionId === undefined) throw new h.RunStepToolPolicyRefusal("action_decision_binding_missing");
+      if (h.consumed.has(used.publishDecisionId)) throw new h.RunStepToolPolicyRefusal("action_person_decision_already_consumed");
+      h.consumed.add(used.publishDecisionId);
+      h.order.push(`consumed:${used.publishDecisionId}`);
+      return {};
+    });
+  }
+
+  it("two visits of one step in an attempt each send on their own signed decision", async () => {
+    twoDecisionsOfOneStep();
+    const first = await POST(makeReq(sourceHeaders({ id: "decision-1" })));
+    const second = await POST(makeReq(sourceHeaders({ id: "decision-2" })));
+    expect([first.status, second.status]).toEqual([200, 200]);
+    expect(h.order).toEqual(["consumed:decision-1", "sent", "consumed:decision-2", "sent"]);
+  });
+
+  it("a decision named with a bad or missing signature is refused before anything runs", async () => {
+    for (const sig of ["0".repeat(64), null]) {
+      const res = await POST(makeReq(sourceHeaders({ id: "decision-1", sig })));
+      expect(res.status).toBe(403);
+    }
+    expect(h.consumeRunActionDecision).not.toHaveBeenCalled();
+    expect(h.startInitialSend).not.toHaveBeenCalled();
+  });
+
+  it("a call missing a bundle reference uses no decision, and the corrected call then sends", async () => {
+    // The step's node holds one decision: the call's visit is that one, signed or not.
+    h.consumeRunActionDecision.mockImplementation(async () => {
+      if (h.consumed.has("decision-1")) throw new h.RunStepToolPolicyRefusal("action_person_decision_already_consumed");
+      h.consumed.add("decision-1");
+      h.order.push("consumed:decision-1");
+      return {};
+    });
+    const { confirmedRecipientsRef: _dropped, ...missing } = INPUT;
+    const refused = await POST(makeReq(sourceHeaders(), missing));
+    expect(refused.status).not.toBe(200);
+    expect(h.consumed.size).toBe(0);
+    expect(h.startInitialSend).not.toHaveBeenCalled();
+    const corrected = await POST(makeReq(sourceHeaders()));
+    expect(corrected.status).toBe(200);
+    expect(h.order).toEqual(["consumed:decision-1", "sent"]);
   });
 });
