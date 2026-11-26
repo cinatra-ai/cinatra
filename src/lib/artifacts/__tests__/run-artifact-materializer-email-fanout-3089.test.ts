@@ -28,8 +28,10 @@
  *   P1 a message bound to an approved revision records the fan-out row under
  *      the message identity, writes no artifact and no claim, and a retry
  *      returns the same row
- *   P2 one binding per message: a second revision (other text, so another
- *      content hash) is refused, also when two binds run at once
+ *   P2 one binding per message: a revision of another artifact (other text,
+ *      so another content hash) is refused, also when two binds run at once
+ *      (a newer revision of the SAME artifact moves an unsent message:
+ *      send-rebinds-unsent-message-3089.test.ts)
  *   P3 a run outside the organization, or a type no pack claims, binds nothing
  *   P4 the stored revision decides: a revision of another artifact or
  *      organization, and a text that is not the stored text, bind nothing
@@ -609,6 +611,7 @@ describe("cinatra#3089 — a message bound to its approved revision", () => {
   const STORED: Record<string, string> = {
     "art-approved:rev-approved": "Approved body one",
     "art-approved:rev-2": "Approved body two",
+    "art-second:rev-2": "Approved body two",
   };
   /** A client of a fake ledger table: the advisory lock serializes until COMMIT or ROLLBACK. */
   function client() {
@@ -690,8 +693,8 @@ describe("cinatra#3089 — a message bound to its approved revision", () => {
     expect(rows).toHaveLength(1);
   });
 
-  it("P2 one binding per message: a second revision with other text is refused, also when the two binds run at once", async () => {
-    const second = { ...approvedInput, markdown: "Approved body two", representationRevisionId: "rev-2" };
+  it("P2 one binding per message: a revision of another artifact is refused, also when the two binds run at once", async () => {
+    const second = { ...approvedInput, markdown: "Approved body two", artifactId: "art-second", representationRevisionId: "rev-2" };
     expect((await bindFanoutMessageRevision(approvedInput)).ok).toBe(true);
     const refused = await bindFanoutMessageRevision(second);
     expect(!refused.ok && refused.error).toContain("is already bound to revision rev-approved of artifact art-approved");

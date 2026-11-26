@@ -1892,6 +1892,41 @@ LIMIT 1`,
 }
 
 /**
+ * Inside the bind's transaction (cinatra#3089): re-point a message bound to
+ * another revision of the SAME artifact, only while the message has no effect
+ * claim row (no claim or sent record of any effect: neither sent nor in doubt).
+ * Takes the exclusive form of the artifact's revision lock, the lock whose
+ * shared form every effect claim holds, before it reads the claims, so no claim
+ * of the old binding commits between the read and the move. True when the old
+ * bindings were removed (the caller inserts the new one); false when the
+ * message keeps its binding. The caller calls it only when every binding of
+ * the message is on the artifact being bound.
+ */
+async function moveUnsentBinding(
+  client: { query: (text: string, values?: unknown[]) => Promise<{ rows: unknown[] }> },
+  s: string,
+  input: { orgId: string; runId: string; outputId: string; artifactId: string },
+): Promise<boolean> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [input.artifactId]);
+  const claims = await client.query(
+    `SELECT 1 FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3
+    AND path = 'email_fanout' AND extension = content_hash
+  LIMIT 1`,
+    [input.orgId, input.runId, input.outputId],
+  );
+  if (claims.rows.length > 0) return false;
+  await client.query(
+    `DELETE FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3
+    AND path = 'email_fanout' AND phase = 'finalized'
+    AND artifact_id = $4 AND extension <> content_hash`,
+    [input.orgId, input.runId, input.outputId, input.artifactId],
+  );
+  return true;
+}
+
+/**
  * Bind ONE message of a send to a body revision a person decided on, instead of
  * writing a new body (cinatra#3089). The send that mails a decided revision
  * files no body of its own: it records a finalized `email_fanout` ledger row
@@ -1908,10 +1943,19 @@ LIMIT 1`,
  *     is the stored revision's; the row's content hash is the stored text's.
  *   - ONE BINDING PER MESSAGE. A message (organisation, run, output id) is bound
  *     to one revision whatever its text: the lookup takes no content hash, and
- *     a message bound to another artifact or revision is refused, never
- *     re-pointed. The lookup and the insert run in one transaction under an
- *     advisory transaction lock on the run and the output id, so of two
- *     concurrent binds of one message the second sees the first.
+ *     a message bound to another artifact is refused. The lookup and the
+ *     insert run in one transaction under an advisory transaction lock on the
+ *     run and the output id, so of two concurrent binds of one message the
+ *     second sees the first.
+ *   - AN UNSENT MESSAGE MOVES TO A NEWER REVISION OF ITS ARTIFACT. A message
+ *     bound to another revision of the SAME artifact is re-pointed to this one
+ *     only while it has no effect claim row (no `message-send` claim or sent
+ *     record: neither sent nor in doubt). The check and the move run under the
+ *     EXCLUSIVE form of the artifact's revision lock, whose shared form every
+ *     effect claim holds (`claimRevisionEffect`): a claim committed earlier is
+ *     seen and the message stays bound (refused as before); a claim started
+ *     later finds only the new binding, so it can no longer start an effect
+ *     with the old revision. A message with a claim row keeps its binding.
  *   - A retry of the same revision finds its row and returns it (`deduped`).
  *
  * Never throws: a refusal is a returned error.
@@ -1994,13 +2038,15 @@ export async function bindFanoutMessageRevision(input: {
       const other = rows.find(
         (r) => r.artifact_id !== input.artifactId || r.representation_revision_id !== input.representationRevisionId,
       );
-      if (other) {
+      const sameArtifact = rows.every((r) => r.artifact_id === input.artifactId);
+      if (other && !(sameArtifact && (await moveUnsentBinding(client, s, input)))) {
         await client.query("ROLLBACK");
         return {
           ok: false,
           error: `message ${input.outputId} of run ${input.runId} is already bound to revision ${other.representation_revision_id} of artifact ${other.artifact_id}`,
         };
       }
+      if (other) rows.length = 0;
       if (rows.length > 0) {
         await client.query("COMMIT");
         return { ok: true, artifactId: input.artifactId, representationRevisionId: input.representationRevisionId, deduped: true };
