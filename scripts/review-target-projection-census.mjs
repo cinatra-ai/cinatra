@@ -103,7 +103,6 @@ export const NOT_TARGET_RULES = [
   ["src/lib/auth-route-guard.ts", "new URL(buildSignInPath(currentPath), request.url)", "the sign-in redirect for the request's own path"],
   // --- sealed capabilities: the token is opaque and carries the ids sealed inside
   ["src/lib/lifecycle/review-island-byte-capability.ts", "encodeURIComponent(capability)", "encodes a sealed byte capability token, not a target id"],
-  ["src/lib/lifecycle/capture-capability.ts", "encodeURIComponent(encoded)", "encodes a sealed capture capability token, not a target id"],
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "const url = new URL(request.url);", "parses the request's own address to read the capability"],
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "searchParams.get(REVIEW_ISLAND_BYTE_CAPABILITY_QUERY_PARAM)", "reads the sealed byte capability, not a target id"],
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "const filename = `artifact-${decision.capability.artifactId}`;", "the download filename handed to the disposition helper, from the capability's sealed server-minted id"],

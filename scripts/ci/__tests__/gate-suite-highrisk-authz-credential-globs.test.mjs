@@ -122,7 +122,9 @@ const WIDENED_GLOBS = [
 ];
 
 // The 26 leaves the re-audit measured as matching ZERO glob of the prior
-// 44-glob effective set. Each must classify high-risk now.
+// 44-glob effective set. Each must classify high-risk now. (Two of them, the
+// sealed capture capability and its serving ladder, left the tree with
+// cinatra#3862.)
 const PREVIOUSLY_UNCOVERED = [
   "packages/agents/src/a2a-publication-guard.ts",
   "packages/agents/src/wayflow-run-token-carrier.ts",
@@ -139,8 +141,6 @@ const PREVIOUSLY_UNCOVERED = [
   "src/lib/connector-instance-trusted-read-verifier.ts",
   "src/lib/embed/frame-widget-session.client.ts",
   "src/lib/execution/surface-execution-session.ts",
-  "src/lib/lifecycle/capture-capability-serving.ts",
-  "src/lib/lifecycle/capture-capability.ts",
   "src/lib/lifecycle/review-island-credential.ts",
   "src/lib/lifecycle/review-island-grant-store.ts",
   "src/lib/llm-credential-fingerprint.ts",

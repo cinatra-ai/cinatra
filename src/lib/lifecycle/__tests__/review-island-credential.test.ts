@@ -129,20 +129,6 @@ describe("it is not one of ours unless it is exactly one of ours", () => {
     expect(verifyReviewIslandCredential(encoded, { nowSeconds: now })).toBeTruthy();
   });
 
-  it("KEY SEPARATION: a capture capability does not open as an island credential", async () => {
-    const { mintCaptureCapability } = await import("../capture-capability");
-    const capture = mintCaptureCapability(
-      {
-        ...PAYLOAD,
-        captureArtifactId: "cap-1",
-        representationRevisionId: "rev-1",
-      },
-      { nowSeconds: now },
-    )!;
-    expect(capture).toBeTruthy();
-    expect(verifyReviewIslandCredential(capture, { nowSeconds: now })).toBeNull();
-  });
-
   it("mints NOTHING when a field is missing, blank or over-long", () => {
     for (const field of Object.keys(PAYLOAD) as Array<keyof ReviewIslandCredentialPayload>) {
       expect(

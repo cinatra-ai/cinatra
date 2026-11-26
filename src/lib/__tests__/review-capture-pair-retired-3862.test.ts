@@ -17,6 +17,8 @@
  *
  * The second part of leg 8 then removed what had no reader left: the capture
  * route, the capture store, its view module and the broker minter's module.
+ * Its last part removed the sealed capture capability, its serving ladder and
+ * the route guard's exemption for the capture path, which no handler serves.
  *
  * Source text, not behaviour: the invariant is the absence of every name (the
  * technique of `cms-preview-signed-target-retired-3862.test.ts`).
@@ -150,5 +152,15 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
     ]) {
       expect(existsSync(path.join(REPO_ROOT, rel))).toBe(false);
     }
+  });
+
+  it("the sealed capture capability, its serving ladder and the guard's exemption are gone", () => {
+    for (const rel of [
+      "src/lib/lifecycle/capture-capability.ts",
+      "src/lib/lifecycle/capture-capability-serving.ts",
+    ]) {
+      expect(existsSync(path.join(REPO_ROOT, rel))).toBe(false);
+    }
+    expect(read("src/lib/auth-route-guard.ts")).not.toContain("/api/lifecycle-views/capture\"");
   });
 });
