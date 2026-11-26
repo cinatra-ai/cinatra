@@ -340,19 +340,33 @@ own in its manifest, and the gates read them; neither gate names a word.
 - **What the gates read.** The union, over the packs the two locks and
   `cinatra.devExtensions` pin, of their declared words and the bridge below:
   the `vendor` list for the vendor gate, the `domain` list for class 2. A word
-  declared a vendor word by one pack and a domain word by another fails. An
-  absent or partial extension tree, an unreadable manifest or a malformed
-  bridge is a scanner error (exit 2), never a pass. Both jobs clone the tree
-  before the gates run, so no workflow changes.
+  declared a vendor word by one pack and a domain word by another fails.
+  Completeness is by identity: every pinned package must be found under
+  `extensions/` by its manifest `name` (the folder name does not matter). A
+  pinned package not found, two directories naming one pinned package, an
+  absent tree, an unreadable manifest or a malformed bridge is a scanner error
+  (exit 2), never a pass. A directory the locks do not pin is ignored for words
+  and never stands in for a missing one; a symlinked pack directory is not
+  followed, so its package counts as missing. Both CI jobs (`perpetual-core`
+  for the vendor gate, `gates-pnpm` for class 2) run the `clone-extensions`
+  action (`sync-dev-extensions.mjs --pinned`), which materializes every
+  `cinatra.devExtensions` entry, and the two locks are a subset of that set,
+  so both jobs have the whole pinned set on disk and no workflow changes.
 - **The bridge (temporary).** `scripts/audit/border-words-bridge.json` holds
   the words no pinned pack declares yet: at introduction the 10 vendor and 16
   domain words the gates held in their code before cinatra#4848, so the
   findings on `main` did not change (49 vendor occurrences in 37 files; 72
   class 2 entries in 71 files). It only shrinks: a word both in the bridge
   and declared by a pinned pack fails (the pull request that advances that
-  pack's pin removes the word), and a bridge that grew against the base
-  (`VENDOR_TOKEN_BASE`, `APPLICATION_BORDER_BASE`) fails. **The bridge must
-  reach empty; cinatra#4848 tracks it.**
+  pack's pin removes the word), a bridge that grew against the base
+  (`VENDOR_TOKEN_BASE`, `APPLICATION_BORDER_BASE`) fails, and a word that left
+  the bridge against the base fails unless a pinned pack declares it in the
+  SAME list at the head. So a word leaves the bridge only into a declaration,
+  never out of the words the gates read: removing it, moving it to the other
+  list, emptying the bridge, or unpinning the pack that declares it in the
+  same change all fail, naming the word. A deleted bridge is a scanner error,
+  and an unresolvable base fails, as the other base guards do. **The bridge
+  must reach empty; cinatra#4848 tracks it.**
 - **A pack without the declaration** is listed as a warning while the bridge
   holds a word, and is a failure once the bridge is empty. The switch is the
   bridge's own content, so no code change makes it.

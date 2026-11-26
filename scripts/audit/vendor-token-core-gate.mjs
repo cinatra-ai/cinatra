@@ -63,9 +63,11 @@
 // words the pinned extensions declare in their own manifests and the
 // temporary, shrink-only bridge scripts/audit/border-words-bridge.json (the
 // words no pack declares yet). A malformed declaration, a word both in the
-// bridge and declared, a bridge that grew against VENDOR_TOKEN_BASE, and —
-// once the bridge is empty — a pinned pack without the declaration each fail;
-// an absent or partial extension tree is a scanner error (exit 2). The
+// bridge and declared, a bridge that grew against VENDOR_TOKEN_BASE, a word
+// that left the bridge against it without a pinned pack declaring it as a
+// vendor word, and — once the bridge is empty — a pinned pack without the
+// declaration each fail; an absent extension tree or a pinned package not
+// found in it is a scanner error (exit 2). The
 // non-goals of epic #978 stay non-goals by declaration: `nango` (the
 // credential-broker MECHANISM) and the LLM-provider names are words no pack
 // declares as a vendor word.
@@ -85,6 +87,7 @@ import {
   BorderWordsError,
   bridgeAtRef,
   bridgeGrowth,
+  bridgeShrinkProblems,
   fileUnchangedAtRef,
   loadBorderWords,
 } from "./lib/border-words.mjs";
@@ -422,6 +425,15 @@ function main() {
         `[vendor-token-core-gate] FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words; cinatra#4848):`,
       );
       bridgeGrew.forEach((e) => console.error("  + " + e));
+      process.exit(1);
+    }
+    const bridgeDropped = baseBridge ? bridgeShrinkProblems(baseBridge, words).filter((g) => g.startsWith("vendor: ")) : [];
+    if (bridgeDropped.length) {
+      console.error(
+        `[vendor-token-core-gate] FAIL — word(s) left the border-word bridge vs ${baseRef} without a pinned pack declaring them ` +
+          `in the same list (a word leaves the bridge only into a cinatra.borderWords declaration; cinatra#4848):`,
+      );
+      bridgeDropped.forEach((e) => console.error("  - " + e));
       process.exit(1);
     }
     if (baseText) {

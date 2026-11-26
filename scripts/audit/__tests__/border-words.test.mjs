@@ -6,7 +6,10 @@
 //   B1 the declaration's rules (and parity with the SDK's validator);
 //   B2 a declared word is found by both gates without any edit to gate code;
 //   B3 the bridge: a word both in the bridge and declared fails; growth
-//      against the base fails; a malformed or missing bridge is a scanner error;
+//      against the base fails; a word that left it against the base fails
+//      unless a pinned pack declares it in the same list; a malformed or
+//      missing bridge is a scanner error; every pinned package must be found
+//      in the tree by its manifest name;
 //   B4 a pinned pack without the declaration: a warning while the bridge holds
 //      a word, a failure once it is empty (no code change makes the switch);
 //   B5 the real tree: no problem, and the gate sources spell no bridge word.
@@ -15,7 +18,7 @@
 // organisation's shape (`@example-org/...`); they are removed after the suite.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSync, symlinkSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -25,6 +28,7 @@ import {
   borderWordsIssues,
   bridgeAtRef,
   bridgeGrowth,
+  bridgeShrinkProblems,
   loadBorderWordRules,
   loadBorderWords,
 } from "../lib/border-words.mjs";
@@ -235,6 +239,81 @@ describe("B3 the bridge", () => {
     const r = makeTree({ packs: { "@example-org/widget-artifacts": NO_WORD } });
     writeFileSync(join(r, "package.json"), JSON.stringify({ cinatra: { devExtensions: { "@example-org/widget-artifacts": "0", "@example-org/gone-agent": "0" } } }));
     expect(() => loadBorderWords(r)).toThrow(/refusing to read a partial set/);
+  });
+});
+
+describe("B3b a word leaves the bridge only into a declaration of its own list", () => {
+  // red-first-expect: TypeError: bridgeShrinkProblems is not a function
+  const base = { vendor: ["acme", "legacy"], domain: ["ticket"] };
+  const packs = { "@example-org/widget-artifacts": NO_WORD, "@example-org/acme-connector": { vendor: ["acme"], domain: [] } };
+
+  it("a word removed while a pinned pack declares it in the same list passes", () => {
+    const now = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: ["ticket"] } }));
+    expect(bridgeShrinkProblems(base, now)).toEqual([]);
+  });
+
+  it("a word removed that no pinned pack declares fails, naming the word", () => {
+    const now = loadBorderWords(makeTree({ packs, bridge: { vendor: [], domain: ["ticket"] } }));
+    expect(bridgeShrinkProblems(base, now)).toEqual(["vendor: legacy"]);
+  });
+
+  it("a word removed while the pack that declares it is unpinned in the same change fails", () => {
+    const now = loadBorderWords(makeTree({ packs: { "@example-org/widget-artifacts": NO_WORD }, bridge: { vendor: ["legacy"], domain: ["ticket"] } }));
+    expect(bridgeShrinkProblems(base, now)).toEqual(["vendor: acme"]);
+  });
+
+  it("a word declared only in the other list does not cover its removal", () => {
+    const now = loadBorderWords(
+      makeTree({ packs: { "@example-org/widget-artifacts": NO_WORD, "@example-org/acme-agent": { vendor: [], domain: ["acme"] } }, bridge: { vendor: ["legacy"], domain: ["ticket"] } }),
+    );
+    expect(bridgeShrinkProblems(base, now)).toEqual(["vendor: acme"]);
+  });
+
+  it("a word moved to the other bridge list fails as removed from one and grown in the other", () => {
+    const now = loadBorderWords(makeTree({ packs, bridge: { vendor: ["acme"], domain: ["ticket", "legacy"] } }));
+    expect(bridgeShrinkProblems(base, now)).toEqual(["vendor: legacy"]);
+    expect(bridgeGrowth(base, now.bridge)).toEqual(["domain: legacy"]);
+  });
+
+  it("an emptied bridge fails for every word no pinned pack declares", () => {
+    const now = loadBorderWords(makeTree({ packs, bridge: { vendor: [], domain: [] } }));
+    expect(bridgeShrinkProblems(base, now)).toEqual(["domain: ticket", "vendor: legacy"]);
+  });
+
+  it("no base bridge (the introducing change) sets no constraint", () => {
+    const now = loadBorderWords(makeTree({ packs, bridge: { vendor: [], domain: [] } }));
+    expect(bridgeShrinkProblems(null, now)).toEqual([]);
+  });
+});
+
+describe("B3c every pinned package must be found by its manifest name", () => {
+  const packs = { "@example-org/widget-artifacts": NO_WORD, "@example-org/acme-connector": { vendor: ["acme"], domain: [] } };
+
+  it("a missing pinned directory is not made up for by a stray one", () => {
+    const r = makeTree({
+      packs,
+      files: { "extensions/example-org/stray-connector/package.json": JSON.stringify({ name: "@example-org/stray-connector", cinatra: {} }) },
+    });
+    rmSync(join(r, "extensions/example-org/acme-connector"), { recursive: true });
+    expect(() => loadBorderWords(r)).toThrow(/1 pinned package\(s\) not found under extensions\/: @example-org\/acme-connector/);
+  });
+
+  it("the folder name does not matter, but two directories naming one pinned package are a scanner error", () => {
+    const r = makeTree({ packs });
+    renameSync(join(r, "extensions/example-org/acme-connector"), join(r, "extensions/example-org/renamed"));
+    expect(loadBorderWords(r).words.vendor).toEqual(["acme"]);
+    mkdirSync(join(r, "extensions/example-org/copy"), { recursive: true });
+    copyFileSync(join(r, "extensions/example-org/renamed/package.json"), join(r, "extensions/example-org/copy/package.json"));
+    expect(() => loadBorderWords(r)).toThrow(/two extension directories name the pinned package @example-org\/acme-connector/);
+  });
+
+  it("a symlinked pack directory is not followed: its package counts as missing", () => {
+    const r = makeTree({ packs });
+    const outside = mkdtempSync(join(tmpdir(), "border-words-link-"));
+    roots.push(outside);
+    renameSync(join(r, "extensions/example-org/acme-connector"), join(outside, "acme-connector"));
+    symlinkSync(join(outside, "acme-connector"), join(r, "extensions/example-org/acme-connector"));
+    expect(() => loadBorderWords(r)).toThrow(/not found under extensions\/: @example-org\/acme-connector/);
   });
 });
 

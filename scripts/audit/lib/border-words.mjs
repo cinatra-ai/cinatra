@@ -15,13 +15,17 @@
 //   - a word both in the bridge and declared by a pinned pack FAILS (remove it
 //     from the bridge in the pull request that advances that pack's pin);
 //   - a bridge that grew against the base reference FAILS (bridgeGrowth);
+//   - a word that left the bridge against the base reference FAILS unless a
+//     pinned pack declares it in the SAME list (bridgeShrinkProblems): a word
+//     leaves the bridge only into a declaration, never out of the vocabulary;
 //   - a pinned pack without the declaration is a WARNING while the bridge
 //     holds a word, and a FAILURE once the bridge is empty: the switch is the
 //     bridge's own content, so no code change makes it.
 // cinatra#4848 tracks the bridge to empty.
 //
-// FAIL CLOSED. An absent or under-populated extension tree, an unreadable
-// pack manifest, an unreadable or malformed bridge, or SDK constants that
+// FAIL CLOSED. An absent extension tree, a pinned package not found under
+// extensions/ by its manifest name, two directories naming one pinned package,
+// an unreadable pack manifest, an unreadable or malformed bridge, or SDK constants that
 // cannot be read throw a BorderWordsError, which each check maps to exit 2
 // (scanner error, never a pass).
 //
@@ -179,8 +183,8 @@ export function pinnedPackageNames(repoRoot) {
  *               bridge is empty — every undeclared pack),
  *   warnings:   one line naming the undeclared packs while the bridge holds a word,
  *   packCount,
- * }. Throws BorderWordsError on an absent or under-populated tree, an
- * unreadable manifest, or an unreadable or malformed bridge.
+ * }. Throws BorderWordsError on an absent tree, a pinned package not found
+ * (or found twice) by its manifest name, an unreadable manifest, or an unreadable or malformed bridge.
  */
 export function loadBorderWords(repoRoot) {
   const rules = loadBorderWordRules(repoRoot);
@@ -188,12 +192,36 @@ export function loadBorderWords(repoRoot) {
   if (!existsSync(bridgePath)) throw new BorderWordsError(`${BRIDGE_REL} is missing (it holds the words no pack declares yet; empty lists when none)`);
   const bridge = parseBridge(readFileSync(bridgePath, "utf8"), rules);
 
+  // COMPLETENESS BY IDENTITY. Every package the locks and cinatra.devExtensions
+  // pin must be found under extensions/ by its manifest `name` (the folder name
+  // does not matter). A directory the locks do not pin is ignored for words and
+  // never stands in for a missing pinned one; two directories naming the same
+  // pinned package are ambiguous. A symlinked pack directory is not followed
+  // (discoverExtensionDirs), so its package counts as missing.
   const pinned = pinnedPackageNames(repoRoot);
-  const declaredCount = Object.keys(readJson(join(repoRoot, "package.json"))?.cinatra?.devExtensions ?? {}).length;
   const dirs = discoverExtensionDirs(join(repoRoot, "extensions"));
-  if (dirs.length === 0 || dirs.length < declaredCount) {
+  if (pinned.size === 0 || dirs.length === 0) {
     throw new BorderWordsError(
-      `found ${dirs.length} extension package(s) under extensions/, but cinatra.devExtensions declares ${declaredCount} — ` +
+      `found ${dirs.length} extension package(s) under extensions/ and ${pinned.size} pinned package(s) — ` +
+        `${SYNC_HINT}; refusing to read a partial set of border words.`,
+    );
+  }
+  const pinnedDirs = new Map();
+  for (const dir of dirs) {
+    const pkg = readJson(join(dir, "package.json"));
+    if (!pkg || typeof pkg.name !== "string" || !pkg.name) {
+      throw new BorderWordsError(`the manifest of the extension package at ${dir} is unreadable or names no package — ${SYNC_HINT}.`);
+    }
+    if (!pinned.has(pkg.name)) continue;
+    if (pinnedDirs.has(pkg.name)) {
+      throw new BorderWordsError(`two extension directories name the pinned package ${pkg.name}: ${pinnedDirs.get(pkg.name).dir} and ${dir}.`);
+    }
+    pinnedDirs.set(pkg.name, { dir, pkg });
+  }
+  const missing = [...pinned].filter((name) => !pinnedDirs.has(name)).sort();
+  if (missing.length) {
+    throw new BorderWordsError(
+      `${missing.length} pinned package(s) not found under extensions/: ${missing.join(", ")} — ` +
         `${SYNC_HINT}; refusing to read a partial set of border words.`,
     );
   }
@@ -202,12 +230,7 @@ export function loadBorderWords(repoRoot) {
   const undeclared = [];
   const problems = [];
   let packCount = 0;
-  for (const dir of dirs) {
-    const pkg = readJson(join(dir, "package.json"));
-    if (!pkg || typeof pkg.name !== "string" || !pkg.name) {
-      throw new BorderWordsError(`the manifest of the extension package at ${dir} is unreadable or names no package — ${SYNC_HINT}.`);
-    }
-    if (!pinned.has(pkg.name)) continue;
+  for (const { pkg } of pinnedDirs.values()) {
     packCount += 1;
     const raw = pkg.cinatra?.borderWords;
     if (raw === undefined) {
@@ -266,6 +289,26 @@ export function bridgeGrowth(baseBridge, bridge) {
     for (const word of bridge[list]) if (!base.has(word)) grown.push(`${list}: ${word}`);
   }
   return grown.sort();
+}
+
+/**
+ * Bridge words present at the base but gone now that no pinned pack declares
+ * in the SAME list (`loaded` is loadBorderWords' result). A word leaves the
+ * bridge only into a declaration of its own list: removing it, moving it to the
+ * other list, or unpinning the pack that would declare it in the same change
+ * would drop it from the words the gate reads. Emptying the bridge is the same
+ * rule for every word.
+ */
+export function bridgeShrinkProblems(baseBridge, loaded) {
+  const problems = [];
+  for (const list of BORDER_WORD_LISTS) {
+    const now = new Set(loaded.bridge[list]);
+    for (const word of baseBridge?.[list] ?? []) {
+      if (now.has(word) || loaded.declared[list].has(word)) continue;
+      problems.push(`${list}: ${word}`);
+    }
+  }
+  return problems.sort();
 }
 
 /** The bridge at `ref` (null when the reference holds none: the introducing change). */
