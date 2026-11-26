@@ -103,8 +103,6 @@
     { "alias": "@cinatra-ai/agents/run-dispatch-core", "target": "./packages/agents/src/run-dispatch-core.ts" },
     { "alias": "@cinatra-ai/agents/artifact-review-gate-store", "target": "./packages/agents/src/artifact-review-gate-store.ts" },
     { "alias": "@cinatra-ai/agents/publish-decision-island-subject", "target": "./packages/agents/src/publish-decision-island-subject.ts" },
-    { "alias": "@cinatra-ai/agents/publish-decision-store", "target": "./packages/agents/src/publish-decision-store.ts" },
-    { "alias": "@cinatra-ai/agents/publish-decision-actions", "target": "./packages/agents/src/publish-decision-actions.ts" },
     { "alias": "@cinatra-ai/agents/lifecycle-verification-store", "target": "./packages/agents/src/lifecycle-verification-store.ts" },
     { "alias": "@cinatra-ai/agents/lifecycle-verification-read-store", "target": "./packages/agents/src/lifecycle-verification-read-store.ts" },
     { "alias": "@cinatra-ai/agents/artifact-open-review-read", "target": "./packages/agents/src/artifact-open-review-read.ts" },

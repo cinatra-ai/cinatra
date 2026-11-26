@@ -53,8 +53,6 @@
     "./auditor-snapshot-store": "./src/auditor-snapshot-store.ts",
     "./artifact-review-gate-store": "./src/artifact-review-gate-store.ts",
     "./publish-decision-island-subject": "./src/publish-decision-island-subject.ts",
-    "./publish-decision-store": "./src/publish-decision-store.ts",
-    "./publish-decision-actions": "./src/publish-decision-actions.ts",
     "./lifecycle-card-runtime": "./src/lifecycle-card-runtime.tsx",
     "./run-page-chrome": "./src/run-page-chrome.tsx",
     "./run-window-screen-context": "./src/run-window-screen-context.tsx",
