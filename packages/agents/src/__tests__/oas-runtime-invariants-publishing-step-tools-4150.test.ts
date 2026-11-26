@@ -2,9 +2,13 @@
  * cinatra#4150: a step of a `publishes: true` node that the run would refuse is
  * refused by the runtime-invariant scan (OAS-RUNTIME-015).
  *
- *   - A model-bridge step that can call tools but declares none in
+ *   - A model-bridge step offered an MCP toolbox but that declares no tools in
  *     `metadata.cinatra.tools`: every outward call is refused after Publish
  *     (`action_decision_step_undeclared`, run-action-decision-consumption.ts).
+ *     A provider-native tool (web_search) needs no declaration.
+ *   - Any bridge or passthrough step the run cannot tie to one publishing node
+ *     (publishingStepInGraph, publish-decision-actions.ts publishCallAllowed):
+ *     every call is refused (`publish_not_released`).
  *   - Any bridge or passthrough step in a holder the run does not read steps
  *     from (an agent, its tools, a tool's flow): every call is refused
  *     (`step_tool_step_unknown`, agent-run-serde.ts), whatever it declares or is
@@ -15,14 +19,18 @@
  * The fleet sweep over every pinned pack is `oas-runtime-invariants.test.ts`
  * (allow-list: `__fixtures__/known-broken-agents.ts`).
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { checkPublishingCallRoutes } from "../oas-compiler";
 import {
+  BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS,
   everyApiNodeUnder,
   findPublishingAncestor,
   findStepToolDeclaration,
   hasApiNodeStep,
+  publishingStepInGraph,
   scanOasForRuntimeInvariantFindings,
 } from "../validate-oas-runtime-invariants";
 
@@ -294,6 +302,7 @@ describe("the walk of a publishing node's components ends on cycles", () => {
 // publish (readDecisionNode, run-action-decision-consumption.ts).
 describe("a publishing model step resolves to one publishing node", () => {
   const AMBIGUOUS = "action_decision_node_ambiguous";
+  const GOVERNING = "publish_not_released";
   const shared = (keys: string[]): Node => {
     const nodes = Object.fromEntries(keys.map((k) => [k, {
       component_type: "FlowNode", id: k, name: k, subflow: { $component_ref: "sub" }, metadata: { cinatra: { publishes: true } },
@@ -332,11 +341,68 @@ describe("a publishing model step resolves to one publishing node", () => {
     expect(rule015(shared([key]), "is not one the run can record a decision under")).toHaveLength(1);
   });
 
-  it("leaves a passthrough step and a step offered no tools to the routes that serve them", () => {
+  // cinatra#4150 round 5, finding 1: publishCallAllowed resolves the governing
+  // publishing step (publishingStepInGraph) for EVERY call of the bridge and the
+  // passthrough, so a passthrough step and a step offered no tools are refused
+  // too when they lie beneath two publishing nodes (publish_not_released). They
+  // never reach the consumer, so its ambiguity finding is not given for them.
+  it("refuses a passthrough step and a step offered no tools shared beneath two publishing nodes", () => {
+    // red-first-expect: publishingStepInGraph) is not a function
     const doc = shared(["pub_a", "pub_b"]);
-    (doc.$referenced_components as Record<string, Node>).sub = flow({ s: passthrough("s") }, ["s"]);
-    expect(all015(doc)).toEqual([]);
-    (doc.$referenced_components as Record<string, Node>).sub = flow({ s: bridge("s", undefined, { toolbox_ids: [] }) }, ["s"]);
-    expect(all015(doc)).toEqual([]);
+    for (const s of [passthrough("s"), bridge("s", undefined, { toolbox_ids: [] }), bridge("s", undefined, { toolbox_ids: ["web_search"] })]) {
+      (doc.$referenced_components as Record<string, Node>).sub = flow({ s }, ["s"]);
+      expect(publishingStepInGraph(doc, "s", ["pub_a", "pub_b"])).toBeNull();
+      expect(rule015(doc, GOVERNING).map((f) => f.message)).toEqual([
+        expect.stringContaining('Step "s" can run inside the publishing node "pub_a"'),
+      ]);
+      expect(rule015(doc, AMBIGUOUS)).toEqual([]);
+      expect(all015(doc)).toHaveLength(1);
+    }
+  });
+
+  it("accepts a passthrough step and a step offered no tools beneath one publishing node", () => {
+    // red-first-expect: publishingStepInGraph) is not a function
+    const doc = shared(["pub_a"]);
+    for (const s of [passthrough("s"), bridge("s", undefined, { toolbox_ids: [] })]) {
+      (doc.$referenced_components as Record<string, Node>).sub = flow({ s }, ["s"]);
+      expect(publishingStepInGraph(doc, "s", ["pub_a"])).toEqual({ step: "pub_a", publishing: true });
+      expect(all015(doc)).toEqual([]);
+    }
+  });
+
+  it("gives both refusals for a tool-calling step shared beneath two publishing nodes", () => {
+    const doc = shared(["pub_a", "pub_b"]);
+    expect(rule015(doc, GOVERNING)).toHaveLength(1);
+    expect(rule015(doc, AMBIGUOUS)).toHaveLength(1);
+  });
+});
+
+// cinatra#4150 round 5, finding 2: the bridge routes a provider-native toolbox
+// id (web_search) to `extraTools`, never to an MCP toolbox
+// (src/app/api/llm-bridge/route.ts, BUILT_IN_BRIDGE_TOOLS), and the model call
+// that runs it is gated by publishCallAllowed. Only an MCP toolbox reaches the
+// consumer that needs the step's declaration.
+describe("a publishing model step needs a declaration only for an MCP toolbox", () => {
+  it("mirrors the bridge's provider-native toolbox ids", () => {
+    expect(BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS).toBeInstanceOf(Set);
+    const route = readFileSync(path.resolve(__dirname, "..", "..", "..", "..", "src", "app", "api", "llm-bridge", "route.ts"), "utf8");
+    const match = /const BUILT_IN_BRIDGE_TOOLS: ReadonlySet<string> = new Set\(\[([^\]]*)\]\);/.exec(route);
+    expect(match).not.toBeNull();
+    const bridgeIds = [...match![1]!.matchAll(/"([^"]*)"/g)].map((m) => m[1]).sort();
+    expect([...BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS].sort()).toEqual(bridgeIds);
+  });
+
+  it("accepts a publishing step offered only provider-native tools", () => {
+    expect(all015(flow({ p: bridge("p", { publishes: true }, { toolbox_ids: ["web_search"] }) }, ["p"]))).toEqual([]);
+    expect(all015(flow({ pub: subflowNode("pub", { s: bridge("s", undefined, { toolbox_ids: ["web_search"] }) }, { publishes: true }) }, ["pub"]))).toEqual([]);
+  });
+
+  it("refuses an undeclared publishing step offered an MCP toolbox, an unknown id or a mix", () => {
+    for (const ids of [["cinatra-mcp"], ["web_search", "cinatra-mcp"], ["some-external-server"], ["web_search", "some-external-server"]]) {
+      const doc = flow({ p: bridge("p", { publishes: true }, { toolbox_ids: ids }) }, ["p"]);
+      expect(rule015(doc, RULE)).toHaveLength(1);
+      const declared = flow({ p: bridge("p", { publishes: true, tools: ["x_post"] }, { toolbox_ids: ids }) }, ["p"]);
+      expect(all015(declared)).toEqual([]);
+    }
   });
 });

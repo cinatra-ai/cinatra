@@ -815,17 +815,37 @@ function scanForStepToolDeclarations(
   // (d) the steps of a publishing node (cinatra#4150). Every call of a
   // source-bound run names its step, and the bridge and the passthrough refuse
   // the call unless hasApiNodeStep finds that step in the bound graph
-  // (step_tool_step_unknown), whatever the step declares or is offered. An
-  // outward tool call of a model-bridge step is served only when the step's
-  // declaration, read by findStepToolDeclaration, names the tool
-  // (action_decision_step_undeclared, step_tool_not_declared). A passthrough
-  // step declares nothing and needs nothing: the passthrough serves its one
-  // tool directly under the publish decision it claims. The steps checked are
-  // every ApiNode the compiler's publishing traversal reaches under the node,
-  // and each is read by id with the run's own readers.
+  // (step_tool_step_unknown), whatever the step declares or is offered.
+  //
+  // The run resolves the publishing step that governs a call at these callers:
+  //   - publishCallAllowed (publish-decision-actions.ts:922), through
+  //     resolvePublishingStep and publishingStepInGraph, for EVERY call of the
+  //     model bridge (src/app/api/llm-bridge/route.ts:1256, before any
+  //     provider, tools or no tools) and of the passthrough
+  //     (src/app/api/agents/passthrough/route.ts:524). A step that lies inside
+  //     two publishing nodes resolves to none (null) and every call of it is
+  //     refused (publish_not_released). So every model-bridge and every
+  //     passthrough step under a publishing node is read here, by id, with the
+  //     run's own publishingStepInGraph.
+  //   - consumeRunActionDecision (run-action-decision-consumption.ts:244),
+  //     through readDecisionNode and findPublishingAncestor, for an outward
+  //     call that reaches the action consumer (src/lib/extension-host-context.ts:1962):
+  //     a tool of the product's tool boundary, which a model-bridge step reaches
+  //     only through an MCP toolbox (bridgeOffersMcpToolboxes). That step is also
+  //     read with findPublishingAncestor, and must declare the call's tool
+  //     (findStepToolDeclaration; action_decision_step_undeclared,
+  //     step_tool_not_declared).
+  // A passthrough step declares nothing and needs nothing: the passthrough
+  // serves its one tool directly under the publish decision it claims. A
+  // provider-native tool (web_search) runs inside the model call, which
+  // publishCallAllowed already gates at route.ts:1256; it never reaches the
+  // consumer. The steps checked are every ApiNode the compiler's publishing
+  // traversal reaches under the node.
   const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  const listed = publishingNodeKeys(parsed);
   const ancestryRead = new Set<string>();
-  for (const key of publishingNodeKeys(parsed)) {
+  const governingRead = new Set<string>();
+  for (const key of listed) {
     for (const step of everyApiNodeUnder(rootRefs[key], rootRefs)) {
       const bridge = isModelBridgeApiNode(step);
       if (!bridge && !(typeof step.url === "string" && step.url.includes(AGENTS_PASSTHROUGH_URL_MARKER))) continue;
@@ -845,12 +865,26 @@ function scanForStepToolDeclarations(
         });
         continue;
       }
-      const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
-      if (!bridge || (Array.isArray(offered) && offered.length === 0)) continue;
-      // The consumer ties each outward call to the decision of the step's one
-      // top-level node (findPublishingAncestor, readDecisionNode in
-      // run-action-decision-consumption.ts) and refuses the call otherwise. One
-      // finding per step id: the reading is the same from every node.
+      // One finding per step id: the reading is the same from every node.
+      if (!governingRead.has(stepId)) {
+        governingRead.add(stepId);
+        if (publishingStepInGraph(parsed, stepId, listed) === null) {
+          findings.push({
+            code: "OAS-RUNTIME-015",
+            severity: "blocker",
+            message:
+              `Step "${idOf(step)}" can run inside the publishing node "${key}" ` +
+              `(metadata.cinatra.publishes: true), but the run cannot tell which publishing ` +
+              `node governs its calls: it lies inside more than one, or its id names more ` +
+              `than one component. The run refuses every call of such a step, even after the ` +
+              `person chose Publish (publish_not_released). Give the step an id of its own ` +
+              `in each node, or keep it in one publishing node.`,
+            location: `$.$referenced_components.${key}`,
+            source: "deterministic",
+          });
+        }
+      }
+      if (!bridge || !bridgeOffersMcpToolboxes(step)) continue;
       if (!ancestryRead.has(stepId)) {
         ancestryRead.add(stepId);
         const refusal = publishingAncestorRefusal(findPublishingAncestor(parsed, stepId));
@@ -873,7 +907,7 @@ function scanForStepToolDeclarations(
         severity: "blocker",
         message:
           `Model-bridge step "${idOf(step)}" is part of the publishing node "${key}" ` +
-          `(metadata.cinatra.publishes: true) and declares no tools in ` +
+          `(metadata.cinatra.publishes: true), offers an MCP toolbox and declares no tools in ` +
           `metadata.cinatra.tools. The run refuses every outward call of a step ` +
           `that does not declare the call's tool (action_decision_step_undeclared), ` +
           `even after the person chose Publish. Declare the tools the step calls.`,
@@ -883,6 +917,32 @@ function scanForStepToolDeclarations(
     }
   }
   return findings;
+}
+
+/**
+ * The toolbox ids the model bridge routes as provider-native tools (`extraTools`)
+ * and not through an MCP toolbox: a mirror of BUILT_IN_BRIDGE_TOOLS in
+ * src/app/api/llm-bridge/route.ts:145 (the validator's package cannot import the
+ * app route). A test fails when the two lists differ.
+ */
+export const BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS: ReadonlySet<string> = new Set(["web_search"]);
+
+/**
+ * Does the model bridge offer this step an MCP toolbox, the road to the
+ * product's tool boundary? The bridge reads `toolbox_ids` absent as
+ * ["cinatra-mcp"] (route.ts:1924) and routes every entry that is not
+ * provider-native to resolveMcpToolsForDeclaredIds (route.ts:1928), which
+ * resolves "cinatra-mcp" and every registered external MCP server; an id no
+ * server answers at the run is dropped there, but which servers are registered
+ * is decided at the run, so any such id counts. A value that is not a list of
+ * texts is the bridge's to refuse; it is read as offering one (fail closed).
+ */
+function bridgeOffersMcpToolboxes(step: Record<string, unknown>): boolean {
+  const data = isPlainObject(step.data) ? step.data : null;
+  if (data === null || !Object.prototype.hasOwnProperty.call(data, "toolbox_ids")) return true;
+  const ids = data.toolbox_ids;
+  if (!Array.isArray(ids)) return true;
+  return ids.some((id) => typeof id !== "string" || !BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS.has(id));
 }
 
 /**
@@ -985,6 +1045,154 @@ export function everyApiNodeUnder(start: unknown, rootRefs: Record<string, unkno
     const refs = value.$referenced_components;
     const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
     for (const child of Object.values(value)) stack.push([child, inner]);
+  }
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// The publishing step that governs a call (cinatra#4762), read by
+// publishCallAllowed and readGoverningPublishDecision (publish-decision-actions.ts)
+// on the model-bridge and the passthrough roads, and by OAS-RUNTIME-015 here.
+// It lives in this pure module so that the validator reads the run's own
+// resolver; publish-decision-actions.ts is server-only.
+// ---------------------------------------------------------------------------
+
+type GraphComponent = Record<string, unknown>;
+const isGraphComponent = (value: unknown): value is GraphComponent => !!value && typeof value === "object" && !Array.isArray(value);
+
+const addTo = (map: Map<string, GraphComponent[]>, name: string, comp: GraphComponent) => map.set(name, [...(map.get(name) ?? []), comp]);
+
+/** Every component of the document by the key it is declared under in a `$referenced_components` map, at any depth (a
+ *  key declared in more than one scope names all of them, so a reference read against it reaches each, fail closed),
+ *  and every object of the document by its own `id`, inline ones included. */
+function indexComponents(document: GraphComponent): { byKey: Map<string, GraphComponent[]>; byId: Map<string, GraphComponent[]> } {
+  const byKey = new Map<string, GraphComponent[]>();
+  const byId = new Map<string, GraphComponent[]>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [document];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as GraphComponent;
+    if (typeof comp.id === "string") addTo(byId, comp.id, comp);
+    if (isGraphComponent(comp.$referenced_components)) {
+      for (const [key, child] of Object.entries(comp.$referenced_components)) if (isGraphComponent(child)) addTo(byKey, key, child);
+    }
+    stack.push(...Object.values(comp));
+  }
+  return { byKey, byId };
+}
+
+/** The ids of every component inside `root` (the root's own included): each object's `id`, each key of a
+ *  `$referenced_components` map, and every component a `$component_ref` names, followed. Over-reading is fail closed. */
+function idsInside(root: GraphComponent, byKey: Map<string, GraphComponent[]>): Set<string> {
+  const ids = new Set<string>();
+  const seen = new Set<object>();
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as GraphComponent;
+    if (typeof comp.$component_ref === "string") {
+      ids.add(comp.$component_ref);
+      stack.push(...(byKey.get(comp.$component_ref) ?? []));
+    }
+    if (typeof comp.id === "string") ids.add(comp.id);
+    if (isGraphComponent(comp.$referenced_components)) for (const key of Object.keys(comp.$referenced_components)) ids.add(key);
+    stack.push(...Object.values(comp));
+  }
+  return ids;
+}
+
+const declaresPublishes = (comp: GraphComponent): boolean => {
+  const cinatra = isGraphComponent(comp.metadata) ? comp.metadata.cinatra : undefined;
+  return isGraphComponent(cinatra) && cinatra.publishes === true;
+};
+
+/** The publishing step of `stepId` in a flow document: the step itself when it is a publishing node, else the one
+ *  publishing node it lies inside, else the step as unrelated to any publishing node. The publishing nodes are the
+ *  template's list and every component the document itself declares `publishes: true`. null: inside more than one.
+ *
+ *  One component carries two names: the key it is declared under in a `$referenced_components` map, which the compiler
+ *  records in the template's list and under which the decision is stored, and its own `id`, which the runtime signs for
+ *  its calls. Both names resolve to the one component, and a publishing step is always named canonically: the listed
+ *  name it carries, else its key, else its own id (an inline component). A name that two components carry (a shared id,
+ *  or an id equal to another component's key) resolves only when the same publishing step governs every component it
+ *  names; otherwise it is ambiguous and refused (null), as is a publishing component that carries two listed names or
+ *  whose canonical name another component also carries. */
+export function publishingStepInGraph(
+  document: GraphComponent,
+  stepId: string,
+  listed: readonly string[],
+): { step: string; publishing: boolean } | null {
+  const { byKey, byId } = indexComponents(document);
+  const keyOf = new Map<GraphComponent, string>();
+  for (const [key, comps] of byKey) for (const comp of comps) keyOf.set(comp, key);
+  const namesOf = (comp: GraphComponent): string[] =>
+    [...new Set([keyOf.get(comp), typeof comp.id === "string" ? comp.id : undefined])].filter((name): name is string => name !== undefined);
+  const named = (name: string): GraphComponent[] => [...new Set([...(byKey.get(name) ?? []), ...(byId.get(name) ?? [])])];
+  const AMBIGUOUS = Symbol("ambiguous");
+  const canonical = (comp: GraphComponent): string | typeof AMBIGUOUS => {
+    const listedNames = namesOf(comp).filter((name) => listed.includes(name));
+    if (listedNames.length > 1) return AMBIGUOUS;
+    const name = listedNames[0] ?? keyOf.get(comp) ?? (typeof comp.id === "string" ? comp.id : undefined);
+    // The decision stored under the name must be this component's alone.
+    return name !== undefined && named(name).length === 1 ? name : AMBIGUOUS;
+  };
+  const containers = new Set<GraphComponent>();
+  for (const name of listed) for (const comp of named(name)) containers.add(comp);
+  for (const comps of [...byKey.values(), ...byId.values()]) for (const comp of comps) if (declaresPublishes(comp)) containers.add(comp);
+
+  // The publishing step that governs one component (or, for a name no component carries, that name): the component
+  // itself when it is a publishing node, else the one publishing node it lies inside, else none (undefined).
+  const governing = (comp: GraphComponent | null): string | undefined | typeof AMBIGUOUS => {
+    if (comp !== null && containers.has(comp)) return canonical(comp);
+    const holders = new Set<string | typeof AMBIGUOUS>();
+    for (const container of containers) {
+      const inside = comp !== null ? componentsInside(container, byKey).has(comp) : idsInside(container, byKey).has(stepId);
+      if (inside) holders.add(canonical(container));
+    }
+    if (holders.size > 1) return AMBIGUOUS;
+    const [holder] = holders;
+    return holder;
+  };
+
+  const comps = named(stepId);
+  const steps = new Set(comps.length === 0 ? [governing(null)] : comps.map(governing));
+  if (steps.size !== 1) return null;
+  const [step] = steps;
+  if (step === undefined) return { step: stepId, publishing: false };
+  return typeof step === "string" ? { step, publishing: true } : null; // the symbol: ambiguous
+}
+
+/** Every component below `root` (the root itself excluded), every `$component_ref` followed to each component its key
+ *  names. Over-reading is fail closed. */
+function componentsInside(root: GraphComponent, byKey: Map<string, GraphComponent[]>): Set<object> {
+  const found = new Set<object>();
+  const seen = new Set<object>([root]);
+  const stack: unknown[] = Object.values(root);
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      stack.push(...value);
+      continue;
+    }
+    const comp = value as GraphComponent;
+    found.add(comp);
+    if (typeof comp.$component_ref === "string") stack.push(...(byKey.get(comp.$component_ref) ?? []));
+    stack.push(...Object.values(comp));
   }
   return found;
 }
