@@ -46,9 +46,6 @@ vi.mock("@/lib/lifecycle/review-island-serving", () => ({
 vi.mock("@/lib/lifecycle/review-island-byte-road", () => ({
   buildIslandArtifactByteMinter: () => (input: unknown) => mintPreview(input),
 }));
-vi.mock("@/lib/lifecycle/widget-capture-egress", () => ({
-  buildBrokerCapturePair: () => null,
-}));
 vi.mock(
   "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor",
   () => ({ resolveReviewActorContext: () => resolveReviewActorContext() }),
@@ -163,5 +160,26 @@ describe("the CREDENTIAL branch names no data road (no cookie; the sealed road i
     resolveIslandCredentialReader.mockResolvedValue({ actorCtx: ACTOR, runId: "run-1", reviewTaskId: "task-1", publishDecision: null });
     await renderIsland({ ic: CREDENTIAL });
     expect(loaderRoads().present).toBe(false);
+  });
+});
+
+describe("the CREDENTIAL branch's sealed roads carry bytes and content only (cinatra#3862 leg 8)", () => {
+  // The island's sealed roads used to carry a third road, the broker builder of
+  // a target's pinned before/after pictures, so the pictures loaded inside a
+  // third-party application. Those pictures are not drawn on any surface now
+  // (lifecycle cards, section III), so the sealed roads are the byte minter and
+  // the content channel.
+  // red-first-expect: expected [ 'buildContent', 'byteMinter', …(1) ] to deeply equal [ 'buildContent', 'byteMinter' ]
+  it("a sealable credential reader: the loader is handed the byte minter and the content builder, nothing else", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+      publishDecision: null,
+      principal: PRINCIPAL,
+    });
+    await renderIsland({ ic: CREDENTIAL });
+    const { roads } = loaderRoads();
+    expect(Object.keys(roads ?? {}).sort()).toEqual(["buildContent", "byteMinter"]);
   });
 });

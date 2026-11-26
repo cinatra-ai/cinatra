@@ -322,8 +322,7 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> =>
 
 // The decided island streams each review target under its own Suspense
 // boundary: the element inside the boundary carries the PROMISE of the
-// target's prepared display and of its pinned pair, and its component unwraps
-// both with React's `use`. Only a React render can run `use`, so this renders
+// target's prepared display, and its component unwraps it with React's `use`. Only a React render can run `use`, so this renders
 // that element's OWN component, under a boundary, in a throwaway root, captures
 // what it returns, and unmounts the root at once.
 async function evaluateStreamedBody(
@@ -397,6 +396,9 @@ async function resolveSettledServerTree(
 
 // The decided island streams each target under its own boundary, so this case
 // finds the target inside its boundary and reads the panel through it.
+// Before the fix the streamed body still unwraps a pinned pair with React's
+// `use`, and the target this case hands it carries none:
+// red-first-expect: An unsupported type was passed to use(): undefined
 describe("the settled review island composes the actual pinned markdown display", () => {
   it("keeps Preview and Code on one frozen read-only target, with one panel and no save", async () => {
     process.env.BETTER_AUTH_SECRET ??= "native-settled-markdown-ref-secret";
@@ -428,7 +430,7 @@ describe("the settled review island composes the actual pinned markdown display"
     });
     const target = { artifactId: artifact.artifactId, representationRevisionId: frozenRevision };
     // The settled surface streams: each target carries the promise of its
-    // prepared display and of its pinned pair, as the loader hands them over.
+    // prepared display, as the loader hands it over.
     settledBoundary.loadSurface.mockResolvedValue({
       kind: "settled",
       agentSummary: null,
@@ -438,7 +440,6 @@ describe("the settled review island composes the actual pinned markdown display"
           kind: "build-map", slot: "detail", packageName: "@cinatra-ai/markdown-artifact",
           generatedKey: MARKDOWN_DETAIL_KEY,
         } }),
-        capturePair: Promise.resolve(null),
       }],
     });
     const ref = encodeLifecycleGateRef({ runId: "run_md_1", reviewTaskId: "review_md_decided" });
@@ -448,7 +449,6 @@ describe("the settled review island composes the actual pinned markdown display"
     // whose props hold the `prepared` promise. The panel is read through it.
     const streamed: Array<ReactElement<{
       prepared: Promise<{ target: typeof target; props: ArtifactRendererProps }>;
-      capturePair: Promise<unknown>;
       orgId: string;
     }>> = [];
     const collect = (node: ReactNode): void => {
@@ -471,7 +471,6 @@ describe("the settled review island composes the actual pinned markdown display"
     expect(prepared.props.edit).toMatchObject({
       channelVersion: 2, kind: "read-only", reason: "read-only-surface",
     });
-    expect(await streamed[0].props.capturePair).toBeNull();
     const seen: string[] = [];
     const panelCalls: Array<Record<string, unknown>> = [];
     const { container } = render(await resolveSettledServerTree(island, ReviewTargetPanel, seen, panelCalls));
@@ -479,11 +478,10 @@ describe("the settled review island composes the actual pinned markdown display"
       "StreamedReviewTarget", "ReviewTargetPanel", "ReviewTargetMount", "ExtensionRendererSlot",
     ]));
     // The streamed body composed exactly one panel, fed the very value the
-    // boundary's promise carried, the trusted organization and no pinned pair.
+    // boundary's promise carried and the trusted organization.
     expect(panelCalls).toHaveLength(1);
     expect(panelCalls[0].orgId).toBe("org_1");
     expect(panelCalls[0].prepared).toBe(prepared);
-    expect(panelCalls[0].capturePair).toBeNull();
     expect(settledBoundary.loadSurface).toHaveBeenCalledWith(expect.objectContaining({
       runId: "run_md_1", reviewTaskId: "review_md_decided",
     }));

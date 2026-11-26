@@ -179,12 +179,12 @@ describe("the bound ports", () => {
     expect(call.reading).toBe("pending");
   });
 
-  it("the stream reads every target's pictures as an ordinary pair", async () => {
+  it("the stream hands the started targets on, and reads no capture pair for them", async () => {
+    // cinatra#3862 leg 8: no surface draws a stored capture pair, so the stream takes the started targets alone: no
+    // organization to read pictures in, no pairing and no road for them.
     gatePorts.streamReviewTargets.mockReturnValue(STREAMS);
     expect(PUBLISH_DECISION_ISLAND_PORTS.stream({ orgId: "org-1", started: STARTED as never, roads: null })).toBe(STREAMS);
-    const [orgId, started, pairing, roads] = gatePorts.streamReviewTargets.mock.calls[0];
-    expect([orgId, started, roads]).toEqual(["org-1", STARTED, null]);
-    expect(await pairing()).toEqual({ kind: "ordinary" });
+    expect(gatePorts.streamReviewTargets.mock.calls).toEqual([[STARTED]]);
   });
 
   it("the default loader runs the real subject and revision reads", async () => {
