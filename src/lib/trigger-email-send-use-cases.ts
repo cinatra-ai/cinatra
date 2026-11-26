@@ -367,8 +367,10 @@ export const EMAIL_BODY_TYPE_ID = "@cinatra-ai/email:body";
 
 /**
  * Deterministic external identity for a per-draft `email:body` projection.
- * `(runScopeId, draftItemId)` is the fan-out key (cinatra#1455). The objects
- * identity resolver lowercases the key, so equal keys converge on one row.
+ * `(runScopeId, draftItemId)` is the fan-out key (cinatra#1455); a message of
+ * the approved form is keyed by its approved body artifact instead
+ * (`(runScopeId, artifactId)`, cinatra#3089). The objects identity resolver
+ * lowercases the key, so equal keys converge on one row.
  */
 export function emailBodyExternalId(runScopeId: string, draftItemId: string): string {
   return `email-body:${runScopeId}:${draftItemId}`;
@@ -428,7 +430,31 @@ export type EmailFanoutInput = {
   campaignId: string;
   drafts: readonly DraftRow[];
   recipients: readonly RecipientRow[];
+  /**
+   * The approved body of each mailed draft, by the draft's position in
+   * `drafts` (cinatra#3089). Given, the fan-out writes NO body: it binds each
+   * message to its approved revision through `bindBody` and files nothing for
+   * a draft without one.
+   */
+  approvedBodies?: ReadonlyMap<number, ApprovedFanoutBody>;
 };
+
+/** One approved body revision a message of the send is bound to, with the
+ *  text the send mails (the revision's own text). */
+export type ApprovedFanoutBody = {
+  artifactId: string;
+  representationRevisionId: string;
+  text: string;
+};
+
+/** Bind one message to its approved revision on the ledger (cinatra#3089). */
+export type EmailFanoutBodyBindFn = (input: {
+  runId: string;
+  outputId: string;
+  markdown: string;
+  artifactId: string;
+  representationRevisionId: string;
+}) => Promise<EmailFanoutBodyWriteResult>;
 
 export type EmailFanoutArgs = EmailFanoutInput & {
   actor: PrimitiveActorContext;
@@ -465,13 +491,21 @@ export async function materializeEmailFanout(
   input: EmailFanoutInput,
   deps: {
     writeBody?: EmailFanoutBodyWriteFn;
+    bindBody?: EmailFanoutBodyBindFn;
     registeredTypes: ReadonlySet<string>;
   },
 ): Promise<EmailFanoutResult> {
-  const { runScopeId, campaignId, drafts } = input;
+  const { runScopeId, campaignId, drafts, approvedBodies } = input;
   const bodies: EmailFanoutEmission[] = [];
 
   const canBody = deps.registeredTypes.has(EMAIL_BODY_TYPE_ID);
+  // The approved form binds every message before any mail (cinatra#3089): with
+  // no body type registered nothing could be bound, so the send is refused.
+  if (approvedBodies && !canBody) {
+    throw new EmailBodyRefusedError(
+      `the object type ${EMAIL_BODY_TYPE_ID} is not registered, so no message can be bound to its approved body`,
+    );
+  }
 
   // One `email:body` markdown revision per draft item, written through the
   // materialization ledger keyed (run, message identity, content hash)
@@ -487,6 +521,46 @@ export async function materializeEmailFanout(
     for (const draft of drafts) {
       const draftItemId = deriveDraftItemId(draft, index);
       index += 1;
+      if (approvedBodies) {
+        // The approved form (cinatra#3089): the message is bound to the
+        // revision a person approved; no body of the bundle is filed. Its
+        // identity is the approved body ARTIFACT of the run, never a draft id
+        // or a list position the bundle can change: one artifact is one
+        // message, mailed at most once per run whatever revision of it is
+        // approved later and whatever the bundle says (the send refuses a list
+        // that names one artifact twice before anything is bound).
+        const approved = approvedBodies.get(index - 1);
+        if (!approved) continue;
+        const externalId = emailBodyExternalId(runScopeId, approved.artifactId);
+        if (!deps.bindBody) {
+          throw new EmailBodyRefusedError(
+            `the email body ${externalId} cannot be bound: the fan-out has no binder for approved bodies`,
+          );
+        }
+        let bound: EmailFanoutBodyWriteResult;
+        try {
+          bound = await deps.bindBody({
+            runId: runScopeId,
+            outputId: externalId,
+            markdown: approved.text,
+            artifactId: approved.artifactId,
+            representationRevisionId: approved.representationRevisionId,
+          });
+        } catch {
+          // The binder's thrown text is never passed on (a store error may quote stored data): a fixed reason.
+          throw new EmailBodyRefusedError(`the email body ${externalId} could not be bound (bind_failed)`);
+        }
+        if (!bound.ok) {
+          throw new EmailBodyRefusedError(`the email body ${externalId} was refused: ${bound.error}`);
+        }
+        bodies.push({
+          typeId: EMAIL_BODY_TYPE_ID,
+          externalId,
+          objectId: bound.artifactId,
+          isNew: false,
+        });
+        continue;
+      }
       const externalId = emailBodyExternalId(runScopeId, draftItemId);
       const contactId =
         typeof draft.contactId === "string" && draft.contactId.trim() !== ""
@@ -551,9 +625,17 @@ async function loadDefaultEmitEmailFanout(): Promise<
     try {
       const listed = (await client.typesList()) as { types?: Array<{ type: string }> };
       registeredTypes = new Set((listed?.types ?? []).map((t) => t.type));
-    } catch {
-      // If type discovery fails, stay dormant rather than risk a misclassified
-      // write — the projection is best-effort and must never break the send.
+    } catch (err) {
+      // The approved form needs every message bound to its revision before
+      // any mail, so a failed discovery refuses that send (cinatra#3089).
+      if (args.approvedBodies) {
+        throw new EmailBodyRefusedError(
+          `the registered object types could not be read, so no message can be bound to its approved body: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // The reference-only form keeps its behaviour: if type discovery fails,
+      // stay dormant rather than risk a misclassified write — the projection
+      // is best-effort there and must never break the send.
       registeredTypes = new Set();
     }
     return materializeEmailFanout(
@@ -562,8 +644,22 @@ async function loadDefaultEmitEmailFanout(): Promise<
         campaignId: args.campaignId,
         drafts: args.drafts,
         recipients: args.recipients,
+        ...(args.approvedBodies ? { approvedBodies: args.approvedBodies } : {}),
       },
       {
+        bindBody: async (b) => {
+          const orgId = args.actor.orgId;
+          if (!orgId) {
+            return {
+              ok: false,
+              error: "the sending actor carries no organization, so the body cannot be bound on its run",
+            };
+          }
+          const { bindFanoutMessageRevision } = await import(
+            "./artifacts/run-artifact-materializer"
+          );
+          return bindFanoutMessageRevision({ ...b, orgId, objectTypeId: EMAIL_BODY_TYPE_ID });
+        },
         writeBody: async (w) => {
           const orgId = args.actor.orgId;
           if (!orgId) {
