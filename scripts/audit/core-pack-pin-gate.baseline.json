@@ -73,6 +73,11 @@
     },
     {
       "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-creation-review-progress.test.ts",
+      "pack": "@cinatra-ai/anthropic-connector"
+    },
+    {
+      "rule": "read",
       "file": "packages/agents/src/__tests__/agent-creation-review.test.ts",
       "pack": "@cinatra-ai/anthropic-connector"
     },
@@ -1043,6 +1048,11 @@
     },
     {
       "rule": "read",
+      "file": "src/__tests__/a2a-dev-auto-connect.test.ts",
+      "pack": "@cinatra-ai/gemini-connector"
+    },
+    {
+      "rule": "read",
       "file": "src/__tests__/mcp-server-tool-count.test.ts",
       "pack": "@cinatra-ai/blog-connector"
     },
@@ -1473,6 +1483,21 @@
     },
     {
       "rule": "read",
+      "file": "src/lib/__tests__/setup-gate-indeterminate.test.ts",
+      "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/setup-gate-shared-derivation.test.ts",
+      "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/setup-wizard.test.ts",
+      "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
       "file": "src/lib/artifacts/__tests__/lifecycle-c-w8-image-tool.integration.test.ts",
       "pack": "@cinatra-ai/image-artifact"
     },
@@ -1620,6 +1645,16 @@
       "rule": "read",
       "file": "src/lib/assistant-runtime/__tests__/hosted-mcp-wire-gate.test.ts",
       "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/blog/__tests__/delete-wordpress-draft-rollback.test.ts",
+      "pack": "@cinatra-ai/social-media-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/blog/__tests__/stop-linkedin-draft-terminal-guard.test.ts",
+      "pack": "@cinatra-ai/social-media-connector"
     },
     {
       "rule": "read",

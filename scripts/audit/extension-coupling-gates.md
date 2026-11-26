@@ -630,7 +630,14 @@ skipped. A load that loads no value is exempt from both rules, by structure:
 `import type`, `export type`, every named specifier marked `type` with no
 default or namespace binding, `import type X = require(...)`, and a
 `typeof import("...")` type; `import x = require(...)` and
-`requireActual(...)` count. **Iteration is not a pin:** a fleet test that
+`requireActual(...)` count. **A module mock names its module like an
+import:** the first argument of `vi.mock`, `vi.doMock`, `vi.unmock`,
+`vi.doUnmock`, `vi.importActual`, `vi.importMock` and the `jest.*` calls of
+the same kind (`MODULE_SPECIFIER_CALLS` in the script is the one table) counts
+as a specifier. **A wrapper hides nothing:** the scanner reads an expression
+through parentheses, `as`, `satisfies`, a non-null `!`, a type assertion
+`<T>x` and `await`, wherever it looks at an expression (a path, a specifier,
+a callee). **Iteration is not a pin:** a fleet test that
 walks the lock or the tree builds the name from a variable, so its path stops
 at the tree with a hole and no pack is found; a file whose path reaches the
 tree that way (rooted in a variable or a relative `.`/`..`) is found for every

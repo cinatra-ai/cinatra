@@ -15,6 +15,7 @@ import {
   BASELINE_REL,
   GATE_REL,
   REPO_ROOT,
+  MODULE_SPECIFIER_CALLS,
   ScannerError,
   isCoreTestPath,
   loadPinnedPacks,
@@ -244,6 +245,137 @@ describe("one path normalizer and one comparison for every caller", () => {
       [`${T}value-import.test.ts`]: `import { x } from ${P};`,
     };
     expect(pins(files)).toEqual([`read :: ${T}value-import.test.ts :: ${DEMO}`]);
+  });
+});
+
+describe("transparent wrappers: the scanner reads through everything the TypeScript tree wraps around an expression", () => {
+  const DEMO = "@example-org/demo-agent";
+  // Every wrapper that changes no value: parentheses (twice too), `as`,
+  // `satisfies`, a non-null `!`, a type assertion `<T>x` and `await`.
+  const WRAPPERS = {
+    paren: (x) => `(${x})`,
+    doubleParen: (x) => `((${x}))`,
+    as: (x) => `(${x} as string)`,
+    asUnwrapped: (x) => `${x} as string`,
+    satisfies: (x) => `(${x} satisfies string)`,
+    nonNull: (x) => `${x}!`,
+    typeAssertion: (x) => `<string>${x}`,
+    await: (x) => `await ${x}`,
+    awaitParen: (x) => `(await (${x}))`,
+  };
+  // A module file (it has an export), so `await` is the keyword in every position.
+  const pinsOf = (files) => pins(Object.fromEntries(Object.entries(files).map(([k, v]) => [k, `export {};\n${v}`])));
+  const found = (kind) => [`read :: ${T}${kind}.test.ts :: ${DEMO}`];
+  const each = (build) => {
+    const files = {};
+    for (const [name, wrap] of Object.entries(WRAPPERS)) files[`${T}${name}.test.ts`] = build(wrap);
+    return files;
+  };
+  const expected = () => Object.keys(WRAPPERS).sort().flatMap((n) => found(n));
+
+  it("finds a path joined from literals when the whole call is wrapped", () => {
+    const files = each((w) => `readFileSync(${w(`path.join(ROOT, "extensions", "example-org", "demo-agent")`)});`);
+    expect(pinsOf(files)).toEqual(expected());
+  });
+
+  it("finds a path literal when the literal is wrapped", () => {
+    const files = each((w) => `readFileSync(${w(`"extensions/example-org/demo-agent/cinatra/oas.json"`)});`);
+    expect(pinsOf(files)).toEqual(expected());
+  });
+
+  it("finds a path whose segments are wrapped inside the join", () => {
+    const files = each((w) => `const d = path.join(ROOT, ${w(`"extensions"`)}, ${w(`"example-org"`)}, ${w(`"demo-agent"`)});`);
+    expect(pinsOf(files)).toEqual(expected());
+  });
+
+  it("finds a path built with + when an operand is wrapped", () => {
+    const files = each((w) => `const d = ROOT + "/" + ${w(`"extensions/example-org/"`)} + "demo-agent";`);
+    expect(pinsOf(files)).toEqual(expected());
+  });
+
+  it("finds a dynamic import and a require whose specifier is wrapped", () => {
+    const dyn = each((w) => `const m = import(${w(`"${DEMO}"`)});`);
+    const req = {};
+    for (const [name, wrap] of Object.entries(WRAPPERS)) req[`${T}req-${name}.test.ts`] = `const m = require(${wrap(`"${DEMO}"`)});`;
+    expect(pinsOf({ ...dyn, ...req })).toEqual(
+      [...Object.keys(WRAPPERS).map((n) => `req-${n}`), ...Object.keys(WRAPPERS)].sort().map((n) => `read :: ${T}${n}.test.ts :: ${DEMO}`),
+    );
+  });
+
+  it("finds require.resolve, import.meta.resolve and importActual whose specifier is wrapped", () => {
+    const files = {};
+    for (const [name, wrap] of Object.entries(WRAPPERS)) {
+      files[`${T}res-${name}.test.ts`] = `const p = require.resolve(${wrap(`"${DEMO}"`)});`;
+      files[`${T}meta-${name}.test.ts`] = `const p = import.meta.resolve(${wrap(`"${DEMO}"`)});`;
+      files[`${T}act-${name}.test.ts`] = `const m = await vi.importActual(${wrap(`"${DEMO}"`)});`;
+    }
+    const names = Object.keys(WRAPPERS).flatMap((n) => [`res-${n}`, `meta-${n}`, `act-${n}`]).sort();
+    expect(pinsOf(files)).toEqual(names.map((n) => `read :: ${T}${n}.test.ts :: ${DEMO}`));
+  });
+
+  it("finds a load whose callee is wrapped", () => {
+    const P = `"${DEMO}"`;
+    const files = {
+      [`${T}callee-paren.test.ts`]: `const m = (require)(${P});`,
+      [`${T}callee-nonnull.test.ts`]: `const m = require!(${P});`,
+      [`${T}callee-as.test.ts`]: `const m = (require as NodeRequire)(${P});`,
+      [`${T}recv-as.test.ts`]: `const m = (vi as any).importActual(${P});`,
+      [`${T}recv-paren.test.ts`]: `const m = (jest).requireActual(${P});`,
+      [`${T}resolve-paren.test.ts`]: `const p = (require).resolve(${P});`,
+      [`${T}joiner-paren.test.ts`]: `readFileSync((path.join)(ROOT, "extensions/example-org/demo-agent"));`,
+    };
+    expect(pinsOf(files)).toEqual(Object.keys(files).map((f) => f.replace(T, "")).sort().map((f) => `read :: ${T}${f} :: ${DEMO}`));
+  });
+
+  it("does not find a wrapped made-up pack, or a wrapped path that stops at the tree", () => {
+    const files = each((w) => `readFileSync(${w(`path.join(ROOT, "extensions", "made-up-org", "made-up-agent")`)});
+const m = import(${w(`"@made-up-org/made-up-agent"`)});
+const t = readdirSync(${w(`path.join(ROOT, "extensions", scope)`)});`);
+    expect(pinsOf(files)).toEqual([]);
+  });
+});
+
+describe("module mocks name a module like an import does", () => {
+  const DEMO = "@example-org/demo-agent";
+  const P = `"${DEMO}"`;
+
+  // The names are spelled through V and J so this file holds no literal module
+  // mock call itself (the runner would hoist and rewrite the file's imports).
+  const V = "vi";
+  const J = "jest";
+  const VI = ["doMock", "doUnmock", "importActual", "importMock", "mock", "unmock"];
+  const JEST = ["createMockFromModule", "doMock", "dontMock", "genMockFromModule", "mock", "requireActual", "requireMock", "setMock", "unmock"];
+
+  it("lists every call it reads in one table, for vi and for jest", () => {
+    expect([...(MODULE_SPECIFIER_CALLS?.vi ?? [])].sort()).toEqual(VI);
+    expect([...(MODULE_SPECIFIER_CALLS?.jest ?? [])].sort()).toEqual(JEST);
+  });
+
+  it("finds a pinned package named by each call of the table, on vi and on jest", () => {
+    const files = {};
+    for (const [recv, names] of [["vi", VI], ["jest", JEST]]) {
+      for (const name of names) files[`${T}${recv}-${name}.test.ts`] = `${recv}.${name}(${P}, () => ({}));`;
+    }
+    expect(pins(files)).toEqual(Object.keys(files).map((f) => f.replace(T, "")).sort().map((f) => `read :: ${T}${f} :: ${DEMO}`));
+  });
+
+  it("finds a mocked pack by a subpath, a template literal and a wrapped specifier", () => {
+    const files = {
+      [`${T}sub.test.ts`]: `${V}.mock("${DEMO}/src/x", () => ({}));`,
+      [`${T}tpl.test.ts`]: V + ".doMock(`" + DEMO + "`, () => ({}));",
+      [`${T}wrapped.test.ts`]: `${V}.mock((${P} as string), () => ({}));`,
+      [`${T}hoisted.test.ts`]: `const m = ${V}.hoisted(async () => await ${V}.importMock(${P}));`,
+      [`${T}factory.test.ts`]: `${V}.mock(${P}, async () => ({ ...(await ${V}.importActual(${P})) }));`,
+    };
+    expect(pins(files)).toEqual(Object.keys(files).map((f) => f.replace(T, "")).sort().map((f) => `read :: ${T}${f} :: ${DEMO}`));
+  });
+
+  it("does not find a mock of a made-up pack or of a core module", () => {
+    const files = {
+      [`${T}made-up.test.ts`]: `${V}.mock("@made-up-org/made-up-agent", () => ({}));\n${J}.mock("@made-up-org/other", () => ({}));`,
+      [`${T}core.test.ts`]: `${V}.mock("@/lib/db", () => ({}));\n${V}.unmock("node:fs");`,
+    };
+    expect(pins(files)).toEqual([]);
   });
 });
 

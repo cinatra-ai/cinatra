@@ -185,7 +185,53 @@ export const START = Symbol("start");
 
 const PATH_JOINERS = new Set(["join", "resolve", "normalize", "posix", "relative"]);
 
+/**
+ * The wrappers the TypeScript tree puts around an expression without changing
+ * its value: parentheses, `x as T`, `x satisfies T`, `x!`, `<T>x` and `await x`.
+ * EVERY place the scanner looks at an expression reads it through
+ * unwrapExpression (what it is) or outerExpression (what it is part of), so a
+ * wrapper never hides a path or a specifier.
+ */
+function isTransparentWrapper(node) {
+  return (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isSatisfiesExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isAwaitExpression(node)
+  );
+}
+
+/** The expression under any transparent wrappers. */
+export function unwrapExpression(node) {
+  let n = node;
+  while (n && isTransparentWrapper(n)) n = n.expression;
+  return n;
+}
+
+/** The outermost transparent wrapper around the node (the node itself when it has none). */
+function outerExpression(node) {
+  let n = node;
+  while (n.parent && isTransparentWrapper(n.parent) && n.parent.expression === n) n = n.parent;
+  return n;
+}
+
+/**
+ * The calls that name a module by their first argument, and so count like an
+ * import (the one table; a call not listed here names no module). A bare name
+ * matches on any receiver (`require`, `jest.requireActual`, `vi.importActual`);
+ * `vi` and `jest` list the calls read only on that receiver: the module mocks
+ * and their helpers.
+ */
+export const MODULE_SPECIFIER_CALLS = Object.freeze({
+  anyReceiver: Object.freeze(["require", "importActual", "requireActual"]),
+  vi: Object.freeze(["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"]),
+  jest: Object.freeze(["mock", "doMock", "unmock", "dontMock", "requireActual", "requireMock", "setMock", "createMockFromModule", "genMockFromModule"]),
+});
+
 function calleeName(expr) {
+  expr = unwrapExpression(expr);
   if (ts.isIdentifier(expr)) return expr.text;
   if (ts.isPropertyAccessExpression(expr)) return expr.name.text;
   return null;
@@ -197,7 +243,7 @@ function calleeName(expr) {
  * gate never infers where a root points.
  */
 function piecesOf(node) {
-  if (ts.isParenthesizedExpression(node)) return piecesOf(node.expression);
+  node = unwrapExpression(node);
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return [node.text];
   if (ts.isTemplateExpression(node)) {
     const out = [node.head.text];
@@ -366,12 +412,32 @@ export function packageOfSpecifier(spec) {
  * is read whole, so a literal is never read apart from the root before it.
  */
 function isPartOfLargerPath(node) {
-  const parent = node.parent;
+  // The node under its wrappers: `("a")`, `"a" as string` and `await x` are
+  // the same piece as the bare expression.
+  const outer = outerExpression(node);
+  const parent = outer.parent;
   if (!parent) return false;
-  if (ts.isParenthesizedExpression(parent)) return true;
   if (ts.isBinaryExpression(parent) && parent.operatorToken.kind === ts.SyntaxKind.PlusToken) return true;
-  if (ts.isCallExpression(parent) && parent.arguments.includes(node) && PATH_JOINERS.has(calleeName(parent.expression) ?? "")) return true;
+  if (ts.isCallExpression(parent) && parent.arguments.includes(outer) && PATH_JOINERS.has(calleeName(parent.expression) ?? "")) return true;
   return false;
+}
+
+/**
+ * True when the call loads the module its first argument names: a dynamic
+ * import, `require`, `require.resolve`, `import.meta.resolve`, or a call of
+ * MODULE_SPECIFIER_CALLS.
+ */
+function namesModule(call, sf) {
+  if (call.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
+  const callee = unwrapExpression(call.expression);
+  const name = calleeName(callee);
+  if (name === null) return false;
+  if (MODULE_SPECIFIER_CALLS.anyReceiver.includes(name)) return true;
+  if (!ts.isPropertyAccessExpression(callee)) return false;
+  const receiver = unwrapExpression(callee.expression);
+  if (name === "resolve" && /^(require|import\.meta)$/.test(receiver.getText(sf))) return true;
+  const receiverName = ts.isIdentifier(receiver) ? receiver.text : ts.isPropertyAccessExpression(receiver) ? receiver.name.text : null;
+  return (receiverName === "vi" || receiverName === "jest") && MODULE_SPECIFIER_CALLS[receiverName].includes(name);
 }
 
 /**
@@ -406,22 +472,25 @@ export function scanScriptText(rel, text, pinned) {
   // is exempt from both rules: structure decides it, not its text.
   const typeOnlySpecifiers = new Set();
   const visit = (node) => {
-    // An import, export-from, dynamic import, require, require.resolve or
-    // vi.importActual whose specifier is a pinned package.
+    // An import, export-from, dynamic import, require, require.resolve, module
+    // mock or actual-import helper (MODULE_SPECIFIER_CALLS) whose specifier is a
+    // pinned package, read through any wrapper.
     let spec = null;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
       if (!isTypeOnlyImportOrExport(node)) spec = node.moduleSpecifier.text;
       else typeOnlySpecifiers.add(node.moduleSpecifier);
-    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
-      if (!node.isTypeOnly) spec = node.moduleReference.expression.text;
-      else typeOnlySpecifiers.add(node.moduleReference.expression);
+    } else if (
+      ts.isImportEqualsDeclaration(node) &&
+      ts.isExternalModuleReference(node.moduleReference) &&
+      ts.isStringLiteral(unwrapExpression(node.moduleReference.expression))
+    ) {
+      const literal = unwrapExpression(node.moduleReference.expression);
+      if (!node.isTypeOnly) spec = literal.text;
+      else typeOnlySpecifiers.add(literal);
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
       typeOnlySpecifiers.add(node.argument.literal);
-    } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0])) {
-      const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
-      const name = calleeName(node.expression);
-      const isResolve = name === "resolve" && ts.isPropertyAccessExpression(node.expression) && /^(require|import\.meta)$/.test(node.expression.expression.getText(sf));
-      if (isDynamicImport || name === "require" || name === "importActual" || name === "requireActual" || isResolve) spec = node.arguments[0].text;
+    } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(unwrapExpression(node.arguments[0]))) {
+      if (namesModule(node, sf)) spec = unwrapExpression(node.arguments[0]).text;
     }
     if (spec !== null) {
       const pkg = packageOfSpecifier(spec);
