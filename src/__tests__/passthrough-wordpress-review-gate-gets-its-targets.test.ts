@@ -208,7 +208,6 @@ afterAll(() => {
 
 describe("the WordPress publish pack's review gate gets its targets", () => {
   it("the gather step's echoed answer carries the one-target set under the gate's marked input", async () => {
-    // red-first-expect: Cannot read properties of undefined (reading 'metadata')
     const { gather, targetsInput, feedingOutput } = packNodes();
     expect(feedingOutput, "a gather output feeds the gate's marked input").toBe(targetsInput);
     const res = await POST(nodeRequest(gather.data!));
@@ -227,7 +226,6 @@ describe("the WordPress publish pack's review gate gets its targets", () => {
   });
 
   it("without the echo flag the answer carries no target set: the flag is what feeds the gate", async () => {
-    // red-first-expect: Cannot read properties of undefined (reading 'metadata')
     const { gather, targetsInput } = packNodes();
     const { result_input_passthrough: _flag, ...withoutEcho } = gather.data!;
     const res = await POST(nodeRequest(withoutEcho));
@@ -245,7 +243,6 @@ describe("the WordPress publish pack's review gate gets its targets", () => {
 // successor's, never the revision the run started with.
 describe("the WordPress publish pack reads the revision the review approved", () => {
   it("a Regenerate's successor, approved on the review, is the revision whose words are read", async () => {
-    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
     const read = oas.$referenced_components.read_post_text;
     const readData = read.data as { tool?: string; input?: Record<string, unknown> };
     expect(readData.tool).toBe("extension_tool");
