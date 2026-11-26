@@ -115,7 +115,9 @@ import {
   type MessageSendLedger,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
-import { createDefaultSendEmail } from "../approved-body-send";
+
+// Loaded inside the test that needs it, so the file loads before the change and a missing module fails that test.
+const createDefaultSendEmail = async () => (await import("../approved-body-send")).createDefaultSendEmail();
 
 // The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
 // step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
@@ -554,7 +556,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const sent: Array<{ to: string[]; textBody: string }> = [];
     transportMock.mockImplementation(recordingTransport(sent));
     mailboxes.list = [connectedMailbox("not_connected")];
-    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const stopped = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
@@ -563,7 +565,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect(stopped.errorMessage).not.toContain("Mailbox A is not connected");
     expect(transportMock).not.toHaveBeenCalled();
     mailboxes.list = [connectedMailbox()];
-    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const retry = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(retry).toMatchObject({ status: "completed", sentCount: 3, alreadySentCount: 0, inDoubtCount: 0 });
@@ -579,7 +581,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const sendLedger = memorySendLedger();
     mailboxes.list = [];
     routing.connectorId = null;
-    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const stopped = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
@@ -594,7 +596,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const sent: Array<{ to: string[]; textBody: string }> = [];
     transportMock.mockImplementation(recordingTransport(sent));
     routing.redirectOn = true;
-    const stopped = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const stopped = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(stopped).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 0 });
@@ -602,7 +604,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     expect(stopped.errorMessage).not.toContain("no override recipient email is configured");
     expect(transportMock).not.toHaveBeenCalled();
     routing.redirectTo = "dev@example.com";
-    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const retry = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(retry).toMatchObject({ status: "completed", sentCount: 3, inDoubtCount: 0 });
@@ -615,13 +617,13 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     transportMock.mockImplementationOnce(async () => {
       throw new Error("socket hang up");
     });
-    const first = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const first = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
     expect(first.errorMessage).toContain("may or may not have gone out (provider_error)");
     expect(first.errorMessage).not.toContain("socket hang up");
-    const retry = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const retry = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(sent.map((m) => m.to[0])).toEqual(["p2@example.com", "p3@example.com"]);
@@ -635,7 +637,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     transportMock.mockImplementationOnce(async () => {
       throw new Error("Resend send failed: Invalid `to` field.");
     });
-    const first = await makeFixture({ sendLedger, sendEmail: createDefaultSendEmail() }).start({
+    const first = await makeFixture({ sendLedger, sendEmail: await createDefaultSendEmail() }).start({
       releasedList: approved,
     });
     expect(first).toMatchObject({ status: "failed", sentCount: 0, inDoubtCount: 1 });
