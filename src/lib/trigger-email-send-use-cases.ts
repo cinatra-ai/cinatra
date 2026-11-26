@@ -29,12 +29,13 @@
  * publishing step's call on the passthrough route, in the run's frame with its
  * verified run, step and claimed decision (cinatra#3089).
  *
- * WHAT A PUBLISHING STEP MAY SEND (cinatra#3089): a call whose verified step is
- * governed by a publish decision is checked against the ONE decision its road
- * claimed for it, and a run that filed email bodies for review never sends the
- * bundle's text. Every gap refuses the whole send before any mail, with a named
- * code. A call that passes every check mails, for each draft with an address,
- * the text of ITS released body revision, never the bundle's body.
+ * WHAT A PUBLISHING STEP MAY SEND (cinatra#3089): a call that carries a
+ * publish claim for its verified step is checked against the ONE decision its
+ * road claimed for it, and every gap refuses the whole send before any mail,
+ * with a named code. When that decision surfaced a released list, the send
+ * mails, for each draft with an address, the text of ITS released body
+ * revision, never the bundle's body. Every other call (no claim, or no
+ * released list) is sent exactly as before (`takesReleasedListRoad`).
  *
  * THE INVARIANT OF THE APPROVED SEND (cinatra#3089): an approved body is handed
  * to a recipient at most once across all calls and all decisions. Each message
@@ -56,7 +57,6 @@ import {
   bodyRefusalCode,
   createDefaultSendEmail,
   IN_DOUBT_MANUAL_CHECK,
-  PROVENANCE_CHECK_CAP,
   SEND_FAILURE_CODE,
 } from "./approved-body-send";
 
@@ -156,14 +156,6 @@ export type TriggerEmailSendDeps = {
   // twice. Absent, `performRevisionEffectOnce` uses the materialization
   // ledger's claim rows. The reference-only form does not use it.
   messageSendLedger?: MessageSendLedger;
-  // Whether the steps of a run filed email bodies for review (cinatra#3089). A
-  // send of such a run whose calling step released no reviewed list is refused
-  // before any mail, so the bundle's text never bypasses the reviewed bodies.
-  // Defaults to `runHasFiledReviewArtifacts`: the run's mid-run filings in the
-  // actor's organization, each read through the access-checked objects read.
-  // A run that filed more than `cap` artifacts counts as filed, unread
-  // (PROVENANCE_CHECK_CAP).
-  readRunReviewedBodies?: (runId: string, actor: PrimitiveActorContext, cap: number) => Promise<boolean>;
   /**
    * The run this call belongs to, read from the server's own context of the
    * call (cinatra#3089), with the verified step that made the call; null when
@@ -187,13 +179,6 @@ export type TriggerEmailSendDeps = {
    * from this decision only, never from "the newest of the attempt".
    */
   readClaimedPublishDecision?: (runId: string, decisionId: string) => Promise<StepPublishDecision | null>;
-  /**
-   * The runs the HOST RECORDED as writers of the object `objectId` (its row's
-   * run and every run of its append-only change history), never a run id the
-   * object's own data names (cinatra#3089). Throws when they cannot be read.
-   * Defaults to `listObjectWriterRunIds`.
-   */
-  readObjectRuns?: (objectId: string, actor: PrimitiveActorContext) => Promise<string[]>;
   /**
    * The decision state of an approved body revision, read through `query` (the
    * claim's own connection, inside the transaction that holds the artifact's
@@ -340,23 +325,6 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
         objectTypeId: EMAIL_BODY_TYPE_ID,
       });
     },
-    async readRunReviewedBodies(runId, actor, cap) {
-      const orgId = actor.orgId;
-      if (!orgId) {
-        throw new Error("the sending actor carries no organization, so the filings of its run cannot be read");
-      }
-      const [{ kernelActorForRead }, { runHasFiledReviewArtifacts }] = await Promise.all([
-        import("./authz/enforce-resource-access"),
-        import("./artifacts/current-decided-revision-read"),
-      ]);
-      return runHasFiledReviewArtifacts({
-        actor: kernelActorForRead(actor, orgId),
-        orgId,
-        runId,
-        objectTypeId: EMAIL_BODY_TYPE_ID,
-        cap,
-      });
-    },
     // The run of the call is a verified channel of the request frame only: an
     // agent-run token's signed run, or the run a run-bound seam proved
     // (`verifiedRunScopeId`, or the frame's run id beside a verified step: a
@@ -380,17 +348,6 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
           ? { claim: { runId: claim.runId, decisionId: claim.decisionId } }
           : {}),
       };
-    },
-    async readObjectRuns(objectId, actor) {
-      const orgId = actor.orgId;
-      if (!orgId) {
-        throw new Error("the sending actor carries no organization, so the writers of its bundles cannot be read");
-      }
-      const [{ kernelActorForRead }, { listObjectWriterRunIds }] = await Promise.all([
-        import("./authz/enforce-resource-access"),
-        import("./artifacts/current-decided-revision-read"),
-      ]);
-      return listObjectWriterRunIds({ actor: kernelActorForRead(actor, orgId), orgId, objectId });
     },
     async readRevisionStateUnderLock(query, ref) {
       const { readRevisionDecisionState } = await import("./artifacts/current-decided-revision-read");
@@ -922,27 +879,25 @@ async function defaultEmitEmailFanout(args: EmailFanoutArgs): Promise<EmailFanou
 }
 
 /**
- * Every run id the two bundle envelopes name (`cinatraAgentRunId`,
- * `cinatra_agent_run_id`, `runId`; the draft bundle first), each non-empty one
- * once, in that order. An agent may change a bundle after the approval, so a
- * named run is never the run of a send (cinatra#3089): the first one only keys
- * the reference-only fan-out of a call that carries no run (cinatra#1455: the
- * key is `(runId, itemKey)`, never the campaign; with no run id the projection
- * is skipped).
+ * The run-scope id for the fan-out identity: the campaign run id carried on
+ * either bundle envelope (system-injected as `cinatraAgentRunId` on every
+ * objects_save). Returns null when no real run id is present — the projection
+ * is then SKIPPED rather than collapsing distinct runs of the same campaign
+ * onto a shared `campaignId` key (which would merge their per-item artifacts).
+ * `campaignId` remains on the payload as soft-provenance correlation only, never
+ * as the identity key — the key is strictly `(runId, itemKey)` per cinatra#1455.
  */
-function bundleRunIds(
+function resolveRunScopeId(
   draftEnv: ObjectsEnvelope | null,
   recipEnv: ObjectsEnvelope | null,
-): string[] {
-  const ids: string[] = [];
-  for (const env of [draftEnv, recipEnv]) {
+): string | null {
+  const fromEnv = (env: ObjectsEnvelope | null): string | null => {
     const d = (env?.data ?? null) as Record<string, unknown> | null;
-    if (!d || typeof d !== "object") continue;
-    for (const rid of [d.cinatraAgentRunId, d.cinatra_agent_run_id, d.runId]) {
-      if (typeof rid === "string" && rid.trim() !== "" && !ids.includes(rid.trim())) ids.push(rid.trim());
-    }
-  }
-  return ids;
+    if (!d || typeof d !== "object") return null;
+    const rid = d.cinatraAgentRunId ?? d.cinatra_agent_run_id ?? d.runId;
+    return typeof rid === "string" && rid.trim() !== "" ? rid.trim() : null;
+  };
+  return fromEnv(draftEnv) ?? fromEnv(recipEnv);
 }
 
 async function runInitialSend(args: {
@@ -958,11 +913,9 @@ async function runInitialSend(args: {
   readDecidedBody: NonNullable<TriggerEmailSendDeps["readDecidedBody"]>;
   messageSendLedger: MessageSendLedger | undefined;
   readRevisionStateUnderLock: NonNullable<TriggerEmailSendDeps["readRevisionStateUnderLock"]>;
-  readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
   readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
   readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
   readClaimedPublishDecision: NonNullable<TriggerEmailSendDeps["readClaimedPublishDecision"]>;
-  readObjectRuns: NonNullable<TriggerEmailSendDeps["readObjectRuns"]>;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
@@ -976,15 +929,28 @@ async function runInitialSend(args: {
     sendApprovedEmail,
     getObjectByRef,
     emitEmailFanout,
-    readRunReviewedBodies,
     readCallingRun,
     readPublishDecision,
     readClaimedPublishDecision,
-    readObjectRuns,
     readDecidedBody,
     messageSendLedger,
     readRevisionStateUnderLock,
   } = args;
+  /**
+   * THE ROAD OF THE SEND (cinatra#3089). A send takes the released-list road
+   * (each draft matched to the body revision a person released, bound to it and
+   * mailed at most once) only when the call carries BOTH a verified publish
+   * claim for its step AND a governing decision that surfaced a released list.
+   * Every other send (no claim, or a decision with no released list: every
+   * send of the packs pinned today, and a person's plain send) takes the old
+   * road and is sent exactly as before. The old road stays open until the
+   * pinned packs surface the released list; the piece that closes it is
+   * tracked on issue 3089.
+   */
+  const takesReleasedListRoad = (
+    run: CallingRun | null,
+    list: Array<Record<string, string>> | null,
+  ): boolean => run?.claim !== undefined && run.stepId !== undefined && list !== null;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -1043,15 +1009,20 @@ async function runInitialSend(args: {
 
     // THE RUN OF THE SEND (cinatra#3089) is the run of the call, from the
     // server's own context of the call; a run id written in a bundle never
-    // decides it.
+    // decides it. No reader's text reaches the answer: a fixed code.
     let callingRun: CallingRun | null = null;
     try {
       callingRun = await readCallingRun();
-    } catch (err) {
-      refuse(`the run of this call could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      refuse("the run of this call could not be read (calling_run_unreadable)");
     }
     const callRunId = callingRun?.runId ?? null;
 
+    // A CALL THAT CARRIES A CLAIM has entered the released-list road: the
+    // decision its road claimed is read and checked, and every gap refuses the
+    // whole send before any mail (fail closed). A call without a claim reads
+    // no decision and takes the old road (`takesReleasedListRoad`).
+    //
     // WHAT A PERSON APPROVED (cinatra#3089) is the publish decision a person
     // released for the calling step: its values were frozen when the step
     // stopped, and the card was drawn from them. The approved list is the ONE
@@ -1067,45 +1038,43 @@ async function runInitialSend(args: {
       senderEmail: string | undefined;
     } | null = null;
     const stepId = callingRun?.stepId;
-    if (callRunId && stepId) {
+    const claim = callingRun?.claim;
+    if (callRunId && stepId && claim) {
       const decisionOf = `step ${stepId} of run ${callRunId}`;
       let governing: StepPublishDecision | null = null;
       try {
         governing = await readPublishDecision(callRunId, stepId);
-      } catch (err) {
-        refuse(`the publish decision of ${decisionOf} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      } catch {
+        refuse(`the publish decision of ${decisionOf} could not be read (decision_unreadable)`);
       }
       // The decision the runtime signed for this call names the visit it was
       // made under: the governing decision must be that very decision.
       const signed = callingRun?.publishDecisionId;
       if (signed !== undefined && governing?.id !== signed) {
-        refuse(`the call was signed for another publish decision than the one that governs ${decisionOf}`);
+        refuse(`the call was signed for another publish decision than the one that governs ${decisionOf} (decision_signed_other)`);
       }
       // THE SEND USES EXACTLY ONE DECISION (cinatra#3089): the one the call's
       // road claimed for this call (`claim`), read by that id in the run's
-      // current attempt. A governed call with no claim, a claim of another run,
-      // a claim the signed decision contradicts, a claimed decision that cannot
-      // be read, one the current attempt no longer holds (a reset left it
-      // behind), or one a newer decision of the step superseded is refused
-      // before any mail; a claimed decision that is not released is refused by
-      // the list read below.
+      // current attempt. A claim of another run, a claim the signed decision
+      // contradicts, a claimed decision that cannot be read, one the current
+      // attempt no longer holds (a reset left it behind), or one a newer
+      // decision of the step superseded is refused before any mail; a claimed
+      // decision that is not released is refused by the list read below.
       let decision: StepPublishDecision | null = null;
       if (governing) {
-        const claim = callingRun?.claim;
-        if (!claim) refuse(`no publish decision was claimed for this call (${decisionOf}) (decision_not_claimed)`);
-        if (claim!.runId !== callRunId) refuse(`the call claimed a publish decision of another run (${decisionOf}) (decision_claim_other_run)`);
-        if (signed !== undefined && signed !== claim!.decisionId) {
+        if (claim.runId !== callRunId) refuse(`the call claimed a publish decision of another run (${decisionOf}) (decision_claim_other_run)`);
+        if (signed !== undefined && signed !== claim.decisionId) {
           refuse(`the call was signed for another publish decision than the one it claimed (${decisionOf}) (decision_claim_conflict)`);
         }
         try {
-          decision = await readClaimedPublishDecision(callRunId, claim!.decisionId);
+          decision = await readClaimedPublishDecision(callRunId, claim.decisionId);
         } catch {
           refuse(`the publish decision this call claimed could not be read (${decisionOf}) (decision_claim_unreadable)`);
         }
-        if (!decision || decision.id !== claim!.decisionId) {
+        if (!decision || decision.id !== claim.decisionId) {
           refuse(`the publish decision this call claimed is not a decision of the current attempt of the run (${decisionOf}) (decision_claim_not_current)`);
         }
-        if (governing.id !== claim!.decisionId) {
+        if (governing.id !== claim.decisionId) {
           refuse(`the publish decision this call claimed was superseded by a newer decision of the step (${decisionOf}) (decision_claim_superseded)`);
         }
       }
@@ -1120,94 +1089,35 @@ async function runInitialSend(args: {
           ],
         });
         if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
-        // THE FORM IS CHOSEN BY THE DECISION, NEVER BY THE REQUEST: a call whose
-        // step is governed by a publish decision sends only the bodies a person
-        // released. A decision with no approved list cannot route it into the
-        // reference-only form (which mails the bundle): it is refused.
-        if (!read.list) {
-          const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
-          throw new ReviewedArtifactsRequiredError(
-            `The send was refused before any email went out: the publish decision that governs ${decisionOf} holds no list of approved bodies, and a publishing step sends only the bodies a person released`,
-          );
-        }
-        const surfaced = decision.surfacedValues;
-        const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
-        if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
-        const campaignId = exactOf(frozenCampaign)
-          ?? refuse(`the released publish decision carries its campaign with white space around it (${decisionOf})`);
-        if (campaignId !== input.campaignId) {
-          refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
-        }
-        const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
-        if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
-        const senderEmail = shownSender.value ?? undefined;
-        if (senderEmail !== undefined && exactOf(senderEmail) === undefined) {
-          refuse(`the sender the released publish card showed carries white space around it (${decisionOf})`);
-        }
-        // The call's sender, when it names one, must be the shown sender byte for byte.
-        const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
-        if (callSender !== undefined && callSender !== senderEmail) {
-          refuse(
-            senderEmail
-              ? `the call names another sender than the released publish card showed (${decisionOf})`
-              : `the call names a sender the released publish card did not show (${decisionOf})`,
-          );
-        }
-        released = { list: read.list, campaignId, senderEmail };
-      }
-    }
-
-    // Without a released list the send reads the bundle exactly as before,
-    // unless a step filed bodies for review: the bundle's text is then not what
-    // a person reviewed, so the send is refused before any mail
-    // (`ReviewedArtifactsRequiredError`). The runs looked up are the run of the
-    // call AND every run the HOST RECORDED as a writer of either bundle object
-    // (`readObjectRuns`). A run id in a bundle's data decides nothing here. A
-    // call that carries no run (a person's direct call) on bundles no run ever
-    // wrote keeps the reference-only send: no body of theirs was filed for review.
-    //
-    // THE CHECK IS CAPPED (PROVENANCE_CHECK_CAP) and stops at the first run
-    // found to have filed: the call's run is asked before any writer is read.
-    // A reader's thrown text is never passed on (a store error may quote stored
-    // data): a fixed code.
-    if (!released) {
-      const checked = new Set<string>();
-      const check = async (runId: string, cap: number) => {
-        checked.add(runId);
-        let reviewed = true;
-        try {
-          reviewed = await readRunReviewedBodies(runId, actor, cap);
-        } catch {
-          refuse(`whether run ${runId} filed artifacts for review could not be read (run_filings_unreadable)`);
-        }
-        if (reviewed) {
-          const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
-          throw new ReviewedArtifactsRequiredError(
-            `The send was refused before any email went out: run ${runId} filed artifacts for review, and the calling step holds no list a person released`,
-          );
-        }
-      };
-      const { runs: runsCap, filings: filingsCap, perRun } = PROVENANCE_CHECK_CAP;
-      if (callRunId) await check(callRunId, perRun);
-      const writerRuns = new Set<string>();
-      for (const [ref, env] of [
-        [input.approvedDraftBundleRef, draftEnv],
-        [input.confirmedRecipientsRef, recipEnv],
-      ] as const) {
-        const objectId = textOf(env.id) ?? ref;
-        try {
-          for (const runId of await readObjectRuns(objectId, actor)) writerRuns.add(runId);
-        } catch {
-          refuse(`which runs wrote object ${objectId} could not be read (writer_runs_unreadable)`);
+        // A released decision with no list of approved bodies takes the old
+        // road (`takesReleasedListRoad`): the packs pinned today surface none.
+        if (takesReleasedListRoad(callingRun, read.list) && read.list) {
+          const surfaced = decision.surfacedValues;
+          const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
+          if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
+          const campaignId = exactOf(frozenCampaign)
+            ?? refuse(`the released publish decision carries its campaign with white space around it (${decisionOf})`);
+          if (campaignId !== input.campaignId) {
+            refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
+          }
+          const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
+          if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
+          const senderEmail = shownSender.value ?? undefined;
+          if (senderEmail !== undefined && exactOf(senderEmail) === undefined) {
+            refuse(`the sender the released publish card showed carries white space around it (${decisionOf})`);
+          }
+          // The call's sender, when it names one, must be the shown sender byte for byte.
+          const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
+          if (callSender !== undefined && callSender !== senderEmail) {
+            refuse(
+              senderEmail
+                ? `the call names another sender than the released publish card showed (${decisionOf})`
+                : `the call names a sender the released publish card did not show (${decisionOf})`,
+            );
+          }
+          released = { list: read.list, campaignId, senderEmail };
         }
       }
-      const unchecked = [...writerRuns].filter((runId) => !checked.has(runId));
-      if (checked.size + unchecked.length > runsCap) {
-        refuse(`the bundles were written by more runs than one send looks up (${runsCap}) (provenance_over_cap)`);
-      }
-      // The call's run took up to `perRun` reads; the writers share the rest of the cap.
-      const share = Math.min(perRun, Math.floor((filingsCap - (callRunId ? perRun : 0)) / Math.max(1, unchecked.length)));
-      for (const runId of unchecked) await check(runId, share);
     }
 
     // THE APPROVED FORM mails, for each draft with an address, the text of ITS
@@ -1386,10 +1296,7 @@ async function runInitialSend(args: {
     // The bind writes ledger rows only, never an object. The reference-only
     // form keeps its best-effort projection unchanged.
     const messageIdByArtifact = new Map<string, string>();
-    // The reference-only form keys its projection and its correlation on the
-    // run of the call, and on a call that carries no run, as before, on the
-    // first run the bundles name: a key of the projection, never a check.
-    const referenceRunId = callRunId ?? bundleRunIds(draftEnv, recipEnv)[0] ?? null;
+    const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
     if (approvedByIndex && callRunId) {
       let fanout: EmailFanoutResult;
       try {
@@ -1403,8 +1310,9 @@ async function runInitialSend(args: {
         });
       } catch (fanoutErr) {
         if (fanoutErr instanceof EmailBodyRefusedError) throw fanoutErr;
+        // The fan-out's thrown text is never passed on (a store error may quote stored data): a fixed code.
         throw new EmailBodyRefusedError(
-          `The send was refused before any email went out: the messages could not be bound to their approved bodies: ${fanoutErr instanceof Error ? fanoutErr.message : String(fanoutErr)}`,
+          "The send was refused before any email went out: the messages could not be bound to their approved bodies (bind_failed)",
         );
       }
       if (fanout.skipped.bodies) {
@@ -1420,10 +1328,10 @@ async function runInitialSend(args: {
           );
         }
       }
-    } else if (referenceRunId) {
+    } else if (runScopeId) {
       try {
         await emitEmailFanout({
-          runScopeId: referenceRunId,
+          runScopeId,
           campaignId: input.campaignId,
           drafts,
           recipients,
@@ -1623,7 +1531,7 @@ async function runInitialSend(args: {
       // facade's sent-email object writer lands a fully-correlated record for
       // the thread / campaign / contact views (cinatra#1456). `contactId` is
       // the provider-native id on the draft item (connector-scoped on the
-      // record by its `connectorId`); `referenceRunId` is the fan-out run frame
+      // record by its `connectorId`); `runScopeId` is the fan-out run frame
       // (may be null → the field is omitted, never sent as "").
       const contactId =
         typeof draft.contactId === "string" && draft.contactId.trim() !== ""
@@ -1649,7 +1557,7 @@ async function runInitialSend(args: {
           orgId: actor.orgId ?? undefined,
           correlation: {
             campaignId: input.campaignId,
-            ...(referenceRunId ? { runId: referenceRunId } : {}),
+            ...(runScopeId ? { runId: runScopeId } : {}),
             ...(contactId ? { contactId } : {}),
           },
         },
@@ -1957,11 +1865,9 @@ export function createTriggerEmailSendUseCases(
         // (e.g. a unit test) omits the optional fan-out seams.
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
-        readRunReviewedBodies: deps.readRunReviewedBodies ?? fallback().readRunReviewedBodies!,
         readCallingRun: deps.readCallingRun ?? fallback().readCallingRun!,
         readPublishDecision: deps.readPublishDecision ?? fallback().readPublishDecision!,
         readClaimedPublishDecision: deps.readClaimedPublishDecision ?? fallback().readClaimedPublishDecision!,
-        readObjectRuns: deps.readObjectRuns ?? fallback().readObjectRuns!,
         readDecidedBody: deps.readDecidedBody ?? fallback().readDecidedBody!,
         messageSendLedger: deps.messageSendLedger,
         readRevisionStateUnderLock: deps.readRevisionStateUnderLock ?? fallback().readRevisionStateUnderLock!,

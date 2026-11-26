@@ -209,8 +209,6 @@ function send(sent: string[]) {
       text: `Body ${ref.artifactId}`,
       data: { campaignId: CAMPAIGN_ID, contactId: ref.artifactId === "art-1" ? "c1" : "c2" },
     }),
-    readRunReviewedBodies: async () => true,
-    readObjectRuns: async () => ["run-1"],
     readCallingRun: async () => withClaim({ runId: "run-1", stepId: "send" }),
     readClaimedPublishDecision: async (runId: string, decisionId: string) => {
       const decision = withDecisionId(await (deps as unknown as { readPublishDecision: (r: string, s: string) => Promise<object | null> }).readPublishDecision(runId, "send")) as { id?: string } | null;

@@ -107,14 +107,3 @@ export function bodyRefusalCode(text: string): string {
   ];
   return known.find(([re]) => re.test(text))?.[1] ?? "body_read_failed";
 }
-
-/**
- * THE WORK CAP OF THE PROVENANCE CHECK of one reference-only send (cinatra#3089). Each run looked up costs a filings
- * query, and each artifact it filed a type read on the synchronous objects store. One send looks up at most `runs`
- * runs (the call's run and every recorded writer of the two bundles) and reads at most `filings` filed artifacts in
- * all: the call's run, asked first, with `perRun` (the reader's own cap) as its cap, and each writer run with an
- * equal share of the rest (never more than `perRun`); a run that filed more than its cap counts as filed. A send with more runs is refused
- * (`provenance_over_cap`), never read as "no bodies filed for review", which would mail the bundle. A real campaign
- * has the call's run and one or two writer runs, which keep the reader's full cap of 200 each.
- */
-export const PROVENANCE_CHECK_CAP = { runs: 20, filings: 600, perRun: 200 } as const;

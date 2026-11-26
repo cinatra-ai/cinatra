@@ -148,8 +148,6 @@ function fixture(opts?: {
     emitEmailFanout: fanout,
     readDecidedBody,
     messageSendLedger: ledger,
-    readRunReviewedBodies: async () => true,
-    readObjectRuns: async () => ["run-1"],
     readRevisionStateUnderLock: async (_query: unknown, ref: { artifactId: string; representationRevisionId: string; runId: string }) => {
       verified.push(`${ref.artifactId}@${ref.representationRevisionId} in ${ref.runId}`);
       return opts?.underLock?.(ref.artifactId) ?? null;

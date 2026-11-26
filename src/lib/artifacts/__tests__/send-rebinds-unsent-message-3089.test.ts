@@ -339,8 +339,6 @@ function send(approval: Array<[number, number]>, mails: Mail[], mailer: Mailer =
       if (!entry) return { ok: false, error: "not the current decided revision" };
       return { ok: true, text: revisions.get(`${ref.artifactId}|${ref.representationRevisionId}`)!, data: { campaignId: CAMPAIGN_ID, contactId: entry.contactId } };
     },
-    readRunReviewedBodies: async () => true,
-    readObjectRuns: async () => ["run-1"],
     readCallingRun: async () => ({ runId: "run-1", stepId: "send", claim: { runId: "run-1", decisionId: "d-1" } }),
     readPublishDecision: async () => decision,
     readClaimedPublishDecision: async (_runId: string, decisionId: string) => (decisionId === "d-1" ? decision : null),

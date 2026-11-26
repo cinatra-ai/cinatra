@@ -24,22 +24,20 @@
  *   A2 the same for a subject
  *   A3 the released decision's values are mailed, the address and the
  *      subject byte for byte as the card showed them
- *   A4 a decision that is not released, or no list on a run with filed bodies
- *      (no decision, or a call without a verified step): refused
- *   A4b a decision that cannot be read: refused before anything is bound
+ *   A4 a claimed decision that is not released: refused
+ *   A4b a decision that cannot be read: refused before anything is bound, the
+ *      reader's text not passed on
+ *   A4c no claim, no decision, no list or no verified step: the old road, the
+ *      bundle mailed as before (nothing bound, no send record)
  *   A5 a list the decision surfaced, but no list row of its card showing each
  *      address and subject: refused
  *   A6 two surfaced lists of approved bodies: refused
  *   A7 a released decision that carries no campaign, or another campaign than
  *      the call names: refused
  *   A8 an approved body filed for another campaign, or for none: refused
- *   B1 no released list, and the run the host recorded as the bundle's writer
- *      has bodies filed for review: refused
- *   B2 the same with no run on the call: every recorded writer run of either
- *      object is looked up, and the send is refused
  *   B3 a bundle that names another run changes nothing: the approved form
  *      binds and claims under the run of the call
- *   B4 a call that carries no run reads no publish decision
+ *   B4 a call that carries no run reads no publish decision and is sent as before
  *   K1 two drafts sharing one draft id, each with its own approved body: both
  *      are mailed once
  *   K2 one approved body named twice: refused before anything is claimed
@@ -165,10 +163,8 @@ function makeFixture(opts?: {
   recipients?: unknown[];
   callingRun?: { runId: string; stepId?: string } | null;
   decision?: unknown;
-  reviewedRuns?: string[];
-  /** The runs the host recorded as writers of each object; by default the run
-   *  the object's data names, as a host records the run that saved it. */
-  objectRuns?: Record<string, string[]>;
+  /** false: the call carries no publish claim (the packs pinned today). */
+  claim?: false;
   sendLedger?: ReturnType<typeof memorySendLedger>;
   sent?: Array<{ to: string[]; subject: string; textBody: string }>;
 }) {
@@ -222,8 +218,6 @@ function makeFixture(opts?: {
       registeredTypes: new Set([EMAIL_BODY_TYPE_ID]),
     } as Parameters<typeof materializeEmailFanout>[1]),
   );
-  const reviewedRuns = new Set(opts?.reviewedRuns ?? []);
-  const readRunReviewedBodies = vi.fn(async (runId: string) => reviewedRuns.has(runId));
   const callingRun = opts?.callingRun === undefined ? { runId: "run-1", stepId: "send" } : opts.callingRun;
   const readPublishDecision = vi.fn(async () =>
     opts?.decision === undefined ? releasedCard(approved) : opts.decision,
@@ -236,13 +230,7 @@ function makeFixture(opts?: {
     emitEmailFanout,
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
-    readRunReviewedBodies,
-    readObjectRuns: async (id: string) => {
-      if (opts?.objectRuns) return opts.objectRuns[id] ?? [];
-      const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
-      return typeof d.cinatraAgentRunId === "string" && d.cinatraAgentRunId !== "" ? [d.cinatraAgentRunId] : [];
-    },
-    readCallingRun: async () => withClaim(callingRun),
+    readCallingRun: async () => (opts?.claim === false ? callingRun : withClaim(callingRun)),
     readPublishDecision: async (runId: string, stepId: string) =>
       withDecisionId(await (readPublishDecision as (r: string, s: string) => Promise<object | null>)(runId, stepId)),
     readClaimedPublishDecision: async (_runId: string, decisionId: string) => {
@@ -272,7 +260,6 @@ function makeFixture(opts?: {
     bindBody,
     writeBody,
     sendLedger,
-    readRunReviewedBodies,
     readPublishDecision,
     readDecidedBody,
     start,
@@ -330,9 +317,6 @@ describe("cinatra#3089 — what a person approved comes from the released publis
   it.each([
     ["a parked decision", { decision: { ...releasedCard(approved), status: "parked" } }, "the publish decision is not released by a person (step send of run run-1)"],
     ["a decision no person decided", { decision: { ...releasedCard(approved), decidedBy: null } }, "the publish decision is not released by a person"],
-    ["no decision on a run with filed bodies", { decision: null, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
-    ["a released decision with no list on a run with filed bodies", { decision: noListCard, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
-    ["a call without a verified step on a run with filed bodies", { callingRun: { runId: "run-1" }, reviewedRuns: ["run-1"] }, "REVIEWED_ARTIFACTS_REQUIRED"],
   ])("A4 %s refuses the send before anything is bound", async (_name, opts, reason) => {
     await expectRefused(makeFixture(opts as Parameters<typeof makeFixture>[0]), reason);
   });
@@ -340,7 +324,36 @@ describe("cinatra#3089 — what a person approved comes from the released publis
   it("A4b a decision that cannot be read refuses the send before anything is bound", async () => {
     const fx = makeFixture();
     fx.readPublishDecision.mockRejectedValueOnce(new Error("the decision store is unavailable"));
-    await expectRefused(fx, "the publish decision of step send of run run-1 could not be read: the decision store is unavailable");
+    const result = await fx.start({});
+    expect(result).toMatchObject({ status: "failed", sentCount: 0 });
+    // The reader's text is never passed on (finding 3 of the third review): a fixed code.
+    expect(result.errorMessage).toContain("the publish decision of step send of run run-1 could not be read (decision_unreadable)");
+    expect(result.errorMessage).not.toContain("unavailable");
+    await expectNothingDone(fx);
+  });
+
+  // THE OLD ROAD (cinatra#3089): a send without BOTH a claim and a released list is sent as before: the bundle's drafts
+  // are mailed, the fan-out files one body per draft, nothing is bound and no send record is kept.
+  it.each([
+    ["no claim (the packs pinned today), a released decision with no list", { claim: false, decision: noListCard }],
+    ["no claim, a released decision WITH a list", { claim: false }],
+    ["a claim, no decision governing the step", { decision: null }],
+    ["a claim, a released decision with no list", { decision: noListCard }],
+    ["a claim, but no verified step", { callingRun: { runId: "run-1" } }],
+  ])("A4c %s: the old road, the bundle mailed as before", async (_name, opts) => {
+    const fx = makeFixture(opts as Parameters<typeof makeFixture>[0]);
+    const result = await fx.start({});
+    expect(result).toMatchObject({ status: "completed", sentCount: 2 });
+    expect(result.alreadySentCount).toBeUndefined();
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Subject one", textBody: "Body of art-1" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Subject two", textBody: "Body of art-2" }),
+    ]);
+    expect(fx.writeBody).toHaveBeenCalledTimes(2);
+    expect(fx.bindBody).not.toHaveBeenCalled();
+    expect(fx.readDecidedBody).not.toHaveBeenCalled();
+    expect(fx.sendLedger.rows.size).toBe(0);
+    if ((opts as { claim?: false }).claim === false) expect(fx.readPublishDecision).not.toHaveBeenCalled();
   });
 
   it("A5 a decision whose card shows no list row with each address and subject refuses the send", async () => {
@@ -383,27 +396,6 @@ describe("cinatra#3089 — what a person approved comes from the released publis
 });
 
 describe("cinatra#3089 — the run is the run of the call, never a bundle field", () => {
-  it("B1 the run the host recorded as the bundle's writer is looked up beside the run of the call", async () => {
-    // The call's own run filed nothing; the run that wrote the bundle did.
-    const fx = makeFixture({
-      callingRun: { runId: "run-call" },
-      bundleData: { cinatraAgentRunId: "" },
-      objectRuns: { [BUNDLE_REF]: ["run-1"] },
-      reviewedRuns: ["run-1"],
-    });
-    await expectRefused(fx, "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: run run-1 filed artifacts");
-    expect(fx.readRunReviewedBodies.mock.calls.map(([runId]) => runId)).toEqual(["run-call", "run-1"]);
-  });
-
-  it("B2 a call without a run looks up every run the host recorded as a writer of either object", async () => {
-    const fx = makeFixture({
-      callingRun: null,
-      objectRuns: { [RECIPIENTS_REF]: ["run-1"] },
-      reviewedRuns: ["run-1"],
-    });
-    await expectRefused(fx, "run run-1 filed artifacts for review");
-  });
-
   it("B3 a bundle that names another run changes nothing: the messages are bound and claimed under the run of the call", async () => {
     const fx = makeFixture({ bundleData: { cinatraAgentRunId: "run-other" } });
     const result = await fx.start({});
@@ -413,14 +405,14 @@ describe("cinatra#3089 — the run is the run of the call, never a bundle field"
     expect([...fx.sendLedger.rows.keys()]).toEqual(["email-body:run-1:art-1", "email-body:run-1:art-2"]);
   });
 
-  it("B4 a call that carries no run reads no publish decision", async () => {
+  it("B4 a call that carries no run reads no publish decision and is sent as before", async () => {
     const fx = makeFixture({ callingRun: null });
     const result = await fx.start({});
-    expect(result.status).toBe("completed");
+    expect(result).toMatchObject({ status: "completed", sentCount: 2 });
     expect(fx.readPublishDecision).not.toHaveBeenCalled();
     expect(fx.readDecidedBody).not.toHaveBeenCalled();
-    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.anything(), expect.any(Number));
     expect(fx.bindBody).not.toHaveBeenCalled();
+    expect(fx.sendLedger.rows.size).toBe(0);
   });
 });
 

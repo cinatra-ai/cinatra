@@ -9,8 +9,8 @@
  * of. Given, the send mails, for each draft with an address, the text of ITS
  * approved revision (never the bundle's body), refuses the whole send before
  * any mail on every gap, and the fan-out binds each message to the approved
- * revision instead of filing a new body. Without a released list the send
- * reads the bundle exactly as before, unless a run filed bodies for review.
+ * revision instead of filing a new body. A call without BOTH a publish claim
+ * and a released list is sent exactly as before (the old road).
  *
  * NO RUN REACHES THIS SEND YET: the MCP boundary refuses every call of
  * `email_outreach_send_initial_start` made on a run's frame (the outward-effect
@@ -28,9 +28,9 @@
  *      be read, is not current, is of another organization or type, a body
  *      named twice, a body for no draft, two bodies for one contact, a body
  *      carrying another contact: each refuses the whole send before any mail
- *   U1-U4 without a released list: the reference-only form is unchanged; a run
- *      with bodies filed for review (or whose filings cannot be read, or a call
- *      with no run on a bundle such a run wrote) is refused
+ *   U1-U3 the old road is unchanged: a call with no released list, a call
+ *      without a claim (the packs pinned today) and a call with no run mail the
+ *      bundle as before and read no decision or approved body
  *   P1-P4 bodies swapped between drafts, or a draft changed after its body was
  *      filed, are refused; equal texts are sent each to its own draft
  *   F1, F1b the fan-out binds each message to its approved revision and files
@@ -40,12 +40,14 @@
  *      showed; a change in the bundle refuses the send and names no address
  *   G1-G5 the decision that governs the call is read through the one resolution
  *      the publishing call guard claims under; a call signed for a decision is
- *      served by that one only; a publishing step with no decision is refused
- *   L1 a released decision with no list of approved bodies is refused
+ *      served by that one only; a claimed call whose governing decision cannot
+ *      be read is refused with a fixed code
+ *   L1 a released decision with no list of approved bodies takes the old road
  *   B1-B6 what is sent is byte for byte what the card showed; an id, address,
  *      sender or campaign carried with white space around it is refused
  *   C1-C7 the send reads the decision its call claimed, by id: the normal case
- *      mails its list; each claim refusal code refuses before any mail
+ *      mails its list; each claim refusal code refuses before any mail; a call
+ *      with no claim takes the old road
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -235,8 +237,8 @@ function makeFixture(opts?: {
   store?: Map<string, StoredBody>;
   drafts?: unknown[];
   recipients?: unknown[];
-  /** What the ledger answers for "the run has bodies filed for review". */
-  reviewedBodies?: boolean | Error;
+  /** false: the call carries no publish claim (the packs pinned today). */
+  claim?: false;
   /** The run, verified step and signed decision of the call; null: the call carries no run. */
   callingRun?: CallingRun | null;
   /** The claimed-decision read, when a case replaces it. */
@@ -314,11 +316,6 @@ function makeFixture(opts?: {
   // A case that names no list calls from a step no publish decision governs.
   const readPublishDecision = vi.fn(async (_runId: string, _stepId: string): Promise<StepPublishDecision | null> =>
     named === undefined ? null : releasedCardFor(named, CAMPAIGN_ID, shown));
-  const readRunReviewedBodies = vi.fn(async (_runId: string) => {
-    const answer = opts?.reviewedBodies ?? false;
-    if (answer instanceof Error) throw answer;
-    return answer;
-  });
   let lastGoverning: StepPublishDecision | null = null;
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
@@ -328,13 +325,6 @@ function makeFixture(opts?: {
     emitEmailFanout,
     readDecidedBody,
     messageSendLedger: sendLedger.ledger,
-    readRunReviewedBodies,
-    // The runs the host recorded as writers of each object: here the run the
-    // object's data names, as a host records the run that saved it.
-    readObjectRuns: async (id: string) => {
-      const d = (envelopes[id]?.data ?? {}) as Record<string, unknown>;
-      return typeof d.cinatraAgentRunId === "string" ? [d.cinatraAgentRunId] : [];
-    },
     // The road claimed the decision the call was signed for, else the step's decision `d-1` (cinatra#3089).
     ...(opts?.decisions
       ? {
@@ -343,8 +333,10 @@ function makeFixture(opts?: {
             runId === "run-1" ? (opts.decisions!.current.find((d) => d.id === decisionId) ?? null) : null,
         }
       : {
-          readCallingRun: async () =>
-            opts?.callingRun === null ? null : withClaim(opts?.callingRun ?? { runId: "run-1", stepId: "send" }),
+          readCallingRun: async () => {
+            const run = opts?.callingRun === null ? null : (opts?.callingRun ?? { runId: "run-1", stepId: "send" });
+            return opts?.claim === false ? run : withClaim(run);
+          },
         }),
     ...(opts?.decisions || opts?.readPublishDecision === null
       ? {}
@@ -381,7 +373,6 @@ function makeFixture(opts?: {
     sent,
     sendEmail,
     readDecidedBody,
-    readRunReviewedBodies,
     readPublishDecision,
     writeBody,
     bindBody,
@@ -500,36 +491,29 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     expect(fx.writeBody).toHaveBeenCalledTimes(3);
   });
 
-  it("U2 a run with bodies filed for review refuses a send that names none of them, before any mail", async () => {
-    const fx = makeFixture({ reviewedBodies: true });
-    const result = await fx.start({});
-    expect(result.status).toBe("failed");
-    expect(result.sentCount).toBe(0);
-    expect(result.errorMessage).toContain(
-      "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: run run-1 filed artifacts for review, and the calling step holds no list a person released",
-    );
-    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.objectContaining({ orgId: "org-1" }), 200);
-    expect(fx.sendEmail).not.toHaveBeenCalled();
-    expect(fx.writeBody).not.toHaveBeenCalled();
-    expect(fx.emitEmailFanout).not.toHaveBeenCalled();
-  });
-
-  it("U3 a run whose filed bodies cannot be looked up refuses a send that names none of them", async () => {
-    const fx = makeFixture({ reviewedBodies: new Error("the ledger is unavailable") });
-    const result = await fx.start({});
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain(
-      "whether run run-1 filed artifacts for review could not be read (run_filings_unreadable)",
-    );
-    expect(fx.sendEmail).not.toHaveBeenCalled();
-    expect(fx.emitEmailFanout).not.toHaveBeenCalled();
-  });
-
-  it("U4 a call that carries no run, on a bundle a run with reviewed bodies wrote, is refused", async () => {
-    const fx = makeFixture({ callingRun: null, reviewedBodies: true });
-    await expectRefused(fx, {}, "run run-1 filed artifacts for review");
-    expect(fx.readPublishDecision).not.toHaveBeenCalled();
+  // THE OLD ROAD (cinatra#3089): what U1 shows, the bundle mailed exactly as before the released-list road.
+  const expectSentAsBefore = (fx: ReturnType<typeof makeFixture>, result: { status: string; sentCount: number }) => {
+    expect(result).toMatchObject({ status: "completed", sentCount: 2 });
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one\n\n" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two\n\n" }),
+    ]);
     expect(fx.readDecidedBody).not.toHaveBeenCalled();
+    expect(fx.bindBody).not.toHaveBeenCalled();
+    expect(fx.writeBody).toHaveBeenCalledTimes(3);
+    expect(fx.sendLedger.rows.size).toBe(0);
+  };
+
+  it("U2 a call without a claim (the packs pinned today) from a step with a released list is sent as before and reads no decision", async () => {
+    const fx = makeFixture({ claim: false });
+    expectSentAsBefore(fx, await fx.start({ releasedList: approved }));
+    expect(fx.readPublishDecision).not.toHaveBeenCalled();
+  });
+
+  it("U3 a call that carries no run is sent as before and reads no decision", async () => {
+    const fx = makeFixture({ callingRun: null });
+    expectSentAsBefore(fx, await fx.start({ releasedList: approved }));
+    expect(fx.readPublishDecision).not.toHaveBeenCalled();
   });
 
   it("P1 two approved bodies without a contact of their own, swapped between the drafts, refuse the whole send", async () => {
@@ -858,7 +842,6 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
         nodeId === "publish" ? { id: "d-publish", ...releasedCardFor(approved) } : null);
       const fx = makeFixture({
         readPublishDecision: null,
-        reviewedBodies: true,
         callingRun: { runId: "run-1", stepId: "send", claim: { runId: "run-1", decisionId: "d-publish" } },
       });
       const result = await fx.start({});
@@ -879,17 +862,24 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
       },
     }));
     governing.readDecisionForRunNode.mockResolvedValue({ id: "d-publish", ...releasedCardFor(approved) });
-    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "which publishing step governs the call cannot be told");
+    // The reader's text is never passed on (finding 3 of the third review): a fixed code.
+    const result = await expectRefused(makeFixture({ readPublishDecision: null }), {}, "(decision_unreadable)");
+    expect(result.errorMessage).not.toContain("cannot be told");
   });
 
-  it("G5 a send step inside a publishing node that holds no decision is refused, never sent in the reference-only form", async () => {
+  it("G5 a claimed call from a publishing node that holds no decision is refused; an unclaimed one is sent as before", async () => {
     governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(NESTED_GRAPH));
-    // No decision row at all, on a run that filed no bodies for review.
-    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "the publishing step that governs the call holds no decision");
+    // No decision row at all: the claimed call has entered the released-list road and is refused (a fixed code).
+    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "(decision_unreadable)");
     // The same for a step the template lists itself, with no graph to read.
     governing.readRunBoundGraph.mockResolvedValue(null);
     governing.readAgentTemplateById.mockResolvedValue({ id: "tmpl-1", publishingSteps: ["send"] });
-    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "the publishing step that governs the call holds no decision");
+    await expectRefused(makeFixture({ readPublishDecision: null }), {}, "(decision_unreadable)");
+    // A call without a claim reads no decision: the old road.
+    governing.readDecisionForRunNode.mockClear();
+    const unclaimed = makeFixture({ readPublishDecision: null, claim: false });
+    expect((await unclaimed.start({})).status).toBe("completed");
+    expect(governing.readDecisionForRunNode).not.toHaveBeenCalled();
     // A step no publishing node governs keeps the reference-only form.
     governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(NESTED_GRAPH));
     const unrelated = makeFixture({ readPublishDecision: null, callingRun: { runId: "run-1", stepId: "draft" } });
@@ -913,12 +903,17 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
 });
 
 describe("cinatra#3089 — the released decision's list", () => {
-  it("L1 a released decision that holds no list of approved bodies is refused, never sent as the bundle", async () => {
-    await expectRefused(
-      makeFixture({ readPublishDecision: async () => releasedCardFor(undefined) }),
-      {},
-      "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: the publish decision that governs step send of run run-1 holds no list of approved bodies",
-    );
+  it("L1 a released decision that holds no list of approved bodies takes the old road: the bundle is mailed as before", async () => {
+    for (const claim of [undefined, false as const]) {
+      const fx = makeFixture({ readPublishDecision: async () => releasedCardFor(undefined), ...(claim === false ? { claim } : {}) });
+      const result = await fx.start({});
+      expect(result).toMatchObject({ status: "completed", sentCount: 2 });
+      expect(result.errorMessage).toBeUndefined();
+      expect(fx.sent.map((m) => m.subject)).toEqual(["Bundle subject one", "Bundle subject two"]);
+      expect(fx.bindBody).not.toHaveBeenCalled();
+      expect(fx.readDecidedBody).not.toHaveBeenCalled();
+      expect(fx.sendLedger.rows.size).toBe(0);
+    }
   });
 });
 
@@ -1073,15 +1068,17 @@ describe("cinatra#3089 — the approved send reads the decision its call claimed
     expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("C5 a governed call with no claim, or with a claim of another run, is refused", async () => {
+  it("C5 a governed call with no claim takes the old road; a claim of another run is refused", async () => {
+    // No claim (the packs pinned today): the bundle is mailed as before, and no decision is read.
     const none = makeFixture({ decisions: { current: [decisionA] } });
     const unclaimed = await inFrame({}, () => none.start({}));
-    expect(unclaimed.status).toBe("failed");
-    expect(unclaimed.errorMessage).toContain("(decision_not_claimed)");
+    expect(unclaimed).toMatchObject({ status: "completed", sentCount: 2 });
+    expect(none.sent.map((m) => m.subject)).toEqual(["Bundle subject one", "Bundle subject two"]);
+    expect(none.bindBody).not.toHaveBeenCalled();
+    expect(none.sendLedger.rows.size).toBe(0);
     const other = makeFixture({ decisions: { current: [decisionA] } });
     const elsewhere = await inFrame(claimOf("d-A", "run-2"), () => other.start({}));
     expect(elsewhere.errorMessage).toContain("(decision_claim_other_run)");
-    expect(none.sendEmail).not.toHaveBeenCalled();
     expect(other.sendEmail).not.toHaveBeenCalled();
   });
 

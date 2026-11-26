@@ -46,9 +46,10 @@
  *      one is skipped, recipient two is not mailed again
  *   L1 a provider error, or a mailbox status, that quotes an address reaches
  *      neither the answer nor any log line: each failure answers a fixed code
- *   P1 no request routes a publishing-step call (a decision governs its step)
- *      into the reference-only form: a decision with no approved list, one not
- *      released, or a signed call with no decision is refused before any mail
+ *   P1 a claimed call whose decision is not released, or a signed call with no
+ *      decision, is refused before any mail; a released decision with no
+ *      approved list takes the reference-only form, unchanged, whatever the
+ *      request carries
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
@@ -309,9 +310,6 @@ function makeFixture(opts?: {
     ...(emitEmailFanout ? { emitEmailFanout } : {}),
     ...(readDecidedBody ? { readDecidedBody } : {}),
     messageSendLedger: sendLedger.ledger,
-    // A run without bodies filed for review, so the reference-only form runs.
-    readRunReviewedBodies: async () => false,
-    readObjectRuns: async () => [],
     // The run of the call follows the case's run: none when the case has none.
     readCallingRun: async () =>
       withClaim(runId ? { runId, stepId: "send", ...(opts?.decisionId ? { publishDecisionId: opts.decisionId } : {}) } : null),
@@ -824,8 +822,8 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
     }
   });
 
-  it("P1 no request routes a publishing-step call into the reference-only form, which keeps no send record", async () => {
-    // The calling step is governed by a released decision that holds no approved list, or by one not released.
+  it("P1 a claimed call on a decision not released is refused; a released decision with no list keeps the reference-only form", async () => {
+    // The calling step is governed by a decision not released (parked, or decided by no person).
     const noList = releasedCardFor(undefined);
     const requests: Array<Record<string, unknown>> = [
       {},
@@ -833,7 +831,7 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
       { senderEmail: "team@example.com" },
       { releasedList: undefined },
     ];
-    for (const decision of [noList, { ...noList, status: "parked" }, { ...noList, decidedBy: null }]) {
+    for (const decision of [{ ...noList, status: "parked" }, { ...noList, decidedBy: null }]) {
       for (const request of requests) {
         const fx = makeFixture({ decision });
         const result = await fx.start(request);
@@ -844,8 +842,14 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
         expect(fx.sendLedger.rows.size).toBe(0);
       }
     }
-    const fx = makeFixture({ decision: noList });
-    expect((await fx.start({})).errorMessage).toContain("holds no list of approved bodies, and a publishing step sends only the bodies a person released");
+    // A released decision with no approved list (the packs pinned today): the bundle is mailed as before, whatever
+    // the request carries, and no send record is kept.
+    for (const request of requests) {
+      const fx = makeFixture({ decision: noList });
+      expect(await fx.start(request)).toMatchObject({ status: "completed", sentCount: 3 });
+      expect(fx.bindBody).not.toHaveBeenCalled();
+      expect(fx.sendLedger.rows.size).toBe(0);
+    }
     // A call signed for a decision while no decision governs its step is refused too.
     const signed = makeFixture({ decision: null, decisionId: "decision-1" });
     expect(await signed.start({})).toMatchObject({ status: "failed", sentCount: 0 });
