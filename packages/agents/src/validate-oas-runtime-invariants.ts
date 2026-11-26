@@ -681,52 +681,69 @@ const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "Pa
 export function findPublishingAncestor(document: unknown, stepId: string): PublishingAncestorReading {
   if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return { kind: "unresolved" };
   const rootRefs = isPlainObject(document.$referenced_components) ? document.$referenced_components : {};
-  const topLevel: string[] = [];
-  for (const entry of Array.isArray(document.nodes) ? document.nodes : []) {
-    const ref = resolveComponentRef(entry);
-    if (ref !== null && Object.prototype.hasOwnProperty.call(rootRefs, ref) && !topLevel.includes(ref)) topLevel.push(ref);
-  }
-  const holdsStep = (start: unknown): boolean => {
-    const seen = new Set<unknown>();
-    const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
-    while (stack.length > 0) {
-      const [value, scopes] = stack.pop()!;
-      if (!isPlainObject(value) || seen.has(value)) continue;
-      seen.add(value);
-      const ref = resolveComponentRef(value);
-      if (ref !== null) {
-        for (let i = scopes.length - 1; i >= 0; i--) {
-          if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
-            stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
-            break;
-          }
-        }
-        continue;
-      }
-      if (value.component_type === "ApiNode" && value.id === stepId) return true;
-      const refs = value.$referenced_components;
-      const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
-      if (isPlainObject(refs)) for (const child of Object.values(refs)) stack.push([child, inner]);
-      for (const key of ["subflow", "start_node"]) stack.push([value[key], inner]);
-      for (const key of ["subflows", "nodes"]) {
-        const list = value[key];
-        if (Array.isArray(list)) for (const child of list) stack.push([child, inner]);
-      }
-    }
-    return false;
-  };
-  const holders = topLevel.filter((key) => holdsStep(rootRefs[key]));
+  const holders = topLevelNodeKeys(document).filter((key) =>
+    subtreeApiNodes(rootRefs[key], rootRefs).some((node) => node.id === stepId));
   if (holders.length === 0) return { kind: "unresolved" };
   if (holders.length > 1) return { kind: "ambiguous" };
   const nodeId = holders[0]!;
-  const node = rootRefs[nodeId] as Record<string, unknown>;
+  return isPublishingNode(rootRefs[nodeId]) ? { kind: "resolved", nodeId } : { kind: "not_publishing", nodeId };
+}
+
+/** The keys, in the root `$referenced_components`, of the top-level nodes (the root `nodes` list). */
+function topLevelNodeKeys(document: Record<string, unknown>): string[] {
+  const rootRefs = isPlainObject(document.$referenced_components) ? document.$referenced_components : {};
+  const keys: string[] = [];
+  for (const entry of Array.isArray(document.nodes) ? document.nodes : []) {
+    const ref = resolveComponentRef(entry);
+    if (ref !== null && Object.prototype.hasOwnProperty.call(rootRefs, ref) && !keys.includes(ref)) keys.push(ref);
+  }
+  return keys;
+}
+
+/** A node of an action kind that declares `metadata.cinatra.publishes: true` (the JSON boolean). */
+function isPublishingNode(node: unknown): boolean {
+  if (!isPlainObject(node)) return false;
   const metadata = isPlainObject(node.metadata) ? node.metadata : null;
   const cinatra = metadata && isPlainObject(metadata.cinatra) ? metadata.cinatra : null;
-  const publishes = cinatra !== null && cinatra.publishes === true;
-  if (!publishes || typeof node.component_type !== "string" || !PUBLISHING_ACTION_KINDS.has(node.component_type)) {
-    return { kind: "not_publishing", nodeId };
+  return cinatra !== null && cinatra.publishes === true &&
+    typeof node.component_type === "string" && PUBLISHING_ACTION_KINDS.has(node.component_type);
+}
+
+/**
+ * Every ApiNode in the subtree of a top-level node: the walk follows
+ * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
+ * `$component_ref` resolves to the innermost enclosing `$referenced_components`
+ * that holds its key.
+ */
+function subtreeApiNodes(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
+  while (stack.length > 0) {
+    const [value, scopes] = stack.pop()!;
+    if (!isPlainObject(value) || seen.has(value)) continue;
+    seen.add(value);
+    const ref = resolveComponentRef(value);
+    if (ref !== null) {
+      for (let i = scopes.length - 1; i >= 0; i--) {
+        if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
+          stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
+          break;
+        }
+      }
+      continue;
+    }
+    if (value.component_type === "ApiNode") found.push(value);
+    const refs = value.$referenced_components;
+    const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
+    if (isPlainObject(refs)) for (const child of Object.values(refs)) stack.push([child, inner]);
+    for (const key of ["subflow", "start_node"]) stack.push([value[key], inner]);
+    for (const key of ["subflows", "nodes"]) {
+      const list = value[key];
+      if (Array.isArray(list)) for (const child of list) stack.push([child, inner]);
+    }
   }
-  return { kind: "resolved", nodeId };
+  return found;
 }
 
 function scanForStepToolDeclarations(
@@ -810,6 +827,35 @@ function scanForStepToolDeclarations(
       location: steps[0]!.path,
       source: "deterministic",
     });
+  }
+
+  // (d) a model-bridge step inside a publishing node (cinatra#4150). The run
+  // allows a call made after the person's Publish only when the calling step
+  // declares the call's tool, and a step's offered tools are known only from
+  // that declaration: a step that can call tools (its data.toolbox_ids is not
+  // an empty list) and declares none is refused for every outward call.
+  const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  for (const key of topLevelNodeKeys(parsed)) {
+    if (!isPublishingNode(rootRefs[key])) continue;
+    for (const step of subtreeApiNodes(rootRefs[key], rootRefs)) {
+      if (!isModelBridgeApiNode(step)) continue;
+      const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
+      if (Array.isArray(offered) && offered.length === 0) continue;
+      const reading = readStepToolDeclaration(step);
+      if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) continue;
+      findings.push({
+        code: "OAS-RUNTIME-015",
+        severity: "blocker",
+        message:
+          `Model-bridge step "${idOf(step)}" is part of the publishing node "${key}" ` +
+          `(metadata.cinatra.publishes: true) and declares no tools in ` +
+          `metadata.cinatra.tools. The run refuses every outward call of a step ` +
+          `that does not declare the call's tool (action_decision_step_undeclared), ` +
+          `even after the person chose Publish. Declare the tools the step calls.`,
+        location: `$.$referenced_components.${key}`,
+        source: "deterministic",
+      });
+    }
   }
   return findings;
 }
@@ -1000,6 +1046,41 @@ function scanInputMessageGateMountability(
   const findings: ReviewFinding[] = [];
   walkComponentObjects(parsed, (node, path) => {
     const componentType = node["component_type"];
+
+    // --- artifact-review gate surfaces its targets (cinatra#4150) ----------
+    // The loader writes a gate's declared inputs into its pause message only
+    // when the gate sets surfaceGateInputs === true; without it the message is
+    // empty, the application reads no review targets and no review opens.
+    const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
+    const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
+    const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
+    if (review && Object.prototype.hasOwnProperty.call(review, "targetsInput")) {
+      const target = review["targetsInput"];
+      const inputs = Array.isArray(node["inputs"]) ? node["inputs"] : [];
+      const missing =
+        componentType !== "InputMessageNode"
+          ? `it is a "${String(componentType)}", not an InputMessageNode`
+          : cin!["surfaceGateInputs"] !== true
+            ? "it does not set metadata.cinatra.surfaceGateInputs: true"
+            : typeof target !== "string" ||
+                !inputs.some((i) => isPlainObject(i) && i["title"] === target)
+              ? `"${String(target)}" is not one of its declared inputs`
+              : null;
+      if (missing) {
+        findings.push({
+          code: "OAS-RUNTIME-013",
+          severity: "blocker",
+          message:
+            `Gate "${gateLabel(node)}" declares metadata.cinatra.artifactReview.targetsInput ` +
+            `but ${missing}. The pause message then carries no review targets, ` +
+            `so the application opens no artifact review. A review gate is an ` +
+            `InputMessageNode with surfaceGateInputs: true whose declared inputs ` +
+            `include the targets input. ${HITL_GATE_DOC}`,
+          location: path,
+          source: "deterministic",
+        });
+      }
+    }
 
     if (componentType === "PluginInputMessageNode") {
       findings.push({
