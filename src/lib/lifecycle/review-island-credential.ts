@@ -15,10 +15,7 @@ import "server-only";
 // src>`: no Authorization header, no custom header, and — cross-site — no
 // ambient cookie. The URL IS the whole request. So the URL has to carry the
 // authorization, which makes it a bearer, and everything below exists to make
-// that bearer as small as a bearer can be made. This is the same reasoning, and
-// deliberately the same construction, as the capture capability
-// (`capture-capability.ts`); the two are siblings, and a reader who understands
-// one understands this.
+// that bearer as small as a bearer can be made.
 //
 // WHAT IS SEALED, AND WHY EACH FIELD:
 //   orgId, userId, jti     — the PRINCIPAL, derived from the WIDGET principal

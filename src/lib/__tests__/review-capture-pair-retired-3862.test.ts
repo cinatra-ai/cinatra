@@ -15,8 +15,10 @@
  * that read them for a surface: the page's loader, the repair pairing, the
  * island's capture road and the streamed promise each target carried.
  *
- * What stays for the next unit: the capture route, the capture store and its
- * view module (the route still serves old stored bytes until it leaves).
+ * The second part of leg 8 then removed what had no reader left: the capture
+ * route, the capture store, its view module and the broker minter's module.
+ * Its last part removed the sealed capture capability, its serving ladder and
+ * the route guard's exemption for the capture path, which no handler serves.
  *
  * Source text, not behaviour: the invariant is the absence of every name (the
  * technique of `cms-preview-signed-target-retired-3862.test.ts`).
@@ -31,17 +33,11 @@ const REVIEW_DIR = "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[r
 const PAIR_COMPONENT = `${REVIEW_DIR}/review-pinned-capture.tsx`;
 const SURFACE_MODEL = "src/lib/artifacts/review-surface-model.ts";
 
-// The capture route reads the store until the next unit removes it with the
-// store; it is the one place under src/app that may still name the store, and
-// the store is the only retired name it may carry.
-const STAYS_FOR_NOW = "src/app/api/lifecycle-views/capture/";
-const STAYS_FOR_NOW_MODULE = "cms-preview-capture-store";
 // Two suites that were on main before this change replace the store with a
 // `vi.mock` factory, to keep a database read out of the review road the loaders
-// used to call. Nothing they load imports the store any more, so the mock is
-// inert (it is not a use). They are main's files, left as they are (an edit that
-// adds no test cannot pass the red-first check); the next unit removes the store
-// and these two lines with it. Exactly these two paths, exactly this one module.
+// used to call. The store is gone, so the mock is inert (it is not a use). They
+// are main's files, left as they are (an edit that adds no test cannot pass the
+// red-first check). Exactly these two paths, exactly this one module.
 const INERT_STORE_MOCKS = new Set([
   "src/app/artifacts/[id]/__tests__/review-gate-ports-provenance.test.ts",
   "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
@@ -110,13 +106,12 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
     const hits: string[] = [];
     for (const file of files) {
       const rel = path.relative(REPO_ROOT, file);
-      const capture = rel.startsWith(STAYS_FOR_NOW);
       const text = readFileSync(file, "utf8");
       for (const name of RETIRED_NAMES) {
         if (new RegExp(`\\b${name}\\b`).test(text)) hits.push(`${rel} :: ${name}`);
       }
       for (const mod of RETIRED_MODULES) {
-        if ((capture || INERT_STORE_MOCKS.has(rel)) && mod === STAYS_FOR_NOW_MODULE) continue;
+        if (INERT_STORE_MOCKS.has(rel) && mod === "cms-preview-capture-store") continue;
         if (text.includes(mod)) hits.push(`${rel} :: ${mod}`);
       }
     }
@@ -148,13 +143,24 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
     expect(view.match(/<\s*VerificationSummaryCard\b/g) ?? []).toHaveLength(1);
   });
 
-  it("the capture route, the store and its view stay for the next unit", () => {
+  it("the capture route, the store, its view and the broker minter's module are gone", () => {
     for (const rel of [
       "src/app/api/lifecycle-views/capture/route.ts",
       "src/lib/artifacts/cms-preview-capture-store.ts",
       "src/lib/artifacts/cms-preview-capture-view.ts",
+      "src/lib/lifecycle/widget-capture-egress.ts",
     ]) {
-      expect(existsSync(path.join(REPO_ROOT, rel))).toBe(true);
+      expect(existsSync(path.join(REPO_ROOT, rel))).toBe(false);
     }
+  });
+
+  it("the sealed capture capability, its serving ladder and the guard's exemption are gone", () => {
+    for (const rel of [
+      "src/lib/lifecycle/capture-capability.ts",
+      "src/lib/lifecycle/capture-capability-serving.ts",
+    ]) {
+      expect(existsSync(path.join(REPO_ROOT, rel))).toBe(false);
+    }
+    expect(read("src/lib/auth-route-guard.ts")).not.toContain("/api/lifecycle-views/capture\"");
   });
 });
