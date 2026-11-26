@@ -1629,6 +1629,58 @@ describe("XV.1: Allow waits for the items", () => {
     expect(allowOf(root).disabled).toBe(false);
   });
 
+  it("a second load of the SAME frame (a reload or redirect inside it) discards the report: only a report after it shows the items", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await shown(frame);
+    expect(allowOf(root).disabled).toBe(false);
+    // The island's document reloads or redirects itself: React's src is unchanged, the frame element is the same.
+    await loaded(frame);
+    expect(root.querySelector("iframe")).toBe(frame);
+    expect(allowOf(root).disabled).toBe(true);
+    expect(root.querySelector('[data-island-load-state="loading"]')).not.toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).toBeNull();
+    // A report that arrived before a later load belongs to the document that load replaced.
+    await reported(frame);
+    await loaded(frame);
+    expect(allowOf(root).disabled).toBe(true);
+    await reported(frame);
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("a second load of the same frame that never reports fails at its own time limit, and Allow stays disabled", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("chat_thread", okDoor()));
+      await settle();
+      const frame = await frameOf(root);
+      await shown(frame);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(allowOf(root).disabled).toBe(false);
+      await loaded(frame);
+      expect(allowOf(root).disabled).toBe(true);
+      // The time limit runs from this load, not from the frame's first navigation.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+      expect(root.querySelector('[data-island-load-state="loading"]')).not.toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+      expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+      expect(allowOf(root).disabled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("the report and the load are both needed, in either order, for every items row", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS, { ...ITEMS, label: "Proposed post" }] }));
     const root = await rootOf(mountOn("chat_thread", okDoor()));

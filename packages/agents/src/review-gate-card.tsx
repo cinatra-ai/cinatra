@@ -2359,6 +2359,12 @@ function ReviewTargetIsland({
     /** The frame served the island's one empty document, on a host that draws
      *  that reading as an empty panel (`onSettledEmpty`). */
     empty: false,
+    /** How many `load` events this attempt's frame element has fired (cinatra#3089). */
+    loads: 0,
+    /** The `loads` count when the last accepted island report arrived: a report is stamped with the load it belongs to. */
+    reportedAt: 0,
+    /** When a later load of the same frame restarted the time limit (0: never). */
+    restartedAt: 0,
   });
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const protocolClock = useRef({ navigation: 0, progress: 0 });
@@ -2367,13 +2373,24 @@ function ReviewTargetIsland({
   // that a panel mounted. A generic error page, a sign-in page or a redirect target loads too, but never says so: it
   // stays loading until the bound below turns it into the failed state. The island's empty document keeps its own
   // reading. Every other host reads the load event alone, as before.
+  //
+  // EACH LOAD NEEDS ITS OWN REPORT (cinatra#3089, the same-frame leg). The frame's document can be replaced without React
+  // changing `src`: the island reloads itself, or redirects to a sign-in or error page. The parent sees each of those as
+  // another `load` of the same frame element. The order rule: a report that arrived before the FIRST load of an attempt
+  // counts with that first load (stamp 0 or 1 at load 1); for every later load only a report that arrived after that load
+  // counts (stamp equal to the load count). Each later load discards the stored report and restarts the time limit.
   const awaitsPanelReport = useCallback(
-    (current: { loaded: boolean; empty: boolean; ready: boolean; progress: number }) =>
-      onLoadState !== undefined && current.loaded && !current.empty && (!current.ready || current.progress === 0),
+    (current: { loaded: boolean; empty: boolean; ready: boolean; progress: number; loads: number; reportedAt: number }) =>
+      onLoadState !== undefined &&
+      current.loaded &&
+      !current.empty &&
+      (!current.ready ||
+        current.progress === 0 ||
+        !(current.reportedAt === current.loads || (current.loads === 1 && current.reportedAt === 0))),
     [onLoadState],
   );
   if (load.identity !== identity) {
-    setLoad({ identity, src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
+    setLoad({ identity, src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false, loads: 0, reportedAt: 0, restartedAt: 0 });
   } else if (load.src !== src) {
     // A HOST THAT ASKS FOR THE LOAD STATE (the publish card, cinatra#3089): any navigation of the frame, a palette
     // change included, replaces the document it read as loaded. It is a new attempt: the frame remounts under the next
@@ -2381,7 +2398,7 @@ function ReviewTargetIsland({
     // and the load bound starts again. Every other host keeps the work on screen across a repaint, as before.
     setLoad(
       onLoadState
-        ? { ...load, src, attempt: load.attempt + 1, loaded: false, timedOut: false, ready: false, progress: 0, empty: false }
+        ? { ...load, src, attempt: load.attempt + 1, loaded: false, timedOut: false, ready: false, progress: 0, empty: false, loads: 0, reportedAt: 0, restartedAt: 0 }
         : { ...load, src },
     );
   }
@@ -2429,13 +2446,13 @@ function ReviewTargetIsland({
         if (progress.type === "island-ready") {
           if (current.ready) return current;
           protocolClock.current.progress = Date.now();
-          return { ...current, ready: true };
+          return { ...current, ready: true, reportedAt: current.loads };
         }
         // Only island-ready cancels the initial-response bound. An unsolicited
         // panel message before that cannot manufacture a ready document.
         if (!current.ready) return current;
         protocolClock.current.progress = Date.now();
-        return { ...current, progress: current.progress + 1 };
+        return { ...current, progress: current.progress + 1, reportedAt: current.loads };
       });
     };
     window.addEventListener("message", onMessage);
@@ -2459,7 +2476,7 @@ function ReviewTargetIsland({
       ? Date.now()
       : load.ready
         ? protocolClock.current.progress
-        : protocolClock.current.navigation;
+        : Math.max(protocolClock.current.navigation, load.restartedAt);
     const remaining = Math.max(0, bound - (Date.now() - started));
     const timer = setTimeout(() => {
       setLoad((current) =>
@@ -2467,7 +2484,7 @@ function ReviewTargetIsland({
       );
     }, remaining);
     return () => clearTimeout(timer);
-  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused, waits, awaitsReport, awaitsPanelReport]);
+  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, load.loads, load.restartedAt, bound, refused, waits, awaitsReport, awaitsPanelReport]);
 
   // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
   // load bag is keyed on, and for the same reason: a palette repaint is the SAME
@@ -2656,36 +2673,44 @@ function ReviewTargetIsland({
             // `null`: the denial was then taken for a drawn target.
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
             const emptyIsSettled = onSettledEmpty !== undefined;
-            setLoad((current) =>
-              current.identity === identity && current.attempt === attempt
-                ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
-                  // leg). Every denial this island serves is an EMPTY painted
-                  // rectangle — that is the shape §IV requires, so that a reader
-                  // who may not see the item is indistinguishable from one looking
-                  // at an item that is not there. But `onLoad` fires for that
-                  // document exactly as it does for a drawn target, so the
-                  // skeleton came down and the reader was left looking at a flat
-                  // panel: no content, no skeleton and no reason. Plan (A) §4.1:
-                  // the card "always shows you something; it is never blank".
-                  //
-                  // ONLY THE DENIAL TURNS IT, and nothing else: a document this
-                  // card cannot read is left exactly where it always was, so the
-                  // one thing that changes is the one case that produced a blank
-                  // panel. A preview that is not there is drawn as a preview that
-                  // is not there, which is a state that HAS a drawing.
-                  //
-                  // A HOST WHOSE DRAWING HAS AN EMPTY READING (`onSettledEmpty`,
-                  // the publish card's items row, cinatra#4738) draws that same
-                  // document as its empty panel: it is settled, not failed, and
-                  // it has nothing to retry. A frame that never answers still
-                  // reaches the failed state through the bound above.
-                  servedTheDenial
-                  ? emptyIsSettled
-                    ? { ...current, loaded: true, timedOut: false, empty: true }
-                    : { ...current, loaded: false, timedOut: true, empty: false }
-                  : { ...current, loaded: true, empty: false }
-                : current,
-            );
+            // A LATER LOAD OF THE SAME FRAME (cinatra#3089): for a host that reads the load state, the document it proved
+            // is gone. Its report is discarded, the row goes back to loading and the time limit starts again; only a
+            // report after this load shows it again. Every other host reads this load as before.
+            const freshProof = onLoadState !== undefined;
+            setLoad((current) => {
+              if (current.identity !== identity || current.attempt !== attempt) return current;
+              const loads = current.loads + 1;
+              const base =
+                freshProof && loads > 1
+                  ? { ...current, loads, ready: false, progress: 0, timedOut: false, restartedAt: Date.now() }
+                  : { ...current, loads };
+              // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
+              // leg). Every denial this island serves is an EMPTY painted
+              // rectangle — that is the shape §IV requires, so that a reader
+              // who may not see the item is indistinguishable from one looking
+              // at an item that is not there. But `onLoad` fires for that
+              // document exactly as it does for a drawn target, so the
+              // skeleton came down and the reader was left looking at a flat
+              // panel: no content, no skeleton and no reason. Plan (A) §4.1:
+              // the card "always shows you something; it is never blank".
+              //
+              // ONLY THE DENIAL TURNS IT, and nothing else: a document this
+              // card cannot read is left exactly where it always was, so the
+              // one thing that changes is the one case that produced a blank
+              // panel. A preview that is not there is drawn as a preview that
+              // is not there, which is a state that HAS a drawing.
+              //
+              // A HOST WHOSE DRAWING HAS AN EMPTY READING (`onSettledEmpty`,
+              // the publish card's items row, cinatra#4738) draws that same
+              // document as its empty panel: it is settled, not failed, and
+              // it has nothing to retry. A frame that never answers still
+              // reaches the failed state through the bound above.
+              return servedTheDenial
+                ? emptyIsSettled
+                  ? { ...base, loaded: true, timedOut: false, empty: true }
+                  : { ...base, loaded: false, timedOut: true, empty: false }
+                : { ...base, loaded: true, empty: false };
+            });
           }}
         />
       )}
@@ -2720,6 +2745,9 @@ function ReviewTargetIsland({
                   ready: false,
                   progress: 0,
                   empty: false,
+                  loads: 0,
+                  reportedAt: 0,
+                  restartedAt: 0,
                 }));
               }}
             />
@@ -3039,7 +3067,8 @@ export function ReviewTargetFrame({
   /** Told the island's load state each time it changes (cinatra#3089): the publish card keeps Allow disabled until
    *  every items panel reads `loaded` (design XV.1). For a host that passes it, `loaded` needs the frame's load AND the
    *  island's own `island-ready` and `panel-mounted` for that attempt, and a navigation of the frame (a palette
-   *  change) is a new load. */
+   *  change) is a new load. Every later `load` of the same frame element (the document reloaded or redirected itself)
+   *  discards the earlier report and needs a report after it. */
   onLoadState?: (state: IslandLoadState) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
