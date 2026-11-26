@@ -207,7 +207,7 @@ describe("cinatra#3089 — the approved send fixes each message at its send time
     expect(to(f.sent)).toEqual(["p1@example.com", "p3@example.com"]);
     expect(result.status).toBe("failed");
     expect(result.sentCount).toBe(2);
-    expect(result.errorMessage).toContain("still waits on an open decision");
+    expect(result.errorMessage).toContain("its body was refused at its send time (body_decision_open)");
     expect(result.errorMessage).toContain("draft 2");
     expect(f.log).toContain("release art-2");
     expect([...f.rows.values()].map((r) => r.phase)).toEqual(["finalized", "finalized"]);
@@ -268,7 +268,31 @@ describe("cinatra#3089 — the approved send fixes each message at its send time
     expect(to(f.sent)).toEqual(["p1@example.com", "p3@example.com"]);
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain("draft 2");
-    expect(result.errorMessage).toContain("is not its current revision");
+    expect(result.errorMessage).toContain("its body was refused when its mail was claimed (body_superseded)");
+  });
+
+  it("S7 a body reader's returned text (a store error) reaches neither the answer nor any log line, at the check, at the send time or under the lock", async () => {
+    const RAW = "revision rev-2 of artifact art-2 could not be read: connect ECONNREFUSED postgres://admin:hunter2@db.internal:5432/app (owner p9@example.com)";
+    const logged: string[] = [];
+    const spies = (["warn", "error", "log", "info", "debug"] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => void logged.push(args.map(String).join(" "))),
+    );
+    try {
+      const atCheck = await fixture({ read: (id, n) => (id === "art-2" && n === 1 ? { ok: false, error: RAW } : undefined) }).start();
+      expect(atCheck.errorMessage).toContain("approved body 2 was refused (body_read_failed)");
+      const atSend = await fixture({ read: (id, n) => (id === "art-2" && n === 2 ? { ok: false, error: RAW } : undefined) }).start();
+      expect(atSend.errorMessage).toContain("its body was refused at its send time (body_read_failed)");
+      const underLock = await fixture({ underLock: (id) => (id === "art-2" ? RAW : null) }).start();
+      expect(underLock.errorMessage).toContain("its body was refused when its mail was claimed (body_read_failed)");
+      for (const text of [atCheck.errorMessage, atSend.errorMessage, underLock.errorMessage, ...logged]) {
+        expect(text).not.toContain("postgres://");
+        expect(text).not.toContain("hunter2");
+        expect(text).not.toContain("p9@example.com");
+        expect(text).not.toContain("ECONNREFUSED");
+      }
+    } finally {
+      for (const s of spies) s.mockRestore();
+    }
   });
 
   it("S5 the contact the mail is recorded for is the released entry's", async () => {

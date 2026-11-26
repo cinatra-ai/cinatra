@@ -66,8 +66,8 @@ export function createDefaultSendEmail(): TriggerEmailSendDeps["sendEmail"] {
  * THE FIXED REASONS OF THE APPROVED SEND (cinatra#3089). No text from the mail connector, the provider or the send
  * record's store reaches the answer or the log: a provider's error can quote the recipient's address (a rejected
  * recipient) and a mailbox status can name the mailbox, so each failure stage answers one of these codes, and the
- * raw text is dropped (it is kept nowhere). The one reason passed on is a refusal under the revision's lock
- * (`refused`), whose text is the host's own decision-state reading of the body.
+ * raw text is dropped (it is kept nowhere). A refusal of the body (under the revision's lock, at the check or at the
+ * send time) passes on only the code `bodyRefusalCode` reads from it.
  */
 export const SEND_FAILURE_CODE = {
   claim: "send_record_claim_failed",
@@ -85,3 +85,36 @@ export const IN_DOUBT_MANUAL_CHECK =
   "provider may have accepted it. Check the sent mail of the connected mailbox for each message named (by its contact, " +
   "in this campaign) to learn whether it went out. Nothing in the app clears an in-doubt mark; this is a manual check, " +
   "and a message that did not go out must be sent by hand";
+
+/**
+ * THE FIXED CODE OF A BODY READ THAT REFUSED (cinatra#3089). The decided-revision readers return a refusal as text,
+ * and a read that failed in the store embeds the store's own error in it (a connection, a query or a stored value):
+ * that text never reaches the answer or the log. The send passes on only the code read here from the readers' own
+ * fixed phrases; any other text, a failed read included, answers `body_read_failed`.
+ */
+export function bodyRefusalCode(text: string): string {
+  // A failed read ("... could not be read: <store text>") is matched first, so no store text can pick another code.
+  if (/ could not be read/.test(text)) return "body_read_failed";
+  const known: Array<[RegExp, string]> = [
+    [/ is not its current revision\b/, "body_superseded"],
+    [/ was decided against /, "body_decided_against"],
+    [/ still waits on an open decision$/, "body_decision_open"],
+    [/ has a repair filed against it$/, "body_repaired"],
+    [/ was not approved by a person$| was approved, but not by a person of organisation /, "body_not_approved"],
+    [/ was not filed in run /, "body_not_filed_in_run"],
+    [/ is not an artifact this organisation can see$/, "body_not_visible"],
+    [/ is of type "/, "body_wrong_type"],
+  ];
+  return known.find(([re]) => re.test(text))?.[1] ?? "body_read_failed";
+}
+
+/**
+ * THE WORK CAP OF THE PROVENANCE CHECK of one reference-only send (cinatra#3089). Each run looked up costs a filings
+ * query, and each artifact it filed a type read on the synchronous objects store. One send looks up at most `runs`
+ * runs (the call's run and every recorded writer of the two bundles) and reads at most `filings` filed artifacts in
+ * all: the call's run, asked first, with `perRun` (the reader's own cap) as its cap, and each writer run with an
+ * equal share of the rest (never more than `perRun`); a run that filed more than its cap counts as filed. A send with more runs is refused
+ * (`provenance_over_cap`), never read as "no bodies filed for review", which would mail the bundle. A real campaign
+ * has the call's run and one or two writer runs, which keep the reader's full cap of 200 each.
+ */
+export const PROVENANCE_CHECK_CAP = { runs: 20, filings: 600, perRun: 200 } as const;

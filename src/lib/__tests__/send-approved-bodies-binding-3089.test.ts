@@ -390,7 +390,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const fx = makeFixture({ readDecidedBody: "production" });
     const result = await fx.start({ releasedList: approved });
     expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain(`approved body 2: ${UNSEEN}`);
+    expect(result.errorMessage).toContain("approved body 2 was refused (body_not_visible)");
     expect(result.errorMessage).not.toMatch(/type|revision rev-2/);
     expect(fx.sendEmail).not.toHaveBeenCalled();
     expect(fx.bindBody).not.toHaveBeenCalled();

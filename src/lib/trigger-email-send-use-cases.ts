@@ -52,7 +52,13 @@ import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 import type { PublishDecisionRow } from "@cinatra-ai/agents/publish-decision-store";
 import type { RevisionEffectLedger, RevisionEffectVerify } from "./artifacts/materialization-ledger";
-import { createDefaultSendEmail, IN_DOUBT_MANUAL_CHECK, SEND_FAILURE_CODE } from "./approved-body-send";
+import {
+  bodyRefusalCode,
+  createDefaultSendEmail,
+  IN_DOUBT_MANUAL_CHECK,
+  PROVENANCE_CHECK_CAP,
+  SEND_FAILURE_CODE,
+} from "./approved-body-send";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -155,7 +161,9 @@ export type TriggerEmailSendDeps = {
   // before any mail, so the bundle's text never bypasses the reviewed bodies.
   // Defaults to `runHasFiledReviewArtifacts`: the run's mid-run filings in the
   // actor's organization, each read through the access-checked objects read.
-  readRunReviewedBodies?: (runId: string, actor: PrimitiveActorContext) => Promise<boolean>;
+  // A run that filed more than `cap` artifacts counts as filed, unread
+  // (PROVENANCE_CHECK_CAP).
+  readRunReviewedBodies?: (runId: string, actor: PrimitiveActorContext, cap: number) => Promise<boolean>;
   /**
    * The run this call belongs to, read from the server's own context of the
    * call (cinatra#3089), with the verified step that made the call; null when
@@ -332,7 +340,7 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
         objectTypeId: EMAIL_BODY_TYPE_ID,
       });
     },
-    async readRunReviewedBodies(runId, actor) {
+    async readRunReviewedBodies(runId, actor, cap) {
       const orgId = actor.orgId;
       if (!orgId) {
         throw new Error("the sending actor carries no organization, so the filings of its run cannot be read");
@@ -346,6 +354,7 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
         orgId,
         runId,
         objectTypeId: EMAIL_BODY_TYPE_ID,
+        cap,
       });
     },
     // The run of the call is a verified channel of the request frame only: an
@@ -1156,25 +1165,20 @@ async function runInitialSend(args: {
     // (`readObjectRuns`). A run id in a bundle's data decides nothing here. A
     // call that carries no run (a person's direct call) on bundles no run ever
     // wrote keeps the reference-only send: no body of theirs was filed for review.
+    //
+    // THE CHECK IS CAPPED (PROVENANCE_CHECK_CAP) and stops at the first run
+    // found to have filed: the call's run is asked before any writer is read.
+    // A reader's thrown text is never passed on (a store error may quote stored
+    // data): a fixed code.
     if (!released) {
-      const writerRuns: string[] = [];
-      for (const [ref, env] of [
-        [input.approvedDraftBundleRef, draftEnv],
-        [input.confirmedRecipientsRef, recipEnv],
-      ] as const) {
-        const objectId = textOf(env.id) ?? ref;
-        try {
-          writerRuns.push(...(await readObjectRuns(objectId, actor)));
-        } catch (err) {
-          refuse(`which runs wrote object ${objectId} could not be read: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-      for (const runId of [...new Set([...(callRunId ? [callRunId] : []), ...writerRuns])]) {
+      const checked = new Set<string>();
+      const check = async (runId: string, cap: number) => {
+        checked.add(runId);
         let reviewed = true;
         try {
-          reviewed = await readRunReviewedBodies(runId, actor);
-        } catch (err) {
-          refuse(`whether run ${runId} filed artifacts for review could not be read: ${err instanceof Error ? err.message : String(err)}`);
+          reviewed = await readRunReviewedBodies(runId, actor, cap);
+        } catch {
+          refuse(`whether run ${runId} filed artifacts for review could not be read (run_filings_unreadable)`);
         }
         if (reviewed) {
           const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
@@ -1182,7 +1186,28 @@ async function runInitialSend(args: {
             `The send was refused before any email went out: run ${runId} filed artifacts for review, and the calling step holds no list a person released`,
           );
         }
+      };
+      const { runs: runsCap, filings: filingsCap, perRun } = PROVENANCE_CHECK_CAP;
+      if (callRunId) await check(callRunId, perRun);
+      const writerRuns = new Set<string>();
+      for (const [ref, env] of [
+        [input.approvedDraftBundleRef, draftEnv],
+        [input.confirmedRecipientsRef, recipEnv],
+      ] as const) {
+        const objectId = textOf(env.id) ?? ref;
+        try {
+          for (const runId of await readObjectRuns(objectId, actor)) writerRuns.add(runId);
+        } catch {
+          refuse(`which runs wrote object ${objectId} could not be read (writer_runs_unreadable)`);
+        }
       }
+      const unchecked = [...writerRuns].filter((runId) => !checked.has(runId));
+      if (checked.size + unchecked.length > runsCap) {
+        refuse(`the bundles were written by more runs than one send looks up (${runsCap}) (provenance_over_cap)`);
+      }
+      // The call's run took up to `perRun` reads; the writers share the rest of the cap.
+      const share = Math.min(perRun, Math.floor((filingsCap - (callRunId ? perRun : 0)) / Math.max(1, unchecked.length)));
+      for (const runId of unchecked) await check(runId, share);
     }
 
     // THE APPROVED FORM mails, for each draft with an address, the text of ITS
@@ -1309,7 +1334,8 @@ async function runInitialSend(args: {
           actor,
         );
         if (!read.ok) {
-          return refuse(`approved body ${body.position}: ${read.error}`);
+          // The reader's text is never passed on (a failed read embeds the store's error): a fixed code.
+          return refuse(`approved body ${body.position} was refused (${bodyRefusalCode(read.error)})`);
         }
         const ownContact = textOf(read.data.contactId);
         if (ownContact !== undefined && ownContact !== contact) {
@@ -1501,7 +1527,8 @@ async function runInitialSend(args: {
               now = { ok: false, error: "its body could not be read at its send time (body_read_failed)" };
             }
             if (!now.ok || now.text !== approved.text) {
-              notDecidedNow = now.ok ? "its revision read another text at its send time than the one checked" : now.error;
+              // A returned refusal's text is never passed on either (a failed read embeds the store's error).
+              notDecidedNow = now.ok ? "body_changed" : bodyRefusalCode(now.error);
               throw new EffectNotStartedError(notDecidedNow);
             }
             return sendApprovedEmail(
@@ -1539,11 +1566,11 @@ async function runInitialSend(args: {
           continue;
         }
         if (failure.stage === "refused") {
-          refusedAtSend.push(`${name} was not sent, its body was refused when its mail was claimed: ${failure.reason}`);
+          refusedAtSend.push(`${name} was not sent, its body was refused when its mail was claimed (${bodyRefusalCode(failure.reason)})`);
           continue;
         }
         if (failure.stage === "not_started" && notDecidedNow !== undefined) {
-          refusedAtSend.push(`${name} was not sent, its body was refused at its send time: ${notDecidedNow}`);
+          refusedAtSend.push(`${name} was not sent, its body was refused at its send time (${notDecidedNow})`);
           continue;
         }
         if (failure.stage === "mark") {

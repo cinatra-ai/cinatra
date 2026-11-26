@@ -429,7 +429,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
   it("R2 an approved revision that cannot be read refuses the whole send", async () => {
     const store = makeStore();
     store.get("art-2")!.revisions = {};
-    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 2: the revision could not be read");
+    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 2 was refused (body_read_failed)");
   });
 
   it("R3 an approved revision that is not the artifact's current revision refuses the whole send", async () => {
@@ -437,16 +437,16 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     // The body was filed again after the approval: rev-1b supersedes rev-1.
     store.get("art-1")!.revisions["rev-1b"] = "Regenerated body one";
     store.get("art-1")!.latest = "rev-1b";
-    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 1: revision rev-1 is not its current revision");
+    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 1 was refused (body_superseded)");
   });
 
   it("R4 a revision of another organization or of another type refuses the whole send", async () => {
     const other = makeStore();
     other.get("art-1")!.orgId = "org-2";
-    await expectRefused(makeFixture({ store: other }), { releasedList: approved }, "is not a live artifact of organization org-1");
+    await expectRefused(makeFixture({ store: other }), { releasedList: approved }, "approved body 1 was refused (body_read_failed)");
     const typed = makeStore();
     typed.get("art-2")!.type = "@cinatra-ai/blog:post";
-    await expectRefused(makeFixture({ store: typed }), { releasedList: approved }, 'artifact art-2 is of type "@cinatra-ai/blog:post"');
+    await expectRefused(makeFixture({ store: typed }), { releasedList: approved }, "approved body 2 was refused (body_wrong_type)");
   });
 
   it("R5 the list names one body twice", async () => {
@@ -508,7 +508,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     expect(result.errorMessage).toContain(
       "REVIEWED_ARTIFACTS_REQUIRED: The send was refused before any email went out: run run-1 filed artifacts for review, and the calling step holds no list a person released",
     );
-    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.objectContaining({ orgId: "org-1" }));
+    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.objectContaining({ orgId: "org-1" }), 200);
     expect(fx.sendEmail).not.toHaveBeenCalled();
     expect(fx.writeBody).not.toHaveBeenCalled();
     expect(fx.emitEmailFanout).not.toHaveBeenCalled();
@@ -519,7 +519,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     const result = await fx.start({});
     expect(result.status).toBe("failed");
     expect(result.errorMessage).toContain(
-      "whether run run-1 filed artifacts for review could not be read: the ledger is unavailable",
+      "whether run run-1 filed artifacts for review could not be read (run_filings_unreadable)",
     );
     expect(fx.sendEmail).not.toHaveBeenCalled();
     expect(fx.emitEmailFanout).not.toHaveBeenCalled();

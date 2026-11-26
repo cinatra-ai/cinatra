@@ -419,7 +419,7 @@ describe("cinatra#3089 — the run is the run of the call, never a bundle field"
     expect(result.status).toBe("completed");
     expect(fx.readPublishDecision).not.toHaveBeenCalled();
     expect(fx.readDecidedBody).not.toHaveBeenCalled();
-    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.anything());
+    expect(fx.readRunReviewedBodies).toHaveBeenCalledWith("run-1", expect.anything(), expect.any(Number));
     expect(fx.bindBody).not.toHaveBeenCalled();
   });
 });
