@@ -92,8 +92,16 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
       unknown
     >;
     expect(publishMeta.publishes).toBe(true);
-    // The card shows the words that go out; they also carry the page's title.
-    expect(publishMeta.publishRows).toEqual([{ label: "Post text", input: "postText" }]);
+    // The step declares exactly the two site tools it calls: the model is offered
+    // those and no other, and the person's released publish decision is used for
+    // the site write only for a step that declares the tool it calls.
+    expect(publishMeta.tools).toEqual(["wordpress_site_tools_list", "wordpress_site_tool_write"]);
+    // The card shows the page's title, then the words that go out: two rows,
+    // each a declared input of the publishing step.
+    expect(publishMeta.publishRows).toEqual([
+      { label: "Title", input: "postTitle" },
+      { label: "Post text", input: "postText" },
+    ]);
     // The write-back is NOT a publishing step: one publish card per run.
     const writeMeta = (components.write_address.metadata as Record<string, unknown>).cinatra as Record<
       string,
@@ -118,6 +126,10 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const gateMeta = (gate.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(gateMeta.artifactReview).toEqual({ targetsInput: "reviewTargets" });
     expect(gateMeta.requiresApproval).toBe(true);
+    // The runtime writes the value of the marked input into the pause's message
+    // only for a gate that sets this flag; without it the application reads no
+    // target set and the review never opens.
+    expect(gateMeta.surfaceGateInputs).toBe(true);
     // artifacts_get answers only `{ artifact }`. The target set reaches the gate
     // only because the host echoes the call's input back on this flag, so the
     // gather step's declared output and its edge into the gate's marked input
@@ -144,13 +156,50 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(control).toEqual([
       "start->gather_review_target",
       "gather_review_target->review_post",
-      "review_post->read_post_text",
+      "review_post->check_review",
+      "check_review->read_post_record",
+      "read_post_record->read_post_text",
       "read_post_text->publish",
       "publish->write_address",
       "write_address->end",
     ]);
-    // The old record read is gone: nothing of the artifact's current state is read.
-    expect(components.read_post_record).toBeUndefined();
+    // The review's answer is checked before anything is read behind the review:
+    // the check reads nothing itself (checkOnly) and hands on only the approved
+    // artifact, which the record read behind it reads.
+    const checkData = components.check_review.data as {
+      tool?: string;
+      input?: { name?: string; input?: Record<string, unknown> };
+    };
+    expect(checkData.tool).toBe("extension_tool");
+    expect(checkData.input?.name).toBe("approved_post_text");
+    expect(checkData.input?.input).toEqual({
+      reviewDecision: "{{ reviewDecision }}",
+      artifactId: "{{ postArtifactId }}",
+      checkOnly: true,
+    });
+    // The record is read again only after that check, only of the artifact the
+    // check approved; it writes nothing and goes only to the read step.
+    const recordData = components.read_post_record.data as {
+      tool?: string;
+      input?: Record<string, unknown>;
+    };
+    expect(recordData.tool).toBe("artifacts_get");
+    expect(recordData.input).toEqual({ artifactId: "{{ postArtifactId }}" });
+    const dataEdges = (
+      oas.data_flow_connections as Array<{
+        source_node: Ref;
+        source_output: string;
+        destination_node: Ref;
+        destination_input: string;
+      }>
+    ).map(
+      (e) =>
+        `${e.source_node.$component_ref}.${e.source_output}->${e.destination_node.$component_ref}.${e.destination_input}`,
+    );
+    expect(dataEdges).toContain("check_review.artifactId->read_post_record.postArtifactId");
+    expect(dataEdges.filter((e) => e.startsWith("read_post_record.artifact->"))).toEqual([
+      "read_post_record.artifact->read_post_text.postRecord",
+    ]);
   });
 
   it("Pin 4c: the words read for publishing are the revision the review approved, not the one the run started with", () => {
@@ -171,6 +220,7 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(readData.input?.input).toEqual({
       reviewDecision: "{{ reviewDecision }}",
       artifactId: "{{ postArtifactId }}",
+      postRecord: "{# pyagentspec-input-hint: {{ postRecord }} #}{{ postRecord | tojson }}",
     });
     const tools = ((pkg.cinatra ?? {}) as { tools?: unknown }).tools;
     expect(tools).toContainEqual({
@@ -190,6 +240,8 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     );
     expect(edges).toContain("review_post.reviewDecision->read_post_text.reviewDecision");
     expect(edges).toContain("read_post_text.artifactId->publish.postArtifactId");
+    // The page's title the card shows in its own row is the one the read step answers.
+    expect(edges).toContain("read_post_text.title->publish.postTitle");
     expect(edges).toContain(
       "read_post_text.representationRevisionId->publish.postRepresentationRevisionId",
     );
@@ -279,13 +331,14 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     expect(skill).not.toContain("blog_post_publish_wordpress_delete");
   });
 
-  it("takes the page's title only from the reviewed words, never from the artifact's current state", () => {
-    // red-first-expect: to contain 'you never take a title from the artif
-    expect(skill).toContain("Take the page's title from the first heading line of `postText`");
-    expect(skill).toContain("you never take a title from the artifact's current state");
-    // No heading in the pinned words: nothing is published.
-    expect(skill).toContain("When `postText` carries no heading line");
-    // The publish step is handed no record of the artifact at all.
+  it("takes the page's title only from postTitle, the title the publish card shows in its own row", () => {
+    // red-first-expect: to contain 'The page\'s title is `postTitle`, exa
+    expect(skill).toContain("The page's title is `postTitle`, exactly as given");
+    expect(skill).toContain("never take one from a section heading of `postText`");
+    // No title on the card: nothing is published.
+    expect(skill).toContain("An empty `postTitle` means there is no title the person saw");
+    expect(skill).toContain("Never publish a page whose title the person did not see.");
+    // The publish step is handed the title and the words, and no record of the artifact.
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const inputs = (components.publish.inputs as Array<{ title: string }>).map((i) => i.title).sort();
     expect(inputs).toEqual([
@@ -293,6 +346,7 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
       "postArtifactId",
       "postRepresentationRevisionId",
       "postText",
+      "postTitle",
       "truncated",
     ]);
   });

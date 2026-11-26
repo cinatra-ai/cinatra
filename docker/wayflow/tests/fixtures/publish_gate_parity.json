@@ -1,5 +1,5 @@
 {
-  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress ed523da6, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs declare (the WordPress pack declares it itself at its pin, and parks on the host's review of the pinned revision, gather_review_target then review_post, before anything is read for publishing, and the read step takes the revision the review approved from the review step's answer); every value is a string. The third has a publishing step first after start and a second one.",
+  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 0602af42, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs declare (the WordPress pack declares it itself at its pin, and parks on the host's review of the pinned revision, gather_review_target then review_post, then check_review validates the approval (it reads nothing) and read_post_record reads the post's record again, all before anything is read for publishing; the read step takes the revision the review approved from the review step's answer and answers the page's title, which goes to the publishing step as postTitle; the review step sets surfaceGateInputs, so the pause carries the target set, and the publishing step declares its two site tools); every value is a string. The third has a publishing step first after start and a second one.",
   "gatePrefix": "cinatra_publish_gate__",
   "flows": [
     {
@@ -50,6 +50,12 @@
             "$component_ref": "review_post"
           },
           {
+            "$component_ref": "check_review"
+          },
+          {
+            "$component_ref": "read_post_record"
+          },
+          {
             "$component_ref": "read_post_text"
           },
           {
@@ -85,9 +91,29 @@
           },
           {
             "component_type": "ControlFlowEdge",
-            "name": "review_post_to_read_post_text",
+            "name": "review_post_to_check_review",
             "from_node": {
               "$component_ref": "review_post"
+            },
+            "to_node": {
+              "$component_ref": "check_review"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "check_review_to_read_post_record",
+            "from_node": {
+              "$component_ref": "check_review"
+            },
+            "to_node": {
+              "$component_ref": "read_post_record"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "read_post_record_to_read_post_text",
+            "from_node": {
+              "$component_ref": "read_post_record"
             },
             "to_node": {
               "$component_ref": "read_post_text"
@@ -175,6 +201,78 @@
           },
           {
             "component_type": "DataFlowEdge",
+            "name": "start_postArtifactId_to_check_review_postArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "postArtifactId",
+            "destination_node": {
+              "$component_ref": "check_review"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "review_post_reviewDecision_to_check_review_reviewDecision",
+            "source_node": {
+              "$component_ref": "review_post"
+            },
+            "source_output": "reviewDecision",
+            "destination_node": {
+              "$component_ref": "check_review"
+            },
+            "destination_input": "reviewDecision"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_check_review_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "check_review"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "check_review_artifactId_to_read_post_record_postArtifactId",
+            "source_node": {
+              "$component_ref": "check_review"
+            },
+            "source_output": "artifactId",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "postArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_read_post_record_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "read_post_record"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_record_artifact_to_read_post_text_postRecord",
+            "source_node": {
+              "$component_ref": "read_post_record"
+            },
+            "source_output": "artifact",
+            "destination_node": {
+              "$component_ref": "read_post_text"
+            },
+            "destination_input": "postRecord"
+          },
+          {
+            "component_type": "DataFlowEdge",
             "name": "start_postArtifactId_to_read_post_text_postArtifactId",
             "source_node": {
               "$component_ref": "start"
@@ -244,6 +342,18 @@
               "$component_ref": "publish"
             },
             "destination_input": "instanceId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "read_post_text_title_to_publish_postTitle",
+            "source_node": {
+              "$component_ref": "read_post_text"
+            },
+            "source_output": "title",
+            "destination_node": {
+              "$component_ref": "publish"
+            },
+            "destination_input": "postTitle"
           },
           {
             "component_type": "DataFlowEdge",
@@ -398,15 +508,16 @@
                 "requiresApproval": true,
                 "artifactReview": {
                   "targetsInput": "reviewTargets"
-                }
+                },
+                "surfaceGateInputs": true
               }
             }
           },
-          "read_post_text": {
+          "check_review": {
             "component_type": "ApiNode",
-            "id": "read_post_text",
-            "name": "read_post_text",
-            "url": "https://example.invalid/read_post_text",
+            "id": "check_review",
+            "name": "check_review",
+            "url": "https://example.invalid/check_review",
             "http_method": "POST",
             "data": {
               "input": {
@@ -437,6 +548,90 @@
               {
                 "title": "representationRevisionId",
                 "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "read_post_record": {
+            "component_type": "ApiNode",
+            "id": "read_post_record",
+            "name": "read_post_record",
+            "url": "https://example.invalid/read_post_record",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "postArtifactId": "{{ postArtifactId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "artifact",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "read_post_text": {
+            "component_type": "ApiNode",
+            "id": "read_post_text",
+            "name": "read_post_text",
+            "url": "https://example.invalid/read_post_text",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "reviewDecision": "{{ reviewDecision }}",
+                "postArtifactId": "{{ postArtifactId }}",
+                "cinatra_run_id": "{{ cinatra_run_id }}",
+                "postRecord": "{{ postRecord }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "reviewDecision",
+                "type": "string"
+              },
+              {
+                "title": "postArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              },
+              {
+                "title": "postRecord",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "artifactId",
+                "type": "string"
+              },
+              {
+                "title": "representationRevisionId",
+                "type": "string"
               },
               {
                 "title": "text",
@@ -444,6 +639,10 @@
               },
               {
                 "title": "truncated",
+                "type": "string"
+              },
+              {
+                "title": "title",
                 "type": "string"
               }
             ],
@@ -465,6 +664,7 @@
                 "postArtifactId": "{{ postArtifactId }}",
                 "postRepresentationRevisionId": "{{ postRepresentationRevisionId }}",
                 "instanceId": "{{ instanceId }}",
+                "postTitle": "{{ postTitle }}",
                 "postText": "{{ postText }}",
                 "truncated": "{{ truncated }}"
               }
@@ -480,6 +680,10 @@
               },
               {
                 "title": "instanceId",
+                "type": "string"
+              },
+              {
+                "title": "postTitle",
                 "type": "string"
               },
               {
@@ -505,7 +709,11 @@
               "cinatra": {
                 "riskClass": "write",
                 "requiresApproval": false,
-                "publishes": true
+                "publishes": true,
+                "tools": [
+                  "wordpress_site_tools_list",
+                  "wordpress_site_tool_write"
+                ]
               }
             }
           },
