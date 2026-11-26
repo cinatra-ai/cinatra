@@ -46,7 +46,8 @@
 // fails closed with a line that names the reason. The ledger's `rules` list
 // names the rules it ratchets: a rule the base's list lacks is seeded once in
 // the pull request that adds it (cinatra#4852); a listed rule never gains an
-// entry. A base ledger without the list ratchets every rule its base copy of
+// entry, and every rule the base ratchets must still be known at the head (the
+// rule set is append-only, so a rename cannot reset a floor). A base ledger without the list ratchets every rule its base copy of
 // this script knows (zero-entry rules too); that copy unread fails closed.
 //
 // Usage:
@@ -1021,14 +1022,22 @@ export function baselineGrowth(previousDoc, currentDoc) {
   // that adds it (cinatra#4852): its standing crossings enter the ledger once,
   // the rule enters `rules`, and from the next base on it only shrinks. A rule
   // the base lists can never gain an entry, also after its last entry left.
-  // Read only when an entry is new, so a base that grew nothing needs no list.
-  let ratcheted;
+  // The rule set is APPEND-ONLY against the base: every rule the base ratchets
+  // must still be known at the head, in this script's KNOWN_RULES and in the
+  // head ledger's `rules` list, or a rename (old rows dropped, new ones seeded)
+  // would reset the floor. A rule is retired only by a change to this guard.
+  const ratcheted = ledgerRules(previousDoc);
+  const headList = Array.isArray(currentDoc?.rules) ? currentDoc.rules : null;
   const grown = [];
+  for (const r of ratcheted) {
+    if (!KNOWN_RULES.has(r) || (headList && !headList.includes(r))) {
+      grown.push(`a rule of the base is gone at the head (the rule set is append-only): ${r}`);
+    }
+  }
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
-      ratcheted ??= ledgerRules(previousDoc);
       if (!ratcheted.has(e.rule)) continue;
       grown.push(`new entry: ${id}`);
       continue;

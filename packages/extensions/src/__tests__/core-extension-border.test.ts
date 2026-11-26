@@ -436,7 +436,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
 
   it("refuses a ledger that raised a recorded allowance", () => {
     const grown = gate.baselineGrowth(
-      { entries: [entry()] },
+      { rules: [...gate.KNOWN_RULES], entries: [entry()] },
       { entries: [entry({ files: { "src/lib/blog/store.ts": 1700 } })] },
     );
     expect(grown).toEqual(["raised allowance under pack-shaped-core-domain::src/lib/blog: src/lib/blog/store.ts 1606 -> 1700"]);
@@ -444,7 +444,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
 
   it("refuses a ledger that recorded a new file inside a module", () => {
     const grown = gate.baselineGrowth(
-      { entries: [entry()] },
+      { rules: [...gate.KNOWN_RULES], entries: [entry()] },
       { entries: [entry({ files: { "src/lib/blog/store.ts": 1606, "src/lib/blog/gate.ts": 40 } })] },
     );
     expect(grown).toEqual(["new file recorded under pack-shaped-core-domain::src/lib/blog: src/lib/blog/gate.ts"]);
@@ -453,7 +453,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
   it("accepts a ledger that only lost entries and lowered allowances", () => {
     expect(
       gate.baselineGrowth(
-        { entries: [entry(), { rule: "pack-table-literal", key: "a::b", reason: "gone now" }] },
+        { rules: [...gate.KNOWN_RULES], entries: [entry(), { rule: "pack-table-literal", key: "a::b", reason: "gone now" }] },
         { entries: [entry({ files: { "src/lib/blog/store.ts": 1200 } })] },
       ),
     ).toEqual([]);
@@ -1140,6 +1140,54 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     );
     expect(r.ok).toBe(false);
     expect(r.growth).toEqual([`new entry: ${C}::src/lib/x.ts::c2`]);
+  });
+
+  // The rule set is append-only against the base: a rule the base ratchets
+  // that the head no longer knows fails, so a rename cannot reset a floor.
+  it("a rule the base ratchets that the head no longer knows fails, naming it", () => {
+    const RETIRED = "pack-retired-rule";
+    const r = run(
+      { [FLOOR]: { rules: [A, B, RETIRED], entries: [e(A, "a1"), e(RETIRED, "r1")] } },
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${RETIRED}`]);
+  });
+
+  it("a renamed rule whose rows are re-seeded under the new name fails", () => {
+    const RENAMED = "pack-step-kind-in-host";
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] } },
+      { [FLOOR]: { rules: [A, B, RENAMED], entries: [e(A, "a1"), e(RENAMED, "c1"), e(RENAMED, "c2")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${C}`]);
+  });
+
+  // red-first-expect: none (a rule the base lacks seeded before too; this pins it next to the append-only check)
+  it("a rule added on top of the base's list still seeds once", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("a head ledger whose rules list drops a rule the gate script still knows fails", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1")] } },
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${C}`]);
+    // and the committed-ledger check refuses any list that is not the script's KNOWN_RULES
+    const all = [...gate.KNOWN_RULES];
+    expect(gate.rulesListDefects({ rules: all.filter((x) => x !== C), entries: [] })).toEqual([
+      `a rule of the gate is not in \`rules\`: ${C}`,
+    ]);
+    expect(gate.rulesListDefects({ rules: [...all, "pack-extra"], entries: [] })).toEqual([
+      "unknown rule in `rules`: pack-extra",
+    ]);
   });
 
   it("fails closed when the base gate script cannot be read or names no rules", () => {

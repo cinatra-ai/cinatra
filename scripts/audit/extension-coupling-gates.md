@@ -709,7 +709,15 @@ kind is gone. A tree with no kind table fails closed. Today's kinds are held in 
 gate's ledger, each naming the issue that removes it; the ledger's `rules`
 list names the rules it ratchets, a rule missing from the base's list is
 seeded once in the pull request that adds it, and a listed rule never gains an
-entry against the base. The rule reads names only: a pack-specific kind whose
+entry against the base. The rule set is append-only: every rule the base
+ratchets (its ledger's list, or for an older ledger the base copy of the gate
+script) must still be in the head's `KNOWN_RULES` and the head ledger's list,
+or the base guard fails and names it; renaming a rule (dropping its rows and
+seeding them under the new name) would otherwise reset its floor. A rule is
+retired only by a change to the guard itself. A listed rule whose rows all
+leave is a full shrink and stays listed, so it can never gain a row again;
+removing its scanner while keeping the id is a change to the gate's code,
+which the ledger ratchet does not judge. The rule reads names only: a pack-specific kind whose
 words match no pack (`final-list-review`, `send-confirmation`) is not seen.
 
 ### The record road for registers
