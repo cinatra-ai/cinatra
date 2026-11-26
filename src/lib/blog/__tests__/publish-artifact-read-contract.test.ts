@@ -18,6 +18,8 @@
  *
  *   pnpm exec vitest run src/lib/blog/__tests__/publish-artifact-read-contract.test.ts
  */
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -89,6 +91,14 @@ describe("host-side reader helpers exist and have the documented `liveOnly: true
     const module = await import("@/lib/blog-post-artifact-materializer");
     expect(typeof module.readBlogPostBodyArtifactBytes).toBe("function");
     expect(typeof module.materializeBlogPostBodyArtifact).toBe("function");
+  });
+
+  // cinatra#4865: the idea-summary materializer (the dormant writer went in
+  // #3034, its last reader here) had no caller on main and is deleted. This
+  // pins that it stays deleted: an idea is read through the binding road.
+  it("the idea-summary materializer module is gone", () => {
+    const path = fileURLToPath(new URL("../../blog-idea-artifact-materializer.ts", import.meta.url));
+    expect(existsSync(path)).toBe(false);
   });
 
   it("readBlogImageArtifactBytes is exported; WP image upload still flows through it", async () => {
