@@ -456,24 +456,14 @@ function walkBridgeApiNodes(
   });
 }
 
-/**
- * Every ApiNode of a flow document, nested subflows included, whatever its target.
- * With `seen`, each object is entered at most once across every walk that shares
- * the set; `startPath` names where the walk starts.
- */
+/** Every ApiNode of a flow document, nested subflows included, whatever its target. */
 function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
-  seen?: Set<object>,
-  startPath = "$",
 ): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
-    if (seen) {
-      if (seen.has(o)) return;
-      seen.add(o);
-    }
     if (o.component_type === "ApiNode") {
       visit(o, path);
     }
@@ -496,7 +486,7 @@ function walkApiNodes(
       });
     }
   }
-  go(parsed, startPath);
+  go(parsed, "$");
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +664,40 @@ export type PublishingAncestorReading =
 /** The node kinds that can be the publishing action (the compiler's and the loader's set). */
 const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
 
+/** A `$referenced_components` map in scope, with the path it is declared at. */
+type ComponentScope = { refs: Record<string, unknown>; path: string };
+type WalkEntry = [value: unknown, scopes: ComponentScope[], path: string];
+
+/**
+ * The children the run follows from one object of a flow document when it reads
+ * the steps under a publishing node (findPublishingAncestor), and so the
+ * children OAS-RUNTIME-015's publishing-step walk follows. A `$component_ref`
+ * has one child: the component under its key in the innermost enclosing
+ * `$referenced_components` that holds the key (none when no scope does). Any
+ * other object has its `$referenced_components` entries, `subflow`,
+ * `start_node`, and the entries of `subflows` and `nodes`.
+ */
+function publishingWalkChildren(value: Record<string, unknown>, scopes: ComponentScope[], path: string): WalkEntry[] {
+  const ref = resolveComponentRef(value);
+  if (ref !== null) {
+    for (let i = scopes.length - 1; i >= 0; i--) {
+      const scope = scopes[i]!;
+      if (Object.prototype.hasOwnProperty.call(scope.refs, ref)) return [[scope.refs[ref], scopes.slice(0, i + 1), `${scope.path}.${ref}`]];
+    }
+    return [];
+  }
+  const children: WalkEntry[] = [];
+  const refs = value.$referenced_components;
+  const inner = isPlainObject(refs) ? [...scopes, { refs, path: `${path}.$referenced_components` }] : scopes;
+  if (isPlainObject(refs)) for (const [key, child] of Object.entries(refs)) children.push([child, inner, `${path}.$referenced_components.${key}`]);
+  for (const key of ["subflow", "start_node"]) children.push([value[key], inner, `${path}.${key}`]);
+  for (const key of ["subflows", "nodes"]) {
+    const list = value[key];
+    if (Array.isArray(list)) list.forEach((child, i) => children.push([child, inner, `${path}.${key}[${i}]`]));
+  }
+  return children;
+}
+
 /**
  * The top-level node of a flow document whose subtree holds the ApiNode step
  * with the given id (cinatra#3745). A publish decision is recorded only for a
@@ -684,9 +708,7 @@ const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "Pa
  * top-level step is its own ancestor.
  *
  * The walk starts at each top-level node (the root `nodes` list) and follows
- * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
- * `$component_ref` resolves to the innermost enclosing `$referenced_components`
- * that holds its key. `unresolved`: no top-level node holds the step.
+ * the children publishingWalkChildren names. `unresolved`: no top-level node holds the step.
  * `ambiguous`: more than one does. `not_publishing`: the one that holds it does
  * not declare `publishes: true` (the JSON boolean) on a node of an action kind.
  */
@@ -700,30 +722,13 @@ export function findPublishingAncestor(document: unknown, stepId: string): Publi
   }
   const holdsStep = (start: unknown): boolean => {
     const seen = new Set<unknown>();
-    const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
+    const stack: WalkEntry[] = [[start, [{ refs: rootRefs, path: "$.$referenced_components" }], ""]];
     while (stack.length > 0) {
-      const [value, scopes] = stack.pop()!;
+      const [value, scopes, path] = stack.pop()!;
       if (!isPlainObject(value) || seen.has(value)) continue;
       seen.add(value);
-      const ref = resolveComponentRef(value);
-      if (ref !== null) {
-        for (let i = scopes.length - 1; i >= 0; i--) {
-          if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
-            stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
-            break;
-          }
-        }
-        continue;
-      }
-      if (value.component_type === "ApiNode" && value.id === stepId) return true;
-      const refs = value.$referenced_components;
-      const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
-      if (isPlainObject(refs)) for (const child of Object.values(refs)) stack.push([child, inner]);
-      for (const key of ["subflow", "start_node"]) stack.push([value[key], inner]);
-      for (const key of ["subflows", "nodes"]) {
-        const list = value[key];
-        if (Array.isArray(list)) for (const child of list) stack.push([child, inner]);
-      }
+      if (value.component_type === "ApiNode" && value.id === stepId && resolveComponentRef(value) === null) return true;
+      stack.push(...publishingWalkChildren(value, scopes, path));
     }
     return false;
   };
@@ -834,14 +839,16 @@ function scanForStepToolDeclarations(
 //
 // The steps judged are those found by ONE walk that starts at each top-level
 // node (the root `nodes` list) declaring `publishes: true` on an action kind and
-// follows exactly the children walkApiNodes (the run's step reader) follows. The
-// walks share one visited set, so each object is entered once in total and the
-// work is linear in the document; a step under two publishing nodes is judged
-// once. One finding per step id at most.
+// follows exactly the children the run follows when it finds a step's
+// publishing node (publishingWalkChildren, shared with findPublishingAncestor):
+// a `$component_ref` resolved in the run's scope, inline `nodes` and subflows.
+// The walks share one visited set, so each object is entered once in total and
+// the work is linear in the document; a step under two publishing nodes is
+// judged once. One finding per step id at most.
 //
-// Limits: this rule does not judge a step the run cannot read, a step that two
-// publishing nodes share (that ambiguity is itself the run's refusal), or a
-// passthrough publisher; the run refuses those itself (tracked in cinatra#4897).
+// Limits: this rule does not judge a step that two publishing nodes share (that
+// ambiguity is itself the run's refusal) or a passthrough publisher; the run
+// refuses those itself (tracked in cinatra#4897).
 
 /** A mirror of BUILT_IN_BRIDGE_TOOLS (src/app/api/llm-bridge/route.ts:145); a test fails on drift. */
 export const BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS: ReadonlySet<string> = new Set(["web_search"]);
@@ -855,7 +862,7 @@ export function publishingStepScanVisitsForTests(): number {
 function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
-  const seen = new Set<object>();
+  const seen = new Set<unknown>();
   const judged = new Set<string>();
   for (const entry of Array.isArray(parsed.nodes) ? parsed.nodes : []) {
     const key = resolveComponentRef(entry);
@@ -864,35 +871,43 @@ function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): Revi
     if (!isPlainObject(top) || typeof top.component_type !== "string" || !PUBLISHING_ACTION_KINDS.has(top.component_type)) continue;
     const cinatra = isPlainObject(top.metadata) && isPlainObject(top.metadata.cinatra) ? top.metadata.cinatra : null;
     if (cinatra === null || cinatra.publishes !== true) continue;
-    walkApiNodes(top, (step, path) => {
-      if (!isModelBridgeApiNode(step)) return;
-      const id = typeof step.id === "string" ? step.id : (step.name as string) ?? "<unknown>";
-      if (judged.has(id)) return;
-      const data = isPlainObject(step.data) ? step.data : {};
-      const ids = data.toolbox_ids;
-      // The bridge's body schema is `toolbox_ids: z.array(z.string()).optional()`
-      // (route.ts:198): any other value is refused before the call runs.
-      if (ids !== undefined && (!Array.isArray(ids) || ids.some((t) => typeof t !== "string"))) {
-        judged.add(id);
-        findings.push(publishingStepFinding(id, path, key,
-          "carries a data.toolbox_ids that is not a list of texts, so the bridge refuses this step's call " +
-          "(its body schema is z.array(z.string()), src/app/api/llm-bridge/route.ts:198). Give a list of toolbox ids."));
-        return;
-      }
-      // Absent: the bridge reads ["cinatra-mcp"] (route.ts:1924). Every id that is
-      // not provider-native goes to the MCP toolboxes, the product's tool boundary.
-      if (Array.isArray(ids) && ids.every((t) => BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS.has(t as string))) return;
-      const reading = readStepToolDeclaration(step);
-      if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) return;
-      judged.add(id);
-      findings.push(publishingStepFinding(id, path, key,
-        "reaches the product's tools and declares no tools in metadata.cinatra.tools. After Publish the run " +
-        "refuses every outward call of a step that does not declare the call's tool " +
-        "(action_decision_step_undeclared). Declare the tools the step calls."));
-    }, seen, `$.$referenced_components.${key}`);
+    const stack: WalkEntry[] = [[top, [{ refs: rootRefs, path: "$.$referenced_components" }], `$.$referenced_components.${key}`]];
+    while (stack.length > 0) {
+      const [value, scopes, path] = stack.pop()!;
+      if (!isPlainObject(value) || seen.has(value)) continue;
+      seen.add(value);
+      stack.push(...publishingWalkChildren(value, scopes, path));
+      if (resolveComponentRef(value) === null && isModelBridgeApiNode(value)) judgeStep(value, path, key);
+    }
   }
   publishingStepScanVisits = seen.size;
   return findings;
+
+  function judgeStep(step: Record<string, unknown>, path: string, key: string): void {
+    const id = typeof step.id === "string" ? step.id : (step.name as string) ?? "<unknown>";
+    if (judged.has(id)) return;
+    const data = isPlainObject(step.data) ? step.data : {};
+    const ids = data.toolbox_ids;
+    // The bridge's body schema is `toolbox_ids: z.array(z.string()).optional()`
+    // (route.ts:198): any other value is refused before the call runs.
+    if (ids !== undefined && (!Array.isArray(ids) || ids.some((t) => typeof t !== "string"))) {
+      judged.add(id);
+      findings.push(publishingStepFinding(id, path, key,
+        "carries a data.toolbox_ids that is not a list of texts, so the bridge refuses this step's call " +
+        "(its body schema is z.array(z.string()), src/app/api/llm-bridge/route.ts:198). Give a list of toolbox ids."));
+      return;
+    }
+    // Absent: the bridge reads ["cinatra-mcp"] (route.ts:1924). Every id that is
+    // not provider-native goes to the MCP toolboxes, the product's tool boundary.
+    if (Array.isArray(ids) && ids.every((t) => BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS.has(t as string))) return;
+    const reading = readStepToolDeclaration(step);
+    if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) return;
+    judged.add(id);
+    findings.push(publishingStepFinding(id, path, key,
+      "reaches the product's tools and declares no tools in metadata.cinatra.tools. After Publish the run " +
+      "refuses every outward call of a step that does not declare the call's tool " +
+      "(action_decision_step_undeclared). Declare the tools the step calls."));
+  }
 }
 
 function publishingStepFinding(id: string, path: string, key: string, why: string): ReviewFinding {
