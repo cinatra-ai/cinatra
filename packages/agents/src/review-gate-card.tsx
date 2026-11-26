@@ -2383,11 +2383,14 @@ function ReviewTargetIsland({
   } else if (load.src !== src) {
     // ANY NAVIGATION OF THE FRAME (cinatra#3089), a palette change included: the document that drew the items is
     // replaced, so a strict host reads the island as not loaded again (Allow waits) until the replacement document
-    // reports its own drawn reading. The attempt stays: the frame and its name are the same. Every other host keeps
-    // the work on screen across a repaint, as before.
+    // reports its own drawn reading. THE NAVIGATION IS A NEW ATTEMPT: the frame remounts under the next attempt's
+    // name, the one road by which a document learns its attempt (a frame's name is read by its document as created).
+    // A report the outgoing document posts while the replacement loads names the old attempt and comes from a window
+    // that is no longer this frame's, so it is dropped; the load bound restarts with the attempt. Every other host
+    // keeps the work on screen across a repaint, as before.
     if (strict) {
       protocolClock.current.navigation = Date.now();
-      setLoad({ ...load, src, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
+      setLoad({ ...load, src, attempt: load.attempt + 1, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
     } else {
       setLoad({ ...load, src });
     }

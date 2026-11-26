@@ -259,14 +259,15 @@ type MediaReading = "loading" | "loaded" | "failed";
  *   - an image (an image representation's preview, a pinned capture, an image a display draws): its own decode
  *     promise answers, `img.decode()`, which settles once the bytes loaded and decoded, and rejects on a failed
  *     request; a failed image is failed; an image whose `src` changes is read again;
- *   - a video: loaded at `readyState >= HAVE_CURRENT_DATA`, failed when it carries an `error`;
+ *   - a video or an audio element (an `audio/*` display draws its controls before the audio loads): loaded at
+ *     `readyState >= HAVE_CURRENT_DATA`, failed when it carries an `error`;
  *   - text, a structured-data view, a table: drawn once mounted (React committed it before this effect runs).
- * `media` holds each image's and video's settled reading.
+ * `media` holds each image's, video's and audio element's settled reading.
  */
 function readPanelContent(root: Element, media: Map<Element, MediaReading>): PanelReading {
   if (root.querySelector(PANEL_FLOOR_SELECTOR)) return "failed";
   let loading = root.querySelector(PANEL_BUSY_SELECTOR) !== null || !panelHasContent(root);
-  for (const element of root.querySelectorAll("img, video")) {
+  for (const element of root.querySelectorAll("img, video, audio")) {
     const reading = media.get(element) ?? "loading";
     if (reading === "failed") return "failed";
     if (reading === "loading") loading = true;
@@ -274,8 +275,9 @@ function readPanelContent(root: Element, media: Map<Element, MediaReading>): Pan
   return loading ? "loading" : "drawn";
 }
 
-/** What a panel can draw as content: a picture, a video, a vector or bitmap drawing, an embedded document. */
-const PANEL_CONTENT_SELECTOR = "img,video,svg,canvas,picture,object,embed,iframe";
+/** What a panel can draw as content: a picture, a video, an audio player, a vector or bitmap drawing, an embedded
+ *  document. */
+const PANEL_CONTENT_SELECTOR = "img,video,audio,svg,canvas,picture,object,embed,iframe";
 
 /**
  * AN EMPTY PANEL IS NEVER DRAWN (cinatra#3089). A display may first commit an empty placeholder and draw its snapshot
@@ -288,10 +290,10 @@ function panelHasContent(root: Element): boolean {
   return (slot.textContent ?? "").trim() !== "" || slot.querySelector(PANEL_CONTENT_SELECTOR) !== null;
 }
 
-/** Start reading each image and video under `root` that has no reading yet, recording its settled reading in
+/** Start reading each image, video and audio element under `root` that has no reading yet, recording its settled reading in
  *  `media`; `changed` runs whenever one settles. A reading is dropped when its element's `src` changes. */
 function watchMedia(root: Element, media: Map<Element, MediaReading>, changed: () => void): void {
-  for (const element of root.querySelectorAll("img, video")) {
+  for (const element of root.querySelectorAll("img, video, audio")) {
     if (media.has(element)) continue;
     media.set(element, "loading");
     const src = element.getAttribute("src");
@@ -310,7 +312,7 @@ function watchMedia(root: Element, media: Map<Element, MediaReading>, changed: (
         element.addEventListener("load", () => settle("loaded"), { once: true });
         element.addEventListener("error", () => settle("failed"), { once: true });
       }
-    } else if (element instanceof HTMLVideoElement) {
+    } else if (element instanceof HTMLVideoElement || element instanceof HTMLAudioElement) {
       if (element.error) settle("failed");
       else if (element.readyState >= 2) settle("loaded");
       element.addEventListener("loadeddata", () => settle("loaded"), { once: true });

@@ -425,3 +425,50 @@ describe("an unmarked display is drawn only once it shows content that held", ()
     expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn", "island-busy", "island-drawn"]);
   });
 });
+
+// cinatra#3089: AN AUDIO ITEM. An `audio/*` display draws its player before the audio loads; the player is the item,
+// read the way a video is: drawn once its data is there, failed on an error, and never drawn by the text beside it.
+describe("an audio element is an item of its own", () => {
+  const types = () => posted.map(([message]) => (message as { type?: string }).type);
+  const mount = async (attempt: number, withText: boolean) => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(attempt);
+    const { container } = render(
+      <>
+        <Ready panels={1} />
+        <Panel>{withText ? <p>Episode notes</p> : null}<audio controls src="/episode.mp3" /></Panel>
+      </>,
+    );
+    return container.querySelector("audio")!;
+  };
+
+  it("an audio-only panel reads drawn once its audio is ready", async () => {
+    const audio = await mount(14, false);
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    await act(async () => {
+      audio.dispatchEvent(new Event("loadeddata"));
+    });
+    await held();
+    // red-first-expect: expected [ 'island-ready', 'panel-mounted' ] to deeply equal [ 'island-ready', …(2) ]
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+  });
+
+  it("an audio element that errors reads failed", async () => {
+    const audio = await mount(15, false);
+    await act(async () => {
+      audio.dispatchEvent(new Event("error"));
+    });
+    await held();
+    // red-first-expect: expected [ 'island-ready', 'panel-mounted' ] to deeply equal [ 'island-ready', …(2) ]
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-failed"]);
+  });
+
+  it("text beside an audio element still loading does not read drawn", async () => {
+    await mount(16, true);
+    await held();
+    // red-first-expect: expected [ 'island-ready', …(2) ] to deeply equal [ 'island-ready', 'panel-mounted' ]
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+  });
+});

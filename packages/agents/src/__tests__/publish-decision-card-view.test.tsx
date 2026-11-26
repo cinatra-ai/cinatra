@@ -1419,21 +1419,66 @@ describe("XV.1: Allow waits for the items", () => {
       expect(schemeOf(frame)).toBe("light");
       await drawn(frame, 1);
       expect(allowOf(root).disabled).toBe(false);
+      const outgoingAttempt = Number(frame.name.split(":")[1]);
       await act(async () => {
         paint("dark");
       });
       await settle();
-      // The same frame, navigated to the replacement document in the new palette.
-      expect(root.querySelector("iframe")).toBe(frame);
-      expect(schemeOf(frame)).toBe("dark");
       // red-first-expect: expected false to be true
       expect(allowOf(root).disabled).toBe(true);
-      // The replacement's load alone does not draw the items; its own drawn report does.
-      await loadOnly(frame);
+      // The outgoing document's late drawn report (its settle bound or an image ending while the replacement loads)
+      // names the outgoing attempt. A browser delivers it through the frame's one window proxy, which jsdom models only
+      // as the frame's current window: it does not make Allow live.
+      const replacement = await frameOf(root);
+      await postDrawn(replacement, 1, { attempt: outgoingAttempt });
+      // red-first-expect: expected false to be true
       expect(allowOf(root).disabled).toBe(true);
-      await postDrawn(frame, 1);
+      // The navigation is a new attempt: a frame under the next attempt's name, in the new palette.
+      expect(replacement).not.toBe(frame);
+      expect(replacement.name).toBe(`cinatra-review-island:${outgoingAttempt + 1}`);
+      expect(schemeOf(replacement)).toBe("dark");
+      // The replacement's load alone does not draw the items; its own drawn report does.
+      await loadOnly(replacement);
+      expect(allowOf(root).disabled).toBe(true);
+      await postDrawn(replacement, 1);
       expect(allowOf(root).disabled).toBe(false);
     } finally {
+      paint("none");
+    }
+  });
+
+  it("a palette change while the island is still loading restarts the load bound for the replacement document", async () => {
+    const paint = (scheme: "light" | "dark" | "none") => {
+      document.documentElement.className = scheme === "none" ? "" : scheme === "dark" ? "dark" : "cinatra";
+    };
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      paint("light");
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("chat_thread", okDoor()));
+      await settle();
+      await frameOf(root);
+      // Most of the first document's 12 s bound passes, then the palette changes.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await act(async () => {
+        paint("dark");
+      });
+      await settle();
+      // Past the first document's deadline, well inside the replacement's own.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      // red-first-expect: expected <div …(2)><div>…(3)</div></div> to be null
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+      expect(allowOf(root).disabled).toBe(true);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(8_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
       paint("none");
     }
   });
