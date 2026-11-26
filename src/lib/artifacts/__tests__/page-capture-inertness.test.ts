@@ -8,7 +8,7 @@ import {
   findInertnessViolations,
   isCapturedHtmlInert,
   sanitizeCapturedHtml,
-} from "@/lib/artifacts/cms-preview-inertness";
+} from "@/lib/artifacts/page-capture-inertness";
 
 describe("cinatra#2044 L-B — captured-page inertness", () => {
   it("removes scripts, frames, handlers, and executable URLs from a hostile page", () => {

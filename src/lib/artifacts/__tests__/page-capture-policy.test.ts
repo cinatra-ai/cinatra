@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { captureDenialCopy, normalizeOrigin } from "@/lib/artifacts/cms-preview-capture-policy";
+import { captureDenialCopy, normalizeOrigin } from "@/lib/artifacts/page-capture-policy";
 
 describe("cinatra#2044 L-B: registered-origin policy", () => {
   it("refuses userinfo-bearing and non-http(s) origins", () => {
