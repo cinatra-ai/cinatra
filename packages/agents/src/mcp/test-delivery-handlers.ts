@@ -18,9 +18,13 @@ import { enforceRunAccess } from "../auth-policy";
 import {
   getTestDeliverySendPort,
   TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR,
+  type TestDeliveryPinnedPlan,
   type TestDeliveryPortRun,
   type TestDeliverySelectionMode,
+  testSendRecipient,
 } from "../test-delivery-send-port";
+import { readDecisionOfRun } from "../publish-decision-store";
+import { publishDecisionCardRows, publishRowKind, type PublishRowDeclaration } from "../publish-decision-card";
 import {
   claimTestSend,
   settleTestSend,
@@ -136,13 +140,15 @@ const MAX_GATE_VISITS_CEILING = 100;
 // (`/api/agents/passthrough`, from the context-id-bound run row's a2aTaskId),
 // never from caller input. Fail closed absent — the ledger dedupe identity
 // cannot be forged into being.
-function resolveRunScopedSubmissionId(): { submissionId: string } | { error: string } {
+function resolveRunScopedSubmissionId(
+  tool = "email_test_delivery_run_send",
+): { submissionId: string } | { error: string } {
   const ctx = mcpRequestContextStorage.getStore();
   const submissionId = ctx?.verifiedSubmissionId;
   if (!submissionId || typeof submissionId !== "string" || submissionId.length === 0) {
     return {
       error:
-        "email_test_delivery_run_send: no verified submission id on the invocation frame " +
+        `${tool}: no verified submission id on the invocation frame ` +
         "(the run-bound pre-interrupt seam stamps it from the gate's resume task id). " +
         "Failing closed — the idempotency identity cannot be caller-supplied.",
     };
@@ -209,12 +215,81 @@ function ledgerRowToResult(row: TestSendRecord): Record<string, unknown> {
   };
 }
 
+/** The idempotency read of a send (one per (run, submission)), shared by both call shapes: a terminal row of this
+ *  submission is returned verbatim, a live claim answers send_in_progress, and a claim whose lease expired is reconciled
+ *  against the outbound correlation store (never a blind resend). Null when the submission has no row yet. */
+async function replayExistingSubmission(args: {
+  runId: string;
+  submissionId: string;
+  campaignId: string;
+  recipientEmail: string;
+  port: NonNullable<ReturnType<typeof getTestDeliverySendPort>>;
+  portRun: TestDeliveryPortRun;
+}): Promise<Record<string, unknown> | null> {
+  const { runId, submissionId, campaignId, recipientEmail, port, portRun } = args;
+  const existing = await readTestSendBySubmission(runId, submissionId);
+  if (!existing) return null;
+  if (existing.status === "sent" || existing.status === "failed") {
+    // Terminal — a transport retry of the same resume. Return the prior
+    // result verbatim; NEVER a second send.
+    return ledgerRowToResult(existing);
+  }
+  // status === "sending": either genuinely in-flight (lease live) or a
+  // crashed claim (lease expired → ambiguous, reconcile).
+  if (existing.leaseExpiresAt.getTime() > Date.now()) {
+    return {
+      ok: false,
+      seq: existing.seq,
+      reason: "send_in_progress",
+      message: "Your previous test send is still in progress. Please wait.",
+    };
+  }
+  // Expired lease → reconcile against the outbound correlation store for THIS
+  // submission (never a blind resend).
+  const outcome = await port.reconcile({
+    run: portRun,
+    campaignId,
+    submissionId,
+    expectedDraftIds: existing.selectedDraftIds,
+  });
+  if (outcome === "sent") {
+    const settled = await settleTestSend({
+      id: existing.id,
+      status: "sent",
+      result: {
+        ok: true,
+        sentTo: existing.recipientEmail ?? recipientEmail,
+        sentCount: existing.selectedDraftIds.length,
+        // reconcile confirmed EVERY expected draft was delivered.
+        deliveredDraftIds: existing.selectedDraftIds,
+        message: `Test email sent to ${existing.recipientEmail ?? recipientEmail}.`,
+      },
+    });
+    if (settled) return ledgerRowToResult(settled);
+    // CAS lost (#1947): the original slow claimer's performSend returned and
+    // settled this row between our reconcile and here. Its result is a real
+    // send outcome — return the AUTHORITATIVE persisted terminal verbatim,
+    // never our reconcile-synthesized shape over a row that already settled.
+    const authoritative = await readTestSendBySubmission(runId, submissionId);
+    return ledgerRowToResult(authoritative ?? existing);
+  }
+  // Ambiguous — the earlier send's outcome is unknowable. Do NOT auto-resend.
+  return {
+    ok: false,
+    seq: existing.seq,
+    reason: "previous_send_unknown",
+    message:
+      "Your last test send's status is unknown — check the inbox before resending.",
+  };
+}
+
 export async function handleEmailTestDeliveryRunSend(
   request: PrimitiveRequest<{
     recipientEmail?: unknown;
     selectionMode?: unknown;
     specificInitialDraftIds?: unknown;
     specificFollowUpDraftIds?: unknown;
+    pinnedPlanJson?: unknown;
   }>,
 ): Promise<unknown> {
   const runCtx = resolveRunScopedRunId();
@@ -230,8 +305,15 @@ export async function handleEmailTestDeliveryRunSend(
   // loaded + authorized (below), so EVERY user-correctable failure resolves to a
   // gateCycle-advancing ledger row (never a bare `{error}` that strands the HITL
   // screen — #1625 F3). Captured raw here; validated post-authz.
-  const recipientEmail =
-    typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
+  // cinatra#4150: TWO call shapes, told apart by the presence of `pinnedPlanJson`. With it, the call is a PINNED send:
+  // it sends exactly the plan that `campaign_test_send_plan` answered (the plan a publish card showed), and every
+  // selection field is ignored. Without it, the call is the selection send exactly as before.
+  const pinned = request.input !== null && typeof request.input === "object" && "pinnedPlanJson" in request.input;
+  const pinnedPlanJson = typeof request.input?.pinnedPlanJson === "string" ? request.input.pinnedPlanJson : "";
+  const pinnedPlan = pinned ? parsePinnedPlan(pinnedPlanJson) : null;
+  const recipientEmail = pinned
+    ? (pinnedPlan?.recipientEmail ?? "")
+    : typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
   const selectionModeRaw = request.input?.selectionMode;
   const SELECTION_MODES: TestDeliverySelectionMode[] = [
     "random_initial",
@@ -335,6 +417,22 @@ export async function handleEmailTestDeliveryRunSend(
       });
     }
 
+    if (pinned) {
+      return await performPinnedTestSend({
+        run, campaignId, submissionId, plan: pinnedPlan, planJson: pinnedPlanJson, preClaimFail,
+      });
+    }
+    // cinatra#4150: a call the passthrough road let through with a claimed publish decision comes from a step a
+    // publishing step governs. Such a step sends the pinned plan its card showed, never a selection made here that no
+    // one saw. The selection send runs only when the road took no claim (no publishing step governs the call).
+    if (mcpRequestContextStorage.getStore()?.publishCallClaim !== undefined) {
+      return preClaimFail({
+        ok: false,
+        reason: "plan_required",
+        message: "This test send must send the plan that was approved. Nothing was sent.",
+      });
+    }
+
     // Input validation — post-authz so a malformed envelope resolves to a
     // gateCycle-advancing failed row, never a stranded screen (F3).
     if (recipientEmail.length === 0) {
@@ -375,61 +473,8 @@ export async function handleEmailTestDeliveryRunSend(
     const portRun = toPortRun(run);
 
     // ---- Idempotency: is there already a claim for this (run, submission)? ----
-    const existing = await readTestSendBySubmission(runId, submissionId);
-    if (existing) {
-      if (existing.status === "sent" || existing.status === "failed") {
-        // Terminal — a transport retry of the same resume. Return the prior
-        // result verbatim; NEVER a second send.
-        return ledgerRowToResult(existing);
-      }
-      // status === "sending": either genuinely in-flight (lease live) or a
-      // crashed claim (lease expired → ambiguous, reconcile).
-      if (existing.leaseExpiresAt.getTime() > Date.now()) {
-        return {
-          ok: false,
-          seq: existing.seq,
-          reason: "send_in_progress",
-          message: "Your previous test send is still in progress. Please wait.",
-        };
-      }
-      // Expired lease → reconcile against the outbound correlation store for THIS
-      // submission (never a blind resend).
-      const outcome = await port.reconcile({
-        run: portRun,
-        campaignId,
-        submissionId,
-        expectedDraftIds: existing.selectedDraftIds,
-      });
-      if (outcome === "sent") {
-        const settled = await settleTestSend({
-          id: existing.id,
-          status: "sent",
-          result: {
-            ok: true,
-            sentTo: existing.recipientEmail ?? recipientEmail,
-            sentCount: existing.selectedDraftIds.length,
-            // reconcile confirmed EVERY expected draft was delivered.
-            deliveredDraftIds: existing.selectedDraftIds,
-            message: `Test email sent to ${existing.recipientEmail ?? recipientEmail}.`,
-          },
-        });
-        if (settled) return ledgerRowToResult(settled);
-        // CAS lost (#1947): the original slow claimer's performSend returned and
-        // settled this row between our reconcile and here. Its result is a real
-        // send outcome — return the AUTHORITATIVE persisted terminal verbatim,
-        // never our reconcile-synthesized shape over a row that already settled.
-        const authoritative = await readTestSendBySubmission(runId, submissionId);
-        return ledgerRowToResult(authoritative ?? existing);
-      }
-      // Ambiguous — the earlier send's outcome is unknowable. Do NOT auto-resend.
-      return {
-        ok: false,
-        seq: existing.seq,
-        reason: "previous_send_unknown",
-        message:
-          "Your last test send's status is unknown — check the inbox before resending.",
-      };
-    }
+    const replayed = await replayExistingSubmission({ runId, submissionId, campaignId, recipientEmail, port, portRun });
+    if (replayed) return replayed;
 
     // ---- Phase 1 (no side-effects): plan + pin the batch under owner authz. ----
     const prepared = await port.prepareSend({
@@ -551,6 +596,374 @@ export async function handleEmailTestDeliveryRunSend(
     // node visibly — it is a bug, not a user-correctable gate state.
     const message = err instanceof Error ? err.message : String(err);
     return { error: `Test delivery send failed: ${message}` };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The pinned test send and its plan (cinatra#4150)
+//
+// A run must not mail anything before a person approved it on the host's
+// publish card, and the card must show what is mailed. The plan primitive
+// (`campaign_test_send_plan`) answers, for one gate submission, the sender as
+// the messages carry it, the recipient as typed and validated, and the PINNED
+// drafts (ids and revisions, subjects, a short preview), with the random pick
+// made there, once. Its answer feeds the card's rows directly: `sender` (a text
+// row "From"), `recipient` (a text row "To"), `drafts` (a list row of records
+// with `subject` and `preview`, at most 50, so the card shows every draft that
+// will be mailed), and `planJson`, the pinned plan the send takes. The send in
+// its pinned shape mails exactly that plan and refuses anything else.
+// ---------------------------------------------------------------------------
+
+/** The most drafts one pinned plan holds: the most records a publish card's list row draws, so every draft that will
+ *  be mailed is on the card. */
+export const TEST_SEND_PLAN_DRAFTS_MAX = 50;
+const PLAN_JSON_MAX = 20_000;
+const REVISION_RE = /^[0-9a-f]{64}$/;
+
+/** The pinned plan as `planJson` carries it. Version 1; exactly these keys. */
+type PinnedPlanWire = TestDeliveryPinnedPlan & { v: 1 };
+
+const ownKeysAre = (value: object, keys: string): boolean => Object.keys(value).sort().join(",") === keys;
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+
+/** Parse a `planJson` the plan primitive answered, or null for anything else (a wrong key, type, size or version). */
+export function parsePinnedPlan(json: string): TestDeliveryPinnedPlan | null {
+  if (typeof json !== "string" || json.length === 0 || json.length > PLAN_JSON_MAX) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return null;
+  }
+  if (!isPlainRecord(raw) || !ownKeysAre(raw, "campaignId,drafts,recipientEmail,sender,v") || raw.v !== 1) return null;
+  const { campaignId, sender, recipientEmail, drafts } = raw;
+  if (typeof campaignId !== "string" || campaignId.length === 0) return null;
+  if (!isPlainRecord(sender) || !ownKeysAre(sender, "email,name")) return null;
+  if (typeof sender.email !== "string" || typeof sender.name !== "string") return null;
+  if (typeof recipientEmail !== "string" || testSendRecipient(recipientEmail) !== recipientEmail) return null;
+  if (!Array.isArray(drafts) || drafts.length === 0 || drafts.length > TEST_SEND_PLAN_DRAFTS_MAX) return null;
+  const pinned: Array<{ id: string; revision: string }> = [];
+  for (const d of drafts) {
+    if (!isPlainRecord(d) || !ownKeysAre(d, "id,revision")) return null;
+    if (typeof d.id !== "string" || d.id.length === 0 || d.id.length > 200) return null;
+    if (typeof d.revision !== "string" || !REVISION_RE.test(d.revision)) return null;
+    pinned.push({ id: d.id, revision: d.revision });
+  }
+  if (new Set(pinned.map((d) => d.id)).size !== pinned.length) return null;
+  return { campaignId, sender: { email: sender.email, name: sender.name }, recipientEmail, drafts: pinned };
+}
+
+/** The sender as a person reads it on the card: the From of the test messages. */
+export function testSendSenderText(sender: { email: string; name: string }): string {
+  if (sender.email && sender.name) return `${sender.name} <${sender.email}>`;
+  if (sender.email) return sender.email;
+  return sender.name ? `${sender.name} (the run owner's mailbox)` : "The run owner's mailbox";
+}
+
+/** The values a publish card draws for a test-send plan, by the plan's own fields: the From as a person reads it, the
+ *  recipient, and each draft's subject and preview with its id and revision. THE one derivation: the plan primitive
+ *  answers exactly these values, and the pinned send checks the approved card against them. */
+export function testSendCardValues(
+  plan: { sender: { email: string; name: string }; recipientEmail: string },
+  drafts: ReadonlyArray<{ id: string; revision: string; subject: string; preview: string }>,
+): { sender: string; recipient: string; drafts: Array<{ subject: string; preview: string; draftId: string; revision: string }> } {
+  return {
+    sender: testSendSenderText(plan.sender),
+    recipient: plan.recipientEmail,
+    drafts: drafts.map((d) => ({ subject: d.subject, preview: d.preview, draftId: d.id, revision: d.revision })),
+  };
+}
+
+/** The card a test-send decision must declare: a text row of `sender`, a text row of `recipient` and a list row of
+ *  `drafts` whose columns are exactly `subject` and `preview`, and no other row. Labels and order are the pack's. */
+function declaresTestSendCard(rows: readonly PublishRowDeclaration[]): boolean {
+  if (rows.length !== 3) return false;
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const kind = publishRowKind(row);
+    if (kind === "text" && (row.input === "sender" || row.input === "recipient")) seen.add(row.input);
+    else if (kind === "list" && row.input === "drafts" && "columns" in row) {
+      const fields = row.columns.map((c) => c.field).sort().join(",");
+      if (fields !== "preview,subject") return false;
+      seen.add("drafts");
+    } else return false;
+  }
+  return seen.size === 3;
+}
+
+type ApprovedCard = { ok: true; shownDrafts?: Array<{ subject: string; preview: string }> } | { ok: false };
+
+/**
+ * The approval of this pinned send. The decision is never resolved here by a reading of its own: it is the decision
+ * the passthrough road resolved for the verified step (itself, or the publishing node it lies inside) and claimed for
+ * this call (`publishCallClaim` in the request frame). With no claim, the road proved that no publishing step governs
+ * the call (publishCallAllowed lets a governed step through only with a claim), and nothing is compared.
+ * With a claim, the claimed decision must be this run's, released, and its card must be the plan: the declared rows
+ * are the test-send card (declaresTestSendCard), the surfaced `planJson` is this call's plan byte for byte, the
+ * surfaced drafts name the plan's drafts at their revisions in order, and the rows the card DREW from the surfaced
+ * values (publishDecisionCardRows, the card's own drawing) equal the rows it draws from testSendCardValues of the plan
+ * with the drafts' shown subjects and previews. Those shown subjects and previews go to the port, which compares them
+ * with the drafts it reads. Anything else refuses.
+ */
+async function approvedCardOfCall(runId: string, plan: TestDeliveryPinnedPlan, planJson: string): Promise<ApprovedCard> {
+  const claim = mcpRequestContextStorage.getStore()?.publishCallClaim;
+  if (claim === undefined) return { ok: true };
+  if (claim.runId !== runId || typeof claim.decisionId !== "string" || claim.decisionId.length === 0) return { ok: false };
+  const decision = await readDecisionOfRun(runId, claim.decisionId);
+  if (!decision || decision.runId !== runId || decision.status !== "released") return { ok: false };
+  const declared = decision.declaredRows;
+  if (!declared || !declaresTestSendCard(declared)) return { ok: false };
+  const surfaced = decision.surfacedValues;
+  if (surfaced.planJson !== planJson) return { ok: false };
+  const rows = surfaced.drafts;
+  if (!Array.isArray(rows) || rows.length !== plan.drafts.length) return { ok: false };
+  const shown: Array<{ id: string; revision: string; subject: string; preview: string }> = [];
+  for (const [i, r] of rows.entries()) {
+    const pinned = plan.drafts[i]!;
+    if (!isPlainRecord(r) || r.draftId !== pinned.id || r.revision !== pinned.revision) return { ok: false };
+    if (typeof r.subject !== "string" || typeof r.preview !== "string") return { ok: false };
+    shown.push({ id: pinned.id, revision: pinned.revision, subject: r.subject, preview: r.preview });
+  }
+  const drawn = publishDecisionCardRows(declared, surfaced);
+  const expected = publishDecisionCardRows(declared, testSendCardValues(plan, shown));
+  if (drawn.length !== 3 || JSON.stringify(drawn) !== JSON.stringify(expected)) return { ok: false };
+  return { ok: true, shownDrafts: shown.map(({ subject, preview }) => ({ subject, preview })) };
+}
+
+type PreClaimFail = (result: Record<string, unknown>) => Promise<Record<string, unknown>>;
+
+/** The pinned send, after the run, its authz, its gate owner, its campaign and its owner were proven by the caller. */
+async function performPinnedTestSend(args: {
+  run: AgentRunRecord;
+  campaignId: string;
+  submissionId: string;
+  plan: TestDeliveryPinnedPlan | null;
+  planJson: string;
+  preClaimFail: PreClaimFail;
+}): Promise<Record<string, unknown>> {
+  const { run, campaignId, submissionId, plan, planJson, preClaimFail } = args;
+  const runId = run.id;
+  if (!plan || plan.campaignId !== campaignId) {
+    return preClaimFail({ ok: false, reason: "plan_invalid", message: "This test send carries no valid plan. Nothing was sent." });
+  }
+  const port = getTestDeliverySendPort();
+  if (!port || typeof port.performPinnedSend !== "function") {
+    return preClaimFail({ ok: false, reason: "connector_unavailable", message: TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR });
+  }
+  const portRun = toPortRun(run);
+  const replayed = await replayExistingSubmission({
+    runId, submissionId, campaignId, recipientEmail: plan.recipientEmail, port, portRun,
+  });
+  if (replayed) return replayed;
+  const approved = await approvedCardOfCall(runId, plan, planJson);
+  if (!approved.ok) {
+    return preClaimFail({
+      ok: false,
+      reason: "plan_not_approved",
+      message: "This test send is not the one that was approved. Nothing was sent.",
+    });
+  }
+  // A draft of the plan that a previous partial send already delivered to this recipient is not sent again, and the
+  // plan is not cut down either: what the card showed is what is mailed, so the send is refused and nothing goes out.
+  const alreadyDelivered = new Set(await readUnacknowledgedDeliveredDraftIds(runId, plan.recipientEmail));
+  if (plan.drafts.some((d) => alreadyDelivered.has(d.id))) {
+    return preClaimFail({
+      ok: false,
+      reason: "plan_changed",
+      message: "A draft of this test send was already delivered by a previous test send. Nothing was sent.",
+    });
+  }
+  const selectedDraftIds = plan.drafts.map((d) => d.id);
+  const claim = await claimTestSend({
+    runId,
+    submissionId,
+    selectedDraftIds,
+    recipientEmail: plan.recipientEmail,
+    leaseSeconds: TEST_SEND_LEASE_SECONDS,
+  });
+  if (claim.kind === "existing") {
+    const row = claim.row;
+    if (row.status === "sent" || row.status === "failed") return ledgerRowToResult(row);
+    return { ok: false, seq: row.seq, reason: "send_in_progress", message: "Your previous test send is still in progress. Please wait." };
+  }
+  const result = await port.performPinnedSend({
+    run: portRun,
+    submissionId,
+    plan,
+    ...(approved.shownDrafts ? { shownDrafts: approved.shownDrafts } : {}),
+  });
+  const settled = await settleTestSend({ id: claim.row.id, status: result.ok ? "sent" : "failed", result: { ...result } });
+  if (settled) return { ...result, seq: claim.row.seq };
+  const authoritative = await readTestSendBySubmission(runId, submissionId);
+  return authoritative ? ledgerRowToResult(authoritative) : { ...result, seq: claim.row.seq };
+}
+
+/** The plan's answer on a refusal: the recorded failure row (its seq advances the form's cycle), in the shape the form
+ *  reads back (`lastSendResult`, `gateCycle`), with every success field present and empty. */
+function planRefusal(recorded: Record<string, unknown>): Record<string, unknown> {
+  const message = typeof recorded.message === "string" ? recorded.message : "The test send could not be planned.";
+  return {
+    ...recorded,
+    ok: false,
+    sender: "",
+    recipient: "",
+    drafts: [],
+    draftCount: 0,
+    planJson: "",
+    lastSendResult: { ok: false, message },
+    gateCycle: typeof recorded.seq === "number" ? recorded.seq : 0,
+  };
+}
+
+/**
+ * campaign_test_send_plan (cinatra#4150): the plan of a test send for this run's gate submission. It sends nothing and
+ * changes no draft. It runs under the same run checks as the send (execute-tier run authz, the gate-owner restriction,
+ * the campaign pinned from the run, the run owner's mailbox); a user-correctable refusal (no recipient, no drafts, too
+ * many drafts, no campaign access) is recorded as the send records it, a terminal failed row of the test-send ledger
+ * that advances the form's cycle, and is answered in the form's shape. On success it answers the card's values and
+ * the pinned plan (see the section comment above). The recipient and the subjects are the run's own data; they are
+ * answered to the run and never logged.
+ */
+export async function handleCampaignTestSendPlan(
+  request: PrimitiveRequest<{
+    recipientEmail?: unknown;
+    selectionMode?: unknown;
+    specificInitialDraftIds?: unknown;
+    specificFollowUpDraftIds?: unknown;
+  }>,
+): Promise<unknown> {
+  const runCtx = resolveRunScopedRunId();
+  if ("error" in runCtx) return { error: runCtx.error };
+  const subCtx = resolveRunScopedSubmissionId("campaign_test_send_plan");
+  if ("error" in subCtx) return { error: subCtx.error };
+  const { runId } = runCtx;
+  const { submissionId } = subCtx;
+  const typedRecipient = typeof request.input?.recipientEmail === "string" ? request.input.recipientEmail.trim() : "";
+  // The one recipient rule of every test send: a plan is never built for an address the send would refuse.
+  const recipientEmail = testSendRecipient(typedRecipient) ?? "";
+  const actor = request.actor as PrimitiveActorContext;
+  const roles = await resolveRoleHintsFromSession();
+  try {
+    const refuse = async (result: Record<string, unknown>): Promise<Record<string, unknown>> => {
+      const rec = await recordPreClaimFailure({
+        runId, submissionId, recipientEmail: recipientEmail || (typedRecipient.length > 0 && typedRecipient.length <= 320 ? typedRecipient : null), result,
+      });
+      return planRefusal(ledgerRowToResult(rec.row));
+    };
+    const run = await readAgentRunById(runId, actor, roles);
+    if (!run) return { error: `Run not found: ${runId}` };
+    const template = await readAgentTemplateById(run.templateId);
+    const coOwnerRows = await readRunCoOwners(run.id);
+    const effectivePolicy = run.authPolicy ?? template?.agentAuthPolicy ?? null;
+    await enforceRunAccess({ ...run, effectivePolicy, coOwnerUserIds: coOwnerRows.map((r) => r.userId) }, actor, "execute", roles);
+    const agentPackageName = template?.packageName && template.packageName.length > 0 ? template.packageName : null;
+    if (!agentPackageName || !(await resolveTestDeliveryGateOwnerPackages()).has(agentPackageName)) {
+      return refuse({ ok: false, reason: "not_authorized", message: "This run is not authorized to perform a test-delivery send." });
+    }
+    const campaignId = resolvePinnedCampaignId(run);
+    if (!campaignId) {
+      return refuse({ ok: false, reason: "connector_unavailable", message: "This run has no dispatched campaign to send from." });
+    }
+    if (!run.runBy) {
+      return refuse({ ok: false, reason: "connector_unavailable", message: "This run has no owner mailbox to send the test email from." });
+    }
+    if (recipientEmail.length === 0) {
+      return refuse({ ok: false, reason: "invalid_recipient", message: "Enter a valid recipient email address for the test send." });
+    }
+    const selectionMode = request.input?.selectionMode;
+    if (selectionMode !== "random_initial" && selectionMode !== "specific_initial" && selectionMode !== "all_initial") {
+      return refuse({ ok: false, reason: "no_drafts_selected", message: "Choose a valid selection mode for the test send." });
+    }
+    const ids = (value: unknown): string[] | null =>
+      value === undefined ? [] :
+        Array.isArray(value) && value.length <= 500 && value.every((id) => typeof id === "string" && id.length > 0)
+          ? (value as string[]) : null;
+    const initialIds = ids(request.input?.specificInitialDraftIds);
+    const followUpIds = ids(request.input?.specificFollowUpDraftIds);
+    if (!initialIds || !followUpIds) {
+      return refuse({ ok: false, reason: "no_drafts_selected", message: "The selected draft ids are not valid." });
+    }
+    const port = getTestDeliverySendPort();
+    if (!port) return refuse({ ok: false, reason: "connector_unavailable", message: TEST_DELIVERY_SEND_PORT_UNWIRED_ERROR });
+    const prepared = await port.prepareSend({
+      run: toPortRun(run),
+      campaignId,
+      recipientEmail,
+      selectionMode,
+      specificInitialDraftIds: initialIds,
+      specificFollowUpDraftIds: followUpIds,
+    });
+    if (!prepared.ok) {
+      return refuse({
+        ok: false,
+        reason: prepared.reason,
+        message:
+          prepared.reason === "campaign_access_denied"
+            ? "You do not have access to this campaign."
+            : prepared.reason === "invalid_recipient"
+              ? "Enter a valid recipient email address for the test send."
+              : "No test emails were selected to send.",
+      });
+    }
+    // A host whose port answers no plan detail cannot show a card: fail closed, never a plan the card cannot show.
+    if (!prepared.sender || !Array.isArray(prepared.drafts)) {
+      return { error: "campaign_test_send_plan: the host test-delivery port answered no plan detail. Nothing was planned." };
+    }
+    // Drafts a previous partial send already delivered to this recipient are left out here, so the card shows only
+    // what this send will mail.
+    const alreadyDelivered = new Set(await readUnacknowledgedDeliveredDraftIds(runId, prepared.recipientEmail));
+    const drafts = prepared.drafts.filter((d) => !alreadyDelivered.has(d.id));
+    if (drafts.length === 0) {
+      return refuse({
+        ok: false,
+        reason: "no_drafts_selected",
+        message: "The selected drafts were already delivered by a previous test send; nothing new to send.",
+      });
+    }
+    if (drafts.length > TEST_SEND_PLAN_DRAFTS_MAX) {
+      return refuse({
+        ok: false,
+        reason: "too_many_drafts",
+        message: `Select at most ${TEST_SEND_PLAN_DRAFTS_MAX} drafts for one test send.`,
+      });
+    }
+    const wire: PinnedPlanWire = {
+      v: 1,
+      campaignId,
+      sender: { email: prepared.sender.email, name: prepared.sender.name },
+      recipientEmail: prepared.recipientEmail,
+      drafts: drafts.map((d) => ({ id: d.id, revision: d.revision })),
+    };
+    const planJson = JSON.stringify(wire);
+    const card = testSendCardValues(wire, drafts);
+    // A plan the send would refuse for a reason known now is refused now: the send reads the plan with this same
+    // parser, and the publish gate records at most PUBLISH_SURFACED_VALUES_MAX_BYTES of the values it surfaces (the
+    // card's values and planJson), so a plan over either bound is never shown for approval.
+    const { PUBLISH_SURFACED_VALUES_MAX_BYTES } = await import("../publish-decision-actions");
+    const surfacedBytes = new TextEncoder().encode(JSON.stringify({ ...card, planJson })).length;
+    if (parsePinnedPlan(planJson) === null || surfacedBytes > PUBLISH_SURFACED_VALUES_MAX_BYTES) {
+      return refuse({
+        ok: false,
+        reason: "plan_too_large",
+        message: "This test send is too large to show for approval. Select fewer drafts or shorten the sender.",
+      });
+    }
+    return {
+      ok: true,
+      ...card,
+      draftCount: drafts.length,
+      planJson,
+      lastSendResult: null,
+      gateCycle: 0,
+    };
+  } catch (err) {
+    if (err instanceof AuthzError) {
+      emitReadDenialAudit(actor, runId);
+      return authzErrorToResponse(err, `Run not found: ${runId}`);
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `Test delivery plan failed: ${message}` };
   }
 }
 

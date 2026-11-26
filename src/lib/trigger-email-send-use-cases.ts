@@ -25,6 +25,7 @@
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
+import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -164,7 +165,7 @@ async function loadDefaultSendEmail(): Promise<TriggerEmailSendDeps["sendEmail"]
   return facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
 }
 
-function buildLazyDefaultDeps(): TriggerEmailSendDeps {
+export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
   let cachedGetCampaign: TriggerEmailSendDeps["getCampaign"] | null = null;
   let cachedGetDrafts: TriggerEmailSendDeps["getDraftsByIds"] | null = null;
   let cachedSend: TriggerEmailSendDeps["sendEmail"] | null = null;
@@ -200,7 +201,7 @@ function buildLazyDefaultDeps(): TriggerEmailSendDeps {
 // non-greedily and excludes embedded `}` so adjacent tokens don't merge
 // into a single match.
 const MUSTACHE_TOKEN_RE = /\{\{[^}]+\}\}/g;
-function applyTokenReplacements(body: string): string {
+export function applyTokenReplacements(body: string): string {
   return body.replace(MUSTACHE_TOKEN_RE, "there");
 }
 
@@ -795,11 +796,20 @@ export async function planTestSendSelection(
   },
   deps: TriggerEmailSendDeps = buildLazyDefaultDeps(),
 ): Promise<
-  | { ok: true; recipientEmail: string; selectedDraftIds: string[] }
+  | {
+      ok: true;
+      recipientEmail: string;
+      selectedDraftIds: string[];
+      // cinatra#4150: what a publish card shows of this plan, read in the same pass: the From of every message (the
+      // campaign's sender) and each selected draft, in send order, as it was read.
+      sender: { email: string; name: string };
+      selectedDrafts: Draft[];
+    }
   | { ok: false; reason: "no_drafts_selected" | "invalid_recipient" }
 > {
-  const recipient = (input.recipientEmail ?? "").trim();
-  if (recipient.length === 0 || !recipient.includes("@")) {
+  // cinatra#4150: the one recipient rule of every test send (plan, pinned send, selection send).
+  const recipient = testSendRecipient(input.recipientEmail ?? "");
+  if (recipient === null) {
     return { ok: false, reason: "invalid_recipient" };
   }
   const campaign = await deps.getCampaign(input.campaignId);
@@ -831,7 +841,13 @@ export async function planTestSendSelection(
   if (selectedDraftIds.length === 0) {
     return { ok: false, reason: "no_drafts_selected" };
   }
-  return { ok: true, recipientEmail: recipient, selectedDraftIds };
+  return {
+    ok: true,
+    recipientEmail: recipient,
+    selectedDraftIds,
+    sender: { email: campaign.senderEmail ?? "", name: campaign.senderName ?? "" },
+    selectedDrafts: [...selectedById.values()],
+  };
 }
 
 export function createTriggerEmailSendUseCases(
@@ -878,8 +894,8 @@ export function createTriggerEmailSendUseCases(
       // (`previous_send_unknown`, `send_in_progress`) are refined by the
       // run-scoped `email_test_delivery_run_send` wrapper primitive, which owns
       // the send ledger and the connector-availability signal.
-      const recipient = (input.recipientEmail ?? "").trim();
-      if (recipient.length === 0 || !recipient.includes("@")) {
+      const recipient = testSendRecipient(input.recipientEmail ?? "");
+      if (recipient === null) {
         return {
           ok: false,
           reason: "invalid_recipient",
