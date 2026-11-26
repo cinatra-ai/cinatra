@@ -106,4 +106,22 @@ describe("KNOWN_BROKEN_AGENTS only shrinks", () => {
     // the cured pack deletes the entry and this check together.
     expect(mod.KNOWN_BROKEN_AGENTS["blog-wordpress-publish-agent"]?.expectedCodes).toEqual(["OAS-RUNTIME-013"]);
   });
+
+  it("the exception list holds exactly the WordPress publish agent's entry, with only OAS-RUNTIME-013 (cinatra#4150)", async () => {
+    const mod = await import("./__fixtures__/known-broken-agents");
+    expect(Object.keys(mod.KNOWN_BROKEN_AGENTS)).toEqual(["blog-wordpress-publish-agent"]);
+    const entry = mod.KNOWN_BROKEN_AGENTS["blog-wordpress-publish-agent"];
+    expect(entry.expectedCodes).toEqual(["OAS-RUNTIME-013"]);
+    expect(entry.expectedBlockerCount).toBe(1);
+    // The entry records a finding the validator really raises for the pinned
+    // pack: a list entry the validator does not back is rot, not an exception.
+    const oas = JSON.parse(
+      readFileSync(
+        join(__dirname, "../../../../extensions/cinatra-ai/blog-wordpress-publish-agent/cinatra/oas.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const codes = validateOasAgentJson(oas).map((m) => m.match(/^[A-Z]+(?:-[A-Z]+)+-\d+/)?.[0]);
+    expect(codes).toEqual(["OAS-RUNTIME-013"]);
+  });
 });
