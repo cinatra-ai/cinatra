@@ -9,7 +9,11 @@ const seen: Array<Record<string, unknown>> = [];
 
 vi.mock("drizzle-cube/client", () => ({
   DashboardProvider: (props: { config?: unknown; children?: unknown }) => {
-    seen.push({ config: props.config, editable: (props as { editable?: unknown }).editable });
+    seen.push({
+      config: props.config,
+      editable: (props as { editable?: unknown }).editable,
+      props,
+    });
     return props.children ?? null;
   },
   DashboardGridSurface: () => null,
@@ -81,5 +85,45 @@ describe("the read-only compositions hand drizzle-cube an eager configuration", 
     expect(lazyPortlet.eagerLoad).toBe(false);
     expect(given.portlets[0]).toBe(lazyPortlet);
     expect(CONFIG.portlets[1]).not.toHaveProperty("eagerLoad");
+  });
+
+  it("forwards no callback that receives a configuration, so an echo cannot persist the eager flags", () => {
+    // Authored lazy opt-outs on the dashboard and on a portlet, plus callbacks a
+    // caller may (wrongly) pass. drizzle-cube echoes the MOUNTED config through
+    // onConfigChange/onSave; that copy says eagerLoad: true, which must never
+    // reach a persisting callback.
+    const authored = {
+      ...CONFIG,
+      eagerLoad: false,
+      portlets: [{ ...CONFIG.portlets[0], eagerLoad: false }, CONFIG.portlets[1]],
+    };
+    const onConfigChange = vi.fn();
+    const onSave = vi.fn();
+    const onPortletRefresh = vi.fn();
+    const extra = { config: authored as never, onConfigChange, onSave, onPortletRefresh };
+    renderToStaticMarkup(createElement(ReadOnlyComposedDashboard, extra as never));
+    renderToStaticMarkup(createElement(ReadOnlySinglePortlet, { ...extra, portletId: "runs-by-agent" } as never));
+    expect(seen).toHaveLength(2);
+    for (const call of seen) {
+      const props = call.props as {
+        config: unknown;
+        onConfigChange?: (c: unknown) => void;
+        onSave?: (c: unknown) => void;
+        onPortletRefresh?: unknown;
+      };
+      // The simulated provider echo: whatever the provider was handed, if it
+      // was handed a callback, it calls it with the mounted config.
+      props.onConfigChange?.(props.config);
+      props.onSave?.(props.config);
+      expect(props).not.toHaveProperty("onConfigChange");
+      expect(props).not.toHaveProperty("onSave");
+      // A callback that carries no configuration is untouched.
+      expect(props.onPortletRefresh).toBe(onPortletRefresh);
+    }
+    expect(onConfigChange).not.toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+    // The caller's authored flags are unchanged.
+    expect(authored.eagerLoad).toBe(false);
+    expect(authored.portlets[0].eagerLoad).toBe(false);
   });
 });

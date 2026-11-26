@@ -75,7 +75,13 @@ export type ReadOnlyCompositionDataRoad = {
  *  optional data road. */
 export type ReadOnlyComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
-  "children" | "dashboardModes" | "hideToolbar" | "editable"
+  | "children"
+  | "dashboardModes"
+  | "hideToolbar"
+  | "editable"
+  // A read-only display has nothing to persist; see `withoutPersistingCallbacks`.
+  | "onConfigChange"
+  | "onSave"
 > & {
   /** Given, the view mounts its own query client and cube provider over it;
    *  absent, it draws inside the providers its caller already mounts. */
@@ -128,6 +134,23 @@ function MountedDataRoad({
 }
 
 /**
+ * A READ-ONLY DISPLAY FORWARDS NO CALLBACK THAT RECEIVES A CONFIGURATION
+ * (cinatra#3092). drizzle-cube echoes the mounted configuration through
+ * `onConfigChange`/`onSave`, and the mounted copy carries `eagerLoad: true`
+ * that the author never wrote (`read-only-eager-load.ts`); a persisting caller
+ * would store it and silently change authored lazy opt-outs. There is nothing
+ * to persist here, so both are dropped at runtime as well as in the type (a
+ * caller that is not type-checked, or spreads a wider props object, still
+ * cannot reach the provider with them).
+ */
+function withoutPersistingCallbacks<T extends object>(props: T): Omit<T, "onConfigChange" | "onSave"> {
+  const rest = { ...props } as Record<string, unknown>;
+  delete rest.onConfigChange;
+  delete rest.onSave;
+  return rest as Omit<T, "onConfigChange" | "onSave">;
+}
+
+/**
  * A dashboard's portlet grid, drawn from a configuration, read-only.
  *
  * `editable={false}` is belt to the braces of mounting no editing UI: the
@@ -140,7 +163,7 @@ export function ReadOnlyComposedDashboard({ dataRoad, ...props }: ReadOnlyCompos
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
-        {...(props as ComponentProps<typeof DashboardProvider>)}
+        {...(withoutPersistingCallbacks(props) as ComponentProps<typeof DashboardProvider>)}
         config={config as never}
         editable={false}
       >
@@ -181,7 +204,7 @@ export function ReadOnlySinglePortlet({ portletId, dataRoad, ...rest }: ReadOnly
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
-        {...(props as ComponentProps<typeof DashboardProvider>)}
+        {...(withoutPersistingCallbacks(props) as ComponentProps<typeof DashboardProvider>)}
         config={narrowed as never}
         editable={false}
       >
