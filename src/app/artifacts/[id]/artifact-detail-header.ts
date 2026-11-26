@@ -6,9 +6,13 @@
  * over a mono meta line carrying its type, the pinned representation revision
  * (shown as a mono revision id with a pinned marker), and the read-only row
  * facts the host authorized — owner level / visibility, MIME, and updated
- * time." §XI draws the same line on the artifact's OWN page without the pinned
- * marker — nothing on this surface is pinned, the page reads what the artifact
- * has become — and puts the kind beside the title.
+ * time." §XI draws the same line on the artifact's OWN page and puts the kind
+ * beside the title. The pinned marker stands on it exactly where the revision
+ * the page shows is a review target (cinatra#3092): "On a review target every
+ * display draws the one revision the gate pinned … the meta line names the
+ * revision with its pinned marker" (§XI, drawn so in §XI.5, §XI.7 and §XI.8);
+ * a revision no gate pinned, and the page of an artifact never reviewed ("Where
+ * no review stands", §XI.5), carry none.
  *
  * THE LINE CLOSES THERE. Type, revision, owner level, visibility, MIME, updated
  * time: six facts, and the drawing names no seventh. A size is drawn where the
@@ -20,7 +24,7 @@
  * drew it", and the platform it names is the only thing that tells a WordPress
  * page from a Drupal page. The drawn line reads "<type> · drawn by <renderer> ·
  * revision rev_c410… · WordPress · Team: Growth · Private · acme.example/pricing"
- * (§XI.8; its pinned marker is the review's, and this page pins nothing). Core
+ * (§XI.8; its pinned marker is the review's, drawn here only on a review target). Core
  * knows neither fact and names no extension, so the display that draws the row
  * says them itself, through two optional exports of its own module that the
  * page reads generically (`./artifact-display-identity`): the renderer's name,
@@ -49,7 +53,13 @@ export type ArtifactDetailHeaderModel = {
   readonly title: string;
   readonly kindLabel: string;
   readonly metaCells: readonly string[];
+  /** The index of the "pinned" cell in `metaCells`, drawn as the marker the
+   *  review card draws; null where the revision shown is no review target. */
+  readonly pinnedCellIndex: number | null;
 };
+
+/** The pinned marker's word, as the review card's identity line draws it. */
+export const ARTIFACT_PINNED_MARKER = "pinned";
 
 /**
  * WHAT THE DISPLAY THAT DRAWS THE ROW SAYS OF ITSELF, already read and checked
@@ -155,6 +165,9 @@ export function buildArtifactDetailHeader(input: {
   /** What the display that draws the row declared of itself. Absent, or
    *  `NO_DISPLAY_IDENTITY`, draws the six facts exactly as before. */
   readonly display?: ArtifactDisplayIdentity;
+  /** The revision shown is pinned by a review gate (open or decided). Absent or
+   *  false draws no pinned marker. */
+  readonly pinned?: boolean;
   readonly now?: Date;
 }): ArtifactDetailHeaderModel {
   const { artifact, mime, revisionId } = input;
@@ -163,10 +176,17 @@ export function buildArtifactDetailHeader(input: {
   const facts = input.display?.facts ?? null;
 
   const revision = artifactRevisionLabel(revisionId);
+  // The marker names the revision, so a line with no revision draws none.
+  const pinned = input.pinned === true && revision !== null;
   const updated = artifact.updatedAt
     ? `updated ${formatDistance(new Date(artifact.updatedAt), now, { addSuffix: true })}`
     : "updated recently";
 
+  const leading = [
+    artifact.objectType,
+    ...(drawnBy === null ? [] : [`drawn by ${drawnBy}`]),
+    ...(revision === null ? [] : [revision]),
+  ];
   return {
     // A NAME, OR EIGHT CHARACTERS OF AN ID. This title is what
     // `PageHeaderTitleSync` broadcasts to the trail's leaf crumb, and the
@@ -176,13 +196,15 @@ export function buildArtifactDetailHeader(input: {
     title: artifactDisplayTitle(artifact),
     kindLabel: artifactKindLabel(artifact.presentationIdentity),
     metaCells: [
-      artifact.objectType,
-      ...(drawnBy === null ? [] : [`drawn by ${drawnBy}`]),
-      ...(revision === null ? [] : [revision]),
+      ...leading,
+      // Right after the revision it names, before the display's own facts
+      // (§XI.8: "revision rev_c410… · pinned · WordPress").
+      ...(pinned ? [ARTIFACT_PINNED_MARKER] : []),
       ...(facts === null ? [] : facts.revision),
       artifactOwnerLabel(artifact.ownerLevel, input.ownerName),
       artifactVisibilityLabel(artifact.visibility),
       ...(facts === null ? [mime || "unknown", updated] : facts.closing),
     ],
+    pinnedCellIndex: pinned ? leading.length : null,
   };
 }

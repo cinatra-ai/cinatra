@@ -23,16 +23,13 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 
-// The mount and the pinned-capture pair are rendered, not exercised, here —
-// each carries its own suite.
+// The mount is rendered, not exercised, here - it carries its own suite.
 vi.mock("@/app/artifacts/[id]/review-target-mount", () => ({
   ReviewTargetMount: () => null,
 }));
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 
@@ -60,7 +57,7 @@ const PREPARED = {
 
 function panel(): { frame: Element; slot: Element } {
   document.body.innerHTML = renderToStaticMarkup(
-    <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />,
+    <ReviewTargetPanel prepared={PREPARED} orgId="org-1" />,
   );
   const frame = document.body.querySelector("[data-conformance-id='review-target']");
   if (!frame) throw new Error("no target panel");
@@ -112,7 +109,7 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
 
   it("framed by default: the border and the control radius every caller has drawn", () => {
     const frame = frameOf(
-      renderToStaticMarkup(<ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />),
+      renderToStaticMarkup(<ReviewTargetPanel prepared={PREPARED} orgId="org-1" />),
     );
     expect(classesOf(frame)).toEqual(expect.arrayContaining(["rounded-control", "border", "border-line"]));
     // … and the surface it paints: every class of the frame is pinned.
@@ -122,7 +119,7 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
   it("unframed inside a one-target card: no border and no radius; the anchor and the scrolling slot stay", () => {
     const frame = frameOf(
       renderToStaticMarkup(
-        <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} framed={false} />,
+        <ReviewTargetPanel prepared={PREPARED} orgId="org-1" framed={false} />,
       ),
     );
     expect(classesOf(frame)).not.toContain("border");
@@ -133,5 +130,34 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
     const slot = frame.querySelector("[data-review-representation-slot]");
     expect(slot).not.toBeNull();
     expect(classesOf(slot!)).toContain("overflow-x-auto");
+  });
+});
+
+describe("cinatra#3862 leg 8 — the scrolling slot holds the representation alone", () => {
+  // The slot used to draw the pinned before/after pictures after the mount, so
+  // they scrolled with the representation. No pinned capture pair is drawn
+  // anywhere now (lifecycle cards, section III): the slot holds the mount, with
+  // the floor as its fallback, and nothing after it. A render cannot show this
+  // (the retired pictures drew nothing without their input), so the panel's
+  // source is read.
+  // red-first-expect: expected [ 'ReviewTargetMount', …(2) ] to deeply equal [ 'ReviewTargetMount', …(1) ]
+  it("draws only the mount and its floor fallback inside the slot", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx"), "utf8");
+    const slot = /data-review-representation-slot=""\s*>([\s\S]*?)\n {6}<\/div>/.exec(source)?.[1];
+    expect(slot).toBeDefined();
+    const drawn = [...slot!.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]);
+    expect(drawn).toEqual(["ReviewTargetMount", "ArtifactStructuredDataView"]);
+  });
+});
+
+// cinatra#3459 — THE PDF FLOOR STANDS IN THE SLOT ITSELF. specs/app-artifact-
+// review.html §XI.4 draws the floor straight under the target header, one
+// surface with its own rule and padding; the slot gives it no padding of its
+// own around it, and keeps its padding for every other representation.
+describe("cinatra#3459 — the slot draws no padding around the pdf floor", () => {
+  it("drops its padding where the shared pdf shell draws its floor in it", () => {
+    const classes = classesOf(panel().slot);
+    expect(classes).toContain("has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0");
+    expect(classes).toContain("p-4");
   });
 });

@@ -1,22 +1,22 @@
 // cinatra#4738 round 2: A WIDGET READER'S PUBLISH ROW GETS WORKING SEALED ROADS.
 //
-// Inside a third-party site the reader holds no Cinatra cookie, so a publish row's image, PDF or media target and its
-// capture pair load only through the sealed byte and capture roads a review gate's island already gets. This file runs
-// the real island page, the real publish-decision loader, the real roads and minters, and then the real serving
-// routes for what the page minted. Only the stores under them are doubles (the decision, the run's revisions, the
+// Inside a third-party site the reader holds no Cinatra cookie, so a publish row's image, PDF or media target loads only
+// through the sealed byte road a review gate's island already gets. This file runs the real island page, the real
+// publish-decision loader, the real roads and minters, and then the real serving route for what the page minted. Only the stores under them are doubles (the decision, the run's revisions, the
 // live widget token, the blob), plus the one core that prepares a target, which here hands each target to the byte
 // minter exactly as the real core does for a file-backed revision.
 //
 // Pinned here:
-//   - the credentialed publish island's file-backed target gets a sealed preview and download, and its capture pair
-//     sealed pictures, and the byte and capture routes SERVE them;
+//   - the credentialed publish island's file-backed target gets a sealed preview and download, and the byte route
+//     SERVES them;
+//   - no stored capture pair is read, minted or drawn for it (cinatra#3862 leg 8): the streamed target carries its
+//     preparation only, on every target, a floored one included;
 //   - they are proven against the row's own set, never a gate's: no gate exists for the run, and a target the row
 //     does not show, a decision that is no longer the newest, and a row the reader may not read all serve nothing;
 //   - a gate capability sealed with the row's subject key serves nothing either;
-//   - a target the reader keeps the run for but may not read as an artifact (`object.read`) serves no bytes and no
-//     pictures, and a target the core floors as `read-denied` gets no capture pair minted at all.
-// Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses. Before the
-// publish row existed at all, the subject key it seals with does not exist:
+//   - a target the reader keeps the run for but may not read as an artifact (`object.read`) serves no bytes, and a
+//     target the core floors as `read-denied` gets no bytes minted at all.
+// Red first at ffe421ea: a publish row names no sealed road, so the target keeps the session addresses.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 
@@ -81,37 +81,6 @@ vi.mock("@/app/artifacts/[id]/review-target-prepare", () => ({
 vi.mock("@/app/artifacts/[id]/review-gate-ports", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/app/artifacts/[id]/review-gate-ports")>()),
   loadReviewGateSurface: vi.fn(async () => ({ kind: "refused" })),
-}));
-
-const captureRow = (id: string, role: "before" | "current", target: Target) => ({
-  captureArtifactId: id,
-  representationRevisionId: `${id}-png`,
-  data: {
-    role,
-    status: "captured",
-    degradedReason: null,
-    boundArtifactId: target.artifactId,
-    boundSnapshotRevisionId: target.representationRevisionId,
-    sourceOrigin: "https://cms.example",
-    postId: 7,
-    capturedAt: "2026-11-23T00:00:00.000Z",
-    geometry: null,
-    sanitization: null,
-    network: null,
-    captureDigest: null,
-    title: "Page",
-  },
-});
-vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({
-  readPinnedPreviewCaptures: ({ boundArtifactId, boundSnapshotRevisionId }: { boundArtifactId: string; boundSnapshotRevisionId: string }) => {
-    const t = { artifactId: boundArtifactId, representationRevisionId: boundSnapshotRevisionId };
-    return [captureRow(`${boundArtifactId}-cap-before`, "before", t), captureRow(`${boundArtifactId}-cap-current`, "current", t)];
-  },
-  readPinnedPreviewCapture: (_orgId: string, id: string) => {
-    const artifactId = id.replace(/-cap-(before|current)$/, "");
-    const t = { artifactId, representationRevisionId: artifactId === "art-1" ? "rev-1" : "rev-x" };
-    return captureRow(id, id.endsWith("before") ? "before" : "current", t);
-  },
 }));
 
 const PRINCIPAL = {
@@ -201,11 +170,10 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({
 
 import { encodePublishDecisionIslandRef, publishDecisionIslandSubjectKey } from "@/lib/lifecycle/lifecycle-card-ref";
 import { mintReviewIslandByteCapability, reviewIslandByteUrl } from "@/lib/lifecycle/review-island-byte-capability";
-// The page and both routes load inside each test, so a tree without the publish row fails the test that needs it
+// The page and the byte route load inside each test, so a tree without the publish row fails the test that needs it
 // rather than the whole file.
 const loadPage = async () => (await import("../page")).default;
 const getBytes = async (req: Request) => (await import("@/app/api/lifecycle-views/artifact-bytes/route")).GET(req);
-const getCapture = async (req: Request) => (await import("@/app/api/lifecycle-views/capture/route")).GET(req);
 
 const ACTOR = {
   actor: { actorType: "human", userId: "u1", orgId: "org-1", source: "route" },
@@ -213,26 +181,31 @@ const ACTOR = {
   roleHints: { actorOrganizationId: "org-1" },
 };
 
-function streams(node: ReactNode): Array<{ prepared: Promise<{ bytes: Record<string, unknown> }>; capturePair: Promise<unknown> }> {
+type Streamed = { prepared: Promise<{ bytes: Record<string, unknown> }> } & Record<string, unknown>;
+
+function streams(node: ReactNode): Streamed[] {
   if (Array.isArray(node)) return node.flatMap(streams);
   if (!isValidElement(node)) return [];
-  const props = node.props as { prepared?: unknown; capturePair?: unknown; children?: ReactNode };
-  if (props.prepared && props.capturePair) return [props as never];
+  const props = node.props as { prepared?: unknown; children?: ReactNode };
+  if (props.prepared) return [props as never];
   return streams(props.children);
 }
 
-async function paint(): Promise<{ bytes: Record<string, unknown>; pair: { left: { imageUrl: string | null } | null; right: { imageUrl: string | null } | null } | null }> {
+// The streamed target's props: its preparation, whether it frames itself, and the trusted organization. Nothing else,
+// so no stored capture pair rides along to the panel (cinatra#3862 leg 8).
+const STREAMED_PROPS = ["framed", "orgId", "prepared"];
+
+async function paint(): Promise<{ bytes: Record<string, unknown>; props: string[] }> {
   const ref = encodePublishDecisionIslandRef(ROW)!;
   const el = (await (await loadPage())({ searchParams: Promise.resolve({ ref, ic: "sealed-credential" }) })) as ReactElement;
   const [one] = streams(el);
   expect(one, "the island drew no target").toBeDefined();
-  return { bytes: (await one.prepared).bytes, pair: (await one.capturePair) as never };
+  return { bytes: (await one.prepared).bytes, props: Object.keys(one).sort() };
 }
 
 const fetchHeaders = (dest: string) =>
   new Headers({ "sec-fetch-dest": dest, "sec-fetch-site": "same-origin", "sec-fetch-mode": "no-cors" });
 const serveBytes = (url: string) => getBytes(new Request(`http://localhost:3000${url}`, { headers: fetchHeaders("image") }));
-const serveCapture = (url: string) => getCapture(new Request(`http://localhost:3000${url}`, { headers: fetchHeaders("image") }));
 
 beforeEach(() => {
   begun.length = 0;
@@ -268,28 +241,22 @@ describe("a credentialed publish-decision island", () => {
     expect(readReviewGate).not.toHaveBeenCalled();
   });
 
-  it("hands its capture pair sealed pictures, and the capture route serves them", async () => {
-    const { pair } = await paint();
-    expect(pair?.left?.imageUrl).toMatch(/^\/api\/lifecycle-views\/capture\?c=/);
-    expect(pair?.right?.imageUrl).toMatch(/^\/api\/lifecycle-views\/capture\?c=/);
-    const left = await serveCapture(pair!.left!.imageUrl!);
-    expect(left.status).toBe(200);
-    expect(await left.text()).toBe("blob/art-1-cap-before/art-1-cap-before-png");
-    expect((await serveCapture(pair!.right!.imageUrl!)).status).toBe(200);
+  it("hands its target no stored capture pair: the streamed target carries its preparation only", async () => {
+    const { bytes, props } = await paint();
+    expect(props).toEqual(STREAMED_PROPS);
+    // Only the byte road is minted on; no picture address is handed out beside it.
+    expect(Object.keys(bytes).sort()).toEqual(["download", "preview", "road"]);
     expect(readReviewGate).not.toHaveBeenCalled();
   });
 
   it("serves nothing once the decision is no longer the newest, or the reader may no longer read the run", async () => {
-    const { bytes, pair } = await paint();
+    const { bytes } = await paint();
     expect((await serveBytes(bytes.preview as string)).status).toBe(200);
-    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(200);
     state.newestDecisionId = "dec-2";
     expect((await serveBytes(bytes.preview as string)).status).toBe(404);
-    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(404);
     state.newestDecisionId = "dec-1";
     state.readable = false;
     expect((await serveBytes(bytes.preview as string)).status).toBe(404);
-    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(404);
   });
 
   it("serves nothing once the row no longer shows the target, or the run did not make it", async () => {
@@ -315,22 +282,23 @@ describe("a credentialed publish-decision island", () => {
     expect(readReviewGate).toHaveBeenCalled();
   });
 
-  it("serves no bytes and no pictures for a target the reader keeps the run for but may not read as an artifact", async () => {
-    const { bytes, pair } = await paint();
+  it("serves no bytes for a target the reader keeps the run for but may not read as an artifact", async () => {
+    const { bytes } = await paint();
     expect((await serveBytes(bytes.preview as string)).status).toBe(200);
-    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(200);
     // The run stays readable; only the artifact's own read (`object.read`) now refuses this reader.
     state.objectReadDenied = new Set(["art-1"]);
-    expect((await serveCapture(pair!.left!.imageUrl!)).status).toBe(404);
-    expect((await serveCapture(pair!.right!.imageUrl!)).status).toBe(404);
     expect((await serveBytes(bytes.preview as string)).status).toBe(404);
+    expect((await serveBytes(bytes.download as string)).status).toBe(404);
     // The read ran as the sealed user, in the sealed organization.
     expect(objectReads.some((r) => r.artifactId === "art-1" && r.orgId === "org-1" && r.actor?.principalId === "u1")).toBe(true);
   });
 
-  it("mints no capture pair for a target the core floors as read-denied", async () => {
+  it("mints nothing for a target the core floors as read-denied, and draws no capture pair for it", async () => {
+    // Before cinatra#3862 leg 8 this proved a floored target got no pair while a readable one did; now no target gets
+    // one, so it pins that the floored target is drawn with no bytes and with the same pair-less props.
     state.floorReadDenied = true;
-    const { pair } = await paint();
-    expect(pair).toBeNull();
+    const { bytes, props } = await paint();
+    expect(bytes).toEqual({});
+    expect(props).toEqual(STREAMED_PROPS);
   });
 });

@@ -41,7 +41,19 @@
 //       package.json is read the same way: a listing, a package.json or a kind
 //       it cannot read is REFUSED by its path. With an empty floor there is no
 //       baselined pair left to go stale, so without (e) a tree the gate never
-//       read would pass.
+//       read would pass;
+//   (f) NO REVIEW CONTROL IN A DISPLAY (cinatra#3080 item 7) — a source file of
+//       a kind:artifact package (its tests excepted) whose code, comments
+//       stripped and string and JSX text kept, holds the word Regenerate,
+//       Approve or Reject (any case, whole word) or the address of the host's
+//       review decision route (`lifecycle-views/decide`) fails. A display draws
+//       the work only: the review floor (Comment, Regenerate, Continue) is the
+//       review card's, and a display has no host code to call it with (the
+//       extension import ban), so the one way left is drawing such a control
+//       and posting to that route from the display's own code. A file is a test
+//       when it sits under a `test`, `tests` or `__tests__` directory or is
+//       named `*.test.*` / `*.spec.*`: a pack's own tests assert the absence of
+//       these words and so must name them.
 //
 // kind:agent packages are OUT OF SCOPE here — the agent border has its own gate
 // (cinatra-ai/cinatra#3470).
@@ -134,6 +146,21 @@ const SKIP_DIRS = new Set([
 // Static import / export-from, side-effect import, dynamic import(), require().
 // Run over COMMENT-STRIPPED source, so prose that merely names a host path (the
 // four such comments in the synced tree today) is never read as an edge.
+/** (f) The words and the address a display may not draw or call. */
+export const REVIEW_CONTROL_RE = /\b(?:regenerate|approve|reject)\b|lifecycle-views\/decide/gi;
+
+/** (f) A package-relative path that is one of the package's own tests. */
+export function isPackageTestFile(rel) {
+  const posix = rel.split(sep).join("/");
+  return /(?:^|\/)(?:tests?|__tests__)\//.test(posix) || /\.(?:test|spec)\.[a-z]+$/i.test(posix);
+}
+
+/** (f) The review words and addresses found in one display source file, lower-cased and sorted. */
+export function reviewControlWords(rawText) {
+  const found = stripComments(rawText).match(REVIEW_CONTROL_RE) ?? [];
+  return [...new Set(found.map((w) => w.toLowerCase()))].sort();
+}
+
 const IMPORT_SPECIFIER_RE =
   /(?:\bfrom\s*|\bimport\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g;
 
@@ -409,6 +436,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
   const copies = Object.fromEntries(copyEntries);
 
   const coupling = [];
+  const reviewControls = [];
   for (const pkg of packages) {
     for (const rel of walkFiles(pkg.dir, pkg.dir, { io, unreadable: unreadableIn(pkg) })) {
       if (!CODE_FILE_RE.test(rel)) continue;
@@ -427,13 +455,18 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
         seen.add(banned);
         coupling.push({ package: pkg.name, file: rel, specifier: banned });
       }
+      if (pkg.kind === "artifact" && !isPackageTestFile(rel)) {
+        const words = reviewControlWords(source);
+        if (words.length > 0) reviewControls.push({ package: pkg.name, file: rel, words });
+      }
     }
   }
+  reviewControls.sort((a, b) => (`${a.package}/${a.file}` < `${b.package}/${b.file}` ? -1 : 1));
   coupling.sort((a, b) =>
     `${a.package}/${a.file}/${a.specifier}` < `${b.package}/${b.file}/${b.specifier}` ? -1 : 1,
   );
 
-  return { packages, copies, coupling, refusals: [...new Set(refusals)] };
+  return { packages, copies, coupling, reviewControls, refusals: [...new Set(refusals)] };
 }
 
 /** One census for the exported single-purpose reads: a refusal throws, it never reads as clean. */
@@ -664,6 +697,17 @@ function main() {
     );
   }
 
+  if (census.reviewControls.length > 0) {
+    problems.push(
+      "  (f) REVIEW CONTROL IN A DISPLAY (cinatra#3080 item 7) — a kind:artifact source file names " +
+        "Regenerate, Approve or Reject, or the review decision route. A display draws the work " +
+        "only; the review floor belongs to the review card:",
+    );
+    census.reviewControls.forEach((f) =>
+      problems.push(`  ! ${f.package} :: ${f.file} names ${f.words.join(", ")}`),
+    );
+  }
+
   if (census.refusals.length > 0 || problems.length > 0) {
     console.error(HEADER);
     census.refusals.forEach((line) => console.error(line));
@@ -675,7 +719,8 @@ function main() {
   console.log(
     `[self-rendering-extensions-border-gate] OK — ${total} baselined primitive copy/copies across ` +
       `${Object.keys(current).length} package(s) of ${census.packages.length} self-rendering ` +
-      "package(s) read; no unlisted copy, no stale entry, no direct reach, nothing unread.",
+      "package(s) read; no unlisted copy, no stale entry, no direct reach, no review control " +
+      "in a display, nothing unread.",
   );
 }
 

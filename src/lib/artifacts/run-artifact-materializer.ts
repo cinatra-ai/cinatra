@@ -1853,6 +1853,191 @@ export async function materializeFanoutMessageRevision(input: {
   }
 }
 
+/**
+ * The stored text of one revision, read by its id AND its artifact in the
+ * organisation (cinatra#3089): the same query as the pinned-text read
+ * (`readWholePinnedArtifactText`), kept here so the bind adds no module to the
+ * routes that reach this one. `null` when no such revision has stored bytes;
+ * `truncated` when the text is over the authored-content cap.
+ */
+async function readStoredRevisionText(input: {
+  orgId: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<{ text: string; truncated: boolean } | null> {
+  const s = postgresSchema.replaceAll('"', '""');
+  const res = await pool().query(
+    `SELECT b.storage_key
+FROM "${s}"."representation" rep
+JOIN "${s}"."resource" r ON r.id = rep.resource_id AND r.org_id = rep.org_id
+LEFT JOIN "${s}"."artifact_blobs" b
+  ON b.id = r.metadata->>'blobId' AND b.org_id = r.org_id
+WHERE rep.org_id = $1 AND rep.artifact_id = $2 AND rep.id = $3
+LIMIT 1`,
+    [input.orgId, input.artifactId, input.representationRevisionId],
+  );
+  const storageKey = (res.rows[0] as { storage_key?: string | null } | undefined)?.storage_key;
+  if (!storageKey) return null;
+  const { createLocalDiskBlobStore } = await import("./local-disk-blob-store");
+  const handle = await createLocalDiskBlobStore().openByStorageKey({ orgId: input.orgId, storageKey: String(storageKey) });
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of handle.stream) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
+    bytes += buf.length;
+    if (bytes > MAX_AUTHORED_CONTENT_BYTES) return { text: "", truncated: true };
+    chunks.push(buf);
+  }
+  return { text: Buffer.concat(chunks).toString("utf8"), truncated: false };
+}
+
+/**
+ * Bind ONE message of a send to a body revision a person decided on, instead of
+ * writing a new body (cinatra#3089). The send that mails a decided revision
+ * files no body of its own: it records a finalized `email_fanout` ledger row
+ * under the message identity, pointing at the decided artifact revision. The
+ * run must be an agent run of the organisation, and the pack is the
+ * organisation's winning claim over the declared type, as for a written body.
+ * The bind writes the ledger row only, never the artifact.
+ *
+ *   - THE STORED REVISION. The revision is read by its id AND its artifact in
+ *     the organisation (`readStoredRevisionText`, the pinned-text read's own
+ *     query): a revision of another artifact or organisation, one with no
+ *     stored bytes, or a text over the authored-content cap is refused. The caller's
+ *     text must be that stored text byte for byte, so the text the send mails
+ *     is the stored revision's; the row's content hash is the stored text's.
+ *   - ONE BINDING PER MESSAGE. A message (organisation, run, output id) is bound
+ *     to one revision whatever its text: the lookup takes no content hash, and
+ *     a message bound to another artifact or revision is refused, never
+ *     re-pointed. The lookup and the insert run in one transaction under an
+ *     advisory transaction lock on the run and the output id, so of two
+ *     concurrent binds of one message the second sees the first.
+ *   - A retry of the same revision finds its row and returns it (`deduped`).
+ *
+ * Never throws: a refusal is a returned error.
+ */
+export async function bindFanoutMessageRevision(input: {
+  runId: string;
+  orgId: string;
+  /** The declared object type of the decided body. */
+  objectTypeId: string;
+  /** The message identity — the ledger output id. */
+  outputId: string;
+  /** The text the send mails: it must be the decided revision's stored text. */
+  markdown: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<ToolArtifactMaterialization> {
+  const name = `revision ${input.representationRevisionId} of artifact ${input.artifactId}`;
+  try {
+    ensurePostgresSchema();
+    const s = postgresSchema.replaceAll('"', '""');
+    const runRes = await pool().query(
+      `SELECT template_id FROM "${s}"."agent_runs" WHERE id = $1 AND org_id = $2 LIMIT 1`,
+      [input.runId, input.orgId],
+    );
+    const templateId = (runRes.rows[0] as { template_id?: string | null } | undefined)
+      ?.template_id;
+    if (typeof templateId !== "string" || templateId.length === 0) {
+      return {
+        ok: false,
+        error: `run ${input.runId} is not an agent run of organization ${input.orgId} — the message has no run to be bound under`,
+      };
+    }
+    const [{ readArtifactTypeClaimsForOrg }, { resolveClaimWinner }] = await Promise.all([
+      import("@/lib/objects/artifact-claim-store"),
+      import("@cinatra-ai/objects/claims"),
+    ]);
+    const winner = resolveClaimWinner(readArtifactTypeClaimsForOrg(input.orgId), {
+      orgId: input.orgId,
+      objectTypeId: input.objectTypeId,
+    });
+    if (!winner) {
+      return {
+        ok: false,
+        error: `no installed pack claims the object type "${input.objectTypeId}" for organization ${input.orgId}`,
+      };
+    }
+    // The stored revision, by its id and its artifact in the organisation.
+    let stored: string;
+    try {
+      const read = await readStoredRevisionText(input);
+      if (read === null) {
+        return { ok: false, error: `${name} is not a revision of that artifact in organization ${input.orgId}` };
+      }
+      if (read.truncated) {
+        return { ok: false, error: `${name} cannot be read whole in organization ${input.orgId}` };
+      }
+      stored = read.text;
+    } catch {
+      return { ok: false, error: `${name} is not a revision of that artifact in organization ${input.orgId}` };
+    }
+    if (stored !== input.markdown) {
+      return { ok: false, error: `the text given for message ${input.outputId} is not the stored text of ${name}` };
+    }
+    const contentHash = createHash("sha256").update(stored, "utf8").digest("hex");
+
+    const { randomUUID } = await import("node:crypto");
+    const client = await pool().connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+        `email-fanout-bind:${input.orgId}:${input.runId}:${input.outputId}`,
+      ]);
+      const existing = await client.query(
+        `SELECT artifact_id, representation_revision_id FROM "${s}"."artifact_materializations"
+          WHERE org_id = $1 AND run_id = $2 AND output_id = $3
+            AND path = 'email_fanout' AND phase = 'finalized'`,
+        [input.orgId, input.runId, input.outputId],
+      );
+      const rows = existing.rows as Array<{ artifact_id: string | null; representation_revision_id: string | null }>;
+      const other = rows.find(
+        (r) => r.artifact_id !== input.artifactId || r.representation_revision_id !== input.representationRevisionId,
+      );
+      if (other) {
+        await client.query("ROLLBACK");
+        return {
+          ok: false,
+          error: `message ${input.outputId} of run ${input.runId} is already bound to revision ${other.representation_revision_id} of artifact ${other.artifact_id}`,
+        };
+      }
+      if (rows.length > 0) {
+        await client.query("COMMIT");
+        return { ok: true, artifactId: input.artifactId, representationRevisionId: input.representationRevisionId, deduped: true };
+      }
+      await client.query(
+        `INSERT INTO "${s}"."artifact_materializations"
+   (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+    artifact_id, representation_revision_id, phase)
+ VALUES ($1, $2, $3, $4, NULL, 'email_fanout', $5, $6, $7, $8, 'finalized')
+ ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING`,
+        [
+          randomUUID(),
+          input.orgId,
+          input.runId,
+          input.outputId,
+          winner.extensionPackage,
+          contentHash,
+          input.artifactId,
+          input.representationRevisionId,
+        ],
+      );
+      await client.query("COMMIT");
+      return { ok: true, artifactId: input.artifactId, representationRevisionId: input.representationRevisionId, deduped: false };
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    return {
+      ok: false,
+      error: `message body binding failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // The default road's PURE pickup (cinatra#3029) types its ownership seam on
 // the same shape this module writes with.
 export type { ScopeDerivedOwnership };

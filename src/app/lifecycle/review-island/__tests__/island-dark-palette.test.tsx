@@ -45,16 +45,12 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-// The mount and the pinned-capture pair are rendered, not exercised, here — each
-// carries its own suite. Stubbed so this suite does not drag the renderer-
-// resolution graph in behind the panel's markup.
+// The mount is rendered, not exercised, here - it carries its own suite.
+// Stubbed so this suite does not drag the renderer-resolution graph in behind
+// the panel's markup.
 vi.mock("@/app/artifacts/[id]/review-target-mount", () => ({
   ReviewTargetMount: () => null,
 }));
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 
@@ -359,7 +355,7 @@ const PREPARED = {
 } as unknown as Parameters<typeof ReviewTargetPanel>[0]["prepared"];
 
 const PANEL_MARKUP = renderToStaticMarkup(
-  <ReviewTargetPanel prepared={PREPARED} orgId="org-1" capturePair={null} />,
+  <ReviewTargetPanel prepared={PREPARED} orgId="org-1" />,
 );
 
 /**
@@ -593,5 +589,30 @@ describe("the dark palette is closed, so it cannot reopen one alias at a time", 
     expect(tokenAt(root, "--secondary")).toBe("oklch(0.279 0.041 260.031)");
     expect(tokenAt(root, "--muted-foreground")).toBe("oklch(0.704 0.04 256.788)");
     expect(tokenAt(root, "--ring")).toBe("oklch(0.929 0.013 255.508)");
+  });
+});
+
+describe("the markup read here is the panel's whole drawing (cinatra#3862 leg 8)", () => {
+  // Every token check above reads PANEL_MARKUP, with the mount stubbed because
+  // it carries its own suite. That covers the panel only while the panel draws
+  // no other component of its own: the pinned before/after pictures it used to
+  // draw under the mount painted their own frame in the island's dark document.
+  // They are not drawn anywhere now (lifecycle cards, section III), so the
+  // panel imports the mount and the floor view as its only components.
+  // red-first-expect: expected [ 'ArtifactStructuredDataView', …(2) ] to deeply equal [ 'ArtifactStructuredDataView', …(1) ]
+  it("imports no component beside the mount and the floor view", () => {
+    const source = readFileSync(
+      join(
+        process.cwd(),
+        "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx",
+      ),
+      "utf8",
+    );
+    const components = [...source.matchAll(/^import \{([^}]*)\} from "[^"]+";$/gm)]
+      .flatMap((m) => m[1]!.split(","))
+      .map((name) => name.trim())
+      .filter((name) => /^[A-Z]/.test(name))
+      .sort();
+    expect(components).toEqual(["ArtifactStructuredDataView", "ReviewTargetMount"]);
   });
 });

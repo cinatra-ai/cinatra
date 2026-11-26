@@ -43,6 +43,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
+  // cinatra#3089: a pause reads the steps its dispatch compiled from the mounted source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no pause steps were compiled from the source bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -59,6 +61,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: the steps the dispatch compiled from the mounted source and bound with it: here the template's policy as
+// it was when the test bound it (a copy), never a later template read; with no policy, none compiled (the reader refuses).
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps were compiled from the source bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 // cinatra#2485 C: the install-scope run gate reads the agent_templates /
 // agent_runs rows straight from the DB. This suite already mocks the
 // persistence hub (`../store`), so it mocks the gate's persistence too. The
@@ -230,7 +240,7 @@ describe("execution.ts — enrichment call sites", () => {
   it("per-field setup interrupt is enriched", async () => {
     const run = makeRun({ runBy: "user-a" });
     storeMock.readAgentRunById.mockResolvedValue(run);
-    storeMock.readAgentTemplateById.mockResolvedValue(
+    bindTemplate(
       makeTemplate({
         properties: {
           website: {
@@ -270,7 +280,7 @@ describe("execution.ts — enrichment call sites", () => {
     storeMock.readAgentRunById.mockResolvedValue(run);
     // Grouped path: >=2 pending required fields + at least one has
     // "x-renderer": "@cinatra-ai/agent-builder:grouped-setup-form" (opt-in).
-    storeMock.readAgentTemplateById.mockResolvedValue(
+    bindTemplate(
       makeTemplate({
         properties: {
           website: {
@@ -308,7 +318,7 @@ describe("execution.ts — enrichment call sites", () => {
     // Template with no pending required fields (all resolved) so the setup
     // interrupt loop falls through; we call handleWayflowTaskState directly
     // to drive call site 1.
-    storeMock.readAgentTemplateById.mockResolvedValue(
+    bindTemplate(
       makeTemplate(
         { properties: {}, required: [] },
         { approvalPolicy: { steps: [] } },
