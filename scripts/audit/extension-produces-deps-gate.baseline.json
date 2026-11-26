@@ -1,5 +1,5 @@
 {
-  "note": "Produced-artifact dependency baseline (no-new-rot ratchet, cinatra#2537). `undeclaredProducesDeps` = a `cinatra.produces`/`consumes` entry whose target extension is NOT declared in the SAME manifest's `cinatra.dependencies` as a required artifact-kind edge — installing the producer therefore never installs the produced artifact and every run fails materialization. `unresolvedProducesTargets` = a produced target that does not resolve to a real artifact extension in the synced catalog (absent / wrong kind / unclaimed objectTypeId) — so declaring it as a dependency would not fix anything. `notes` carries the REASON each grandfathered (package, target) pair is tolerated — a manual, version-controlled record; NOT diffed by the gate. The tool-owner classes (cinatra#4874) map consumer -> key -> reason: `undeclaredToolOwnerDeps` = a tool the consumer uses whose owner (per the authz inventory) is another pack that is not in its cinatra.dependencies (or is declared optional/peer for a required use); `unownedTools` = a used tool whose owner cannot be decided; `dynamicToolNames` = a flow tool selection that is not a literal name; `undeclaredPortUses` = a code file that references the host's primitive-call port in a pack that declares no consumed primitive in cinatra.consumes. They fail on NEW and on STALE entries and only shrink against the base branch. These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate the data with `node scripts/audit/extension-produces-deps-gate.mjs --write-baseline` — every data entry should only ever be REMOVED (fix the producing repo, then bump its pin), never added; carry `notes` forward by hand for anything re-baselined this way.",
+  "note": "Produced-artifact dependency baseline (no-new-rot ratchet, cinatra#2537). `undeclaredProducesDeps` = a `cinatra.produces`/`consumes` entry whose target extension is NOT declared in the SAME manifest's `cinatra.dependencies` as a required artifact-kind edge — installing the producer therefore never installs the produced artifact and every run fails materialization. `unresolvedProducesTargets` = a produced target that does not resolve to a real artifact extension in the synced catalog (absent / wrong kind / unclaimed objectTypeId) — so declaring it as a dependency would not fix anything. `notes` carries the REASON each grandfathered (package, target) pair is tolerated — a manual, version-controlled record; NOT diffed by the gate. The tool-owner classes (cinatra#4874) map consumer -> key -> reason: `undeclaredToolOwnerDeps` = a tool the consumer uses whose owner (per the authz inventory) is another pack that is not in its cinatra.dependencies (or is declared optional/peer for a required use); `dynamicToolNames` = a passthrough step's tool selection that is not a literal name; `undeclaredPortUses` = a code file that references the host's primitive-call port in a pack that declares no consumed primitive in cinatra.consumes. They fail on NEW and on STALE entries and only shrink against the base branch. These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate the data with `node scripts/audit/extension-produces-deps-gate.mjs --write-baseline` — every data entry should only ever be REMOVED (fix the producing repo, then bump its pin), never added; carry `notes` forward by hand for anything re-baselined this way.",
   "undeclaredProducesDeps": {
     "@cinatra-ai/blog-draft-writer-agent": [
       "@cinatra-ai/blog-post-artifact"
@@ -27,51 +27,6 @@
       "crm_account_get": "Seeded with the rule (cinatra#4874). The tool is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped.",
       "crm_list_create": "Seeded with the rule (cinatra#4874). The tool is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped.",
       "crm_list_member_add": "Seeded with the rule (cinatra#4874). The tool is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped."
-    }
-  },
-  "unownedTools": {
-    "@cinatra-ai/blog-draft-writer-agent": {
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/blog-image-generator-agent": {
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/blog-linkedin-publish-agent": {
-      "artifact_content_read": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_content_read\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/blog-pipeline-agent": {
-      "artifact_image_generate": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_image_generate\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "artifact_materialize": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_materialize\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/blog-wordpress-publish-agent": {
-      "artifact_content_read": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_content_read\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/drupal-agent": {
-      "artifact_materialize": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_materialize\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/email-delivery-agent": {
-      "email_outreach_send_initial_start": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"email_outreach_send_initial_start\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "email_outreach_send_initial_status": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"email_outreach_send_initial_status\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/email-drafting-agent": {
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/email-outreach-agent": {
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/web-research-agent": {
-      "artifact_content_read": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_content_read\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/web-scrape-agent": {
-      "artifact_content_read": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_content_read\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
-    },
-    "@cinatra-ai/wordpress-agent": {
-      "artifact_materialize": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"artifact_materialize\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file.",
-      "extension_tool": "Seeded with the rule (cinatra#4874). The authz inventory holds no entry for \"extension_tool\" (its builder reads only server.registerTool registrations, and this tool is served another way), so its owner cannot be decided. Leaves when the inventory names its registering file."
     }
   },
   "dynamicToolNames": {},

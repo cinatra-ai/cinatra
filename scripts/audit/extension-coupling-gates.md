@@ -606,9 +606,20 @@ is a tool of the inventory or a package name.
 
 | Reading | Where it comes from |
 | --- | --- |
-| A pack USES a tool | `cinatra.consumes[].primitive` in `package.json` and its mirror at `metadata.cinatra.consumes` in `cinatra/oas.json`; every flow `ApiNode`'s `data.tool` (a `data` block written as JSON text is parsed first); every flow node's `metadata.cinatra.tools`. A consumes entry carries its `requirement`; a flow use is read as required (the step calls the tool whenever it runs). Code is not read for tool names (see the port rule below) |
+| A pack USES a tool | `cinatra.consumes[].primitive` in `package.json` and its mirror at `metadata.cinatra.consumes` in `cinatra/oas.json`; the `data.tool` of every passthrough step, selected by the repository's host-tool reader (`collectPassthroughHostTools` in `scripts/ci/pin-advance-host-tools.mjs`: an `ApiNode` whose url ends with `/api/agents/passthrough`); the `metadata.cinatra.tools` of every model step (an `ApiNode` whose url contains `/api/llm-bridge`, the flow validator's `isModelBridgeApiNode`; a test runs both selections on the same nodes). An `ApiNode` with another url, such as an external API request, is not a tool call, whatever its payload holds. A consumes entry carries its `requirement`; a flow use is read as required (the step calls the tool whenever it runs). Code is not read for tool names (see the port rule below) |
 | The tool's OWNER | the file the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) names for the tool: a file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core |
 | The DECLARED dependency | the first entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner, judged as the authoritative validator judges it (`validateDependencyDeclarations` in `packages/extensions/src/dependency-declaration-validator.ts`): a REQUIRED use needs an install-blocking edge (required and not peer, `isInstallBlockingEdge` in `packages/extensions/src/dependency-closure.ts`); an OPTIONAL use is backed by any edge. The gate mirrors the rule (a plain `.mjs` cannot load the TypeScript package), and a drift test reads both sources |
+
+The rule's claim is about tools that ANOTHER pack owns, and the inventory
+is the record of owners. A tool the inventory has no row for cannot be judged
+by it: such a use is printed as "owner not recorded" on every run, so it
+stays visible, and it does not fail and is not on the list. A self-facade
+tool such as `extension_tool`, which resolves against the caller's own
+manifest, is one of them. Completing the inventory is tracked in
+cinatra#4895; after that, such uses can be judged. An inventory row that
+names two owners, or a file under `extensions/` in no pack of the synced
+tree, is a contradiction in the recorded data, not missing data: a use of
+that tool fails the gate and is never listed.
 
 A use of the pack's own tool or of a core tool is no finding. The classes,
 each listed in `extension-produces-deps-gate.baseline.json` as
@@ -617,11 +628,8 @@ each listed in `extension-produces-deps-gate.baseline.json` as
 - `undeclaredToolOwnerDeps`: the owner is another pack, and it is not in the
   consumer's `cinatra.dependencies`, or it is there as an optional or peer
   edge while the use is required (the validator's `REQUIREMENT_MISMATCH`).
-- `unownedTools`: the owner cannot be decided: the inventory holds no entry
-  for the tool, names a file in no pack of the synced tree, or names two
-  owners. Reported, never skipped.
-- `dynamicToolNames`: an `ApiNode` `data.tool` that is not a literal tool
-  name.
+- `dynamicToolNames`: a passthrough step's `data.tool` that is not a
+  literal tool name.
 - `undeclaredPortUses`: a code file of a pack that references the host's
   primitive-call port (`callPrimitive`) while the pack declares no consumed
   primitive in `package.json#cinatra.consumes`. Keyed by the file.
@@ -632,8 +640,9 @@ ctx.mcp.callPrimitive` is safe, because the host's port is an arrow closure),
 so the gate does not read tool names from code at all. A pack whose shipped
 code (every code file except dependencies, build output and tests) names the
 port's method as an identifier, a property name or a string literal, wherever
-and however it is used (read with the TypeScript parser, so a comment does not
-count), must declare the tools it calls in `cinatra.consumes`, which the owner
+and however it is used (every shipped code file is read with the TypeScript
+parser, which resolves escaped spellings such as `\u0063allPrimitive`, so
+a comment does not count and an escape does not hide a use), must declare the tools it calls in `cinatra.consumes`, which the owner
 rule above reads. A same-named method of another object in a pack counts too:
 the rule errs towards reporting. Core files are not scanned. The limit: the
 rule relies on the manifest for WHICH tools a pack calls. The host does not
@@ -658,20 +667,21 @@ shrink against the base branch: the shared floor base guard compares it with
 the copy on the base (own variable `EXTENSION_PRODUCES_DEPS_BASE`). A class
 absent from the base copy is the one-time seed of the change that introduces
 it. An entry leaves when the consumer's repository declares the owner (or
-stops using the tool) and its pin is bumped, or when the inventory names the
-tool's registering file.
+stops using the tool) and its pin is bumped.
 
 Seeded on 2026-11-26 at the pins of both extension locks: 70 tool uses, 3
 `undeclaredToolOwnerDeps` (`list-curator-agent` uses `crm_account_get`,
-`crm_list_create` and `crm_list_member_add` of the CRM connector), 19
-`unownedTools` (core tools the inventory builder does not see because they
-are not served through `server.registerTool`: `extension_tool`,
-`artifact_content_read`, `artifact_materialize`, `artifact_image_generate`,
-`email_outreach_send_initial_start`, `email_outreach_send_initial_status`),
-0 `dynamicToolNames`, 0 `undeclaredPortUses` (no pinned pack references the
-port).
+`crm_list_create` and `crm_list_member_add` of the CRM connector), 0
+`dynamicToolNames`, 0 `undeclaredPortUses` (no pinned pack references the
+port; all 744 shipped code files of the 117 packs are parsed, in about 0.7
+seconds). 19 uses are printed as "owner not recorded" (tools the inventory
+builder does not see because they are not served through
+`server.registerTool`: `extension_tool`, `artifact_content_read`,
+`artifact_materialize`, `artifact_image_generate`,
+`email_outreach_send_initial_start`, `email_outreach_send_initial_status`).
 
-What it cannot see: a pack outside both extension locks; which tools a pack's
+What it cannot see: a pack outside both extension locks; the owner of a tool
+the inventory has no row for (until cinatra#4895); which tools a pack's
 code calls through the port (only that it references the port; the manifest
 names the tools); a tool reached through a host route other than the forms
 above.

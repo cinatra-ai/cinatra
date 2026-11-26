@@ -132,12 +132,17 @@
  * `cinatra.dependencies`. Decided from structure only; no pack and no tool is
  * named in this file:
  *   - USE: `cinatra.consumes[].primitive` (package.json and the OAS mirror,
- *     with its declared `requirement`), every flow ApiNode's `data.tool` and
- *     every flow node's `metadata.cinatra.tools` (both read as REQUIRED uses:
+ *     with its declared `requirement`), every passthrough step's `data.tool`
+ *     (selected by the host-tool reader `collectPassthroughHostTools`) and
+ *     every model step's `metadata.cinatra.tools` (both read as REQUIRED uses:
  *     the step calls the tool whenever it runs);
  *   - OWNER: the file the generated authz inventory
  *     (`src/lib/authz/__generated__/inventory.json`) names for the tool: a file
- *     under `extensions/<scope>/<pack>/` is that pack, any other file is core;
+ *     under `extensions/<scope>/<pack>/` is that pack, any other file is core.
+ *     A tool with no inventory row cannot be judged: it is printed as "owner
+ *     not recorded" and does not fail (the inventory is completed in
+ *     cinatra#4895). A row that names two owners, or a file in no pack of the
+ *     tree, contradicts itself and fails (never listed);
  *   - DEPENDENCY: the first entry of the consumer's `cinatra.dependencies`
  *     whose `packageName` is the owner, judged like the authoritative
  *     validator (`validateDependencyDeclarations` in
@@ -147,17 +152,17 @@
  * Code is NOT read for tool names (a callee or an alias cannot be resolved
  * without data flow). Instead, a pack whose shipped code references the host's
  * primitive-call port at all (the port's method name as an identifier,
- * property name or string literal, read with the TypeScript parser) must
+ * property name or string literal, read with the TypeScript parser on every
+ * shipped code file, so an escaped spelling counts) must
  * declare what it calls in `package.json#cinatra.consumes`; a pack that
  * references the port and declares no consumed primitive is a finding. A
  * same-named method of another object in a pack also counts (the rule errs
  * towards reporting); core files are not scanned. The rule relies on the
  * manifest for WHICH tools are called; the host does not check a call against
  * `cinatra.consumes` at call time.
- * Four classes, each a map `{ consumer: { key: reason } }` in the baseline:
+ * Three classes, each a map `{ consumer: { key: reason } }` in the baseline:
  * `undeclaredToolOwnerDeps` (owner is another pack, not declared or declared
- * too weakly for a required use), `unownedTools` (no inventory entry, or an
- * entry in no pack of the tree, or two owners), `dynamicToolNames` (a flow
+ * too weakly for a required use), `dynamicToolNames` (a passthrough step's
  * `data.tool` that is not a literal name), `undeclaredPortUses` (a code file
  * that references the port in a pack with no `cinatra.consumes` primitive).
  * Every map keyed by a name from data is a `Map` or a null-prototype object,
@@ -175,6 +180,7 @@ import { execFileSync } from "node:child_process";
 import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import { compareFloorWithBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
+import { collectPassthroughHostTools } from "../ci/pin-advance-host-tools.mjs";
 
 const REPO_ROOT = process.cwd();
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
@@ -191,8 +197,8 @@ const BASELINE_NOTE =
   "fix anything. `notes` carries the REASON each grandfathered (package, target) pair is tolerated — a manual, " +
   "version-controlled record; NOT diffed by the gate. The tool-owner classes (cinatra#4874) map consumer -> key -> reason: " +
   "`undeclaredToolOwnerDeps` = a tool the consumer uses whose owner (per the authz inventory) is another pack " +
-  "that is not in its cinatra.dependencies (or is declared optional/peer for a required use); `unownedTools` = a used " +
-  "tool whose owner cannot be decided; `dynamicToolNames` = a flow tool selection that is not a literal name; " +
+  "that is not in its cinatra.dependencies (or is declared optional/peer for a required use); " +
+  "`dynamicToolNames` = a passthrough step's tool selection that is not a literal name; " +
   "`undeclaredPortUses` = a code file that references the host's primitive-call port in a pack that declares no " +
   "consumed primitive in cinatra.consumes. They fail on NEW and on STALE entries and " +
   "only shrink against the base branch. These are CURRENT tolerated misses; the gate fails on " +
@@ -505,7 +511,22 @@ export function classGrowth(baseBaseline, committedBaseline, key) {
 /** The tool-owner finding classes, in report order. Each is a map
  *  `{ "<consumer>": { "<key>": "<reason>" } }` in the baseline: every
  *  tolerated entry carries its reason. */
-export const TOOL_CLASSES = ["undeclaredToolOwnerDeps", "unownedTools", "dynamicToolNames", "undeclaredPortUses"];
+export const TOOL_CLASSES = ["undeclaredToolOwnerDeps", "dynamicToolNames", "undeclaredPortUses"];
+
+/** The issue that completes the authz inventory; until then a tool without an
+ *  inventory row is listed as "owner not recorded" and not judged. */
+export const INVENTORY_COMPLETION_ISSUE = "cinatra#4895";
+
+/** The model bridge's route. A model step is an ApiNode whose url contains it
+ *  (the flow validator's `isModelBridgeApiNode` in
+ *  packages/agents/src/validate-oas-runtime-invariants.ts, the only node whose
+ *  `metadata.cinatra.tools` the host reads; a parity test runs both). */
+export const MODEL_BRIDGE_PATH = "/api/llm-bridge";
+
+/** Mirror of the validator's `isModelBridgeApiNode`. */
+export function isModelBridgeStep(node) {
+  return node.component_type === "ApiNode" && typeof node.url === "string" && node.url.includes(MODEL_BRIDGE_PATH);
+}
 
 /** The host port's method that calls another primitive (`ctx.mcp.<this>`). */
 export const PRIMITIVE_PORT_METHOD = "callPrimitive";
@@ -588,11 +609,13 @@ function isPlainObject(value) {
  *
  *   - `cinatra.consumes[].primitive` in `package.json` and its mirror at
  *     `metadata.cinatra.consumes` in `cinatra/oas.json`;
- *   - every flow node with `component_type: "ApiNode"` and a `data.tool`
- *     (the tool a passthrough step calls; a `data` block written as a JSON
- *     string is parsed first);
- *   - every flow node's (an object with a `component_type`)
- *     `metadata.cinatra.tools` list (the tools a model step may call).
+ *   - every passthrough step's `data.tool`, selected by the repository's
+ *     host-tool reader (`collectPassthroughHostTools` in
+ *     scripts/ci/pin-advance-host-tools.mjs: an ApiNode whose url ends with
+ *     the passthrough route); an ApiNode with another url (an external API
+ *     request) is not a tool call, whatever its payload holds;
+ *   - every model step's (`isModelBridgeStep`) `metadata.cinatra.tools` list
+ *     (the tools the model may call; the host reads the list on no other node).
  *
  * The flow is walked through every object and list, so nested subflows and
  * `$referenced_components` count. Returns `{ uses, dynamic, malformed }`:
@@ -623,41 +646,19 @@ export function collectToolUses({ packageJson, oasJson }) {
   }
 
   if (oasJson === null || oasJson === undefined) return { uses, dynamic, malformed };
+  for (const call of collectPassthroughHostTools(oasJson)) {
+    const key = `cinatra/oas.json passthrough step ${call.nodeId} data.tool`;
+    if (call.tool !== null) uses.push({ primitive: call.tool, requirement: "required", source: key });
+    else dynamic.push({ key, reason: `the passthrough step ${call.nodeId}: ${call.unreadable}, so the tool it calls cannot be read` });
+  }
   const walk = (value, path) => {
     if (Array.isArray(value)) {
       value.forEach((v, i) => walk(v, `${path}[${i}]`));
       return;
     }
     if (!isPlainObject(value)) return;
-    if (value.component_type === "ApiNode" && value.data !== undefined) {
-      let data = value.data;
-      if (typeof data === "string") {
-        try {
-          data = JSON.parse(data);
-        } catch {
-          data = undefined;
-        }
-        if (!isPlainObject(data)) {
-          dynamic.push({
-            key: `cinatra/oas.json ${path}.data`,
-            reason: `the ApiNode at ${path} writes its data block as text that is not a JSON object, so the tool it calls cannot be read`,
-          });
-          data = undefined;
-        }
-      }
-      if (isPlainObject(data) && Object.prototype.hasOwnProperty.call(data, "tool")) {
-        if (typeof data.tool === "string" && data.tool !== "") {
-          uses.push({ primitive: data.tool, requirement: "required", source: `cinatra/oas.json ${path}.data.tool` });
-        } else {
-          dynamic.push({
-            key: `cinatra/oas.json ${path}.data.tool`,
-            reason: `the ApiNode at ${path} selects its tool with ${JSON.stringify(data.tool)}, not a literal tool name`,
-          });
-        }
-      }
-    }
     const metadata = value.metadata;
-    if (typeof value.component_type === "string" && isPlainObject(metadata) && isPlainObject(metadata.cinatra)) {
+    if (isModelBridgeStep(value) && isPlainObject(metadata) && isPlainObject(metadata.cinatra)) {
       if (Object.prototype.hasOwnProperty.call(metadata.cinatra, "tools")) {
         const tools = metadata.cinatra.tools;
         if (!Array.isArray(tools)) {
@@ -728,26 +729,31 @@ export function referencesPrimitivePort({ fileName, text }) {
 
 /**
  * Classify ONE tool use of `consumer`. PURE. Returns `null` (own tool, a core
- * tool, or an owner declared as the validator accepts it) or
- * `{ cls, key, reason }`. `declared` maps a package name to its first
- * `cinatra.dependencies` entry.
+ * tool, or an owner declared as the validator accepts it), or one of:
+ *   - `{ notRecorded: true, key, reason }`: the inventory has no row for the
+ *     tool, so the rule cannot judge it (listed, not failing; the inventory is
+ *     completed in cinatra#4895);
+ *   - `{ contradiction: true, key, reason }`: the inventory row names two
+ *     owners or a file in no pack of the tree (a hard failure, never listed);
+ *   - `{ cls, key, reason }`: a finding of a tool class.
+ * `declared` maps a package name to its first `cinatra.dependencies` entry.
  */
 export function classifyToolUse({ consumer, use, owners, declared }) {
   const owner = owners.get(use.primitive);
   if (!owner) {
     return {
-      cls: "unownedTools",
+      notRecorded: true,
       key: use.primitive,
       reason:
-        `${use.source} names the tool "${use.primitive}", which the authz inventory (${INVENTORY_REL}) does ` +
-        `not hold, so its owner cannot be decided`,
+        `${use.source} names the tool "${use.primitive}", which has no row in the authz inventory ` +
+        `(${INVENTORY_REL}); not judged until the inventory is complete (${INVENTORY_COMPLETION_ISSUE})`,
     };
   }
   if (owner.kind === "unknown") {
     return {
-      cls: "unownedTools",
+      contradiction: true,
       key: use.primitive,
-      reason: `${use.source} names the tool "${use.primitive}", whose owner cannot be decided: ${owner.reason}`,
+      reason: `${use.source} names the tool "${use.primitive}", and the inventory contradicts itself: ${owner.reason}`,
     };
   }
   if (owner.kind === "core" || owner.pack === consumer) return null;
@@ -957,9 +963,7 @@ function scanPackTools({ dir, packageJson, oasJson, owners }) {
       malformed.push(`${name}: ${rel}: cannot be read (${err?.message ?? err})`);
       continue;
     }
-    // Speed only: a file that does not contain the method name cannot
-    // reference it. Every file that does is read by the parser, which decides.
-    if (!text.includes(PRIMITIVE_PORT_METHOD)) continue;
+    // Every file is parsed: the parser resolves escaped spellings.
     const ref = referencesPrimitivePort({ fileName: rel, text });
     for (const m of ref.malformed) malformed.push(`${name}: ${m}`);
     if (ref.references && !declaresConsumes) {
@@ -972,11 +976,20 @@ function scanPackTools({ dir, packageJson, oasJson, owners }) {
     }
   }
   const declared = declaredDependencyMap(packageJson);
+  const notRecorded = [];
+  const seenNotRecorded = new Set();
   for (const use of uses) {
     const verdict = classifyToolUse({ consumer: name, use, owners, declared });
-    if (verdict) add(verdict.cls, verdict.key, verdict.reason);
+    if (!verdict) continue;
+    if (verdict.notRecorded) {
+      if (!seenNotRecorded.has(verdict.key)) {
+        seenNotRecorded.add(verdict.key);
+        notRecorded.push(`${name} :: ${verdict.key} — ${verdict.reason}`);
+      }
+    } else if (verdict.contradiction) malformed.push(`${name}: ${verdict.reason}`);
+    else add(verdict.cls, verdict.key, verdict.reason);
   }
-  return { findings, malformed, useCount: uses.length };
+  return { findings, malformed, notRecorded, useCount: uses.length };
 }
 
 function sortToolMap(map) {
@@ -1066,14 +1079,16 @@ function scan() {
   const toolFindings = nameMap();
   for (const c of TOOL_CLASSES) toolFindings[c] = nameMap();
   let toolUseCount = 0;
+  const notRecorded = [];
   for (const { dir, packageJson, oasJson } of manifests) {
     const res = scanPackTools({ dir, packageJson, oasJson, owners });
     malformed.push(...res.malformed);
+    notRecorded.push(...res.notRecorded);
     toolUseCount += res.useCount;
     for (const cls of TOOL_CLASSES) Object.assign(toolFindings[cls], res.findings[cls]);
   }
   for (const cls of TOOL_CLASSES) toolFindings[cls] = sortToolMap(toolFindings[cls]);
-  return { findings, reasons, malformed, extensionCount: manifests.length, edgeCount, toolFindings, toolUseCount };
+  return { findings, reasons, malformed, extensionCount: manifests.length, edgeCount, toolFindings, toolUseCount, notRecorded };
 }
 
 function reasonFor(reasons, cls, pkg, key) {
@@ -1096,10 +1111,16 @@ function main() {
     console.error(`[extension-produces-deps] scanner error: ${err?.stack ?? err}`);
     process.exit(2);
   }
-  const { findings, reasons, malformed, extensionCount, edgeCount, toolFindings, toolUseCount } = result;
+  const { findings, reasons, malformed, extensionCount, edgeCount, toolFindings, toolUseCount, notRecorded } = result;
   const totals = Object.fromEntries(FINDING_CLASSES.map((c) => [c, countPairs(findings[c])]));
   const toolTotals = Object.fromEntries(TOOL_CLASSES.map((c) => [c, toolPairs(toolFindings[c]).size]));
-  const toolSummary = TOOL_CLASSES.map((c) => `${toolTotals[c]} ${c}`).join(", ");
+  const toolSummary =
+    TOOL_CLASSES.map((c) => `${toolTotals[c]} ${c}`).join(", ") +
+    `; ${notRecorded.length} uses whose owner is not recorded (not judged, ${INVENTORY_COMPLETION_ISSUE})`;
+  // Printed on every run, so a use the rule cannot judge yet stays visible.
+  const printNotRecorded = () => {
+    for (const line of notRecorded) console.log(`  owner not recorded: ${line}`);
+  };
 
   if (write) {
     // Refuse to write a baseline over a shape the scan could not READ: the
@@ -1159,6 +1180,7 @@ function main() {
       }
     }
     console.log(`\n[extension-produces-deps] tool-owner rule: ${toolUseCount} tool uses; ${toolSummary}.`);
+    printNotRecorded();
     for (const cls of TOOL_CLASSES) {
       const entries = Object.entries(toolFindings[cls]);
       if (entries.length === 0) continue;
@@ -1296,13 +1318,14 @@ function main() {
     newCount += countPairs(newViolations);
   }
 
+  printNotRecorded();
   if (newCount === 0 && toolFail) process.exit(1);
   if (newCount === 0) {
     console.log(
       `[extension-produces-deps] OK — no new undeclared produced-artifact dependencies (scanned ` +
         `${extensionCount} extensions / ${edgeCount} edges; ` +
         FINDING_CLASSES.map((c) => `${totals[c]} ${c}`).join(", ") +
-        ` baselined); tool-owner rule: ${toolUseCount} tool uses, ${toolSummary} listed.`,
+        ` baselined); tool-owner rule: ${toolUseCount} tool uses, ${toolSummary}.`,
     );
     process.exit(0);
   }
