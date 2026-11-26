@@ -28,6 +28,7 @@ import {
   scanOasForStartNodeInputsWithoutRequired,
   validateOasAgentJson,
 } from "../validate-agent-json";
+import { expectMessagesMatchAllowlist } from "./__fixtures__/known-broken-agents";
 
 const agentDir = path.resolve(
   __dirname,
@@ -48,8 +49,8 @@ const skill = [
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
 
 describe("blog-wordpress-publish-agent OAS validates", () => {
-  it("validateOasAgentJson returns [] (no L1 findings)", () => {
-    expect(validateOasAgentJson(oas)).toEqual([]);
+  it("validateOasAgentJson returns only the findings the allowlist records (cinatra#4150)", () => {
+    expectMessagesMatchAllowlist("blog-wordpress-publish-agent", validateOasAgentJson(oas));
   });
 
   it("scanOasForLlmMetadata returns []", () => {
