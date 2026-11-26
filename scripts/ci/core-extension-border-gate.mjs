@@ -46,7 +46,8 @@
 // fails closed with a line that names the reason. The ledger's `rules` list
 // names the rules it ratchets: a rule the base's list lacks is seeded once in
 // the pull request that adds it (cinatra#4852); a listed rule never gains an
-// entry.
+// entry. A base ledger without the list ratchets every rule its base copy of
+// this script knows (zero-entry rules too); that copy unread fails closed.
 //
 // Usage:
 //   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline, a stale entry or a grown ledger)
@@ -58,7 +59,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
+import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -69,6 +70,8 @@ export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
 export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+/** This script, repo-relative: its base copy names the rules a pre-`rules` base ledger ratchets. */
+export const GATE_FILE = "scripts/ci/core-extension-border-gate.mjs";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -456,9 +459,33 @@ function skipString(text, i) {
   return j + 1;
 }
 
-/** The top-level keys of the object literal a kind table is initialised with,
- *  each with its index in the text. A table that is not an object literal
- *  yields no key. */
+/** The literal name a computed key `[expr]` stands for: a string literal, a
+ *  template literal with no substitution, or an identifier bound once in the
+ *  same file by `const NAME = "<literal>"`. Anything else is null. */
+function resolveComputedKey(expr, masked) {
+  const lit = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)$/.exec(expr);
+  if (lit) return lit[1] ?? lit[2] ?? lit[3];
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(expr)) return null;
+  const decl = new RegExp(
+    `\\bconst\\s+${expr.replace(/\$/g, "\\$")}\\s*(?::[^=;]+)?=\\s*(?:"([^"\\\\]*)"|'([^'\\\\]*)'|\`([^\`\\\\$]*)\`)\\s*(?:as\\s+const\\s*)?[;\\n]`,
+    "g",
+  );
+  const values = new Set([...masked.matchAll(decl)].map((m) => m[1] ?? m[2] ?? m[3]));
+  // An imported name has no same-file const; a name also bound by let, var or
+  // function may hold another value.
+  const rebound = new RegExp(`\\b(?:let|var|function)\\s+${expr.replace(/\$/g, "\\$")}\\b`);
+  if (values.size !== 1 || rebound.test(masked)) return null;
+  return [...values][0];
+}
+
+const compact = (s) => s.replace(/\s+/g, " ").trim().slice(0, 80);
+
+/** The top-level entries of the object literal a kind table is initialised
+ *  with, each with its index in the text: `{ kind, index }` for a key read to
+ *  a literal name, `{ unreadable, index }` for one the scanner cannot read (a
+ *  computed key it cannot resolve, a spread, a table that is not an object
+ *  literal, or one declared without an initializer). FAIL CLOSED: an entry is
+ *  read or reported, never skipped. */
 export function kindTableKeys(masked, declIndex) {
   const n = masked.length;
   let i = declIndex;
@@ -477,20 +504,41 @@ export function kindTableKeys(masked, declIndex) {
     if ("({[<".includes(c)) depth += 1;
     else if (")}]>".includes(c)) depth -= 1;
     else if (c === "=" && depth === 0 && masked[i + 1] !== "=") break;
-    else if (c === ";" && depth === 0) return [];
+    else if (c === ";" && depth === 0) return [{ unreadable: "(no initializer)", index: declIndex }];
   }
+  if (i >= n) return [{ unreadable: "(no initializer)", index: declIndex }];
   i += 1;
   while (i < n && /\s/.test(masked[i])) i += 1;
-  if (masked[i] !== "{") return [];
+  if (masked[i] !== "{") {
+    const end = masked.indexOf(";", i);
+    return [{ unreadable: compact(masked.slice(i, end === -1 ? n : end)), index: i }];
+  }
   const keys = [];
   depth = 0;
   let expectKey = false;
   for (; i < n; i += 1) {
     const c = masked[i];
-    if (depth === 1 && expectKey && !/\s/.test(c)) {
+    if (depth === 1 && expectKey && !/\s/.test(c) && c !== "}") {
       expectKey = false;
-      const m = /^(?:"([^"]+)"|'([^']+)'|([A-Za-z_$][A-Za-z0-9_$]*))\s*:/.exec(masked.slice(i));
-      if (m) keys.push({ kind: m[1] ?? m[2] ?? m[3], index: i });
+      const rest = masked.slice(i);
+      const m = /^(?:"([^"\\]*)"|'([^'\\]*)'|([A-Za-z_$][A-Za-z0-9_$]*)|(\d+(?:\.\d+)?))\s*([:,}(])/.exec(rest);
+      if (m && (m[5] === ":" || m[3] !== undefined)) {
+        keys.push({ kind: m[4] !== undefined ? String(Number(m[4])) : (m[1] ?? m[2] ?? m[3]), index: i });
+      } else if (c === "[") {
+        let j = i + 1;
+        for (let d = 1; j < n; j += 1) {
+          const cj = masked[j];
+          if (cj === '"' || cj === "'" || cj === "`") j = skipString(masked, j) - 1;
+          else if (cj === "[") d += 1;
+          else if (cj === "]" && (d -= 1) === 0) break;
+        }
+        const expr = masked.slice(i + 1, j).trim();
+        const kind = resolveComputedKey(expr, masked);
+        keys.push(kind === null ? { unreadable: `[${compact(expr)}]`, index: i } : { kind, index: i });
+      } else {
+        const end = rest.search(/[,\n}]/);
+        keys.push({ unreadable: compact(rest.slice(0, end === -1 ? rest.length : end)), index: i });
+      }
     }
     if (c === '"' || c === "'" || c === "`") {
       i = skipString(masked, i) - 1;
@@ -518,9 +566,25 @@ export function scanStepScreenKindTables({ file, text, packs }) {
   const findings = [];
   const counts = new Map();
   let tables = 0;
+  const unreadable = (text, index) =>
+    findings.push(
+      finding(
+        "pack-step-kind-in-core",
+        file,
+        lineOf(masked, index),
+        occurrenceDetail(counts, "pack-step-kind-in-core", `unreadable entry: ${text}`),
+        "unreadable kind table entry: the gate cannot read this entry to a literal kind name, so it cannot judge it; " +
+          "write the kind table as an object literal of string keys (a computed key only from a string or a same-file const) and add no entries after it",
+      ),
+    );
   for (const decl of masked.matchAll(KIND_TABLE_RE)) {
     tables += 1;
-    for (const { kind, index } of kindTableKeys(masked, decl.index + decl[0].length)) {
+    for (const key of kindTableKeys(masked, decl.index + decl[0].length)) {
+      if (key.unreadable !== undefined) {
+        unreadable(key.unreadable, key.index);
+        continue;
+      }
+      const { kind, index } = key;
       const run = kindCrossesBorder(kind, runs);
       if (!run) continue;
       findings.push(
@@ -534,8 +598,14 @@ export function scanStepScreenKindTables({ file, text, packs }) {
       );
     }
   }
+  // An entry added after the declaration (`T[k] = …`, `T.k ??= …`,
+  // `Object.assign(T, …)`) is not in the literal the gate reads.
+  for (const m of masked.matchAll(KIND_TABLE_WRITE_RE)) unreadable(compact(m[0]), m.index);
   return { findings, tables };
 }
+
+const KIND_TABLE_WRITE_RE =
+  /\b[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)\s*(?:\[[^\]\n]*\]|\.[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\?\?|\|\||&&)?=(?![=>])|\bObject\.(?:assign|defineProperty|defineProperties)\(\s*[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)\b/g;
 
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
@@ -798,11 +868,35 @@ export function wildcardBaselineEntries(doc) {
  *  ledger is shrink-only: a crossing may leave it, none may enter. A domain
  *  entry that recorded a HIGHER line count, or a file it did not record, is
  *  growth too. */
-/** The rules a ledger has ratcheted: its `rules` list, or, in a ledger
- *  written before the list existed, the rules its entries name. */
+/** The rules a ledger has ratcheted: its `rules` list, or, in a base ledger
+ *  written before the list existed, EVERY rule the base copy of this script
+ *  knows (attached by `checkFloorAgainstBase` as BASE_SCRIPT_RULES), so a
+ *  zero-entry rule is ratcheted too. Neither present: fail closed. */
+export const BASE_SCRIPT_RULES = Symbol("base-script-rules");
+
 export function ledgerRules(doc) {
   if (Array.isArray(doc?.rules)) return new Set(doc.rules);
-  return new Set((doc?.entries ?? []).map((e) => e?.rule));
+  if (doc?.[BASE_SCRIPT_RULES] instanceof Set) return doc[BASE_SCRIPT_RULES];
+  throw new Error("[core-extension-border] the base ledger has no `rules` list and the base gate script's rules were not read — failing closed");
+}
+
+/** The rule ids of a copy of this script: its `KNOWN_RULES = new Set([...])`. */
+export function scriptRuleIds(text) {
+  const m = /\bKNOWN_RULES\s*=\s*new Set\(\[([^\]]*)\]\)/.exec(text);
+  const ids = m ? [...m[1].matchAll(/"([^"]+)"|'([^']+)'/g)].map((x) => x[1] ?? x[2]) : [];
+  if (ids.length === 0) throw new Error(`the base copy of ${GATE_FILE} names no rule list (KNOWN_RULES)`);
+  return new Set(ids);
+}
+
+/** The base ledger, and for one written before the `rules` list the rules of
+ *  the base copy of this script, read from the same base. */
+function parseBaseLedger(text, { ref, repoRoot }) {
+  const doc = JSON.parse(text);
+  if (doc?.rules !== undefined) return doc;
+  const script = readFileAtBase(repoRoot, ref, GATE_FILE);
+  if (!script.ok) throw new Error(script.reason);
+  doc[BASE_SCRIPT_RULES] = scriptRuleIds(script.text);
+  return doc;
 }
 
 export function baselineGrowth(previousDoc, currentDoc) {
@@ -812,12 +906,14 @@ export function baselineGrowth(previousDoc, currentDoc) {
   // that adds it (cinatra#4852): its standing crossings enter the ledger once,
   // the rule enters `rules`, and from the next base on it only shrinks. A rule
   // the base lists can never gain an entry, also after its last entry left.
-  const ratcheted = ledgerRules(previousDoc);
+  // Read only when an entry is new, so a base that grew nothing needs no list.
+  let ratcheted;
   const grown = [];
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
+      ratcheted ??= ledgerRules(previousDoc);
       if (!ratcheted.has(e.rule)) continue;
       grown.push(`new entry: ${id}`);
       continue;
@@ -840,7 +936,7 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
-    parse: (text) => JSON.parse(text),
+    parse: parseBaseLedger,
     grown: (base, head) => baselineGrowth(base, head),
     repoRoot,
     env,

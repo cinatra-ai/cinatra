@@ -863,3 +863,139 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     }
   });
 });
+
+// A kind table is read whole or the check fails (fail closed): an entry whose
+// key the scanner cannot resolve to a literal name is itself a finding, never
+// skipped, so a pack-named kind cannot pass under a computed key or a spread.
+describe("core/extension border — an unreadable kind table entry fails the check", () => {
+  const STEP_PACKS = new Set(["@cinatra-ai/acme-invoice-agent", "@cinatra-ai/zephyr-connector"]);
+  const FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const scan = (text: string) =>
+    gate.scanStepScreenKindTables({ file: FILE, text, packs: STEP_PACKS }).findings.map((f) => f.detail);
+  const tableOf = (body: string, tail = "") =>
+    `const RENDERER_KIND_TABLE: Record<string, Entry> = {\n${body}\n}${tail};\n`;
+
+  it("judges a computed key whose same-file const holds the name", () => {
+    const text =
+      `const PACK_KIND = "zephyr-sender";\nconst GENERIC = 'list-picker' as const;\n` +
+      tableOf(`  [PACK_KIND]: { renderer: Floor },\n  [GENERIC]: { renderer: Picker },`);
+    expect(scan(text)).toEqual(["zephyr-sender"]);
+  });
+
+  it("judges a computed string or plain template-literal key", () => {
+    expect(scan(tableOf('  ["zephyr-sender"]: { renderer: Floor },\n  [`acme-invoice-review`]: { renderer: Floor },'))).toEqual([
+      "zephyr-sender",
+      "acme-invoice-review",
+    ]);
+  });
+
+  // red-first-expect: none (passed before; pins that the fail-closed read keeps these readable forms)
+  it("reads a numeric key, a shorthand key and an `as const` or `satisfies` wrapped table", () => {
+    expect(scan(tableOf("  1: { renderer: Floor },\n  cta,\n  form: { renderer: Form },", " as const"))).toEqual([]);
+    expect(scan(tableOf('  "zephyr-sender": { renderer: Floor },', " satisfies Record<string, Entry>"))).toEqual([
+      "zephyr-sender",
+    ]);
+  });
+
+  it("refuses a computed key bound to an imported const", () => {
+    const text = `import { PACK_KIND } from "./kinds";\n` + tableOf("  [PACK_KIND]: { renderer: Floor },");
+    expect(scan(text)).toEqual(["unreadable entry: [PACK_KIND]"]);
+  });
+
+  it("refuses a template-literal key with a substitution, and a member-expression key", () => {
+    expect(scan(tableOf("  [`${VENDOR}-sender`]: { renderer: Floor },\n  [Kinds.Sender]: { renderer: Floor },"))).toEqual([
+      "unreadable entry: [`${VENDOR}-sender`]",
+      "unreadable entry: [Kinds.Sender]",
+    ]);
+  });
+
+  it("refuses a spread entry", () => {
+    expect(scan(tableOf('  "list-picker": { renderer: Picker },\n  ...PACK_KINDS,'))).toEqual(["unreadable entry: ...PACK_KINDS"]);
+  });
+
+  it("refuses a table built by a call, a Map, or declared with no object", () => {
+    expect(scan("const RENDERER_KIND_TABLE = buildKinds();\n")).toEqual(["unreadable entry: buildKinds()"]);
+    expect(scan('const RENDERER_KIND_TABLE = new Map([["zephyr-sender", Floor]]);\n')).toEqual([
+      'unreadable entry: new Map([["zephyr-sender", Floor]])',
+    ]);
+    expect(scan("let RENDERER_KIND_TABLE: Record<string, Entry>;\n")).toEqual(["unreadable entry: (no initializer)"]);
+  });
+
+  it("refuses entries added to the table after its declaration, and passes its reads", () => {
+    const text =
+      tableOf('  "list-picker": { renderer: Picker },') +
+      "const entry = RENDERER_KIND_TABLE[kind];\n" +
+      "if (RENDERER_KIND_TABLE[kind] === undefined) {}\n" +
+      'RENDERER_KIND_TABLE["zephyr-sender"] = { renderer: Floor };\n' +
+      "RENDERER_KIND_TABLE.extra ??= { renderer: Floor };\n" +
+      "Object.assign(RENDERER_KIND_TABLE, PACK_KINDS);\n";
+    expect(scan(text)).toEqual([
+      'unreadable entry: RENDERER_KIND_TABLE["zephyr-sender"] =',
+      "unreadable entry: RENDERER_KIND_TABLE.extra ??=",
+      "unreadable entry: Object.assign(RENDERER_KIND_TABLE",
+    ]);
+  });
+
+  // red-first-expect: none (the real table is read whole before and after; this pins it)
+  it("the real kind table is read whole: no unreadable entry", () => {
+    const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+    expect(r.findings.filter((f) => f.detail.startsWith("unreadable entry"))).toEqual([]);
+  });
+});
+
+// The one-time seeding of a rule's standing findings is open ONLY to a rule
+// the base did not know. A base ledger written before the `rules` list names
+// the rules it ratchets through the BASE COPY OF THE GATE SCRIPT; a zero-entry
+// rule there (B) is ratcheted all the same. The base script unread fails closed.
+describe("core/extension border — only a truly new rule may seed (the migration case)", () => {
+  const FLOOR = "config/core-extension-border-baseline.json";
+  const SCRIPT = "scripts/ci/core-extension-border-gate.mjs";
+  const A = "pack-table-literal";
+  const B = "pack-named-passthrough";
+  const C = "pack-step-kind-in-core";
+  const REASON = "a standing crossing recorded in a fixture ledger";
+  const e = (rule: string, key: string) => ({ rule, key: `src/lib/x.ts::${key}`, reason: REASON });
+  const BASE_SCRIPT = `export const KNOWN_RULES = new Set([\n  "${A}",\n  "${B}",\n]);\n`;
+  const run = (base: Record<string, unknown>, head: Record<string, unknown>) => {
+    const f = floorFixture.makeFloorRepo({ base, head });
+    try {
+      return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+    } finally {
+      f.cleanup();
+    }
+  };
+  const preRulesBase = { [FLOOR]: { entries: [e(A, "a1")] }, [SCRIPT]: BASE_SCRIPT };
+
+  it("a zero-entry rule the base script knows cannot gain an entry", () => {
+    const r = run(preRulesBase, { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(B, "b1")] } });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`new entry: ${B}::src/lib/x.ts::b1`]);
+  });
+
+  // red-first-expect: none (seeding a new rule passed before too; this keeps the road open)
+  it("the rule this change adds seeds its entries once", () => {
+    const r = run(preRulesBase, { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } });
+    expect(r.lines).toEqual([expect.stringContaining("does not grow against")]);
+    expect(r.ok).toBe(true);
+  });
+
+  // red-first-expect: none (a listed rule could not grow before either)
+  it("on the next change the seeded rule cannot grow", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] }, [SCRIPT]: BASE_SCRIPT },
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`new entry: ${C}::src/lib/x.ts::c2`]);
+  });
+
+  it("fails closed when the base gate script cannot be read or names no rules", () => {
+    const head = { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] } };
+    const gone = run({ [FLOOR]: { entries: [e(A, "a1")] } }, head);
+    expect(gone.status).toBe("unreadable");
+    expect(gone.lines.join("\n")).toContain(`${SCRIPT} is not on the base`);
+    const blank = run({ [FLOOR]: { entries: [e(A, "a1")] }, [SCRIPT]: "export const X = 1;\n" }, head);
+    expect(blank.status).toBe("unreadable");
+    expect(blank.lines.join("\n")).toContain("names no rule list");
+  });
+});

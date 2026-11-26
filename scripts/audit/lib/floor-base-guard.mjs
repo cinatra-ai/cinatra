@@ -308,7 +308,7 @@ export function readFileAtBase(repoRoot, ref, path) {
  * @param {string} [o.envVar]   the gate's own base variable, when a workflow sets one
  * @param {string} o.floorPath  the floor file, repo-relative
  * @param {*} o.headFloor       the floor the gate reads from the checkout (the gate's own shape)
- * @param {(text: string) => *} o.parse  base text -> the same shape; throws when the text is not a floor
+ * @param {(text: string, at: { ref: string, repoRoot: string }) => *} o.parse  base text -> the same shape; throws when the text is not a floor (`at` lets it read a sibling file at the same base)
  * @param {(baseFloor: *, headFloor: *) => string[]} o.grown  one line per growth, empty when the floor held
  * @param {string} o.repoRoot   where git runs
  * @param {object} [o.env]      the environment (default: the process's)
@@ -363,7 +363,7 @@ export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse
   if (!read.ok) return { ...unreadable(read.reason, ref), ...(fetched ? { fetched } : {}) };
   let baseFloor;
   try {
-    baseFloor = parse(read.text);
+    baseFloor = parse(read.text, { ref, repoRoot });
   } catch (err) {
     return {
       ...unreadable(`the copy on "${ref}" is not a readable floor (${err?.message ?? err})`, ref),
