@@ -191,9 +191,9 @@ function streams(node: ReactNode): Streamed[] {
   return streams(props.children);
 }
 
-// The streamed target's props: its preparation, whether it frames itself, and the trusted organization. Nothing else,
-// so no stored capture pair rides along to the panel (cinatra#3862 leg 8).
-const STREAMED_PROPS = ["framed", "orgId", "prepared"];
+// The streamed target's props: its preparation, whether it frames itself, the trusted organization, and its own key in
+// the document (cinatra#3092). Nothing else, so no stored capture pair rides along to the panel (cinatra#3862 leg 8).
+const STREAMED_PROPS = ["framed", "orgId", "prepared", "targetKey"];
 
 async function paint(): Promise<{ bytes: Record<string, unknown>; props: string[] }> {
   const ref = encodePublishDecisionIslandRef(ROW)!;

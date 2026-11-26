@@ -7,7 +7,9 @@
 // names, the "Update your OpenAI API key →" call to action — navigates IN PLACE
 // on `/chat`. That is right there and wrong inside the widget: the same column
 // now renders inside `/embed/assistant`, which is an iframe on somebody else's
-// site under `sandbox="allow-scripts allow-same-origin"`. A same-tab navigation
+// site. The site's plugin creates that frame with
+// `sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"`:
+// it may open a new tab, and nothing else leaves it. A same-tab navigation
 // there either replaces the assistant with a full Cinatra page inside a tiny
 // panel, or — for a top-level navigation — is refused by the sandbox outright.
 // Either way the reader loses the conversation to reach a page they cannot use.
