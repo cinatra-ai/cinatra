@@ -350,6 +350,61 @@ afterAll(async () => {
     expect(await read(ORG, artifactId)).toBe(false);
   });
 
+  it("REVISION READ: one revision reads open, then settled with a person's approval time, and only for its own pair and organization (cinatra#3092)", async () => {
+    const { runId, reviewTaskId } = freshGateIds();
+    const artifactId = `art-${randomUUID()}`;
+    const read = (orgId: string, id: string, revision: string) =>
+      openReviewRead.readArtifactRevisionReview({ orgId, artifactId: id, representationRevisionId: revision });
+    expect(await read(ORG, artifactId, "rev-1")).toEqual({ status: "none" });
+    await gateStore.emitArtifactReviewGate({
+      runId,
+      orgId: ORG,
+      reviewTaskId,
+      targets: [{ artifactId, representationRevisionId: "rev-1" }],
+    });
+    expect(await read(ORG, artifactId, "rev-1")).toEqual({ status: "open" });
+    expect(await read(ORG, artifactId, "rev-2")).toEqual({ status: "none" });
+    expect(await read("org-another", artifactId, "rev-1")).toEqual({ status: "none" });
+    const fingerprint = "a".repeat(64);
+    await client.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates"
+          SET status = 'resolved', disposition = 'approve', fingerprint = $3, resolved_by = 'user-1',
+              resolved_at = '2026-11-25T09:20:00.000Z'
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId, fingerprint],
+    );
+    expect(await read(ORG, artifactId, "rev-1")).toEqual({
+      status: "settled",
+      disposition: "approve",
+      decidedAt: "2026-11-25T09:20:00.000Z",
+    });
+    // A non-human carrier's decision: a decision fingerprint and no person as
+    // decider of record (null, or a system principal). Settled, no person's time.
+    for (const resolvedBy of [null, "system:a2a"]) {
+      await client.query(
+        `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET resolved_by = $3
+          WHERE run_id = $1 AND review_task_id = $2`,
+        [runId, reviewTaskId, resolvedBy],
+      );
+      expect(await read(ORG, artifactId, "rev-1")).toEqual({
+        status: "settled",
+        disposition: "approve",
+        decidedAt: null,
+      });
+    }
+    // A system settlement (an expiry fingerprint) is settled, with no person's time.
+    await client.query(
+      `UPDATE "${q(TEST_SCHEMA)}"."artifact_review_gates" SET fingerprint = 'expiry:g', resolved_by = 'user-1'
+        WHERE run_id = $1 AND review_task_id = $2`,
+      [runId, reviewTaskId],
+    );
+    expect(await read(ORG, artifactId, "rev-1")).toEqual({
+      status: "settled",
+      disposition: "approve",
+      decidedAt: null,
+    });
+  });
+
   it("PIN: refuses a new combined gate without storing a partial singleton", async () => {
     const { runId, reviewTaskId } = freshGateIds();
     await expect(gateStore.emitArtifactReviewGate({
