@@ -22,10 +22,25 @@
  * `getCampaignFromDatabase`. Both heavy modules (`@/lib/database` and
  * `@cinatra-ai/gmail-connector`) are loaded lazily so vitest can run the unit
  * tests without resolving them — tests pass mocked deps via the factory.
+ *
+ * NO RUN REACHES THE INITIAL SEND THROUGH MCP: the MCP boundary refuses every
+ * call of this tool made on a run's frame (src/lib/authz/mcp-boundary.ts, the
+ * outward-effect set). A run will reach it only through the declared
+ * publishing step's call on the passthrough route, in the run's frame with its
+ * verified run, step and claimed decision (cinatra#3089).
+ *
+ * WHAT A PUBLISHING STEP MAY SEND (cinatra#3089): a call whose verified step is
+ * governed by a publish decision is checked against the ONE decision its road
+ * claimed for it, and a run that filed email bodies for review never sends the
+ * bundle's text. Every gap refuses the whole send before any mail, with a named
+ * code. A call that passes every check is refused too
+ * (`approved_send_unavailable`) until the per-message mail of the released
+ * revisions is in place: a governed call never falls back to the bundle.
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
+import type { PublishDecisionRow } from "@cinatra-ai/agents/publish-decision-store";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -101,7 +116,58 @@ export type TriggerEmailSendDeps = {
   // refuses fails the send visibly (cinatra#3089); any other projection failure
   // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
+  // Whether the steps of a run filed email bodies for review (cinatra#3089). A
+  // send of such a run whose calling step released no reviewed list is refused
+  // before any mail, so the bundle's text never bypasses the reviewed bodies.
+  // Defaults to `runHasFiledReviewArtifacts`: the run's mid-run filings in the
+  // actor's organization, each read through the access-checked objects read.
+  readRunReviewedBodies?: (runId: string, actor: PrimitiveActorContext) => Promise<boolean>;
+  /**
+   * The run this call belongs to, read from the server's own context of the
+   * call (cinatra#3089), with the verified step that made the call; null when
+   * the call carries no verified run. Never a field of the request or of a
+   * bundle.
+   */
+  readCallingRun?: () => Promise<CallingRun | null>;
+  /**
+   * The publish decision that governs a call of the verified step `stepId` in
+   * `runId`, whatever its status; null when the step governs none. Defaults to
+   * `readGoverningPublishDecision`, the one resolution the publishing call
+   * guard also claims under: a step nested in a publishing node, or signed
+   * with the publishing component's own id, reads the decision of that node.
+   */
+  readPublishDecision?: (runId: string, stepId: string) => Promise<StepPublishDecision | null>;
+  /**
+   * The decision `decisionId` of `runId`, by its id, in the run's CURRENT
+   * attempt (cinatra#3089): the decision the call's road claimed for this call
+   * (`CallingRun.claim`). Null when the run holds no such decision in its
+   * current attempt. Defaults to `readDecisionOfRun`. The send reads its list
+   * from this decision only, never from "the newest of the attempt".
+   */
+  readClaimedPublishDecision?: (runId: string, decisionId: string) => Promise<StepPublishDecision | null>;
+  /**
+   * The runs the HOST RECORDED as writers of the object `objectId` (its row's
+   * run and every run of its append-only change history), never a run id the
+   * object's own data names (cinatra#3089). Throws when they cannot be read.
+   * Defaults to `listObjectWriterRunIds`.
+   */
+  readObjectRuns?: (objectId: string, actor: PrimitiveActorContext) => Promise<string[]>;
 };
+
+/** The run of a call, the verified step that made it, the publish decision the
+ *  runtime signed for the call, when it signed one, and the decision the call's
+ *  road CLAIMED for this call (`claim`, the request frame's `publishCallClaim`),
+ *  when it claimed one (see `readCallingRun`). */
+export type CallingRun = {
+  runId: string;
+  stepId?: string;
+  publishDecisionId?: string;
+  claim?: { runId: string; decisionId: string };
+};
+
+/** A step's publish decision, as the send reads it (see `readPublishDecision`). */
+export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
+  & Partial<Pick<PublishDecisionRow, "id">>;
 
 // Lazy default deps — heavy imports happen only when the adapter is actually
 // invoked in production. Unit tests inject mocks via the factory's deps arg.
@@ -187,6 +253,65 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
     },
     emitEmailFanout(args) {
       return defaultEmitEmailFanout(args);
+    },
+    async readRunReviewedBodies(runId, actor) {
+      const orgId = actor.orgId;
+      if (!orgId) {
+        throw new Error("the sending actor carries no organization, so the filings of its run cannot be read");
+      }
+      const [{ kernelActorForRead }, { runHasFiledReviewArtifacts }] = await Promise.all([
+        import("./authz/enforce-resource-access"),
+        import("./artifacts/current-decided-revision-read"),
+      ]);
+      return runHasFiledReviewArtifacts({
+        actor: kernelActorForRead(actor, orgId),
+        orgId,
+        runId,
+        objectTypeId: EMAIL_BODY_TYPE_ID,
+      });
+    },
+    // The run of the call is a verified channel of the request frame only: an
+    // agent-run token's signed run, or the run a run-bound seam proved
+    // (`verifiedRunScopeId`, or the frame's run id beside a verified step: a
+    // verified step is never stamped on a frame without a verified run).
+    async readCallingRun() {
+      const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+      const ctx = mcpRequestContextStorage.getStore();
+      const agentRun = ctx?.delegatedActor?.delegation === "agent_run" ? ctx.delegatedActor : undefined;
+      const runId = agentRun?.runId ?? ctx?.verifiedRunScopeId ?? (ctx?.verifiedStepId ? ctx.runId : undefined);
+      if (typeof runId !== "string" || runId.trim() === "") return null;
+      const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
+      // The decision the runtime signed beside the verified source (cinatra#3745), never request input.
+      const publishDecisionId = ctx?.verifiedPublishDecisionId;
+      // The decision the passthrough route's call check CLAIMED for this call (cinatra#4762), as the server took it.
+      const claim = ctx?.publishCallClaim;
+      return {
+        runId: runId.trim(),
+        ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}),
+        ...(typeof publishDecisionId === "string" && publishDecisionId !== "" ? { publishDecisionId } : {}),
+        ...(claim && typeof claim.runId === "string" && typeof claim.decisionId === "string" && claim.decisionId !== ""
+          ? { claim: { runId: claim.runId, decisionId: claim.decisionId } }
+          : {}),
+      };
+    },
+    async readObjectRuns(objectId, actor) {
+      const orgId = actor.orgId;
+      if (!orgId) {
+        throw new Error("the sending actor carries no organization, so the writers of its bundles cannot be read");
+      }
+      const [{ kernelActorForRead }, { listObjectWriterRunIds }] = await Promise.all([
+        import("./authz/enforce-resource-access"),
+        import("./artifacts/current-decided-revision-read"),
+      ]);
+      return listObjectWriterRunIds({ actor: kernelActorForRead(actor, orgId), orgId, objectId });
+    },
+    async readPublishDecision(runId, stepId) {
+      const { readGoverningPublishDecision } = await import("@cinatra-ai/agents/publish-decision-actions");
+      return readGoverningPublishDecision(runId, stepId);
+    },
+    async readClaimedPublishDecision(runId, decisionId) {
+      const { readDecisionOfRun } = await import("@cinatra-ai/agents/publish-decision-store");
+      return readDecisionOfRun(runId, decisionId);
     },
   };
 }
@@ -725,13 +850,29 @@ async function runInitialSend(args: {
   };
   actor: PrimitiveActorContext;
   sendEmail: TriggerEmailSendDeps["sendEmail"];
+  readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
+  readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
+  readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
+  readClaimedPublishDecision: NonNullable<TriggerEmailSendDeps["readClaimedPublishDecision"]>;
+  readObjectRuns: NonNullable<TriggerEmailSendDeps["readObjectRuns"]>;
   getObjectByRef: (
     ref: string,
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
 }): Promise<InitialSendStateRow> {
-  const { input, actor, sendEmail, getObjectByRef, emitEmailFanout } = args;
+  const {
+    input,
+    actor,
+    sendEmail,
+    getObjectByRef,
+    emitEmailFanout,
+    readRunReviewedBodies,
+    readCallingRun,
+    readPublishDecision,
+    readClaimedPublishDecision,
+    readObjectRuns,
+  } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -776,6 +917,171 @@ async function runInitialSend(args: {
         sentCount: 0,
         errorMessage: "Approved draft bundle has no drafts.",
       };
+    }
+    const refuse = (reason: string): never => {
+      throw new Error(`The send was refused before any email went out: ${reason}`);
+    };
+    const textOf = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+    // A value of the released decision is used exactly as it was frozen and
+    // shown: never trimmed. An id or an address must carry no white space
+    // around it; a subject is compared byte for byte.
+    const exactOf = (value: unknown): string | undefined =>
+      typeof value === "string" && value !== "" && value.trim() === value ? value : undefined;
+
+    // THE RUN OF THE SEND (cinatra#3089) is the run of the call, from the
+    // server's own context of the call; a run id written in a bundle never
+    // decides it.
+    let callingRun: CallingRun | null = null;
+    try {
+      callingRun = await readCallingRun();
+    } catch (err) {
+      refuse(`the run of this call could not be read: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const callRunId = callingRun?.runId ?? null;
+
+    // WHAT A PERSON APPROVED (cinatra#3089) is the publish decision a person
+    // released for the calling step: its values were frozen when the step
+    // stopped, and the card was drawn from them. The approved list is the ONE
+    // surfaced list of approved bodies that a list row of the card showed
+    // (address and subject columns) and an artifacts row drew
+    // (`releasedDecisionList`). The sender is the text the card's own row
+    // showed (`releasedDecisionText`); the campaign is the decision's surfaced
+    // `campaignId`, which must be the campaign the call names. Nothing of the
+    // request decides what is mailed.
+    let released = false;
+    const stepId = callingRun?.stepId;
+    if (callRunId && stepId) {
+      const decisionOf = `step ${stepId} of run ${callRunId}`;
+      let governing: StepPublishDecision | null = null;
+      try {
+        governing = await readPublishDecision(callRunId, stepId);
+      } catch (err) {
+        refuse(`the publish decision of ${decisionOf} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // The decision the runtime signed for this call names the visit it was
+      // made under: the governing decision must be that very decision.
+      const signed = callingRun?.publishDecisionId;
+      if (signed !== undefined && governing?.id !== signed) {
+        refuse(`the call was signed for another publish decision than the one that governs ${decisionOf}`);
+      }
+      // THE SEND USES EXACTLY ONE DECISION (cinatra#3089): the one the call's
+      // road claimed for this call (`claim`), read by that id in the run's
+      // current attempt. A governed call with no claim, a claim of another run,
+      // a claim the signed decision contradicts, a claimed decision that cannot
+      // be read, one the current attempt no longer holds (a reset left it
+      // behind), or one a newer decision of the step superseded is refused
+      // before any mail; a claimed decision that is not released is refused by
+      // the list read below.
+      let decision: StepPublishDecision | null = null;
+      if (governing) {
+        const claim = callingRun?.claim;
+        if (!claim) refuse(`no publish decision was claimed for this call (${decisionOf}) (decision_not_claimed)`);
+        if (claim!.runId !== callRunId) refuse(`the call claimed a publish decision of another run (${decisionOf}) (decision_claim_other_run)`);
+        if (signed !== undefined && signed !== claim!.decisionId) {
+          refuse(`the call was signed for another publish decision than the one it claimed (${decisionOf}) (decision_claim_conflict)`);
+        }
+        try {
+          decision = await readClaimedPublishDecision(callRunId, claim!.decisionId);
+        } catch {
+          refuse(`the publish decision this call claimed could not be read (${decisionOf}) (decision_claim_unreadable)`);
+        }
+        if (!decision || decision.id !== claim!.decisionId) {
+          refuse(`the publish decision this call claimed is not a decision of the current attempt of the run (${decisionOf}) (decision_claim_not_current)`);
+        }
+        if (governing.id !== claim!.decisionId) {
+          refuse(`the publish decision this call claimed was superseded by a newer decision of the step (${decisionOf}) (decision_claim_superseded)`);
+        }
+      }
+      if (decision) {
+        const { releasedDecisionList, releasedDecisionText } = await import("@cinatra-ai/agents/publish-decision-store");
+        const read = releasedDecisionList({
+          decision,
+          entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
+          shownFields: [
+            { field: "recipientEmail", column: "email" },
+            { field: "subject", column: "subject" },
+          ],
+        });
+        if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
+        // THE FORM IS CHOSEN BY THE DECISION, NEVER BY THE REQUEST: a call whose
+        // step is governed by a publish decision sends only the bodies a person
+        // released. A decision with no approved list cannot route it into the
+        // reference-only form (which mails the bundle): it is refused.
+        if (!read.list) {
+          const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
+          throw new ReviewedArtifactsRequiredError(
+            `The send was refused before any email went out: the publish decision that governs ${decisionOf} holds no list of approved bodies, and a publishing step sends only the bodies a person released`,
+          );
+        }
+        const surfaced = decision.surfacedValues;
+        const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
+        if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
+        const campaignId = exactOf(frozenCampaign)
+          ?? refuse(`the released publish decision carries its campaign with white space around it (${decisionOf})`);
+        if (campaignId !== input.campaignId) {
+          refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
+        }
+        const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
+        if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
+        const senderEmail = shownSender.value ?? undefined;
+        if (senderEmail !== undefined && exactOf(senderEmail) === undefined) {
+          refuse(`the sender the released publish card showed carries white space around it (${decisionOf})`);
+        }
+        // The call's sender, when it names one, must be the shown sender byte for byte.
+        const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
+        if (callSender !== undefined && callSender !== senderEmail) {
+          refuse(
+            senderEmail
+              ? `the call names another sender than the released publish card showed (${decisionOf})`
+              : `the call names a sender the released publish card did not show (${decisionOf})`,
+          );
+        }
+        released = true;
+      }
+    }
+
+    // A RELEASED LIST IS NEVER SENT AS THE BUNDLE: the mail of each approved
+    // revision, at most once per message, is not in place yet, so a call that
+    // passed every check above is refused before any mail. It never falls
+    // through to the reference-only form below.
+    if (released) {
+      refuse("the released publish decision was checked, but this server does not yet mail approved bodies (approved_send_unavailable)");
+    }
+
+    // Without a released list the send reads the bundle exactly as before,
+    // unless a step filed bodies for review: the bundle's text is then not what
+    // a person reviewed, so the send is refused before any mail
+    // (`ReviewedArtifactsRequiredError`). The runs looked up are the run of the
+    // call AND every run the HOST RECORDED as a writer of either bundle object
+    // (`readObjectRuns`). A run id in a bundle's data decides nothing here. A
+    // call that carries no run (a person's direct call) on bundles no run ever
+    // wrote keeps the reference-only send: no body of theirs was filed for review.
+    const writerRuns: string[] = [];
+    for (const [ref, env] of [
+      [input.approvedDraftBundleRef, draftEnv],
+      [input.confirmedRecipientsRef, recipEnv],
+    ] as const) {
+      const objectId = textOf(env.id) ?? ref;
+      try {
+        writerRuns.push(...(await readObjectRuns(objectId, actor)));
+      } catch (err) {
+        refuse(`which runs wrote object ${objectId} could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    for (const runId of [...new Set([...(callRunId ? [callRunId] : []), ...writerRuns])]) {
+      let reviewed = true;
+      try {
+        reviewed = await readRunReviewedBodies(runId, actor);
+      } catch (err) {
+        refuse(`whether run ${runId} filed artifacts for review could not be read: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (reviewed) {
+        const { ReviewedArtifactsRequiredError } = await import("./artifacts/current-decided-revision-read");
+        throw new ReviewedArtifactsRequiredError(
+          `The send was refused before any email went out: run ${runId} filed artifacts for review, and the calling step holds no list a person released`,
+        );
+      }
     }
 
     // Durable per-item projection AT the fan-out boundary (cinatra#1455) —
@@ -1140,6 +1446,8 @@ export function createTriggerEmailSendUseCases(
     // The agent's SKILL.md polls up to 5 times — sync completion plus
     // memo'd state mean the first poll always reports completed.
     async startInitialSend(input, actor) {
+      let defaults: TriggerEmailSendDeps | null = null;
+      const fallback = () => (defaults ??= buildLazyDefaultDeps());
       const result = await runInitialSend({
         input,
         actor,
@@ -1148,6 +1456,11 @@ export function createTriggerEmailSendUseCases(
         // (e.g. a unit test) omits the optional fan-out seams.
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
+        readRunReviewedBodies: deps.readRunReviewedBodies ?? fallback().readRunReviewedBodies!,
+        readCallingRun: deps.readCallingRun ?? fallback().readCallingRun!,
+        readPublishDecision: deps.readPublishDecision ?? fallback().readPublishDecision!,
+        readClaimedPublishDecision: deps.readClaimedPublishDecision ?? fallback().readClaimedPublishDecision!,
+        readObjectRuns: deps.readObjectRuns ?? fallback().readObjectRuns!,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {
