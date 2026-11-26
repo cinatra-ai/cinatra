@@ -135,3 +135,16 @@ describe("cinatra#3441 — the panel draws its frame only where it is the target
     expect(classesOf(slot!)).toContain("overflow-x-auto");
   });
 });
+
+// cinatra#3459 — THE PDF FLOOR STANDS IN THE SLOT ITSELF. specs/app-artifact-
+// review.html §XI.4 draws the floor straight under the target header, one
+// surface with its own rule and padding; the slot gives it no padding of its
+// own around it, and keeps its padding for every other representation.
+describe("cinatra#3459 — the slot draws no padding around the pdf floor", () => {
+  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
+  it("drops its padding where the shared pdf shell draws its floor in it", () => {
+    const classes = classesOf(panel().slot);
+    expect(classes).toContain("has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0");
+    expect(classes).toContain("p-4");
+  });
+});
