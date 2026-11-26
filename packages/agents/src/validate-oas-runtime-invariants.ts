@@ -710,10 +710,12 @@ function isPublishingNode(node: unknown): boolean {
 }
 
 /**
- * Every ApiNode in the subtree of a top-level node: the walk follows
- * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
- * `$component_ref` resolves to the innermost enclosing `$referenced_components`
- * that holds its key.
+ * Every ApiNode in the subtree of a top-level node. The walk visits every child
+ * value, lists and single objects alike (so `subflow`, `nodes`, an AgentNode's
+ * `agent`, an Agent's `tools`, a tool's `flow` and any other holder), the same
+ * shape set as the compiler's publishing traversal (`checkPublishingCallRoutes`
+ * in oas-compiler.ts); a `$component_ref` resolves to the innermost enclosing
+ * `$referenced_components` that holds its key.
  */
 function subtreeApiNodes(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
   const found: Array<Record<string, unknown>> = [];
@@ -721,6 +723,10 @@ function subtreeApiNodes(start: unknown, rootRefs: Record<string, unknown>): Arr
   const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
   while (stack.length > 0) {
     const [value, scopes] = stack.pop()!;
+    if (Array.isArray(value)) {
+      for (const item of value) stack.push([item, scopes]);
+      continue;
+    }
     if (!isPlainObject(value) || seen.has(value)) continue;
     seen.add(value);
     const ref = resolveComponentRef(value);
@@ -736,12 +742,7 @@ function subtreeApiNodes(start: unknown, rootRefs: Record<string, unknown>): Arr
     if (value.component_type === "ApiNode") found.push(value);
     const refs = value.$referenced_components;
     const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
-    if (isPlainObject(refs)) for (const child of Object.values(refs)) stack.push([child, inner]);
-    for (const key of ["subflow", "start_node"]) stack.push([value[key], inner]);
-    for (const key of ["subflows", "nodes"]) {
-      const list = value[key];
-      if (Array.isArray(list)) for (const child of list) stack.push([child, inner]);
-    }
+    for (const child of Object.values(value)) stack.push([child, inner]);
   }
   return found;
 }
@@ -1048,24 +1049,32 @@ function scanInputMessageGateMountability(
     const componentType = node["component_type"];
 
     // --- artifact-review gate surfaces its targets (cinatra#4150) ----------
-    // The loader writes a gate's declared inputs into its pause message only
-    // when the gate sets surfaceGateInputs === true; without it the message is
-    // empty, the application reads no review targets and no review opens.
+    // The application reads the targets by the marker's input name from the
+    // gate's pause message first, then from the run's start parameters
+    // (resolveDeclaredReviewTargets). The loader writes a gate's declared
+    // inputs into its pause message only when the gate sets
+    // surfaceGateInputs === true; the start parameters hold only the ROOT
+    // flow's inputs (a nested flow's inputs never reach them). A gate whose
+    // targets reach neither road opens no review.
     const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
     const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
     const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
     if (review && Object.prototype.hasOwnProperty.call(review, "targetsInput")) {
       const target = review["targetsInput"];
-      const inputs = Array.isArray(node["inputs"]) ? node["inputs"] : [];
+      const named = (list: unknown) =>
+        typeof target === "string" &&
+        Array.isArray(list) &&
+        list.some((i) => isPlainObject(i) && i["title"] === target);
       const missing =
         componentType !== "InputMessageNode"
           ? `it is a "${String(componentType)}", not an InputMessageNode`
-          : cin!["surfaceGateInputs"] !== true
-            ? "it does not set metadata.cinatra.surfaceGateInputs: true"
-            : typeof target !== "string" ||
-                !inputs.some((i) => isPlainObject(i) && i["title"] === target)
-              ? `"${String(target)}" is not one of its declared inputs`
-              : null;
+          : named(parsed["inputs"])
+            ? null
+            : cin!["surfaceGateInputs"] !== true
+              ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${String(target)}" is not a start input of the flow`
+              : !named(node["inputs"])
+                ? `"${String(target)}" is not one of its declared inputs nor a start input of the flow`
+                : null;
       if (missing) {
         findings.push({
           code: "OAS-RUNTIME-013",
@@ -1074,8 +1083,9 @@ function scanInputMessageGateMountability(
             `Gate "${gateLabel(node)}" declares metadata.cinatra.artifactReview.targetsInput ` +
             `but ${missing}. The pause message then carries no review targets, ` +
             `so the application opens no artifact review. A review gate is an ` +
-            `InputMessageNode with surfaceGateInputs: true whose declared inputs ` +
-            `include the targets input. ${HITL_GATE_DOC}`,
+            `InputMessageNode whose targets input is a start input of the root ` +
+            `flow, or that sets surfaceGateInputs: true and declares the targets ` +
+            `input. ${HITL_GATE_DOC}`,
           location: path,
           source: "deterministic",
         });
