@@ -7,15 +7,17 @@
  * scripts/audit/_lib/skill-packaging-verdict.mjs); skills are out of this
  * check's scope, like connectors.
  *
- * LIMITS. The check COUNTS; it does not judge what a file does. A new file of a
+ * LIMITS. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
  * content kind (a `.json`, a `.md`) is not counted even if something executes
  * it. Code inside a connector and code in core are out of its scope.
  *
  * Over the pinned extensions (both locks plus `cinatra.devExtensions`) it reads
  * each pack from its PINNED COMMIT (the lock's `resolvedSha`) in its git
  * checkout at `extensions/<scope>/<name>`, never from the working tree or the
- * index, and counts, per key, four classes that may only go down:
- * `nonContentFiles` (agent packs: files that are not content by `isContent`),
+ * index, and records, per key, the items of four classes that may only go
+ * down (the head's items must be contained in the recorded ones, as a multiset):
+ * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
+ * by `isContent`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
@@ -36,6 +38,21 @@ export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
 export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps"];
 export const EXTENSION_TOOL = "extension_tool";
+
+/**
+ * THE AGENT RULE. A pinned pack is an agent when its manifest says kind
+ * `agent`, OR when its pinned tree holds what the product's discovery looks
+ * for at a pack root `extensions/<scope>/<name>`: `cinatra/oas.json` or the
+ * transitional `cinatra/agent.json` (`collectDefinitions` in
+ * src/lib/git-native-agent-ingest.ts, the vendor-namespace probe; the seed of
+ * scripts/extensions/build-required-oas-seed.mjs tests `cinatra/oas.json`, a
+ * subset). A tree entry at, or below, such a path matches (discovery's
+ * `existsSync` is true for a file, a link or a folder).
+ */
+export const AGENT_DEFINITION_PATHS = Object.freeze(["cinatra/agent.json", "cinatra/oas.json"]);
+export function isAgentPack(kind, entries) {
+  return kind === "agent" || entries.some((e) => AGENT_DEFINITION_PATHS.some((p) => e.rel === p || e.rel.startsWith(`${p}/`)));
+}
 
 /**
  * THE CONTENT RULE, closed. A file is content when its extension, exact name
@@ -140,34 +157,50 @@ export function flowSteps(flow) {
   return { steps: steps.sort(), unreadable: unreadable.sort() };
 }
 
-const countsOf = (map) => new Map(Object.keys(map ?? {}).map((k) => [k, map[k].count]));
+/** The items of `a` (a multiset) that `b` does not hold, each as often as it is missing, sorted. */
+export function missingItems(a, b) {
+  const left = new Map();
+  for (const i of b ?? []) left.set(i, (left.get(i) ?? 0) + 1);
+  const out = [];
+  for (const i of a ?? []) {
+    const n = left.get(i) ?? 0;
+    if (n > 0) left.set(i, n - 1);
+    else out.push(i);
+  }
+  return out.sort();
+}
 
-/** Per class: keys whose found count is above the list (`fresh`) or below it (`stale`). */
+const itemsOf = (map, k) => (map && hasOwn(map, k) ? map[k].items : []);
+const keysOf = (...maps) => [...new Set(maps.flatMap((m) => Object.keys(m ?? {})))].sort();
+
+/**
+ * Per class: items found that the list does not hold (`fresh`, whatever the
+ * count) and items the list holds that are gone (`stale`), as `key: item`.
+ */
 export function diffWithList(findings, list) {
   const out = Object.create(null);
   for (const cls of CLASSES) {
-    const [found, listed] = [countsOf(findings[cls]), countsOf(list[cls])];
     out[cls] = { fresh: [], stale: [] };
-    for (const k of [...new Set([...found.keys(), ...listed.keys()])].sort()) {
-      const [f, l] = [found.get(k) ?? 0, listed.get(k) ?? 0];
-      if (f !== l) out[cls][f > l ? "fresh" : "stale"].push(`${k}: ${f}, the list holds ${l}`);
+    for (const k of keysOf(findings[cls], list[cls])) {
+      const [found, listed] = [itemsOf(findings[cls], k), itemsOf(list[cls], k)];
+      for (const i of missingItems(found, listed)) out[cls].fresh.push(`${k}: ${i}`);
+      for (const i of missingItems(listed, found)) out[cls].stale.push(`${k}: ${i}`);
     }
   }
   return out;
 }
 
-/** Growth of `head` against `base`: a raised count (absent = 0) or a removed class. */
+/** Growth of `head` against `base`: an item the base does not hold (as a multiset), or a removed class. */
 export function listGrowth(base, head) {
   const lines = [];
   for (const cls of CLASSES) {
     if (base?.[cls] && !head?.[cls]) lines.push(`[${cls}] the class is removed (a class is never removed)`);
-    const b = countsOf(base?.[cls]);
-    for (const [k, n] of countsOf(head?.[cls])) if (n > (b.get(k) ?? 0)) lines.push(`[${cls}] ${k}: ${n}, the base holds ${b.get(k) ?? 0}`);
+    for (const k of keysOf(head?.[cls])) for (const i of missingItems(itemsOf(head[cls], k), itemsOf(base?.[cls], k))) lines.push(`[${cls}] ${k}: ${i} (the base does not hold it)`);
   }
   return lines.sort();
 }
 
-/** Parse a list: every class an object of `{ count, items }`. Throws otherwise. Prototype-free copy. */
+/** Parse a list: every class an object of `{ count, items }`, `count` the number of items. Throws otherwise. Prototype-free copy. */
 export function parseList(text) {
   const raw = JSON.parse(text);
   if (!isPlainObject(raw)) throw new Error("the list is not an object");
@@ -176,7 +209,7 @@ export function parseList(text) {
     if (!isPlainObject(raw[cls])) throw new Error(`the class ${cls} is missing or not an object`);
     out[cls] = Object.create(null);
     for (const [k, e] of Object.entries(raw[cls])) {
-      if (!isPlainObject(e) || !Number.isInteger(e.count) || e.count < 0 || !Array.isArray(e.items) || e.items.some((s) => typeof s !== "string")) {
+      if (!isPlainObject(e) || !Array.isArray(e.items) || e.items.some((s) => typeof s !== "string") || e.count !== e.items.length) {
         throw new Error(`the entry ${cls}.${k} is not { count, items }`);
       }
       out[cls][k] = { count: e.count, items: [...e.items] };
@@ -281,7 +314,7 @@ export function scan(root) {
       if (steps.length) findings.extensionToolSteps[`${name} :: ${e.rel}`] = { count: steps.length, items: steps };
       if (unreadable.length) findings.unreadableSteps[`${name} :: ${e.rel}`] = { count: unreadable.length, items: unreadable };
     }
-    if (kind === "agent") {
+    if (isAgentPack(kind, entries)) {
       const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
@@ -301,8 +334,8 @@ export function checkListAgainstBase({ repoRoot, headList, env = process.env }) 
 
 const total = (map) => Object.values(map).reduce((n, e) => n + e.count, 0);
 const totals = (f) => CLASSES.map((c) => `${total(f[c])} ${c} in ${Object.keys(f[c]).length} key(s)`).join(", ");
-const NOTE = "Agent extension code gate (cinatra#4885): counts per key that may only go down (lower them with --write-baseline); " +
-  "`items` is information, never compared. See scripts/audit/extension-coupling-gates.md.";
+const NOTE = "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, " +
+  "a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.";
 
 export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), env = process.env, log = console.log, err = console.error } = {}) {
   const stop = (code, ...lines) => (lines.forEach((l) => err(l)), code);
@@ -343,9 +376,9 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
   const diff = diffWithList(findings, list);
   for (const cls of CLASSES) {
     const { fresh, stale } = diff[cls];
-    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] above the recorded count (an agent extension ships no program code):`);
+    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] items the list does not hold (an agent extension ships no program code):`);
     for (const p of fresh) err(`  + ${p}`);
-    if (stale.length) err(`[${GATE}] FAIL — [${cls}] below the recorded count (lower the list: --write-baseline):`);
+    if (stale.length) err(`[${GATE}] FAIL — [${cls}] recorded items that are gone (shrink the list: --write-baseline):`);
     for (const p of stale) err(`  - ${p}`);
     failed ||= fresh.length + stale.length > 0;
   }

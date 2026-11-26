@@ -1,5 +1,5 @@
 {
-  "note": "Agent extension code gate (cinatra#4885): counts per key that may only go down (lower them with --write-baseline); `items` is information, never compared. See scripts/audit/extension-coupling-gates.md.",
+  "note": "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.",
   "nonContentFiles": {
     "@cinatra-ai/apollo-prospecting-agent": {
       "count": 5,

@@ -11,12 +11,15 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
+  AGENT_DEFINITION_PATHS,
   CLASSES,
   CONTENT,
   diffWithList,
   flowSteps,
+  isAgentPack,
   isContent,
   listGrowth,
+  missingItems,
   nonContentFiles,
   packFiles,
   parseList,
@@ -24,6 +27,8 @@ import {
 } from "../agent-extension-code-gate.mjs";
 
 const GATE_SCRIPT = fileURLToPath(new URL("../agent-extension-code-gate.mjs", import.meta.url));
+const INGEST_SOURCE = fileURLToPath(new URL("../../../src/lib/git-native-agent-ingest.ts", import.meta.url));
+const SEED_SOURCE = fileURLToPath(new URL("../../extensions/build-required-oas-seed.mjs", import.meta.url));
 const LIST_REL = join("scripts", "audit", "agent-extension-code-gate.baseline.json");
 const ABSENT_SHA = "0123456789abcdef0123456789abcdef01234567";
 
@@ -208,19 +213,29 @@ test("unreadable step data: a fully or partly templated string, a templated or n
   });
 });
 
-test("the ratchet reads counts: above fails, below is stale, items are never compared; growth vs base and a removed class", () => {
+test("the ratchet compares items as a multiset: a same-count substitution fails in every class, a duplicate fails, a gone item is stale; growth vs base and a removed class", () => {
+  assert.deepEqual(missingItems(["a", "a", "b"], ["a", "c"]), ["a", "b"]);
   const list = parseList(JSON.stringify(recorded()));
   const found = parseList(JSON.stringify(recorded()));
-  found.nonContentFiles[READ] = { count: 3, items: [] };
-  found.unreadableSteps[FLOW_KEY] = { count: 1, items: ["x"] };
+  found.nonContentFiles[READ] = { count: 2, items: ["cinatra/tools/read.mjs", "src/runtime.ts"] };
   found.toolDeclarations[READ] = { count: 1, items: ["renamed"] };
-  delete found.extensionToolSteps[FLOW_KEY];
+  found.extensionToolSteps[FLOW_KEY] = { count: 1, items: ["read_text -> other"] };
+  found.unreadableSteps[FLOW_KEY] = { count: 1, items: ["x: data.tool is not a plain name"] };
   const d = diffWithList(found, list);
-  assert.deepEqual(d.nonContentFiles.fresh, [`${READ}: 3, the list holds 2`]);
-  assert.deepEqual(d.unreadableSteps.fresh, [`${FLOW_KEY}: 1, the list holds 0`]);
-  assert.deepEqual(d.toolDeclarations, { fresh: [], stale: [] });
-  assert.deepEqual(d.extensionToolSteps.stale, [`${FLOW_KEY}: 0, the list holds 1`]);
-  assert.deepEqual(listGrowth(list, found), [`[nonContentFiles] ${READ}: 3, the base holds 2`, `[unreadableSteps] ${FLOW_KEY}: 1, the base holds 0`]);
+  assert.deepEqual(d.nonContentFiles, { fresh: [`${READ}: src/runtime.ts`], stale: [`${READ}: test/read.test.mjs`] });
+  assert.deepEqual(d.toolDeclarations, { fresh: [`${READ}: renamed`], stale: [`${READ}: read`] });
+  assert.deepEqual(d.extensionToolSteps, { fresh: [`${FLOW_KEY}: read_text -> other`], stale: [`${FLOW_KEY}: read_text -> read`] });
+  assert.deepEqual(d.unreadableSteps, { fresh: [`${FLOW_KEY}: x: data.tool is not a plain name`], stale: [] });
+  assert.deepEqual(listGrowth(list, found), [
+    `[extensionToolSteps] ${FLOW_KEY}: read_text -> other (the base does not hold it)`,
+    `[nonContentFiles] ${READ}: src/runtime.ts (the base does not hold it)`,
+    `[toolDeclarations] ${READ}: renamed (the base does not hold it)`,
+    `[unreadableSteps] ${FLOW_KEY}: x: data.tool is not a plain name (the base does not hold it)`,
+  ]);
+  const dup = parseList(JSON.stringify(recorded()));
+  dup.extensionToolSteps[FLOW_KEY] = { count: 2, items: ["read_text -> read", "read_text -> read"] };
+  assert.deepEqual(diffWithList(dup, list).extensionToolSteps.fresh, [`${FLOW_KEY}: read_text -> read`]);
+  assert.deepEqual(listGrowth(list, dup), [`[extensionToolSteps] ${FLOW_KEY}: read_text -> read (the base does not hold it)`]);
   const rest = recorded();
   delete rest.nonContentFiles;
   assert.deepEqual(listGrowth(list, rest), ["[nonContentFiles] the class is removed (a class is never removed)"]);
@@ -230,20 +245,88 @@ test("a malformed list is refused; parsed maps carry no prototype", () => {
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), unreadableSteps: undefined })), /unreadableSteps is missing/);
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: ["read"] } })), /not \{ count, items \}/);
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: { count: -1, items: [] } } })), /not \{ count, items \}/);
-  const parsed = parseList(JSON.stringify({ ...recorded(), toolDeclarations: { __proto__: { count: 1, items: [] }, constructor: { count: 1, items: [] } } }));
+  assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: { count: 2, items: ["read"] } } })), /not \{ count, items \}/);
+  const parsed = parseList(JSON.stringify({ ...recorded(), toolDeclarations: { __proto__: { count: 1, items: ["a"] }, constructor: { count: 1, items: ["b"] } } }));
   assert.equal(Object.getPrototypeOf(parsed.toolDeclarations), null);
   assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps"]);
 });
 
-test("live: --report counts each class; a connector has no file class but its declarations and steps count", () => {
+test("the agent rule mirrors the product's discovery: the paths its two readers test, at a pack root", () => {
+  const ingest = readFileSync(INGEST_SOURCE, "utf8");
+  assert.ok(ingest.includes('const oasJson = join(entryPath, sub.name, "cinatra", "oas.json");'), "git-native-agent-ingest.ts no longer probes <vendor>/<slug>/cinatra/oas.json: update AGENT_DEFINITION_PATHS");
+  assert.ok(ingest.includes('const transitional = join(entryPath, sub.name, "cinatra", "agent.json");'), "git-native-agent-ingest.ts no longer probes <vendor>/<slug>/cinatra/agent.json: update AGENT_DEFINITION_PATHS");
+  assert.ok(ingest.includes("const target = existsSync(oasJson)\n          ? oasJson\n          : existsSync(transitional)\n            ? transitional\n            : null;"), "the ingest's discovery condition changed: update AGENT_DEFINITION_PATHS");
+  const seed = readFileSync(SEED_SOURCE, "utf8");
+  assert.ok(seed.includes('const cinatraDir = path.join(slugDir, "cinatra");'), "build-required-oas-seed.mjs changed its cinatra/ folder: update AGENT_DEFINITION_PATHS");
+  assert.ok(seed.includes('const oasPath = path.join(cinatraDir, "oas.json");\n      if (!existsSync(oasPath)) continue;'), "build-required-oas-seed.mjs changed its condition: update AGENT_DEFINITION_PATHS");
+  assert.deepEqual([...AGENT_DEFINITION_PATHS], ["cinatra/agent.json", "cinatra/oas.json"]);
+  assert.equal(isAgentPack("agent", []), true);
+  assert.equal(isAgentPack("connector", plain("src/index.ts", "cinatra/tools.json")), false);
+  assert.equal(isAgentPack("connector", plain("cinatra/oas.json")), true);
+  assert.equal(isAgentPack("artifact", plain("cinatra/agent.json")), true);
+  assert.equal(isAgentPack("skill", plain("cinatra/oas.json/x")), true);
+  assert.equal(isAgentPack("connector", plain("x/cinatra/oas.json", "oas.json", "agent.json")), false);
+});
+
+test("live: --report records each class; a pack of any kind that ships a flow the product discovers is judged as an agent", () => {
   const p = packs();
   p["mail-connector"].packageJson.cinatra.tools = [{ name: "send" }];
   p["mail-connector"].files["cinatra/oas.json"] = JSON.stringify(callFlow("send_now"));
+  p["old-connector"] = { packageJson: { name: "@example-org/old-connector", cinatra: { kind: "connector" } }, files: { "cinatra/agent.json": "{}", "lib/x.mjs": "\n" } };
+  p["plain-connector"] = { packageJson: { name: "@example-org/plain-connector", cinatra: { kind: "connector" } }, files: { "src/index.ts": "export {};\n", "cinatra/tools.json": "{}" } };
   withRoot({ packs: p }, (root) => {
     const res = runGate(root, ["--report"]);
     assert.equal(res.status, 0, res.out);
-    assert.match(res.out, /2 pinned extension\(s\) scanned; 2 nonContentFiles in 1 key\(s\), 2 toolDeclarations in 2 key\(s\), 2 extensionToolSteps in 2 key\(s\), 0 unreadableSteps/);
-    assert.doesNotMatch(res.out, /src\/index\.ts|SKILL\.md/);
+    assert.match(res.out, /4 pinned extension\(s\) scanned; 4 nonContentFiles in 3 key\(s\), 2 toolDeclarations in 2 key\(s\), 2 extensionToolSteps in 2 key\(s\), 0 unreadableSteps/);
+    assert.match(res.out, /@example-org\/mail-connector: 1\n    src\/index\.ts\n/);
+    assert.match(res.out, /@example-org\/old-connector: 1\n    lib\/x\.mjs\n/);
+    assert.doesNotMatch(res.out, /plain-connector: 1|SKILL\.md/);
+  });
+});
+
+test("live: a connector that adds a flow fails with its program files until they are recorded", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    assert.equal(runGate(root).status, 0);
+    writeFile(join(packDir(root, "mail-connector"), "cinatra", "oas.json"), JSON.stringify({ nodes: [] }));
+    repin(root, "mail-connector", "@example-org/mail-connector");
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[nonContentFiles\] items the list does not hold[\s\S]*\+ @example-org\/mail-connector: src\/index\.ts/);
+  });
+});
+
+test("live: a committed same-count substitution fails in every class once the pin moves to it", () => {
+  const before = packs();
+  before["read-agent"].files["cinatra/oas.json"] = JSON.stringify({ nodes: [...callFlow("read_text").flow.nodes, step("later", "{{ payload }}")] });
+  const list = { ...recorded(), unreadableSteps: { [FLOW_KEY]: { count: 1, items: ["later: data is a string that does not parse as JSON"] } } };
+  withRoot({ packs: before, list }, (root) => {
+    assert.equal(runGate(root).status, 0, runGate(root).out);
+    const pack = packDir(root, "read-agent");
+    rmSync(join(pack, "test"), { recursive: true });
+    writeFile(join(pack, "src", "runtime.ts"), "export {};\n");
+    writeJson(join(pack, "package.json"), { name: READ, cinatra: { kind: "agent", tools: [{ name: "write" }] } });
+    writeFile(join(pack, "cinatra", "oas.json"), JSON.stringify({ nodes: [step("read_text", { tool: "extension_tool", input: { name: "write" } }), step("other", { tool: "{{ t }}" })] }));
+    repin(root, "read-agent", READ);
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[nonContentFiles\] items the list does not hold[^\n]*\n  \+ @example-org\/read-agent: src\/runtime\.ts/);
+    assert.match(res.out, /\[toolDeclarations\] items the list does not hold[^\n]*\n  \+ @example-org\/read-agent: write/);
+    assert.match(res.out, /\[extensionToolSteps\] items the list does not hold[^\n]*\n  \+ @example-org\/read-agent :: cinatra\/oas\.json: read_text -> write/);
+    assert.match(res.out, /\[unreadableSteps\] items the list does not hold[^\n]*\n  \+ @example-org\/read-agent :: cinatra\/oas\.json: other: data\.tool is not a plain name/);
+    assert.doesNotMatch(res.out, /OK —/);
+  });
+});
+
+test("live: a committed duplicate step fails at the pin", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pack = packDir(root, "read-agent");
+    const flow = callFlow("read_text");
+    flow.flow.nodes.push(step("read_text", { tool: "extension_tool", input: { name: "read" } }));
+    writeFile(join(pack, "cinatra", "oas.json"), JSON.stringify(flow));
+    repin(root, "read-agent", READ);
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\+ @example-org\/read-agent :: cinatra\/oas\.json: read_text -> read/);
   });
 });
 
@@ -255,13 +338,13 @@ test("live: the recorded list passes; one more committed and pinned file fails; 
     repin(root, "read-agent", READ);
     const grown = runGate(root);
     assert.equal(grown.status, 1);
-    assert.match(grown.out, /\[nonContentFiles\] above the recorded count[\s\S]*\+ @example-org\/read-agent: 3, the list holds 2/);
+    assert.match(grown.out, /\[nonContentFiles\] items the list does not hold[\s\S]*\+ @example-org\/read-agent: bin\/run/);
     rmSync(join(pack, "bin"), { recursive: true });
     rmSync(join(pack, "test"), { recursive: true });
     repin(root, "read-agent", READ);
     const stale = runGate(root);
     assert.equal(stale.status, 1);
-    assert.match(stale.out, /\[nonContentFiles\] below the recorded count/);
+    assert.match(stale.out, /\[nonContentFiles\] recorded items that are gone[\s\S]*- @example-org\/read-agent: test\/read\.test\.mjs/);
   });
 });
 
@@ -300,7 +383,7 @@ test("live: a later commit with one more code file counts only once the lock mov
     pin(root, READ, later);
     const grown = runGate(root);
     assert.equal(grown.status, 1);
-    assert.match(grown.out, /\+ @example-org\/read-agent: 3, the list holds 2/);
+    assert.match(grown.out, /\+ @example-org\/read-agent: src\/later\.ts/);
   });
 });
 
@@ -341,7 +424,7 @@ test("live: an unreadable step is a counted finding of its own class", () => {
   withRoot({ packs: p, list: recorded() }, (root) => {
     const res = runGate(root);
     assert.equal(res.status, 1, res.out);
-    assert.match(res.out, /\[unreadableSteps\] above the recorded count[\s\S]*cinatra\/oas\.json: 1, the list holds 0/);
+    assert.match(res.out, /\[unreadableSteps\] items the list does not hold[\s\S]*cinatra\/oas\.json: later: data is a string that does not parse as JSON/);
     assert.equal(runGate(root, [], {}).status, 1);
   });
 });
@@ -360,7 +443,7 @@ test("live: scanner errors exit 2 — a missing pinned pack, an unreadable kind,
   withRoot({ packs: packs(), list: { ...recorded(), unreadableSteps: [] } }, (root) => assert.equal(runGate(root, ["--write-baseline"]).status, 2));
 });
 
-test("live: the writer refuses a missing list and growth, lowers counts; --seed writes only a first list", () => {
+test("live: the writer refuses a missing list and growth (a substituted item too), removes gone items; --seed writes only a first list", () => {
   withRoot({ packs: packs() }, (root) => {
     assert.match(runGate(root, ["--write-baseline"]).out, /REFUSING --write-baseline — .* is missing/);
     mkdirSync(join(root, dirname(LIST_REL)), { recursive: true });
@@ -373,13 +456,20 @@ test("live: the writer refuses a missing list and growth, lowers counts; --seed 
     assert.equal(refused.status, 1);
     assert.match(refused.out, /the list only shrinks/);
   });
-  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 5, items: [] } } } }, (root) => {
+  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "src/gone.ts"] } } } }, (root) => {
+    const refused = runGate(root, ["--write-baseline"]);
+    assert.equal(refused.status, 1);
+    assert.match(refused.out, /the list only shrinks:\n  \+ \[nonContentFiles\] @example-org\/read-agent: test\/read\.test\.mjs/);
+  });
+  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/gone.ts", "test/read.test.mjs"] } } } }, (root) => {
+    assert.equal(runGate(root).status, 1);
     assert.equal(runGate(root, ["--write-baseline"]).status, 0);
     assert.equal(runGate(root).status, 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(root, LIST_REL), "utf8")).nonContentFiles[READ], recorded().nonContentFiles[READ]);
   });
 });
 
-test("live base guard: seeds once, a raised count fails, a lowered count passes, a list-less base never reseeds", () => {
+test("live base guard: seeds once, an added item fails (a same-count substitution too), a removed item passes, a list-less base never reseeds", () => {
   withRoot({ packs: packs() }, (root) => {
     git(root, "init", "-q");
     const before = commitAll(root, "base without the gate");
@@ -393,13 +483,19 @@ test("live base guard: seeds once, a raised count fails, a lowered count passes,
     const pack = packDir(root, "read-agent");
     writeFile(join(pack, "src", "more.ts"), "export {};\n");
     repin(root, "read-agent", READ);
-    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: [] } } });
+    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/more.ts", "test/read.test.mjs"] } } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1);
-    assert.match(grew.out, /GREW against the base[\s\S]*\[nonContentFiles\] @example-org\/read-agent: 3, the base holds 2/);
+    assert.match(grew.out, /GREW against the base[\s\S]*\[nonContentFiles\] @example-org\/read-agent: src\/more\.ts \(the base does not hold it\)/);
+
+    rmSync(join(pack, "test"), { recursive: true });
+    repin(root, "read-agent", READ);
+    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "src/more.ts"] } } });
+    const swapped = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(swapped.status, 1, swapped.out);
+    assert.match(swapped.out, /GREW against the base[\s\S]*\[nonContentFiles\] @example-org\/read-agent: src\/more\.ts \(the base does not hold it\)/);
 
     rmSync(join(pack, "src"), { recursive: true });
-    rmSync(join(pack, "test"), { recursive: true });
     repin(root, "read-agent", READ);
     writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 1, items: ["cinatra/tools/read.mjs"] } } });
     const shrank = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
@@ -407,7 +503,7 @@ test("live base guard: seeds once, a raised count fails, a lowered count passes,
 
     rmSync(join(root, LIST_REL));
     const noList = commitAll(root, "list deleted");
-    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 1, items: [] } } });
+    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 1, items: ["cinatra/tools/read.mjs"] } } });
     const reseed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: noList });
     assert.equal(reseed.status, 1, reseed.out);
     assert.match(reseed.out, /cannot be compared with the base/);
