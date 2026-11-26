@@ -2362,6 +2362,16 @@ function ReviewTargetIsland({
   });
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const protocolClock = useRef({ navigation: 0, progress: 0 });
+  // ITEMS SHOWN NEEDS THE ISLAND'S OWN REPORT (cinatra#3089). For a host that reads the load state, a loaded frame
+  // counts only once the island has also said, for this attempt and from this frame's window, that it is ready and
+  // that a panel mounted. A generic error page, a sign-in page or a redirect target loads too, but never says so: it
+  // stays loading until the bound below turns it into the failed state. The island's empty document keeps its own
+  // reading. Every other host reads the load event alone, as before.
+  const awaitsPanelReport = useCallback(
+    (current: { loaded: boolean; empty: boolean; ready: boolean; progress: number }) =>
+      onLoadState !== undefined && current.loaded && !current.empty && (!current.ready || current.progress === 0),
+    [onLoadState],
+  );
   if (load.identity !== identity) {
     setLoad({ identity, src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
   } else if (load.src !== src) {
@@ -2413,7 +2423,9 @@ function ReviewTargetIsland({
       const progress = readIslandProgress(event.data);
       if (!progress || progress.attempt !== load.attempt) return;
       setLoad((current) => {
-        if (current.loaded || current.attempt !== progress.attempt) return current;
+        // A host that reads the load state (the publish card, cinatra#3089) still needs the island's own report after
+        // the frame's load event: it is the one proof that this frame holds the island and that a panel was drawn.
+        if ((current.loaded && !awaitsPanelReport(current)) || current.attempt !== progress.attempt) return current;
         if (progress.type === "island-ready") {
           if (current.ready) return current;
           protocolClock.current.progress = Date.now();
@@ -2428,7 +2440,7 @@ function ReviewTargetIsland({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [islandOrigin, load.attempt]);
+  }, [islandOrigin, load.attempt, awaitsPanelReport]);
 
   // THE TWO BOUNDS, as one restarting timer (cinatra#3334). Before
   // `island-ready` it is the INITIAL-RESPONSE bound, running from the moment
@@ -2440,8 +2452,9 @@ function ReviewTargetIsland({
   // that awaits its address has no frame to start the clock, so its bound runs
   // from the moment it began to wait, and again from each retry.
   const bound = load.ready ? ISLAND_IDLE_PROGRESS_TIMEOUT_MS : ISLAND_LOAD_TIMEOUT_MS;
+  const awaitsReport = awaitsPanelReport(load);
   useEffect(() => {
-    if (load.loaded || refused) return;
+    if ((load.loaded && !awaitsReport) || refused) return;
     const started = waits
       ? Date.now()
       : load.ready
@@ -2450,11 +2463,11 @@ function ReviewTargetIsland({
     const remaining = Math.max(0, bound - (Date.now() - started));
     const timer = setTimeout(() => {
       setLoad((current) =>
-        current.loaded || current.timedOut ? current : { ...current, timedOut: true },
+        (current.loaded && !awaitsPanelReport(current)) || current.timedOut ? current : { ...current, timedOut: true },
       );
     }, remaining);
     return () => clearTimeout(timer);
-  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused, waits]);
+  }, [load.identity, load.attempt, load.loaded, load.ready, load.progress, bound, refused, waits, awaitsReport, awaitsPanelReport]);
 
   // THE HEIGHT THE ISLAND REPORTED, KEYED BY THE TARGET — the same identity the
   // load bag is keyed on, and for the same reason: a palette repaint is the SAME
@@ -2511,7 +2524,7 @@ function ReviewTargetIsland({
 
   const state: IslandLoadState = refused
     ? "timed-out"
-    : load.loaded
+    : load.loaded && !awaitsReport
       ? load.empty
         ? "empty"
         : "loaded"
@@ -2564,8 +2577,8 @@ function ReviewTargetIsland({
   const unframedRegion = !credentialed && !cookieSession && !refused && !awaiting;
   // THE HOST IS TOLD THE STATE IT DRAWS (cinatra#3089), in a LAYOUT effect: the host's own update lands in the same
   // commit as this drawing, so no click can reach the host between a navigation and its reading. The region above
-  // draws nothing, so it reads empty. "loaded" means the frame's document loaded, nothing more: it does not prove that
-  // every renderer inside the island finished drawing.
+  // draws nothing, so it reads empty. "loaded" means the frame's document loaded AND the island reported a mounted
+  // panel for this attempt (`awaitsPanelReport`); it does not prove that every panel of a several-item document mounted.
   const toldState: IslandLoadState = unframedRegion ? "empty" : state;
   useLayoutEffect(() => {
     onLoadState?.(toldState);
@@ -2627,7 +2640,7 @@ function ReviewTargetIsland({
           // several of these off screen without fetching them all.
           loading={credentialed ? "eager" : "lazy"}
           className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
-            load.loaded && !load.empty ? "opacity-100" : "pointer-events-none opacity-0"
+            state === "loaded" ? "opacity-100" : "pointer-events-none opacity-0"
           }`}
           style={{ height }}
           onLoad={(event) => {
@@ -3024,8 +3037,9 @@ export function ReviewTargetFrame({
    *  document stays a preview that did not arrive, as it always was. */
   onSettledEmpty?: (empty: boolean) => void;
   /** Told the island's load state each time it changes (cinatra#3089): the publish card keeps Allow disabled until
-   *  every items panel reads `loaded` (design XV.1). A host that passes it also reads a navigation of the frame (a
-   *  palette change) as a new load. */
+   *  every items panel reads `loaded` (design XV.1). For a host that passes it, `loaded` needs the frame's load AND the
+   *  island's own `island-ready` and `panel-mounted` for that attempt, and a navigation of the frame (a palette
+   *  change) is a new load. */
   onLoadState?: (state: IslandLoadState) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */

@@ -70,6 +70,25 @@ async function settle() {
   });
 }
 
+/** The island's own report that it drew a panel (cinatra#3089): `island-ready`, then `panel-mounted`, from the frame's
+ *  window and naming the attempt the card stamped on its name, as `island-height-reporter.tsx` posts them. */
+async function islandReportsAPanel(frame: HTMLIFrameElement) {
+  const name = frame.getAttribute("name") ?? "";
+  const attempt = Number(name.slice(name.indexOf(":") + 1));
+  for (const type of ["island-ready", "panel-mounted"]) {
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { channel: "cinatra-review-island-progress", type, attempt },
+          origin: window.location.origin,
+          source: frame.contentWindow as Window,
+        }),
+      );
+    });
+  }
+  await settle();
+}
+
 function mountOn(host: LifecycleCardHost, decide?: PublishDecisionDecide) {
   const auth = host === "site_widget" ? WIDGET_AUTH : undefined;
   const frame = host === "site_widget" ? { assistant: "a", instanceId: "i" } : undefined;
@@ -1136,6 +1155,7 @@ describe("the XV.1 empty items panel", () => {
       frame.dispatchEvent(new Event("load"));
     });
     await settle();
+    await islandReportsAPanel(frame);
     expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
     expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
     expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
@@ -1213,6 +1233,7 @@ describe("an empty widget items frame and a fresh broker address", () => {
     const second = root.querySelector("iframe")!;
     expect(credentialOf(second)).toBe("credential-2");
     await load(second, false);
+    await islandReportsAPanel(second);
     expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
     expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
     expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
@@ -1255,8 +1276,9 @@ describe("an empty widget items frame and a fresh broker address", () => {
 
 // cinatra#3089, design spec XV.1 "Allow waits for the items": "Until every item is drawn, Allow is shown but disabled, so
 // nothing is released that was not on screen; Do not allow and the note field stay live". In this card an item counts as
-// shown once its island frame's document has LOADED (the review card's own load state); the card does not detect
-// whether every renderer inside the island finished drawing.
+// shown once its island frame has LOADED and the island itself has reported, for that frame's attempt and from that
+// frame's window, `island-ready` and a `panel-mounted`. A page that only loads (an error, sign-in or redirect page)
+// never counts.
 describe("XV.1: Allow waits for the items", () => {
   const REF = "Abc_123-xyz";
   const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
@@ -1281,11 +1303,52 @@ describe("XV.1: Allow waits for the items", () => {
     });
     await settle();
   };
+  /** The attempt the card stamped on a frame's name, which the island names back. */
+  const attemptOf = (frame: HTMLIFrameElement) => {
+    const name = frame.getAttribute("name") ?? "";
+    return Number(name.slice(name.indexOf(":") + 1));
+  };
+  /** One message as the island's reporter posts it (`island-height-report.ts`), by default from this frame's window. */
+  const post = async (
+    frame: HTMLIFrameElement,
+    data: unknown,
+    over: { origin?: string; source?: Window | null } = {},
+  ) => {
+    await act(async () => {
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data,
+          origin: over.origin ?? window.location.origin,
+          source: (over.source === undefined ? frame.contentWindow : over.source) as Window,
+        }),
+      );
+    });
+    await settle();
+  };
+  const progress = (type: "island-ready" | "panel-mounted", attempt: number) => ({
+    channel: "cinatra-review-island-progress",
+    type,
+    attempt,
+  });
+  /** The island's own report that it drew a panel: ready, then a mounted panel, for the frame's current attempt. */
+  const reported = async (
+    frame: HTMLIFrameElement,
+    over: { origin?: string; source?: Window | null; attempt?: number } = {},
+  ) => {
+    const attempt = over.attempt ?? attemptOf(frame);
+    await post(frame, progress("island-ready", attempt), over);
+    await post(frame, progress("panel-mounted", attempt), over);
+  };
+  /** The frame loaded the island and the island reported a panel. */
+  const shown = async (frame: HTMLIFrameElement) => {
+    await loaded(frame);
+    await reported(frame);
+  };
   const paint = (scheme: "light" | "dark" | "none") => {
     document.documentElement.className = scheme === "none" ? "" : scheme === "dark" ? "dark" : "cinatra";
   };
 
-  it("Allow is disabled until the items frame has loaded, and live once it has; Do not allow and the note stay live", async () => {
+  it("Allow is disabled until the items frame has loaded AND the island reported a panel; Do not allow and the note stay live", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], ITEMS] }));
     const root = await rootOf(mountOn("chat_thread", okDoor()));
     await settle();
@@ -1297,7 +1360,12 @@ describe("XV.1: Allow waits for the items", () => {
     // While the panel loads the line is not drawn; the same sentence is the button's description.
     expect(waitLine(root)).toBeNull();
     expect(description(root)).toBe(WAITS);
+    // A blank frame's load is not the island: no report, so the items are not shown (the Codex finding on #4838).
     await loaded(frame);
+    expect(allowOf(root).disabled).toBe(true);
+    expect(root.querySelector('[data-island-load-state="loading"]')).not.toBeNull();
+    expect(description(root)).toBe(WAITS);
+    await reported(frame);
     expect(allowOf(root).disabled).toBe(false);
     expect(allowOf(root).hasAttribute("aria-describedby")).toBe(false);
     expect(root.textContent).not.toContain(WAITS);
@@ -1331,7 +1399,7 @@ describe("XV.1: Allow waits for the items", () => {
       });
       await settle();
       expect(allowOf(root).disabled).toBe(true);
-      await loaded(await frameOf(root));
+      await shown(await frameOf(root));
       expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
       expect(allowOf(root).disabled).toBe(false);
       expect(waitLine(root)).toBeNull();
@@ -1390,7 +1458,7 @@ describe("XV.1: Allow waits for the items", () => {
     await settle();
     const frame = await frameOf(root);
     expect(allowOf(root).disabled).toBe(true);
-    await loaded(frame);
+    await shown(frame);
     expect(allowOf(root).disabled).toBe(false);
   });
 
@@ -1402,8 +1470,10 @@ describe("XV.1: Allow waits for the items", () => {
       const root = await rootOf(mountOn("chat_thread", okDoor()));
       await settle();
       const frame = await frameOf(root);
-      await loaded(frame);
+      await shown(frame);
       expect(allowOf(root).disabled).toBe(false);
+      const outgoingWindow = frame.contentWindow;
+      const outgoingAttempt = attemptOf(frame);
       await act(async () => {
         paint("dark");
       });
@@ -1416,7 +1486,14 @@ describe("XV.1: Allow waits for the items", () => {
       expect(schemeOf(replacement)).toBe("dark");
       await loaded(frame);
       expect(allowOf(root).disabled).toBe(true);
+      // The replacement loads, but the only report is the earlier attempt's: from the outgoing window, and then one
+      // naming the earlier attempt from the replacement's own window. Neither is the replacement's island.
       await loaded(replacement);
+      await reported(replacement, { source: outgoingWindow, attempt: outgoingAttempt });
+      await reported(replacement, { attempt: outgoingAttempt });
+      expect(attemptOf(replacement)).not.toBe(outgoingAttempt);
+      expect(allowOf(root).disabled).toBe(true);
+      await reported(replacement);
       expect(allowOf(root).disabled).toBe(false);
     } finally {
       paint("none");
@@ -1433,7 +1510,7 @@ describe("XV.1: Allow waits for the items", () => {
       stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
       const root = await rootOf(mountOn("chat_thread", decide));
       await settle();
-      await loaded(await frameOf(root));
+      await shown(await frameOf(root));
       expect(allowOf(root).disabled).toBe(false);
       // The click lands in the first microtask after React commits the navigated frame: no act() scope, no effect flush.
       let clicked = false;
@@ -1484,5 +1561,91 @@ describe("XV.1: Allow waits for the items", () => {
       vi.useRealTimers();
       paint("none");
     }
+  });
+
+  it("a frame that loads but never reports stays loading, then the time limit fails it; a late report heals it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("chat_thread", okDoor()));
+      await settle();
+      const frame = await frameOf(root);
+      await loaded(frame);
+      expect(allowOf(root).disabled).toBe(true);
+      expect(root.querySelector('[data-island-load-state="loading"]')).not.toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+      expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+      expect(allowOf(root).disabled).toBe(true);
+      await reported(frame);
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+      expect(allowOf(root).disabled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a report from another window or another origin is not the island's", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await loaded(frame);
+    const sibling = document.createElement("iframe");
+    document.body.appendChild(sibling);
+    try {
+      await reported(frame, { source: window });
+      await reported(frame, { source: sibling.contentWindow });
+      await reported(frame, { source: null });
+      await reported(frame, { origin: "https://elsewhere.example" });
+      expect(allowOf(root).disabled).toBe(true);
+      await reported(frame);
+      expect(allowOf(root).disabled).toBe(false);
+    } finally {
+      sibling.remove();
+    }
+  });
+
+  it("a height report, an island that is ready with no panel, and a panel before ready never count", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await loaded(frame);
+    const attempt = attemptOf(frame);
+    // A panel report before the island said it is ready, the height report (zero and real), and an empty body.
+    await post(frame, progress("panel-mounted", attempt));
+    await post(frame, { type: "cinatra.review-island.height", height: 0 });
+    await post(frame, { type: "cinatra.review-island.height", height: 480 });
+    await post(frame, {});
+    await post(frame, { ...progress("panel-mounted", attempt), extra: true });
+    expect(allowOf(root).disabled).toBe(true);
+    // Ready alone is an island with no panel drawn yet.
+    await post(frame, progress("island-ready", attempt));
+    expect(allowOf(root).disabled).toBe(true);
+    await post(frame, progress("panel-mounted", attempt));
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("the report and the load are both needed, in either order, for every items row", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS, { ...ITEMS, label: "Proposed post" }] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    await waitFor(() => expect(root.querySelectorAll("iframe").length).toBe(2));
+    const [first, second] = Array.from(root.querySelectorAll("iframe"));
+    // The first row's island reports before its frame's load event: the report alone is not enough.
+    await reported(first);
+    expect(allowOf(root).disabled).toBe(true);
+    await loaded(first);
+    expect(root.querySelectorAll('[data-island-load-state="loaded"]').length).toBe(1);
+    // The second row loads with no report: one row shown is not every row.
+    await loaded(second);
+    expect(allowOf(root).disabled).toBe(true);
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).toBeNull();
+    await reported(second);
+    expect(allowOf(root).disabled).toBe(false);
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).not.toBeNull();
   });
 });

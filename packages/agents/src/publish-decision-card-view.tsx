@@ -352,9 +352,10 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
   );
 }
 
-/** What an items row shows (design XV.1 "Allow waits for the items"). Only `shown` lets Allow go live. "Shown" means the
- * row's island FRAME DOCUMENT HAS LOADED (the review card's own load state); it does not prove that every renderer
- * inside the island finished drawing, which the card does not detect. */
+/** What an items row shows (design XV.1 "Allow waits for the items"). Only `shown` lets Allow go live. "Shown" is the
+ * review card's `loaded`: the row's frame loaded AND the island itself reported, for that attempt and from that frame's
+ * window, that it is ready and that a panel mounted. A loaded page that sends no such report (an error, sign-in or
+ * redirect page) is never shown. */
 type ItemsReading = "loading" | "shown" | "failed" | "empty" | "refused";
 /** A row's reporter: its reading under its key; `null` takes the reading away (the row unmounted). */
 type ItemsReporter = { key: string; report: (key: string, reading: ItemsReading | null) => void };
