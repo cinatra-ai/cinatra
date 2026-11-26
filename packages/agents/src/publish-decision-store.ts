@@ -580,16 +580,32 @@ export async function listDueParked(limit: number, now?: Date, afterId?: string)
   return rows.map(deserialize);
 }
 
+/** The fixed codes `releasedDecisionList` refuses with (cinatra#3089). */
+export const RELEASED_LIST_REFUSALS = [
+  "released_list_fields_invalid",
+  "decision_not_released",
+  "released_list_malformed",
+  "released_list_ambiguous",
+  "released_list_not_shown",
+  "released_list_bodies_not_drawn",
+] as const;
+export type ReleasedListRefusal = (typeof RELEASED_LIST_REFUSALS)[number];
+
 /**
  * The ONE list of records a person released with a decision (cinatra#3089), for a caller that acts on such a list after
  * the release. A candidate is a surfaced value (by own key) that is, or is JSON text of, a list of 1 to
  * PUBLISH_LIST_ROW_ITEMS_MAX records whose own keys are exactly `entryFields`, each a string. Answers:
- *   - `{ ok: true, list: null }`: the decision surfaced no candidate;
- *   - `{ ok: false }`: `shownFields` is not a set of distinct entry fields on distinct, named columns; or the decision
- *     is not released by a person; or two or more values are candidates (which one was meant cannot be told); or no
- *     declared list row shows the list record for record, in the same order (a row is drawn from a surfaced list of
- *     records, the records only, as the card draws it);
+ *   - `{ ok: true, list: null }`: the decision surfaced no candidate AND its card declares no list row and no artifacts
+ *     row (a card that never carried a released list, as the packs pinned today);
+ *   - `{ ok: false, code }`: `shownFields` is not a set of distinct entry fields on distinct, named columns; or the
+ *     decision is not released by a person; or its card declares a list or an artifacts row but no surfaced value is a
+ *     list of the exact entry form (`released_list_malformed`: missing, another shape, an entry with a field more or
+ *     less, empty, too long; a declared list that is not exact is refused, never read as "no list"); or two or more
+ *     values are candidates (which one was meant cannot be told); or no declared list row shows the list record for
+ *     record, in the same order (a row is drawn from a surfaced list of records, the records only, as the card draws
+ *     it);
  *   - `{ ok: true, list }`: the one candidate, as parsed.
+ * `code` is one of RELEASED_LIST_REFUSALS; `error` is fixed text (it names no value, only a count).
  * A row shows a record when, for EACH `shownFields` entry, the row declares the named `column` (a column `field` of
  * the row) and the record's string value of that column equals the entry's value of `field`. Each column proves one
  * field only, so one drawn cell never shows two fields. A shown value is compared exactly, byte for byte: no trimming,
@@ -601,7 +617,9 @@ export function releasedDecisionList(input: {
   entryFields: readonly string[];
   /** For each entry field the card must show, the row column (its `field`) that shows it. */
   shownFields: ReadonlyArray<{ field: string; column: string }>;
-}): { ok: true; list: Array<Record<string, string>> | null } | { ok: false; error: string } {
+}):
+  | { ok: true; list: Array<Record<string, string>> | null }
+  | { ok: false; code: ReleasedListRefusal; error: string } {
   const { decision, entryFields, shownFields } = input;
   const columnsNamed = new Set(shownFields.map((s) => s.column));
   const fieldsNamed = new Set(shownFields.map((s) => s.field));
@@ -611,10 +629,10 @@ export function releasedDecisionList(input: {
     fieldsNamed.size !== shownFields.length ||
     shownFields.some((s) => typeof s.column !== "string" || s.column === "" || !entryFields.includes(s.field))
   ) {
-    return { ok: false, error: "the fields a list row must show are not distinct entry fields on distinct columns" };
+    return { ok: false, code: "released_list_fields_invalid", error: "the fields a list row must show are not distinct entry fields on distinct columns" };
   }
   if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
-    return { ok: false, error: "the publish decision is not released by a person" };
+    return { ok: false, code: "decision_not_released", error: "the publish decision is not released by a person" };
   }
   const own = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
   const surfaced = decision.surfacedValues;
@@ -641,9 +659,19 @@ export function releasedDecisionList(input: {
     const list = own(surfaced, key) ? asList(surfaced[key]) : null;
     return list ? [{ key, list }] : [];
   });
-  if (candidates.length === 0) return { ok: true, list: null };
+  if (candidates.length === 0) {
+    // A card that declared a list or an artifacts row carried a released list: one that is not of the exact form is
+    // refused (fail closed), never answered as "no list".
+    const declared = (decision.declaredRows ?? []).some((row) => {
+      const kind = publishRowKind(row);
+      return kind === "list" || kind === "artifacts";
+    });
+    return declared
+      ? { ok: false, code: "released_list_malformed", error: "the card of the publish decision declared a list, but no surfaced value is a list of the exact form" }
+      : { ok: true, list: null };
+  }
   if (candidates.length > 1) {
-    return { ok: false, error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
+    return { ok: false, code: "released_list_ambiguous", error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
   }
   const { key: listKey, list } = candidates[0]!;
   const shownOnRow = (decision.declaredRows ?? []).some((row) => {
@@ -665,7 +693,7 @@ export function releasedDecisionList(input: {
     });
   });
   if (!shownOnRow) {
-    return { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
+    return { ok: false, code: "released_list_not_shown", error: "no list row of the released publish decision shows each record of the released list" };
   }
   // The card carried the bodies: an artifacts row of the decision reads the same surfaced value, and the card draws an
   // artifacts row only over a list (never JSON text) whose every record names an artifact and a revision, each a
@@ -681,7 +709,7 @@ export function releasedDecisionList(input: {
     raw.every((e) => isPlainObject(e) && targetId(e.artifactId) && targetId(e.representationRevisionId)) &&
     (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "artifacts" && row.input === listKey);
   if (!bodiesOnCard) {
-    return { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
+    return { ok: false, code: "released_list_bodies_not_drawn", error: "no artifacts row of the released publish decision draws the bodies of the released list" };
   }
   return { ok: true, list };
 }
