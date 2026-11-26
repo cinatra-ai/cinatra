@@ -112,6 +112,74 @@ expect(map("@example-org/demo-agent")).toBe(path.resolve("/repo/extensions/examp
     expect(pins({ [`${T}tmp.test.ts`]: js, "docker/wayflow/tests/test_tmp.py": py })).toEqual([]);
   });
 
+  describe("a temporary root is exempt only when its binding is sound", () => {
+    const READ = (v) => `readFileSync(join(${v}, "extensions/example-org/demo-agent/oas.json"));`;
+    const DEMO = "@example-org/demo-agent";
+    const cases = {
+      reassignedAfterUse: `let root = mkdtempSync(join(tmpdir(), "x-"));\n${READ("root")}\nroot = REPO_ROOT;`,
+      reassignedBeforeUse: `let root = REPO_ROOT;\nroot = mkdtempSync(join(tmpdir(), "x-"));\n${READ("root")}`,
+      shadowedInFunction: `const root = REPO_ROOT;\nfunction build() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  return root;\n}\n${READ("root")}`,
+      shadowingInFunction: `const root = REPO_ROOT;\nfunction build() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  ${READ("root")}\n}`,
+      shadowedInBlock: `const root = mkdtempSync(join(tmpdir(), "x-"));\n{\n  const root = REPO_ROOT;\n  ${READ("root")}\n}`,
+      parameter: `const root = mkdtempSync(join(tmpdir(), "x-"));\nfunction load(root) {\n  return ${READ("root")}\n}\nload(REPO_ROOT);`,
+      destructured: `const { tmpRoot } = setup();\n${READ("tmpRoot")}`,
+      tmpByNameOnly: `const tmpDir = REPO_ROOT;\n${READ("tmpDir")}`,
+    };
+    const sound = {
+      singleConst: `const work = mkdtempSync(join(tmpdir(), "x-"));\nconst root = join(work, "repo");\n${READ("root")}`,
+      singleAssignment: `let tmpRoot;\nfunction make() {\n  ${READ("tmpRoot")}\n}\nbeforeEach(() => {\n  tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "x-")));\n});`,
+      siblingScopes: `function a() {\n  const root = REPO_ROOT;\n  return root;\n}\nfunction b() {\n  const root = mkdtempSync(join(tmpdir(), "x-"));\n  ${READ("root")}\n}`,
+    };
+
+    it("reports a root that is reassigned, shadowed, a parameter, destructured or temporary by name only; keeps a sound one exempt", () => {
+      const files = {};
+      for (const [k, v] of Object.entries({ ...cases, ...sound })) files[`${T}${k}.test.ts`] = v;
+      expect(pins(files)).toEqual(Object.keys(cases).sort().map((k) => `read :: ${T}${k}.test.ts :: ${DEMO}`));
+    });
+
+    it("reports a Python pytest temporary fixture the file rebinds, and a name that is temporary by name only", () => {
+      const rebound = `tmp_path = _REPO_ROOT\nseed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
+      const named = `tmp = _REPO_ROOT\nseed(tmp / "extensions" / "example-org" / "demo-agent")\n`;
+      const kept = `def test_x(tmp_path):\n    seed(tmp_path / "extensions" / "example-org" / "demo-agent")\n`;
+      expect(
+        pins({ "docker/wayflow/tests/test_rebound.py": rebound, "docker/wayflow/tests/test_named.py": named, "docker/wayflow/tests/test_kept.py": kept }),
+      ).toEqual([`read :: docker/wayflow/tests/test_named.py :: ${DEMO}`, `read :: docker/wayflow/tests/test_rebound.py :: ${DEMO}`]);
+    });
+  });
+
+  it("reads a Python string's decoded value (\\x, \\u, octal escapes)", () => {
+    const src = `A = _REPO_ROOT / "extensions" / "example-org" / "demo\\x2dagent"\nB = _REPO_ROOT / "extensions" / "example\\u002dorg" / "other\\055artifact"\n`;
+    expect(pins({ "docker/wayflow/tests/test_esc.py": src })).toEqual([
+      "read :: docker/wayflow/tests/test_esc.py :: @example-org/demo-agent",
+      "read :: docker/wayflow/tests/test_esc.py :: @example-org/other-artifact",
+    ]);
+  });
+
+  it("exempts an import or export-from only when it loads no value", () => {
+    const P = `"@example-org/demo-agent"`;
+    const typeOnly = {
+      declaration: `import type { X } from ${P};`,
+      specifiers: `import { type X, type Y } from ${P};`,
+      exportDeclaration: `export type { X } from ${P};`,
+      exportSpecifiers: `export { type X, type Y } from ${P};`,
+      importEqualsType: `import type X = require(${P});`,
+    };
+    const runtime = {
+      mixed: `import { type X, y } from ${P};`,
+      defaultAndType: `import D, { type X } from ${P};`,
+      namespace: `import * as ns from ${P};`,
+      sideEffect: `import ${P};`,
+      empty: `import {} from ${P};`,
+      exportMixed: `export { type X, y } from ${P};`,
+      exportStar: `export * from ${P};`,
+      importEquals: `import X = require(${P});`,
+      requireActual: `const m = jest.requireActual(${P});`,
+    };
+    const files = {};
+    for (const [k, v] of Object.entries({ ...typeOnly, ...runtime })) files[`${T}${k}.test.ts`] = v;
+    expect(pins(files)).toEqual(Object.keys(runtime).sort().map((k) => `read :: ${T}${k}.test.ts :: @example-org/demo-agent`));
+  });
+
   it("does not find a pack named only as a label, or `extensions` used as a word", () => {
     const src = `expect(label("@example-org/demo-agent")).toBe("Demo");
 expect(crumbs(["configuration", "extensions", "x"])).toEqual([]);
@@ -150,6 +218,33 @@ describe("the flow rule: a flow-shaped core fixture that carries a pinned-pack m
     expect(pins({ [f]: { $comment: `copied at ${SHA.slice(0, 8)}`, flows: [{ flow: flow() }] } })).toEqual([
       `flow :: ${f} :: sha:${SHA.slice(0, 8)}`,
     ]);
+  });
+
+  it("reads the parsed value: an escaped name or pin still counts", () => {
+    const F = "docker/wayflow/tests/fixtures/";
+    const raw = (meta) => `{"component_type":"Flow","id":"f","nodes":[],"metadata":${meta}}`;
+    const files = {
+      [`${F}slash.json`]: raw(`{"packageName":"@example-org\\/demo-agent"}`),
+      [`${F}unicode.json`]: raw(`{"packageName":"@example-org/\\u0064emo-agent"}`),
+      [`${F}key.json`]: raw(`{"@example-org\\/other-artifact":{}}`),
+      [`${F}pin.json`]: raw(`{"$comment":"copied at \\u0030123456789ab"}`),
+    };
+    expect(pins(files)).toEqual([
+      `flow :: ${F}key.json :: @example-org/other-artifact`,
+      `flow :: ${F}pin.json :: sha:0123456789ab`,
+      `flow :: ${F}slash.json :: @example-org/demo-agent`,
+      `flow :: ${F}unicode.json :: @example-org/demo-agent`,
+    ]);
+  });
+
+  it("reports a flow-shaped fixture that does not parse; skips other unparsable JSON", () => {
+    const F = "docker/wayflow/tests/fixtures/";
+    expect(
+      pins({
+        [`${F}broken.json`]: `{ component_type: "Flow", id: "f", // not JSON\n }`,
+        [`${F}other.json`]: `{ not: json`,
+      }),
+    ).toEqual([`flow :: ${F}broken.json :: (unparsed flow fixture)`]);
   });
 
   it("does not find a synthetic flow, or a fixture that names a pack but holds no flow", () => {

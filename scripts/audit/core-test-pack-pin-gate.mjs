@@ -171,13 +171,21 @@ export const HOLE = Symbol("hole");
 /** A hole whose value is a temporary directory: a synthetic tree, not the repository's. */
 export const TMP_HOLE = Symbol("tmp-hole");
 
-/** A name or call that makes a temporary directory (Node, Python, pytest). */
-export const TMP_WORD = /^(?:mkdtemp(?:Sync)?|tmpdir|gettempdir|TemporaryDirectory|tmp_path(?:_factory)?)$|^(?:tmp|temp)(?:[A-Z_0-9]|$)|(?:Tmp|Temp|_tmp|_temp)(?:[A-Z_0-9]|$)/;
+/**
+ * A Python name that is a temporary directory: the pytest fixtures `tmp_path`,
+ * `tmp_path_factory` and `tmpdir`, exempt only while the file never rebinds them.
+ */
+export const PY_TMP_FIXTURES = new Set(["tmp_path", "tmp_path_factory", "tmpdir"]);
+
+/** A call that makes or names a temporary directory (Node `mkdtemp`, `os.tmpdir`). */
+export const TMP_CALLS = new Set(["mkdtemp", "mkdtempSync", "tmpdir"]);
 
 /** The start of a new expression: the chain after it begins at no root. */
 export const START = Symbol("start");
 
 const PATH_JOINERS = new Set(["join", "resolve", "normalize", "posix", "relative"]);
+/** A call whose value is its first argument's directory (`realpathSync(mkdtempSync(...))`). */
+const SAME_DIR_CALLS = new Set([...PATH_JOINERS, "realpath", "realpathSync"]);
 
 function calleeName(expr) {
   if (ts.isIdentifier(expr)) return expr.text;
@@ -185,54 +193,129 @@ function calleeName(expr) {
   return null;
 }
 
-/**
- * True when an expression's value is a temporary directory: it calls or names
- * one (`mkdtempSync`, `os.tmpdir()`, a variable `tmpRoot`), directly or through
- * the in-file declarations and assignments of the identifiers it uses.
- */
-function isTmpExpr(node, defs, seen = new Set()) {
-  let tmp = false;
-  const look = (n) => {
-    if (tmp) return;
-    if (ts.isIdentifier(n)) {
-      if (TMP_WORD.test(n.text)) tmp = true;
-      else if (!seen.has(n.text) && defs.has(n.text)) {
-        seen.add(n.text);
-        for (const d of defs.get(n.text)) if (isTmpExpr(d, defs, seen)) tmp = true;
-      }
-      return;
-    }
-    if (ts.isPropertyAccessExpression(n)) {
-      look(n.expression);
-      if (TMP_WORD.test(n.name.text)) tmp = true;
-      return;
-    }
-    ts.forEachChild(n, look);
-  };
-  look(node);
-  return tmp;
+const DECLARING = (n) =>
+  ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isBindingElement(n) || ts.isFunctionDeclaration(n) ||
+  ts.isFunctionExpression(n) || ts.isClassDeclaration(n) || ts.isClassExpression(n) || ts.isImportClause(n) ||
+  ts.isImportSpecifier(n) || ts.isNamespaceImport(n) || ts.isImportEqualsDeclaration(n) || ts.isEnumDeclaration(n) ||
+  ts.isModuleDeclaration(n);
+
+const isAssignmentOp = (k) => k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+
+/** Every identifier inside a node (a destructuring target, conservatively all of them). */
+function identifiersIn(node, out = []) {
+  if (ts.isIdentifier(node)) out.push(node);
+  ts.forEachChild(node, (c) => identifiersIn(c, out));
+  return out;
 }
 
-/** The in-file values of each identifier: declarations and plain assignments. */
-function definitionsOf(sf) {
-  const defs = new Map();
-  const add = (name, expr) => {
-    if (!defs.has(name)) defs.set(name, []);
-    defs.get(name).push(expr);
-  };
+/**
+ * The bindings of a file, for a SOUND temporary-root reading: every declaration
+ * of each name (any scope, any kind) and every write to it (an assignment of
+ * any operator, `++`/`--`, a destructuring or for-in/of target).
+ */
+function bindingsOf(sf) {
+  const decls = new Map();
+  const writes = new Map();
+  const push = (m, name, v) => (m.has(name) ? m.get(name).push(v) : m.set(name, [v]));
   const walk = (n) => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer) add(n.name.text, n.initializer);
-    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(n.left)) add(n.left.text, n.right);
+    if (DECLARING(n) && n.name && ts.isIdentifier(n.name)) push(decls, n.name.text, n);
+    if (ts.isBinaryExpression(n) && isAssignmentOp(n.operatorToken.kind)) {
+      const plain = n.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+      if (ts.isIdentifier(n.left)) push(writes, n.left.text, { node: n, value: plain ? n.right : null });
+      else for (const id of identifiersIn(n.left)) push(writes, id.text, { node: n, value: null });
+    }
+    if ((ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
+      (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken)) {
+      for (const id of identifiersIn(n.operand)) push(writes, id.text, { node: n, value: null });
+    }
+    if ((ts.isForInStatement(n) || ts.isForOfStatement(n)) && !ts.isVariableDeclarationList(n.initializer)) {
+      for (const id of identifiersIn(n.initializer)) push(writes, id.text, { node: n, value: null });
+    }
     ts.forEachChild(n, walk);
   };
   walk(sf);
-  return defs;
+  return { decls, writes };
+}
+
+const isScopeNode = (n, blockScoped) =>
+  ts.isSourceFile(n) || ts.isFunctionLike(n) || ts.isClassStaticBlockDeclaration(n) ||
+  (blockScoped && (ts.isBlock(n) || ts.isModuleBlock(n) || ts.isCaseBlock(n)));
+
+/** The node a declaration binds its name in: block scope for let/const and the like, function scope for var. */
+function scopeOfDeclaration(decl) {
+  if (ts.isParameter(decl)) return decl.parent;
+  if (ts.isBindingElement(decl)) {
+    let root = decl.parent;
+    while (root && !ts.isVariableDeclaration(root) && !ts.isParameter(root)) root = root.parent;
+    return root ? scopeOfDeclaration(root) : null;
+  }
+  if (ts.isFunctionExpression(decl) || ts.isClassExpression(decl)) return decl;
+  if (ts.isImportClause(decl) || ts.isImportSpecifier(decl) || ts.isNamespaceImport(decl)) return decl.getSourceFile();
+  if (ts.isVariableDeclaration(decl)) {
+    if (ts.isCatchClause(decl.parent)) return decl.parent;
+    const list = decl.parent;
+    const blockScoped = (list.flags & ts.NodeFlags.BlockScoped) !== 0;
+    if (blockScoped && (ts.isForStatement(list.parent) || ts.isForInStatement(list.parent) || ts.isForOfStatement(list.parent))) return list.parent;
+    for (let n = list.parent; n; n = n.parent) if (isScopeNode(n, blockScoped)) return n;
+    return null;
+  }
+  for (let n = decl.parent; n; n = n.parent) if (isScopeNode(n, true)) return n;
+  return null;
+}
+
+const within = (scope, node) => !!scope && scope.pos <= node.pos && node.end <= scope.end;
+
+/**
+ * The one value an identifier holds at its use, or null when the scanner cannot
+ * prove it. Exactly one declaration of the name may enclose the use (a name
+ * shadowed in an inner scope, or shadowing an outer one, is refused; a sibling
+ * scope's declaration of the same name does not reach the use), and it must be
+ * a plain variable (no parameter, destructured, imported or catch binding),
+ * bound exactly once inside its scope: its initializer or one plain `=`
+ * assignment. A name with a single binding can only ever hold that value (or
+ * be unset, which a path join refuses), so the binding's place in the source
+ * does not matter. Fails towards null.
+ */
+function soleValueAt(id, bindings) {
+  const enclosing = (bindings.decls.get(id.text) ?? []).filter((d) => within(scopeOfDeclaration(d), id));
+  if (enclosing.length !== 1) return null;
+  const decl = enclosing[0];
+  if (!ts.isVariableDeclaration(decl) || !ts.isIdentifier(decl.name) || ts.isCatchClause(decl.parent)) return null;
+  const scope = scopeOfDeclaration(decl);
+  const writes = (bindings.writes.get(id.text) ?? []).filter((w) => within(scope, w.node));
+  const all = [...(decl.initializer ? [{ node: decl, value: decl.initializer }] : []), ...writes];
+  if (all.length !== 1 || !all[0].value) return null;
+  return all[0].value;
+}
+
+/**
+ * True when an expression's value is a temporary directory: a call that makes
+ * one (`mkdtempSync(...)`, `os.tmpdir()`), a path that starts at one, or a
+ * variable whose sole sound binding is one (soleValueAt). A name alone is never
+ * enough; anything the scanner cannot resolve is not temporary.
+ */
+function isTmpExpr(node, bindings, seen = new Set()) {
+  if (ts.isParenthesizedExpression(node) || ts.isAwaitExpression(node) || ts.isAsExpression(node) ||
+    ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node)) return isTmpExpr(node.expression, bindings, seen);
+  if (ts.isCallExpression(node)) {
+    const name = calleeName(node.expression) ?? "";
+    if (TMP_CALLS.has(name)) return true;
+    return SAME_DIR_CALLS.has(name) && node.arguments.length > 0 && isTmpExpr(node.arguments[0], bindings, seen);
+  }
+  if (ts.isTemplateExpression(node)) return node.head.text === "" && isTmpExpr(node.templateSpans[0].expression, bindings, seen);
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) return isTmpExpr(node.left, bindings, seen);
+  if (ts.isIdentifier(node)) {
+    if (seen.has(node.text)) return false;
+    const value = soleValueAt(node, bindings);
+    return value !== null && isTmpExpr(value, bindings, new Set([...seen, node.text]));
+  }
+  return false;
 }
 
 /** The pieces (strings, HOLEs and TMP_HOLEs) an expression evaluates to, as far as literals tell. */
-function piecesOf(node, defs = new Map()) {
-  const hole = (n) => (isTmpExpr(n, defs) ? TMP_HOLE : HOLE);
-  if (ts.isParenthesizedExpression(node)) return piecesOf(node.expression, defs);
+function piecesOf(node, bindings) {
+  const hole = (n) => (isTmpExpr(n, bindings) ? TMP_HOLE : HOLE);
+  if (ts.isParenthesizedExpression(node)) return piecesOf(node.expression, bindings);
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return [node.text];
   if (ts.isTemplateExpression(node)) {
     const out = [node.head.text];
@@ -240,13 +323,13 @@ function piecesOf(node, defs = new Map()) {
     return out;
   }
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    return [...piecesOf(node.left, defs), ...piecesOf(node.right, defs)];
+    return [...piecesOf(node.left, bindings), ...piecesOf(node.right, bindings)];
   }
   if (ts.isCallExpression(node) && PATH_JOINERS.has(calleeName(node.expression) ?? "")) {
     const out = [];
     node.arguments.forEach((a, i) => {
       if (i > 0) out.push("/");
-      out.push(...piecesOf(a, defs));
+      out.push(...piecesOf(a, bindings));
     });
     return out;
   }
@@ -364,6 +447,26 @@ function isPartOfLargerPath(node) {
   return false;
 }
 
+/**
+ * True when an import or export-from loads no value: `import type ...`,
+ * `export type ... from`, or every named specifier carries `type` with no
+ * default or namespace binding (`import { type X, type Y } from`). A mixed
+ * list, a bare `import "x"`, an empty `{}`, `export *` and `export * as ns`
+ * load the module at run time.
+ */
+export function isTypeOnlyImportOrExport(node) {
+  if (ts.isImportDeclaration(node)) {
+    const clause = node.importClause;
+    if (!clause) return false;
+    if (clause.isTypeOnly) return true;
+    const named = clause.namedBindings;
+    return !clause.name && !!named && ts.isNamedImports(named) && named.elements.length > 0 && named.elements.every((e) => e.isTypeOnly);
+  }
+  if (node.isTypeOnly) return true;
+  const clause = node.exportClause;
+  return !!clause && ts.isNamedExports(clause) && clause.elements.length > 0 && clause.elements.every((e) => e.isTypeOnly);
+}
+
 /** Every pinned pack a JS/TS test file reads, imports or resolves. */
 export function scanScriptText(rel, text, pinned) {
   const kind = /\.tsx$/.test(rel) ? ts.ScriptKind.TSX : /\.jsx$/.test(rel) ? ts.ScriptKind.JSX : /\.[cm]?ts$/.test(rel) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
@@ -371,20 +474,20 @@ export function scanScriptText(rel, text, pinned) {
   const found = new Set();
   const chains = [];
   const literals = [];
-  const defs = definitionsOf(sf);
+  const bindings = bindingsOf(sf);
   const visit = (node) => {
     // An import, export-from, dynamic import, require, require.resolve or
     // vi.importActual whose specifier is a pinned package.
     let spec = null;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      if (!(ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) && !(ts.isExportDeclaration(node) && node.isTypeOnly)) {
-        spec = node.moduleSpecifier.text;
-      }
+      if (!isTypeOnlyImportOrExport(node)) spec = node.moduleSpecifier.text;
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
+      if (!node.isTypeOnly) spec = node.moduleReference.expression.text;
     } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(node.arguments[0])) {
       const isDynamicImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
       const name = calleeName(node.expression);
       const isResolve = name === "resolve" && ts.isPropertyAccessExpression(node.expression) && /^(require|import\.meta)$/.test(node.expression.expression.getText(sf));
-      if (isDynamicImport || name === "require" || name === "importActual" || isResolve) spec = node.arguments[0].text;
+      if (isDynamicImport || name === "require" || name === "importActual" || name === "requireActual" || isResolve) spec = node.arguments[0].text;
     }
     if (spec !== null) {
       const pkg = packageOfSpecifier(spec);
@@ -398,7 +501,7 @@ export function scanScriptText(rel, text, pinned) {
       ts.isBinaryExpression(node) ||
       (ts.isCallExpression(node) && PATH_JOINERS.has(calleeName(node.expression) ?? "")))
     ) {
-      chains.push(...chainsOf(piecesOf(node, defs)));
+      chains.push(...chainsOf(piecesOf(node, bindings)));
     }
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push(node.text);
     ts.forEachChild(node, visit);
@@ -419,6 +522,13 @@ export function pythonPieces(text) {
   let i = 0;
   const n = text.length;
   let lastEnd = -1;
+  // A pytest temporary fixture the file rebinds (`tmp_path = ...`, `for tmp_path in`,
+  // `as tmp_path`, `tmp_path := ...`) is not a temporary root any more.
+  const rebound = new Set(
+    [...PY_TMP_FIXTURES].filter((w) =>
+      new RegExp(`(?:^|[^\\w.])${w}\\s*(?:[-+*/%&|^@:]|//|\\*\\*|<<|>>)?=(?!=)|\\b(?:for|as)\\s+${w}\\b`, "m").test(text),
+    ),
+  );
   const gapJoins = (from, to) => /^[\s/,+\\]*$/.test(text.slice(from, to)) && !/\n\s*\n/.test(text.slice(from, to));
   while (i < n) {
     const c = text[i];
@@ -435,8 +545,19 @@ export function pythonPieces(text) {
       let body = "";
       while (i < n && text.slice(i, i + q.length) !== q) {
         if (text[i] === "\\" && !prefix.includes("r")) {
-          body += text[i + 1] ?? "";
-          i += 2;
+          // The decoded value: `\x2d`, `\u002d`, `\U0000002d` and octal `\055`
+          // all spell `-`; a line continuation spells nothing; an unknown escape
+          // keeps its backslash, as Python does.
+          const esc = /^\\(?:x([0-9a-fA-F]{2})|u([0-9a-fA-F]{4})|U([0-9a-fA-F]{8})|([0-7]{1,3})|(\r?\n)|(.))/s.exec(text.slice(i, i + 10));
+          if (!esc) {
+            i += 1;
+            continue;
+          }
+          const hex = esc[1] ?? esc[2] ?? esc[3];
+          if (hex) body += String.fromCodePoint(parseInt(hex, 16));
+          else if (esc[4]) body += String.fromCodePoint(parseInt(esc[4], 8));
+          else if (esc[6]) body += { n: "\n", t: "\t", r: "\r", "\\": "\\", "'": "'", '"': '"' }[esc[6]] ?? `\\${esc[6]}`;
+          i += esc[0].length;
           continue;
         }
         if (q.length === 1 && text[i] === "\n") break;
@@ -455,7 +576,7 @@ export function pythonPieces(text) {
         // variable (Path `/`, os.path.join); any other literal starts afresh.
         const lead = /([A-Za-z_][A-Za-z0-9_.]*(?:\(\))?)\s*[/,]\s*$/.exec(text.slice(text.lastIndexOf("\n", start - 1) + 1, start));
         if (!lead) pieces.push(START);
-        else pieces.push(lead[1].split(".").some((w) => TMP_WORD.test(w.replace(/\(\)$/, ""))) ? TMP_HOLE : HOLE);
+        else pieces.push(PY_TMP_FIXTURES.has(lead[1].split(".")[0]) && !rebound.has(lead[1].split(".")[0]) ? TMP_HOLE : HOLE);
       }
       else if (/[/,]/.test(text.slice(lastEnd, start))) pieces.push("/");
       if (prefix.includes("f")) {
@@ -497,9 +618,8 @@ export function holdsFlow(value) {
   return false;
 }
 
-/** The pinned-pack markers a flow-shaped fixture's text carries. */
-export function flowMarkers(text, pinned) {
-  const found = new Set();
+/** The pinned-pack markers one piece of text carries: a package name or a sha prefix. */
+function markersInText(text, pinned, found) {
   for (const name of pinned.names) {
     const re = new RegExp(`(^|[^A-Za-z0-9._/@-])${name.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}(?![A-Za-z0-9._-])`);
     if (re.test(text)) found.add(name);
@@ -508,7 +628,43 @@ export function flowMarkers(text, pinned) {
     if (m[0].length < SHA_PREFIX_MIN) continue;
     for (const sha of pinned.shas) if (sha.startsWith(m[0])) found.add(`sha:${m[0]}`);
   }
+}
+
+/**
+ * The pinned-pack markers a flow-shaped fixture carries, read from its PARSED
+ * value: every string and every key, so an escape (`\/`, `\uNNNN`) spells the
+ * name it decodes to. The raw text is read as well, and can only add a marker
+ * (a sha prefix written as a bare number, say). A name split across two JSON
+ * strings that a loader concatenates is out of reach.
+ */
+export function flowMarkers(text, pinned, value = JSON.parse(text)) {
+  const found = new Set();
+  const stack = [value];
+  while (stack.length) {
+    const v = stack.pop();
+    if (typeof v === "string") markersInText(v, pinned, found);
+    else if (Array.isArray(v)) stack.push(...v);
+    else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        markersInText(k, pinned, found);
+        stack.push(x);
+      }
+    }
+  }
+  markersInText(text, pinned, found);
   return found;
+}
+
+/** The finding's pack for a flow-shaped fixture that does not parse as JSON. */
+export const UNPARSED_FLOW = "(unparsed flow fixture)";
+
+/**
+ * A cheap flow signal on text that does not parse: `component_type` and `Flow`
+ * once the JSON escapes are decoded.
+ */
+export function looksLikeFlow(text) {
+  const decoded = text.replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\\//g, "/");
+  return /component_type/.test(decoded) && /\bFlow\b/.test(decoded);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,10 +686,13 @@ export function scanCorePins(root = REPO_ROOT, { pinned = loadPinnedPacks(root),
       try {
         value = JSON.parse(text);
       } catch {
-        continue; // not JSON, so not a flow
+        // Not JSON: a fixture with a flow's signal is reported (its markers
+        // cannot be read); anything else is not a flow and is skipped.
+        if (looksLikeFlow(text)) findings.push({ rule: "flow", file: rel, pack: UNPARSED_FLOW });
+        continue;
       }
       if (!holdsFlow(value)) continue;
-      for (const pack of flowMarkers(text, pinned)) findings.push({ rule: "flow", file: rel, pack });
+      for (const pack of flowMarkers(text, pinned, value)) findings.push({ rule: "flow", file: rel, pack });
       continue;
     }
     const packs = PY_FILE.test(rel) ? scanPythonText(text, pinned) : scanScriptText(rel, text, pinned);

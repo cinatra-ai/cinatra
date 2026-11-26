@@ -606,9 +606,20 @@ the literal segments of a path expression (`path.join`, `resolve`, `+`,
 template text, Python `Path /`), import specifiers, the shape of a JSON
 fixture, and the two locks; it names no pack and no file. A path reaches the
 tree when the segments before `extensions` are `.`/`..` or a root held in a
-variable; a path rooted in a temporary directory (`mkdtempSync`,
-`os.tmpdir()`, `tmp_path`, a variable named `tmp…`) or an absolute stand-in
-literal (`/repo/extensions/...`) is a synthetic tree and does not count.
+variable; a path rooted in a temporary directory or an absolute stand-in
+literal (`/repo/extensions/...`) is a synthetic tree and does not count. The
+temporary root must be sound: a `mkdtemp`/`os.tmpdir()` call, a path that
+starts at one, or a variable that only one declaration encloses at the use (no
+shadowing, no parameter, destructured or imported binding) and that is bound
+exactly once, to such a value; a pytest `tmp_path`/`tmpdir` only while the file
+never rebinds it. A name alone (`tmpDir`) is not enough; anything else is
+reported. A JSON fixture is read through its parsed value (every string and
+key, so `\/` and `\uNNNN` escapes do not hide a name or pin; the raw text can
+only add markers); a fixture that does not parse but shows a flow's signal is
+reported as `(unparsed flow fixture)`, any other unparsable file is skipped.
+An import or export-from is exempt only when it loads no value: `import type`,
+`export type`, or every named specifier marked `type` with no default or
+namespace binding; `import x = require(...)` and `requireActual(...)` count.
 **Iteration is not a pin:** a fleet test that walks the lock or the tree builds
 the name from a variable, so its path stops at the tree with a hole and no pack
 is found; a file whose path reaches the tree that way is found only for a pack
@@ -624,7 +635,8 @@ the job "Perpetual core invariants". **What it cannot see:** a flow copied by
 hand that keeps no package name and no pin sha (catching that needs the
 positive rule of cinatra#4853: every flow-shaped fixture carries a synthetic
 marker); a flow embedded as an object literal in a test file instead of a JSON
-fixture; YAML fixtures; a pack name computed from parts (`"demo" + "-agent"`)
+fixture; a name split across two JSON strings that a loader concatenates; YAML
+fixtures; a pack name computed from parts (`"demo" + "-agent"`)
 or read from another file; a pack's source reached through a module that is not
 a test (a helper under `src/` that the test calls).
 
