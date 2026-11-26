@@ -36,7 +36,7 @@ import {
 } from "./store";
 import { resolveWayflowUrl } from "./wayflow-url";
 import { claimPause, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
-import { isHumanDecisionFingerprint, isPersonDecider } from "./declared-review-pause";
+import { personApproved } from "./declared-review-pause";
 
 /** The id prefix of the gate the flow runtime inserts in front of a publishing step. The
  *  compiler reserves the same prefix (oas-compiler.ts, PUBLISH_GATE_ID_PREFIX). */
@@ -201,13 +201,6 @@ function reviewSeam(): ReviewSeamReads {
   }
   return { listReviews: seam.listReviews, hasPendingProducedReview: seam.hasPendingProducedReview };
 }
-
-/** A review a person approved: settled 'approve' with a decision fingerprint AND a person as its decider of record.
- *  Every terminal decision carries a fingerprint, also one a non-human carrier submits (it records no decider); the
- *  optional review's expiry settles 'approve' with a synthetic fingerprint and no decider. Neither is a person's. */
-const personApproved = (g: ReviewOfRun): boolean =>
-  g.status === "resolved" && g.disposition === "approve" && isHumanDecisionFingerprint(g.fingerprint)
-    && isPersonDecider(g.resolvedBy);
 
 /**
  * cinatra#4762 (design app-lifecycle-cards §XV): did an approved review card (§II) come earlier in the attempt that
