@@ -10,8 +10,9 @@
 //      unless a pinned pack declares it in the same list; a malformed or
 //      missing bridge is a scanner error; every pinned package must be found
 //      in the tree by its manifest name;
-//   B4 a pinned pack without the declaration: a warning while the bridge holds
-//      a word, a failure once it is empty (no code change makes the switch);
+//   B4 a pinned pack without the declaration: a warning only while the
+//      bridge's shrink-only `packages` list names it; a newly pinned, renamed
+//      or no-longer-declaring pack fails, and the list cannot grow;
 //   B5 the real tree: no problem, and the gate sources spell no bridge word.
 //
 // Fixture trees live under a temporary directory and use an owner outside the
@@ -66,7 +67,7 @@ function makeTree({ packs, bridge = { vendor: [], domain: [] }, files = {} }) {
       name: "example-app",
       cinatra: { devExtensions: Object.fromEntries(names.map((n) => [n, "0.0.0"])) },
     }),
-    [BRIDGE_REL]: JSON.stringify({ note: "fixture", ...bridge }),
+    [BRIDGE_REL]: JSON.stringify({ note: "fixture", packages: [], ...bridge }),
     ...files,
   };
   names.forEach((name, i) => {
@@ -217,8 +218,8 @@ describe("B3 the bridge", () => {
     git("add", "-A");
     git("commit", "-q", "--no-verify", "-m", "fixture");
     const base = git("rev-parse", "HEAD").trim();
-    expect(bridgeAtRef(r, base, RULES)).toEqual({ vendor: ["legacy"], domain: [] });
-    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["legacy", "grown"], domain: [] }));
+    expect(bridgeAtRef(r, base, RULES)).toEqual({ vendor: ["legacy"], domain: [], packages: [] });
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["legacy", "grown"], domain: [], packages: [] }));
     expect(bridgeGrowth(bridgeAtRef(r, base, RULES), loadBorderWords(r).bridge)).toEqual(["vendor: grown"]);
     git("rm", "-q", "-f", BRIDGE_REL);
     git("commit", "-q", "--no-verify", "-m", "no bridge");
@@ -227,10 +228,17 @@ describe("B3 the bridge", () => {
 
   it("a missing, malformed or duplicated bridge is a scanner error", () => {
     const r = makeTree({ packs: { "@example-org/widget-artifacts": NO_WORD } });
-    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["x-y"], domain: [] }));
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["x-y"], domain: [], packages: [] }));
     expect(() => loadBorderWords(r)).toThrow(BorderWordsError);
-    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["acme"], domain: ["acme"] }));
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["acme"], domain: ["acme"], packages: [] }));
     expect(() => loadBorderWords(r)).toThrow(/appears twice/);
+    // red-first-expect: AssertionError: expected [Function] to throw an error
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [] }));
+    expect(() => loadBorderWords(r)).toThrow(/"packages" must be an array/);
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [], packages: ["Not A Name"] }));
+    expect(() => loadBorderWords(r)).toThrow(/is not a package name/);
+    writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [], packages: ["@example-org/a", "@example-org/a"] }));
+    expect(() => loadBorderWords(r)).toThrow(/appears twice in "packages"/);
     rmSync(join(r, BRIDGE_REL));
     expect(() => loadBorderWords(r)).toThrow(/is missing/);
   });
@@ -318,22 +326,79 @@ describe("B3c every pinned package must be found by its manifest name", () => {
 });
 
 describe("B4 a pinned pack without the declaration", () => {
-  const packs = { "@example-org/widget-artifacts": NO_WORD, "@example-org/quiet-agent": undefined };
+  const QUIET = "@example-org/quiet-agent";
+  const packs = { "@example-org/widget-artifacts": NO_WORD, [QUIET]: undefined };
+  const notListed = (name) =>
+    `${name}: the pinned pack declares no cinatra.borderWords and is not in the bridge's "packages" list ` +
+    `(a newly pinned or renamed pack, or one that dropped its declaration, must declare)`;
 
-  it("is a warning, listing the pack, while the bridge holds a word", () => {
-    const words = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: [] } }));
-    expect(words.undeclared).toEqual(["@example-org/quiet-agent"]);
+  it("is a warning, listing the pack, while the bridge's packages list names it", () => {
+    const words = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] } }));
+    expect(words.undeclared).toEqual([QUIET]);
     expect(words.problems).toEqual([]);
     expect(words.warnings).toHaveLength(1);
     expect(words.warnings[0]).toMatch(/@example-org\/quiet-agent/);
+    expect(words.warnings[0]).toMatch(/shrink-only "packages" list/);
   });
 
-  it("is a failure once the bridge is empty: the bridge's own content makes the switch", () => {
-    const words = loadBorderWords(makeTree({ packs, bridge: { vendor: [], domain: [] } }));
+  it("a newly pinned pack the list does not name fails, even while the bridge holds words", () => {
+    // red-first-expect: AssertionError: expected [] to deeply equal [ Array(1) ]
+    const words = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: [] } }));
+    expect(words.problems).toEqual([notListed(QUIET)]);
     expect(words.warnings).toEqual([]);
+  });
+
+  it("a re-pinned pack (same name, new commit) stays listed and passes", () => {
+    const r = makeTree({ packs, bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] } });
+    writeFileSync(join(r, "package.json"), JSON.stringify({ cinatra: { devExtensions: { "@example-org/widget-artifacts": "0", [QUIET]: "1.2.3" } } }));
+    const words = loadBorderWords(r);
+    expect(words.problems).toEqual([]);
+    expect(words.warnings[0]).toMatch(/shrink-only "packages" list/);
+  });
+
+  it("a renamed pack is a new pin: the new name must declare and the old name must leave the list", () => {
+    const NEW = "@example-org/quieter-agent";
+    const words = loadBorderWords(
+      makeTree({ packs: { "@example-org/widget-artifacts": NO_WORD, [NEW]: undefined }, bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] } }),
+    );
     expect(words.problems).toEqual([
-      "@example-org/quiet-agent: the pinned pack declares no cinatra.borderWords (required once the bridge is empty)",
+      `${QUIET}: in the bridge's "packages" list (${BRIDGE_REL}) but not pinned — remove it from the list`,
+      notListed(NEW),
     ]);
+  });
+
+  it("a pack that declared and drops the declaration fails (it is not in the list, and the list cannot grow)", () => {
+    const base = { vendor: ["legacy"], domain: [], packages: [] };
+    const words = loadBorderWords(makeTree({ packs, bridge: base }));
+    expect(words.problems).toEqual([notListed(QUIET)]);
+    const relisted = loadBorderWords(makeTree({ packs, bridge: { ...base, packages: [QUIET] } }));
+    expect(relisted.problems).toEqual([]);
+    expect(bridgeGrowth(base, relisted.bridge)).toEqual([`packages: ${QUIET}`]);
+  });
+
+  it("a listed pack that declares must leave the list", () => {
+    const words = loadBorderWords(
+      makeTree({ packs: { ...packs, [QUIET]: NO_WORD }, bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] } }),
+    );
+    expect(words.problems).toEqual([
+      `${QUIET}: declares cinatra.borderWords but is still in the bridge's "packages" list (${BRIDGE_REL}) — remove it from the list`,
+    ]);
+  });
+
+  it("a declaration that becomes invalid fails, listed or not", () => {
+    for (const packages of [[], [QUIET]]) {
+      const words = loadBorderWords(makeTree({ packs: { ...packs, [QUIET]: { vendor: ["Acme"], domain: [] } }, bridge: { vendor: [], domain: [], packages } }));
+      expect(words.problems.some((p) => p.startsWith(`${QUIET}: cinatra.borderWords.vendor: "Acme"`))).toBe(true);
+      // a listed pack that now carries a declaration, even an invalid one, must also leave the list
+      expect(words.problems.some((p) => p.includes(`still in the bridge's "packages" list`))).toBe(packages.length > 0);
+    }
+  });
+
+  it("the packages list only shrinks against the base", () => {
+    // red-first-expect: AssertionError: expected [] to deeply equal [ 'packages: @example-org/new-agent' ]
+    const base = { vendor: [], domain: [], packages: [QUIET] };
+    expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [QUIET, "@example-org/new-agent"] })).toEqual(["packages: @example-org/new-agent"]);
+    expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [] })).toEqual([]);
   });
 });
 

@@ -67,7 +67,10 @@
 // change, only the vocabulary did (an extension newly claiming an id, or newly
 // declaring a domain word, the application already spells). The domain list
 // of the bridge only shrinks against APPLICATION_BORDER_BASE, and a word
-// leaves it only when a pinned pack declares it as a domain word. Every entry names its `owner`, the extension that will own the
+// leaves it only when a pinned pack declares it as a domain word. A pinned
+// pack without the declaration fails unless the bridge's `packages` list
+// names it, and that list too only shrinks against APPLICATION_BORDER_BASE
+// (lib/border-words.mjs). Every entry names its `owner`, the extension that will own the
 // code; `--write-baseline` writes a new entry with owner UNASSIGNED and the
 // check fails on any UNASSIGNED or empty owner.
 //
@@ -545,9 +548,9 @@ function main() {
       console.error(`${TAG} FAIL — ${err.message}`);
       process.exit(1);
     }
-    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("domain: ")) : [];
+    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("domain: ") || g.startsWith("packages: ")) : [];
     if (bridgeGrew.length) {
-      console.error(`${TAG} FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words; cinatra#4848):`);
+      console.error(`${TAG} FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words, and a newly pinned pack declares; cinatra#4848):`);
       bridgeGrew.forEach((g) => console.error(`  + ${g}`));
       process.exit(1);
     }

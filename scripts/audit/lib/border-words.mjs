@@ -18,9 +18,18 @@
 //   - a word that left the bridge against the base reference FAILS unless a
 //     pinned pack declares it in the SAME list (bridgeShrinkProblems): a word
 //     leaves the bridge only into a declaration, never out of the vocabulary;
-//   - a pinned pack without the declaration is a WARNING while the bridge
-//     holds a word, and a FAILURE once the bridge is empty: the switch is the
-//     bridge's own content, so no code change makes it.
+//   - a pinned pack without the declaration FAILS unless the bridge's
+//     `packages` list names it (a WARNING then). That list holds the packs
+//     pinned without a declaration when the bridge was introduced; it only
+//     shrinks (growth against the base reference FAILS, bridgeGrowth), so a
+//     newly pinned pack, a renamed pack (a new name is a new pin) and a pack
+//     that drops its declaration must declare. A name in the list that also
+//     declares, or that is no longer pinned, FAILS: remove it from the list.
+//     The list is the base's grandfathered set because the base's pack
+//     manifests are not in git (extensions/ is cloned): only a committed
+//     list, read at the base by `git show`, can say which packs were allowed
+//     to be silent there. A re-pin to a new commit keeps the name, so it
+//     stays listed.
 // cinatra#4848 tracks the bridge to empty.
 //
 // FAIL CLOSED. An absent extension tree, a pinned package not found under
@@ -48,6 +57,7 @@ export const BRIDGE_REL = "scripts/audit/border-words-bridge.json";
 export const BORDER_WORD_LISTS = Object.freeze(["vendor", "domain"]);
 const SDK_BORDER_WORDS_REL = "packages/sdk-extensions/src/border-words.ts";
 const SDK_HOST_CONTEXT_REL = "packages/sdk-extensions/src/host-context.ts";
+const PACKAGE_NAME = /^(@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const LOCKS = ["cinatra-required-extensions.lock.json", "cinatra-dev-extensions.lock.json"];
 const SYNC_HINT =
   "clone the extension tree back first (scripts/ci/sync-dev-extensions.mjs --pinned; CI: the clone-extensions action)";
@@ -136,7 +146,10 @@ export function borderWordsIssues(raw, rules) {
   return issues;
 }
 
-/** The bridge's two lists from its text; throws on a malformed bridge. */
+/**
+ * The bridge's two word lists and its `packages` list (the pinned packs still
+ * allowed to declare nothing) from its text; throws on a malformed bridge.
+ */
 export function parseBridge(text, rules, where = BRIDGE_REL) {
   let doc;
   try {
@@ -158,6 +171,17 @@ export function parseBridge(text, rules, where = BRIDGE_REL) {
     }
     out[list] = [...words];
   }
+  const packages = doc?.packages;
+  if (!Array.isArray(packages)) throw new BorderWordsError(`${where}: "packages" must be an array of package names`);
+  const names = new Set();
+  for (const name of packages) {
+    if (typeof name !== "string" || !PACKAGE_NAME.test(name)) {
+      throw new BorderWordsError(`${where}: ${JSON.stringify(name)} in "packages" is not a package name`);
+    }
+    if (names.has(name)) throw new BorderWordsError(`${where}: "${name}" appears twice in "packages"`);
+    names.add(name);
+  }
+  out.packages = [...packages];
   return out;
 }
 
@@ -176,12 +200,13 @@ export function pinnedPackageNames(repoRoot) {
  * Read the border words under `repoRoot`. Returns {
  *   words:      { vendor: string[], domain: string[] }  (declared ∪ bridge, sorted — what the checks match),
  *   declared:   { vendor: Map<word, owners[]>, domain: Map<word, owners[]> },
- *   bridge:     { vendor: string[], domain: string[] },
+ *   bridge:     { vendor: string[], domain: string[], packages: string[] },
  *   undeclared: package names of pinned packs without the declaration (sorted),
  *   problems:   failures (invalid declarations, a word declared in both lists by
- *               different packs, a bridge word also declared, and — once the
- *               bridge is empty — every undeclared pack),
- *   warnings:   one line naming the undeclared packs while the bridge holds a word,
+ *               different packs, a bridge word also declared, an undeclared pack
+ *               the bridge's `packages` list does not name, and a listed pack
+ *               that declares or is no longer pinned),
+ *   warnings:   one line naming the undeclared packs the bridge still lists,
  *   packCount,
  * }. Throws BorderWordsError on an absent tree, a pinned package not found
  * (or found twice) by its manifest name, an unreadable manifest, or an unreadable or malformed bridge.
@@ -264,29 +289,47 @@ export function loadBorderWords(repoRoot) {
     }
   }
   undeclared.sort();
-  const bridgeEmpty = BORDER_WORD_LISTS.every((list) => bridge[list].length === 0);
-  const warnings = [];
-  if (undeclared.length) {
-    if (bridgeEmpty) {
-      for (const name of undeclared) problems.push(`${name}: the pinned pack declares no cinatra.borderWords (required once the bridge is empty)`);
-    } else {
-      warnings.push(
-        `${undeclared.length} pinned pack(s) declare no cinatra.borderWords yet (a warning while ${BRIDGE_REL} holds a word, ` +
-          `a failure once it is empty — cinatra#4848): ${undeclared.join(", ")}`,
+  // GRANDFATHERING BY NAME. Only a pack the bridge's shrink-only `packages`
+  // list names may be pinned without the declaration.
+  const listed = new Set(bridge.packages);
+  const silent = new Set(undeclared);
+  for (const name of undeclared) {
+    if (!listed.has(name)) {
+      problems.push(
+        `${name}: the pinned pack declares no cinatra.borderWords and is not in the bridge's "packages" list ` +
+          `(a newly pinned or renamed pack, or one that dropped its declaration, must declare)`,
       );
     }
+  }
+  for (const name of bridge.packages) {
+    if (!pinned.has(name)) {
+      problems.push(`${name}: in the bridge's "packages" list (${BRIDGE_REL}) but not pinned — remove it from the list`);
+    } else if (!silent.has(name)) {
+      problems.push(`${name}: declares cinatra.borderWords but is still in the bridge's "packages" list (${BRIDGE_REL}) — remove it from the list`);
+    }
+  }
+  const grandfathered = undeclared.filter((name) => listed.has(name));
+  const warnings = [];
+  if (grandfathered.length) {
+    warnings.push(
+      `${grandfathered.length} pinned pack(s) declare no cinatra.borderWords yet (named in the shrink-only "packages" list ` +
+        `of ${BRIDGE_REL} — cinatra#4848): ${grandfathered.join(", ")}`,
+    );
   }
   const words = {};
   for (const list of BORDER_WORD_LISTS) words[list] = [...new Set([...declared[list].keys(), ...bridge[list]])].sort();
   return { words, declared, bridge, undeclared, problems: problems.sort(), warnings, packCount };
 }
 
-/** Bridge words present now but absent at the base (the bridge only shrinks). */
+/**
+ * Bridge entries present now but absent at the base (the bridge only shrinks):
+ * `vendor: <word>`, `domain: <word>` and `packages: <name>`.
+ */
 export function bridgeGrowth(baseBridge, bridge) {
   const grown = [];
-  for (const list of BORDER_WORD_LISTS) {
+  for (const list of [...BORDER_WORD_LISTS, "packages"]) {
     const base = new Set(baseBridge?.[list] ?? []);
-    for (const word of bridge[list]) if (!base.has(word)) grown.push(`${list}: ${word}`);
+    for (const word of bridge[list] ?? []) if (!base.has(word)) grown.push(`${list}: ${word}`);
   }
   return grown.sort();
 }

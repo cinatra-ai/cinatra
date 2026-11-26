@@ -367,9 +367,21 @@ own in its manifest, and the gates read them; neither gate names a word.
   same change all fail, naming the word. A deleted bridge is a scanner error,
   and an unresolvable base fails, as the other base guards do. **The bridge
   must reach empty; cinatra#4848 tracks it.**
-- **A pack without the declaration** is listed as a warning while the bridge
-  holds a word, and is a failure once the bridge is empty. The switch is the
-  bridge's own content, so no code change makes it.
+- **A pack without the declaration** fails unless the bridge's `packages`
+  list names it; a named pack is listed as a warning. The list holds the
+  117 packs that were pinned without the declaration when the bridge came in,
+  and it only shrinks: a list that grew against the base fails, like the word
+  lists. So a newly pinned pack must declare, a renamed pack too (a new name
+  is a new pin), and a pack that declared cannot drop its declaration (it is
+  not in the list and cannot be added). A pack re-pinned to a new commit keeps
+  its name and stays listed. A listed pack that declares (even invalidly) or
+  is no longer pinned fails until the same pull request removes it from the
+  list. The base's grandfathered set is this committed list, read at the base
+  with `git show`, because the packs' manifests are not in git (`extensions/`
+  is cloned at the head's pins); an unreadable or malformed base bridge fails.
+  Without a base variable (a local run) the list is enforced as committed and
+  only its growth goes unchecked, as for the word lists. An invalid
+  declaration fails whether or not the pack is listed.
 - **A pin advance that adds a word** can find a module core already holds; the
   word-born admission (a new key whose file is byte-identical at the base,
   above and below) lets that pull request record it on the floor with its

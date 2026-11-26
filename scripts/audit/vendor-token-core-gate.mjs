@@ -65,8 +65,10 @@
 // words no pack declares yet). A malformed declaration, a word both in the
 // bridge and declared, a bridge that grew against VENDOR_TOKEN_BASE, a word
 // that left the bridge against it without a pinned pack declaring it as a
-// vendor word, and — once the bridge is empty — a pinned pack without the
-// declaration each fail; an absent extension tree or a pinned package not
+// vendor word, a pinned pack without the declaration that the bridge's
+// shrink-only `packages` list does not name (a newly pinned or renamed pack,
+// or one that dropped its declaration), and a `packages` list that grew
+// against VENDOR_TOKEN_BASE each fail; an absent extension tree or a pinned package not
 // found in it is a scanner error (exit 2). The
 // non-goals of epic #978 stay non-goals by declaration: `nango` (the
 // credential-broker MECHANISM) and the LLM-provider names are words no pack
@@ -419,10 +421,10 @@ function main() {
       console.error(`[vendor-token-core-gate] FAIL — ${err.message}`);
       process.exit(1);
     }
-    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("vendor: ")) : [];
+    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("vendor: ") || g.startsWith("packages: ")) : [];
     if (bridgeGrew.length) {
       console.error(
-        `[vendor-token-core-gate] FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words; cinatra#4848):`,
+        `[vendor-token-core-gate] FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words, and a newly pinned pack declares; cinatra#4848):`,
       );
       bridgeGrew.forEach((e) => console.error("  + " + e));
       process.exit(1);

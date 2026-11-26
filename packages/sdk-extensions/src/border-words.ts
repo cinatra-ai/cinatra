@@ -26,9 +26,10 @@
 //
 // ADOPTION. The key is additive (the `consumes` precedent, cinatra#804: absent
 // means "not yet adopted"). Core's checks report a pinned pack without the
-// declaration as a warning while the temporary word bridge
-// (scripts/audit/border-words-bridge.json) still holds words, and as a failure
-// once that bridge is empty. The checks run in bare `node` and read the two
+// declaration as a warning only while the shrink-only `packages` list of the
+// temporary bridge (scripts/audit/border-words-bridge.json) names it, and as a
+// failure otherwise: a newly pinned or renamed pack, or one that dropped its
+// declaration, must declare. The checks run in bare `node` and read the two
 // constants below from this file's TEXT (the conformance-rules idiom), never a
 // re-listed copy.
 
