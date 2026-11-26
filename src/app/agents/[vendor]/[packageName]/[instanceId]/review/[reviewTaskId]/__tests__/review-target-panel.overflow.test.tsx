@@ -143,9 +143,22 @@ describe("cinatra#3862 leg 8 — the scrolling slot holds the representation alo
   // red-first-expect: expected [ 'ReviewTargetMount', …(2) ] to deeply equal [ 'ReviewTargetMount', …(1) ]
   it("draws only the mount and its floor fallback inside the slot", () => {
     const source = readFileSync(path.resolve(process.cwd(), "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx"), "utf8");
-    const slot = /data-review-representation-slot="">([\s\S]*?)\n {6}<\/div>/.exec(source)?.[1];
+    const slot = /data-review-representation-slot=""\s*>([\s\S]*?)\n {6}<\/div>/.exec(source)?.[1];
     expect(slot).toBeDefined();
     const drawn = [...slot!.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]);
     expect(drawn).toEqual(["ReviewTargetMount", "ArtifactStructuredDataView"]);
+  });
+});
+
+// cinatra#3459 — THE PDF FLOOR STANDS IN THE SLOT ITSELF. specs/app-artifact-
+// review.html §XI.4 draws the floor straight under the target header, one
+// surface with its own rule and padding; the slot gives it no padding of its
+// own around it, and keeps its padding for every other representation.
+describe("cinatra#3459 — the slot draws no padding around the pdf floor", () => {
+  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
+  it("drops its padding where the shared pdf shell draws its floor in it", () => {
+    const classes = classesOf(panel().slot);
+    expect(classes).toContain("has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0");
+    expect(classes).toContain("p-4");
   });
 });

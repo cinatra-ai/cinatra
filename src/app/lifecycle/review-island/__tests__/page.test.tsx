@@ -68,12 +68,14 @@ import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { reviewTargetStreamKey } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 import {
+  ISLAND_SOLE_PDF_FLOOR_CLASSES,
   islandBodyClassName,
   islandDocumentGroundCss,
   parseIslandColorScheme,
   REVIEW_ISLAND_COLOR_SCHEME_PARAM,
 } from "../island-color-scheme";
 import ReviewTargetIslandPage from "../page";
+import { PdfShellFrameProvider } from "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell";
 
 const REF = encodeLifecycleGateRef({ runId: "run-1", reviewTaskId: "task-1" })!;
 
@@ -218,6 +220,102 @@ describe("the island draws §III's ladder for the gate the ref names", () => {
 // target(s), kept for the run's audit trail." The decided card frames this same
 // island, so this document draws a resolved gate's frozen set exactly as it
 // draws a pending one's — with no decision chrome on either reading.
+describe("the island tells the pdf shell it is served into a sandboxed frame (cinatra#3459)", () => {
+  // The browser runs no PDF viewer in the card's sandboxed frame, so a served
+  // embed is a blank plate until the page hydrates. Declared here, the shell's
+  // server render already draws its download floor.
+  // red-first-expect: expected undefined to be 'sandboxed'
+  it("draws every target panel inside the sandboxed-frame declaration", async () => {
+    loadReviewGateSurface.mockResolvedValue({
+      kind: "ready",
+      agentSummary: null,
+      targets: [target("a1"), target("a2")],
+      permissions: Promise.resolve({ canDecide: true, canComment: true }),
+    });
+    const el = await renderIsland(REF);
+    const children = (el.props as { children: unknown[] }).children.flat();
+    const provider = children.find(
+      (node): node is ReactElement =>
+        !!node && typeof node === "object" && (node as ReactElement).type === PdfShellFrameProvider,
+    );
+    expect((provider?.props as { frame?: string } | undefined)?.frame).toBe("sandboxed");
+    expect(panelProps(provider!)).toHaveLength(2);
+    expect(panelProps(el)).toHaveLength(2);
+  });
+
+  // WHETHER ITS DOWNLOAD ADDRESSES TAKE A LINK. The first-party card's session
+  // addresses do; the widget's sealed byte addresses refuse a link navigation,
+  // and the CMS frame around the widget withholds downloads anyway, so there
+  // the shell must draw no download control at all.
+  // red-first-expect: expected undefined to be 'link'
+  // red-first-expect: expected undefined to be 'none'
+  function declaredDownloads(el: ReactElement): string | undefined {
+    const children = (el.props as { children: unknown[] }).children.flat();
+    const provider = children.find(
+      (node): node is ReactElement =>
+        !!node && typeof node === "object" && (node as ReactElement).type === PdfShellFrameProvider,
+    );
+    return (provider?.props as { downloads?: string } | undefined)?.downloads;
+  }
+
+  it("declares link downloads for the first-party card, which reads by its session cookie", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF))).toBe("link");
+  });
+
+  it("declares no downloads for a widget target, whose addresses are sealed capabilities", async () => {
+    resolveIslandCredentialReader.mockResolvedValue({
+      actorCtx: ACTOR,
+      runId: "run-1",
+      reviewTaskId: "task-1",
+      publishDecision: null,
+    });
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF, { ic: "AAAA-sealed_value-BBBB" }))).toBe("none");
+  });
+
+  it("declares no downloads for a same-site widget frame that reads by its cookie", async () => {
+    resolveVerifiedWidgetFrameOrigin.mockReturnValue("https://cms.example");
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    expect(declaredDownloads(await renderIsland(REF, { assistant: "a1", instanceId: "i1" }))).toBe("none");
+  });
+});
+
+// THE PDF FLOOR IS THE WHOLE DOCUMENT (cinatra#3459, the layout reading).
+// specs/app-artifact-review.html §XI.4 draws the floor straight under the
+// target header: one surface. A document that draws one target and nothing else
+// draws no plate of its own around that target's floor - no padding and the
+// panel's own fill - so nothing stands between the card's header and the
+// floor's rule. Every other document keeps its body exactly as before.
+describe("a document whose one target stands on the pdf floor draws no plate around it (cinatra#3459)", () => {
+  const FLOOR_STATE = [
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0",
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:bg-surface-strong",
+    "has-[[data-artifact-renderer=pdf-shell][data-floor]]:gap-0",
+  ];
+  const classesOf = (el: ReactElement): string[] =>
+    String((el.props as { className?: string }).className ?? "").split(/\s+/).filter(Boolean);
+
+  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
+  it("drops the body's padding and fill in the floor state where it draws one target", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
+    const classes = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(classes).toContain(token);
+    // The body outside the floor state is the body it always was.
+    expect(classes).toContain("p-3");
+    expect(classes).toContain("bg-surface");
+  });
+
+  it("keeps the body as it was where it draws several targets, or a summary beside the target", async () => {
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1"), target("a2")] });
+    const several = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(several).not.toContain(token);
+    loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: "Drafted.", targets: [target("a1")] });
+    const summarised = classesOf(await renderIsland(REF));
+    for (const token of FLOOR_STATE) expect(summarised).not.toContain(token);
+  });
+});
+
 describe("a DECIDED gate keeps its reviewed target(s), read-only", () => {
   function settledSurface(targets: ReturnType<typeof target>[]) {
     return { kind: "settled", agentSummary: null, targets };
@@ -608,7 +706,7 @@ describe("the island paints in the palette the host named", () => {
   it("carries the DARK palette onto the body it draws the ladder in", async () => {
     ready();
     const el = await renderIsland(REF, { scheme: "dark" });
-    expect(classOf(el)).toBe(islandBodyClassName("dark"));
+    expect(classOf(el)).toBe(`${islandBodyClassName("dark")} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(classOf(el)).toMatch(/(^| )dark( |$)/);
     expect((el.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"]).toBe(
       "dark",
@@ -652,14 +750,14 @@ describe("the island paints in the palette the host named", () => {
   it("carries the LIGHT palette as the app's own light palette class", async () => {
     ready();
     const el = await renderIsland(REF, { scheme: "light" });
-    expect(classOf(el)).toBe(islandBodyClassName("light"));
+    expect(classOf(el)).toBe(`${islandBodyClassName("light")} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(classOf(el)).toMatch(/(^| )cinatra( |$)/);
   });
 
   it("draws exactly what it drew before when the host names no palette", async () => {
     ready();
     const named = await renderIsland(REF, {});
-    expect(classOf(named)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
+    expect(classOf(named)).toBe(`flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3 ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     expect(
       (named.props as { "data-island-color-scheme"?: string })["data-island-color-scheme"],
     ).toBeUndefined();
@@ -670,7 +768,7 @@ describe("the island paints in the palette the host named", () => {
     for (const junk of ["", "DARK", "cinatra", "system", "dark ", "'/><script>"]) {
       expect(parseIslandColorScheme(junk)).toBeNull();
       const el = await renderIsland(REF, { scheme: junk });
-      expect(classOf(el)).toBe("flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3");
+      expect(classOf(el)).toBe(`flex min-w-0 flex-col gap-3 overflow-x-auto bg-surface p-3 ${ISLAND_SOLE_PDF_FLOOR_CLASSES}`);
     }
   });
 
