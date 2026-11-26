@@ -56,6 +56,7 @@ import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
 import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
+import { declaresPublishingStepTool } from "@/lib/passthrough-publishing-step-send";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
   passthroughFailureText,
@@ -422,7 +423,10 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   if (!tool) {
     return NextResponse.json({ error: "`tool` is required" }, { status: 400 });
   }
-  if (!ALLOWED_TOOLS.has(tool)) {
+  // cinatra#3745: a tool off the list is admitted only by its owning package's publishing-step declaration, and then
+  // only as the call of a released publishing step (checked below, once the run and the step are proven).
+  const publishingStepTool = !ALLOWED_TOOLS.has(tool) && declaresPublishingStepTool(tool);
+  if (!ALLOWED_TOOLS.has(tool) && !publishingStepTool) {
     return NextResponse.json(
       {
         error: `Tool "${tool}" is not on the deterministic-passthrough allowlist. ` +
@@ -527,6 +531,14 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   }))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
+  // cinatra#3745: a publishing-step tool is served only to a verified step with its executing-source proof whose
+  // released decision the check above claimed; a step that no released decision governs never reaches it.
+  if (publishingStepTool && (!verifiedExecutedSource || !publishCallClaim)) {
+    return NextResponse.json(
+      { error: "This tool is served only as a released publishing step's call.", code: "publishing_step_required" },
       { status: 403 },
     );
   }
@@ -879,6 +891,21 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         );
       }
       result = outcome.result;
+    } else if (publishingStepTool) {
+      // cinatra#3745: the step's released decision is used once, right before the effect, with the call's arguments
+      // bound to the values it surfaced; a refusal throws the consumption's class (the fixed 403 below).
+      const { loadPublishingStepHandler, usePublishingStepDecision } = await import(
+        "@/lib/passthrough-publishing-step-send"
+      );
+      const frame = mcpRequestContextStorage.getStore();
+      const callArguments = input;
+      const handler = await loadPublishingStepHandler(tool, () => usePublishingStepDecision(frame, tool, callArguments));
+      if (typeof handler !== "function") {
+        return NextResponse.json({ error: `Tool "${tool}" has no registered handler.` }, { status: 404 });
+      }
+      result = await withActorContext(alsActorContext, () =>
+        handler({ primitiveName: tool, input, actor, mode: "agentic" }),
+      );
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];

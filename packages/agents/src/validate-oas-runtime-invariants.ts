@@ -612,10 +612,36 @@ export function readStepToolDeclaration(node: unknown): StepToolDeclaration {
 }
 
 /**
+ * cinatra#3745: the tool a direct passthrough publishing step calls, or null.
+ * The step is a top-level node: a key of the root `$referenced_components`,
+ * listed in the root `nodes`, whose node carries that key as its `id`, is an
+ * ApiNode on `/api/agents/passthrough` and declares `publishes: true` (the
+ * JSON boolean). Its tool is the literal `data.tool`: non-empty, lower-case,
+ * no whitespace, no template. `extension_tool` declares nothing here (its
+ * inner name is the pack's own tool, checked against the pack's declaration).
+ */
+function passthroughPublishingStepTool(document: Record<string, unknown>, stepId: string): string | null {
+  const refs = document.$referenced_components;
+  if (!isPlainObject(refs) || !Object.prototype.hasOwnProperty.call(refs, stepId)) return null;
+  const node = refs[stepId];
+  const listed = Array.isArray(document.nodes) && document.nodes.some((entry) => resolveComponentRef(entry) === stepId);
+  if (!listed || !isPlainObject(node) || node.id !== stepId || node.component_type !== "ApiNode" ||
+      typeof node.url !== "string" || !node.url.includes("/api/agents/passthrough")) return null;
+  const cinatra = isPlainObject(node.metadata) ? node.metadata.cinatra : null;
+  if (!isPlainObject(cinatra) || cinatra.publishes !== true) return null;
+  const tool = isPlainObject(node.data) ? node.data.tool : undefined;
+  if (typeof tool !== "string" || tool === "" || /\s/.test(tool) || tool !== tool.toLowerCase() ||
+      tool.includes("{") || tool.includes("%") || tool === "extension_tool") return null;
+  return tool;
+}
+
+/**
  * Reads the declaration of the model-bridge step with the given id from a flow
  * document, nested subflows included. When several model-bridge steps carry the
  * id, the result is `invalid` if any one is, otherwise the names common to every
- * declared list; a step that declares nothing adds no name.
+ * declared list; a step that declares nothing adds no name. A direct passthrough
+ * publishing step (passthroughPublishingStepTool) declares exactly the tool its
+ * request names (cinatra#3745).
  */
 export function findStepToolDeclaration(
   document: unknown,
@@ -630,6 +656,8 @@ export function findStepToolDeclaration(
     if (reading.kind === "invalid") invalid = invalid ?? reading;
     else if (reading.kind === "declared") declared.push(reading.tools);
   });
+  const passthroughTool = passthroughPublishingStepTool(document, stepId);
+  if (passthroughTool !== null) declared.push([passthroughTool]);
   if (invalid) return invalid;
   if (declared.length === 0) return { kind: "undeclared" };
   const [first, ...rest] = declared;
