@@ -35,7 +35,30 @@ export type ShapedArtifactMaterializeInput = {
    *  `@scope/pkg:local-id` the tool materializes into (else the run
    *  materializer's single-artifact-safe-type fallback / fail-closed). */
   objectTypeId?: string;
+  /**
+   * THE LIST MODE (cinatra#3089): one artifact per member of a JSON array, in
+   * member order, each filed under the same node. Present only when the call
+   * names both `memberContentField` and `memberTitleField`; `content` and
+   * `title` are then empty, as every member carries its own.
+   */
+  members?: ShapedArtifactMaterializeMember[];
 };
+
+/** One member of a list call: its title, its bytes and the typed data it is filed with. */
+export type ShapedArtifactMaterializeMember = { title: string; content: string; data?: Record<string, string> };
+
+/** The reserved ledger namespace of list members; the materializer's `MATERIALIZE_LIST_OUTPUT_ID_PREFIX`
+ *  (restated: this module has zero deps). */
+export const MATERIALIZE_LIST_NODE_ID_PREFIX = "cinatra:list/";
+
+/** The most members one list call files. */
+export const MAX_MATERIALIZE_LIST_MEMBERS = 50;
+
+/** The longest typed-data value a list call files. */
+export const MAX_MATERIALIZE_LIST_VALUE_CHARS = 500;
+
+/** Typed-data names a list call never sets: the run id is the host's (a type keys a run-scoped identity on it). */
+const RESERVED_MEMBER_DATA_FIELDS = new Set(["runId"]);
 
 /** `@scope/package:local-id` — mirrors the binding grammar regex. */
 const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
@@ -77,6 +100,38 @@ export function shapeArtifactMaterializeInput(
   const extension = requireNonEmptyString(raw, "extension");
   const declaredMime = requireNonEmptyString(raw, "declaredMime");
   const nodeId = requireNonEmptyString(raw, "node_id");
+  if (nodeId.startsWith(MATERIALIZE_LIST_NODE_ID_PREFIX)) {
+    // The ledger output ids of a list call's members live under this prefix
+    // (`materializeListMemberOutputId`, cinatra#3089): a node of that name could share one.
+    throw new Error(`artifact_materialize input.node_id must not start with "${MATERIALIZE_LIST_NODE_ID_PREFIX}" (a reserved ledger namespace)`);
+  }
+
+  // ---- the list mode (cinatra#3089) ---------------------------------------
+  if (raw.memberContentField !== undefined || raw.memberTitleField !== undefined) {
+    let objectTypeId: string | undefined;
+    if (raw.objectTypeId !== undefined) {
+      if (typeof raw.objectTypeId !== "string" || !OBJECT_TYPE_ID_RE.test(raw.objectTypeId)) {
+        throw new Error(
+          `artifact_materialize input.objectTypeId, when present, must be a namespaced object type id (@scope/package:local-id) (got ${JSON.stringify(raw.objectTypeId)})`,
+        );
+      }
+      objectTypeId = raw.objectTypeId;
+    }
+    return {
+      extension,
+      content: "",
+      declaredMime,
+      title: "",
+      nodeId,
+      ...(objectTypeId ? { objectTypeId } : {}),
+      members: shapeListMembers(raw),
+    };
+  }
+  if (raw.memberDataFields !== undefined || raw.memberData !== undefined) {
+    throw new Error(
+      "artifact_materialize input.memberDataFields and input.memberData belong to a list call (memberContentField + memberTitleField)",
+    );
+  }
 
   // ---- the same-artifact revision (cinatra#3030, item 0.30) --------------
   const hasArtifactId = raw.artifactId !== undefined && raw.artifactId !== null;
@@ -175,4 +230,123 @@ export function shapeArtifactMaterializeInput(
       ? {}
       : { baseRepresentationRevisionId }),
   };
+}
+
+/** A field name exactly as given: non-blank, with no white space around it (a padded name is refused, never read as another). */
+function requireFieldName(value: unknown, where: string): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value !== value.trim()) {
+    throw new Error(`artifact_materialize ${where} must be a field name with no surrounding whitespace (got ${JSON.stringify(value)})`);
+  }
+  return value;
+}
+
+/** A typed-data value of a list call: a non-blank string of at most MAX_MATERIALIZE_LIST_VALUE_CHARS, trimmed. */
+function requireDataValue(value: unknown, where: string): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.trim().length > MAX_MATERIALIZE_LIST_VALUE_CHARS) {
+    throw new Error(`artifact_materialize ${where} must be a non-blank string of at most ${MAX_MATERIALIZE_LIST_VALUE_CHARS} characters`);
+  }
+  return value.trim();
+}
+
+/**
+ * THE LIST MODE (cinatra#3089). `content` is the JSON text of an array;
+ * `memberContentField` and `memberTitleField` name the field of each member
+ * that is its content and its title. `memberDataFields` (optional) names the
+ * string fields of each member filed as its typed data; `memberData` (optional)
+ * holds call-wide string values filed on every member (a member that carries a
+ * field of that name is refused, never overridden). Every member is checked
+ * here, so a refusal files nothing. Refused besides: one of the two fields
+ * without the other; a list with an append, a `contentJsonField` or a
+ * top-level title; a content that is not a JSON array; an empty list or one
+ * over MAX_MATERIALIZE_LIST_MEMBERS; a member that is not an object, whose
+ * content is not a string or whose title is blank.
+ */
+function shapeListMembers(raw: Record<string, unknown>): ShapedArtifactMaterializeMember[] {
+  if (raw.memberContentField === undefined || raw.memberTitleField === undefined) {
+    throw new Error(
+      "artifact_materialize input.memberContentField and input.memberTitleField must be given together — a list call names the content AND the title of every member",
+    );
+  }
+  const contentField = requireFieldName(raw.memberContentField, "input.memberContentField");
+  const titleField = requireFieldName(raw.memberTitleField, "input.memberTitleField");
+  for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"]) {
+    if (raw[field] !== undefined && raw[field] !== null) {
+      throw new Error(
+        `artifact_materialize input.${field} cannot be combined with a list call — every member is a new artifact with its own title`,
+      );
+    }
+  }
+  let dataFields: string[] = [];
+  if (raw.memberDataFields !== undefined) {
+    if (!Array.isArray(raw.memberDataFields)) {
+      throw new Error("artifact_materialize input.memberDataFields must be an array of field names");
+    }
+    dataFields = raw.memberDataFields.map((f, i) => requireFieldName(f, `input.memberDataFields[${i}]`));
+  }
+  const fixed: Record<string, string> = {};
+  if (raw.memberData !== undefined) {
+    if (typeof raw.memberData !== "object" || raw.memberData === null || Array.isArray(raw.memberData)) {
+      throw new Error("artifact_materialize input.memberData must be an object of string values");
+    }
+    for (const [name, value] of Object.entries(raw.memberData as Record<string, unknown>)) {
+      fixed[requireFieldName(name, "input.memberData field name")] = requireDataValue(value, `input.memberData.${name}`);
+    }
+  }
+  for (const name of [...dataFields, ...Object.keys(fixed)]) {
+    if (RESERVED_MEMBER_DATA_FIELDS.has(name)) {
+      throw new Error(`artifact_materialize a list call cannot set the typed field "${name}" (it is the host's)`);
+    }
+    if (dataFields.includes(name) && Object.prototype.hasOwnProperty.call(fixed, name)) {
+      throw new Error(`artifact_materialize the typed field "${name}" is both a member field and a call-wide value`);
+    }
+  }
+  if (typeof raw.content !== "string") {
+    throw new Error(
+      `artifact_materialize input.content must be a string (got ${Array.isArray(raw.content) ? "array" : typeof raw.content})`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw.content);
+  } catch {
+    throw new Error("artifact_materialize input.content is not parseable JSON (a list call requires a JSON-array content payload)");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(
+      `artifact_materialize input.content must encode a JSON array for a list call (got ${parsed === null ? "null" : typeof parsed})`,
+    );
+  }
+  if (parsed.length === 0) {
+    throw new Error("artifact_materialize input.content is an empty list — a list call files at least one member");
+  }
+  if (parsed.length > MAX_MATERIALIZE_LIST_MEMBERS) {
+    throw new Error(
+      `artifact_materialize input.content has ${parsed.length} members; a list call files at most ${MAX_MATERIALIZE_LIST_MEMBERS}`,
+    );
+  }
+  const hasData = dataFields.length > 0 || Object.keys(fixed).length > 0;
+  return parsed.map((member: unknown, index) => {
+    const where = `input.content member ${index + 1}`;
+    if (typeof member !== "object" || member === null || Array.isArray(member)) {
+      throw new Error(`artifact_materialize ${where} must be a JSON object`);
+    }
+    const record = member as Record<string, unknown>;
+    const content = record[contentField];
+    if (typeof content !== "string") {
+      throw new Error(`artifact_materialize ${where} field "${contentField}" must be a string`);
+    }
+    const title = record[titleField];
+    if (typeof title !== "string" || title.trim().length === 0) {
+      throw new Error(`artifact_materialize ${where} field "${titleField}" must be a non-empty string`);
+    }
+    if (!hasData) return { title: title.trim(), content };
+    const data: Record<string, string> = {};
+    for (const name of Object.keys(fixed)) {
+      if (Object.prototype.hasOwnProperty.call(record, name)) {
+        throw new Error(`artifact_materialize ${where} must not carry the field "${name}" (its value is the call's)`);
+      }
+    }
+    for (const name of dataFields) data[name] = requireDataValue(record[name], `${where} field "${name}"`);
+    return { title: title.trim(), content, data: { ...data, ...fixed } };
+  });
 }

@@ -636,12 +636,46 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       );
       const shaped = input as unknown as ShapedArtifactMaterializeInput;
 
-      // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
-      // an existing artifact AND the revision it read appends the next revision
-      // instead of creating a second artifact. A base another write has already
-      // built on is answered 409 — the caller re-reads and appends again; every
-      // other refusal keeps the 400 the create path uses.
-      if (
+      if (Array.isArray(shaped.members)) {
+        // THE LIST MODE (cinatra#3089): one artifact per member, filed under
+        // this node. A Regenerate run files exactly one artifact, so a list
+        // call in one (or in a run that may be one: the read fails closed) is
+        // refused before anything is filed.
+        const { isRegenerateSegmentRun } = await import("@cinatra-ai/agents/regenerate-segment");
+        if (await isRegenerateSegmentRun({ id: run.id, sourceType: run.sourceType })) {
+          return NextResponse.json(
+            { error: "artifact_materialize: a list call files one artifact per member, and a Regenerate run files exactly one; nothing was filed" },
+            { status: 400 },
+          );
+        }
+        const { materializeToolArtifactList } = await import("@/lib/artifacts/run-artifact-materializer");
+        const listed = await materializeToolArtifactList({
+          runId: run.id,
+          orgId: run.orgId,
+          templateId: run.templateId,
+          packageVersion: run.packageVersion,
+          createdBy: run.runBy,
+          nodeId: shaped.nodeId,
+          ...(verifiedStepId ? { verifiedStepId } : {}),
+          extension: shaped.extension,
+          objectTypeId: shaped.objectTypeId,
+          mime: shaped.declaredMime,
+          members: shaped.members,
+        });
+        if (!listed.ok) {
+          return listed.reason === "publish_call_in_flight"
+            ? NextResponse.json({ error: listed.error, reason: listed.reason }, { status: 409 })
+            : NextResponse.json({ error: listed.error }, { status: 400 });
+        }
+        // The filed pairs in member order, and the same pairs as JSON text for
+        // a marked gate's `targetsInput`.
+        result = { artifacts: listed.artifacts, reviewTargets: JSON.stringify(listed.artifacts), deduped: listed.deduped };
+      } else if (
+        // THE SAME-ARTIFACT REVISION (cinatra#3030, item 0.30). A call that names
+        // an existing artifact AND the revision it read appends the next revision
+        // instead of creating a second artifact. A base another write has already
+        // built on is answered 409 — the caller re-reads and appends again; every
+        // other refusal keeps the 400 the create path uses.
         typeof shaped.artifactId === "string" &&
         typeof shaped.baseRepresentationRevisionId === "string"
       ) {

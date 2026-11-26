@@ -1727,6 +1727,116 @@ export async function materializeToolArtifact(input: {
   }
 }
 
+/**
+ * The reserved ledger output-id namespace of a list call's members (cinatra#3089).
+ * The passthrough shaper refuses a node id in it, so a member's row never shares
+ * an output id with a node's own row; the node is JSON-quoted, which is
+ * self-delimiting, so two (node, position) pairs never give one string.
+ */
+export const MATERIALIZE_LIST_OUTPUT_ID_PREFIX = "cinatra:list/";
+
+/** The ledger output id of member `position` (0-based) of the list a node files. */
+export function materializeListMemberOutputId(nodeId: string, position: number): string {
+  return `${MATERIALIZE_LIST_OUTPUT_ID_PREFIX}${JSON.stringify(nodeId)}/${position}`;
+}
+
+/**
+ * THE LIST MODE of the `artifact_materialize` tool (cinatra#3089): one artifact
+ * per member, in member order, each a `materialize_tool` write of the same node
+ * under its own ledger identity (`materializeListMemberOutputId`), with the
+ * member's typed data. Every member is authorized before the first write (the
+ * produces check, the form, the cap and the declared type), so a refused member
+ * files nothing. A write that fails part-way leaves the members written so far;
+ * the same call again reuses them by their ledger rows and files the rest, so a
+ * retried call answers the one list. Answers the filed pairs in member order,
+ * or the first refusal.
+ */
+export async function materializeToolArtifactList(input: {
+  runId: string;
+  orgId: string;
+  templateId: string;
+  packageVersion: string | null;
+  createdBy: string | null;
+  nodeId: string;
+  verifiedStepId?: string;
+  extension: string;
+  objectTypeId?: string;
+  mime: string;
+  members: ReadonlyArray<{ title: string; content: string; data?: Record<string, string> }>;
+}): Promise<
+  | { ok: true; artifacts: Array<{ artifactId: string; representationRevisionId: string }>; deduped: boolean }
+  | Extract<ToolArtifactMaterialization, { ok: false }>
+> {
+  try {
+    if (input.members.length === 0) return { ok: false, error: "a list call files at least one member" };
+    const reviewNode =
+      input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId ? { nodeId: input.nodeId } : {};
+    let target: ResolvedBoundTarget | null = null;
+    let reviewed = false;
+    for (const [index, member] of input.members.entries()) {
+      if (member.title.trim().length === 0) {
+        return { ok: false, error: `member ${index + 1}: title must be a non-empty string` };
+      }
+      const authorized = await authorizeToolMaterializeWrite({
+        orgId: input.orgId,
+        templateId: input.templateId,
+        packageVersion: input.packageVersion,
+        extension: input.extension,
+        objectTypeId: input.objectTypeId,
+        mime: input.mime,
+        content: member.content,
+        ...reviewNode,
+      });
+      if (!authorized.ok) return { ok: false, error: `member ${index + 1}: ${authorized.error}` };
+      target = authorized.target;
+      reviewed = authorized.reviewed;
+    }
+    const ownership = await resolveRunScopeOwnership({
+      templateId: input.templateId,
+      runId: input.runId,
+      orgId: input.orgId,
+    });
+    const artifacts: Array<{ artifactId: string; representationRevisionId: string }> = [];
+    let deduped = true;
+    for (const [index, member] of input.members.entries()) {
+      let written: Awaited<ReturnType<typeof writeClaimedArtifact>>;
+      try {
+        written = await writeClaimedArtifact({
+          runId: input.runId,
+          orgId: input.orgId,
+          createdBy: input.createdBy,
+          outputId: materializeListMemberOutputId(input.nodeId, index),
+          nodeId: input.nodeId,
+          path: "materialize_tool",
+          ...(input.verifiedStepId !== undefined ? { verifiedStepId: input.verifiedStepId } : {}),
+          extension: input.extension,
+          title: member.title.trim(),
+          mime: input.mime,
+          content: member.content,
+          ownership,
+          resolvedTarget: target!,
+          mimeDescription: "the call declared MIME",
+          ...(reviewed ? { originKind: "live_generator" as const } : {}),
+          ...(member.data ? { typedData: { ...member.data } } : {}),
+        });
+      } catch (err) {
+        if (isPublishCallInFlightAbort(err)) throw err;
+        return { ok: false, error: `member ${index + 1}: materialization failed: ${err instanceof Error ? err.message : String(err)}` };
+      }
+      if (!written.ok) return { ok: false, error: `member ${index + 1}: ${written.error}` };
+      artifacts.push({ artifactId: written.artifactId, representationRevisionId: written.representationRevisionId });
+      deduped = deduped && written.deduped;
+    }
+    return { ok: true, artifacts, deduped };
+  } catch (err) {
+    if (isPublishCallInFlightAbort(err)) return PUBLISH_CALL_IN_FLIGHT_REFUSAL;
+    return {
+      ok: false,
+      error: `materialization failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The send fan-out's per-message body revision (cinatra#3089, lifecycle-d W1).
 // ---------------------------------------------------------------------------
