@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 
-import { scanOasForRuntimeInvariantFindings } from "../validate-oas-runtime-invariants";
+import { measureReviewStepRule, scanOasForRuntimeInvariantFindings } from "../validate-oas-runtime-invariants";
 
 type Node = Record<string, unknown>;
 
@@ -139,7 +139,13 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
   // The application falls back to the run's start parameters
   // (resolveDeclaredReviewTargets); they hold the ROOT flow's inputs only.
   it("accepts a targets input that is a start input of the root flow, and refuses one of a nested flow only", () => {
-    const withStart = (doc: Node) => ({ ...doc, inputs: [{ title: "reviewTargets", type: "array" }] });
+    // A start input is declared by the root flow AND its StartNode (cinatra#4150 round 3).
+    const withStart = (doc: Node) => {
+      const input = { title: "reviewTargets", type: "array" };
+      const refs = { ...(doc.$referenced_components as Record<string, Node>) };
+      refs.start = { ...refs.start, inputs: [input] };
+      return { ...doc, inputs: [input], $referenced_components: refs };
+    };
     expect(codes(withStart(flow({ g: gate("g", review, { inputs: [] }) }, ["g"])), RULE)).toEqual([]);
 
     const fixture = JSON.parse(readFileSync(path.resolve(__dirname, "../../../../tests/fixtures/review-gate-agent/cinatra-review-fixture/marked-review-gate/cinatra/oas.json"), "utf8"));
@@ -234,9 +240,12 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
   });
 
   it("accepts an edge from the StartNode's inputs, and refuses one from an input the StartNode does not have", () => {
-    const fromStart = (inputs: Node[]): Node => {
+    // The start message fills a StartNode port only for an input the root flow
+    // declares too (the rule 004 and 005 share, cinatra#4150 round 3).
+    const fromStart = (inputs: Node[], flowInputs: Node[] = inputs): Node => {
       const doc: Node = {
         ...flow({ g: gate("g", surfaced) }, ["g"]),
+        inputs: flowInputs,
         data_flow_connections: [edge("start", "targets", "g", "reviewTargets")],
       };
       (doc.$referenced_components as Record<string, Node>).start = { component_type: "StartNode", id: "start", name: "start", inputs };
@@ -244,6 +253,7 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
     };
     expect(codes(fromStart([{ title: "targets", type: "string" }]), RULE)).toEqual([]);
     expect(codes(fromStart([]), NOT_FED)).toHaveLength(1);
+    expect(codes(fromStart([{ title: "targets", type: "string" }], []), NOT_FED)).toHaveLength(1);
   });
 
   it("leaves an unmarked gate alone, and still refuses a marked one beside it", () => {
@@ -322,5 +332,140 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
       // red-first-expect: expected [] to have a length of 1 but got +0
       expect(codes(untyped, "control_flow_connections cannot be read")).toHaveLength(1);
     });
+  });
+});
+
+// cinatra#4150 round 3: the gate must run (both roads), a StartNode feeds only
+// a start input of the root flow, and the rule's work is linear in the document.
+describe("OAS-RUNTIME-013: the review step runs, gets real start inputs, and is checked in linear time", () => {
+  const UNREACHABLE = "no control path of the root flow leads from its start node to the gate, so the gate never runs";
+  /** The root flow's start inputs: declared by the flow AND its StartNode. */
+  const startInputs = (doc: Node, flowTitles: string[], startTitles: string[] = flowTitles): Node => {
+    const refs = { ...(doc.$referenced_components as Record<string, Node>) };
+    refs.start = { ...refs.start, inputs: startTitles.map((title) => ({ title, type: "array" })) };
+    return { ...doc, inputs: flowTitles.map((title) => ({ title, type: "array" })), $referenced_components: refs };
+  };
+
+  it("refuses a start-input gate that the control edges never reach", () => {
+    // start -> end; the gate is a root node with no control edge at all.
+    const disconnected = startInputs({ ...flow({ g: gate("g", review, { inputs: [] }) }, []), nodes: ["start", "g", "end"].map((k) => ({ $component_ref: k })) }, ["reviewTargets"]);
+    expect(codes(disconnected, UNREACHABLE)).toHaveLength(1);
+    // The gate only has an outgoing edge.
+    const outgoingOnly = { ...disconnected, control_flow_connections: [ctl("start", "end"), ctl("g", "end")] };
+    expect(codes(outgoingOnly, UNREACHABLE)).toHaveLength(1);
+    // Reached: accepted.
+    const reached = startInputs(flow({ g: gate("g", review, { inputs: [] }) }, ["g"]), ["reviewTargets"]);
+    expect(codes(reached, RULE)).toEqual([]);
+  });
+
+  it("refuses a start-input gate whose control edges cannot be read", () => {
+    const doc = startInputs(flow({ g: gate("g", review, { inputs: [] }) }, ["g"]), ["reviewTargets"]);
+    expect(codes({ ...doc, control_flow_connections: undefined }, "control_flow_connections cannot be read")).toHaveLength(1);
+    expect(codes({ ...doc, start_node: undefined }, "control_flow_connections cannot be read")).toHaveLength(1);
+  });
+
+  it("refuses a surfaced, fed gate that the control edges never reach", () => {
+    const doc = { ...fed(gate("g", surfaced)), control_flow_connections: [ctl("start", "make"), ctl("make", "end")] };
+    expect(codes(doc, UNREACHABLE)).toHaveLength(1);
+  });
+
+  it("refuses a marked gate that is the root flow's start node", () => {
+    const doc = startInputs(flow({ g: gate("g", review, { inputs: [] }) }, ["g"]), ["reviewTargets"]);
+    const asStart = { ...doc, start_node: { $component_ref: "g" }, control_flow_connections: [ctl("g", "start"), ctl("start", "end")] };
+    expect(codes(asStart, "it is the root flow's start node")).toHaveLength(1);
+  });
+
+  it("takes a start input only when the root flow AND its StartNode declare it", () => {
+    const base = flow({ g: gate("g", review, { inputs: [] }) }, ["g"]);
+    expect(codes(startInputs(base, ["reviewTargets"]), RULE)).toEqual([]);
+    expect(codes(startInputs(base, ["reviewTargets"], []), 'is not a start input of the flow')).toHaveLength(1);
+    expect(codes(startInputs(base, [], ["reviewTargets"]), 'is not a start input of the flow')).toHaveLength(1);
+  });
+
+  it("refuses a StartNode feeder whose input the root flow does not declare, even with an explicit StartNode output", () => {
+    const doc: Node = {
+      ...flow({ g: gate("g", surfaced) }, ["g"]),
+      data_flow_connections: [edge("start", "targets", "g", "reviewTargets")],
+    };
+    const port = [{ title: "targets", type: "string" }];
+    (doc.$referenced_components as Record<string, Node>).start = { component_type: "StartNode", id: "start", name: "start", inputs: port, outputs: port };
+    expect(codes(doc, NOT_FED)).toHaveLength(1);
+    expect(codes({ ...doc, inputs: port }, RULE)).toEqual([]);
+  });
+
+  /** A flow start -> p0 .. p(n-1) -> gates -> end, each producer feeding each listed gate's targets. */
+  function large(producers: number, gates: number): { doc: Node; size: number } {
+    const components: Record<string, Node> = {};
+    const top: string[] = [];
+    const data: Node[] = [];
+    for (let i = 0; i < producers; i++) {
+      components[`p${i}`] = producer(`p${i}`, ["targets"]);
+      top.push(`p${i}`);
+    }
+    for (let j = 0; j < gates; j++) {
+      components[`g${j}`] = gate(`g${j}`, surfaced);
+      top.push(`g${j}`);
+    }
+    // Every producer feeds the first gate; each further gate is fed by one producer.
+    for (let i = 0; i < producers; i++) data.push(edge(`p${i}`, "targets", "g0", "reviewTargets"));
+    for (let j = 1; j < gates; j++) data.push(edge(`p${j % producers}`, "targets", `g${j}`, "reviewTargets"));
+    const doc: Node = { ...flow(components, top), data_flow_connections: data };
+    const size = (doc.nodes as Node[]).length + (doc.control_flow_connections as Node[]).length + data.length;
+    return { doc, size };
+  }
+
+  it("checks 5,000 feeders of one gate in work linear in the document", () => {
+    const { doc, size } = large(5000, 1);
+    const t0 = performance.now();
+    // red-first-expect: measureReviewStepRule is not a function
+    const { findings, steps } = measureReviewStepRule(doc);
+    const ms = performance.now() - t0;
+    expect(findings.filter((f) => f.message.includes(RULE))).toEqual([]);
+    expect(steps).toBeLessThanOrEqual(12 * size);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it("checks 5,000 gates, and 5,000 feeders that do not run before their gate, in work linear in the document", () => {
+    // red-first-expect: measureReviewStepRule is not a function
+    const { doc, size } = large(2, 5000);
+    const { findings, steps } = measureReviewStepRule(doc);
+    expect(findings.filter((f) => f.message.includes(RULE))).toEqual([]);
+    expect(steps).toBeLessThanOrEqual(12 * size);
+
+    // The producers come after the gate: every feeder is bypassed, none dominates.
+    const { doc: late, size: lateSize } = large(5000, 1);
+    const order = ["g0", ...Array.from({ length: 5000 }, (_, i) => `p${i}`)];
+    const reordered = { ...late, control_flow_connections: chain(order) };
+    const t0 = performance.now();
+    const result = measureReviewStepRule(reordered);
+    expect(performance.now() - t0).toBeLessThan(2000);
+    expect(result.findings.filter((f) => f.message.includes("reaches the gate without passing through"))).toHaveLength(1);
+    expect(result.steps).toBeLessThanOrEqual(12 * lateSize);
+  });
+
+  it("keeps a ParallelFlowNode feeder's port work within the document's size when its subflows are shared", () => {
+    // 300 ParallelFlowNodes share the same 300 subflows of 300 outputs each; each feeds its own gate.
+    const k = 300;
+    const outputs = Array.from({ length: k }, (_, i) => ({ title: `o${i}`, type: "string" }));
+    const components: Record<string, Node> = {};
+    const top: string[] = [];
+    const data: Node[] = [];
+    const refs: Record<string, Node> = {};
+    for (let s = 0; s < k; s++) refs[`sub${s}`] = { component_type: "Flow", id: `sub${s}`, name: `sub${s}`, outputs };
+    for (let i = 0; i < k; i++) {
+      components[`par${i}`] = { component_type: "ParallelFlowNode", id: `par${i}`, name: `par${i}`, subflows: Array.from({ length: k }, (_, s) => ({ $component_ref: `sub${s}` })) };
+      components[`g${i}`] = gate(`g${i}`, surfaced);
+      top.push(`par${i}`, `g${i}`);
+      data.push(edge(`par${i}`, "o0", `g${i}`, "reviewTargets"));
+    }
+    const doc: Node = { ...flow(components, top), data_flow_connections: data };
+    Object.assign(doc.$referenced_components as Record<string, Node>, refs);
+    const size = (doc.nodes as Node[]).length + (doc.control_flow_connections as Node[]).length + data.length + k * k + k * k;
+    // red-first-expect: measureReviewStepRule is not a function
+    const { findings, steps } = measureReviewStepRule(doc);
+    expect(steps).toBeLessThanOrEqual(12 * size);
+    // The first ParallelFlowNode resolves; the budget refuses, never accepts, the rest.
+    expect(findings.filter((f) => f.message.includes('Gate "g0"'))).toEqual([]);
+    expect(findings.filter((f) => f.message.includes("take more work to resolve")).length).toBeGreaterThan(0);
   });
 });

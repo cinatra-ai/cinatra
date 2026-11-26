@@ -113,7 +113,6 @@ import {
   ARTIFACT_MATERIALIZE_TOOL,
   ARTIFACT_PAGE_CAPTURE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
-  readFlowControlTopology,
 } from "./artifact-binding";
 import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 import {
@@ -995,181 +994,465 @@ const HITL_GATE_DOC =
   "See docs/internals/workflows/agent-run-hitl-prompt-primitives.md " +
   '("Pinned-runtime contract for the gate node", cinatra#1830/#2140).';
 
-/** The keys, in the root `$referenced_components`, of the root flow's own nodes (its `nodes` list). */
-function rootFlowNodeKeys(parsed: Record<string, unknown>): string[] {
+/** A counter of the steps rule 013's review-step check takes (cinatra#4150). */
+interface RuleWork {
+  steps: number;
+}
+
+/**
+ * The root flow as rule 013's review-step check reads it (cinatra#4150), built
+ * ONCE per document, and only when the document has a marked gate. Every part
+ * is one pass over its own list: the root `nodes`, the
+ * `control_flow_connections`, the `data_flow_connections` (indexed by their
+ * destination node and input), the start inputs, and the control graph's
+ * dominator tree. A gate then costs only the edges into its own targets input,
+ * and each feeder an O(1) dominance query.
+ */
+interface ReviewStepGraph {
+  rootRefs: Record<string, unknown>;
+  /** The root flow's own nodes (its `nodes` list), by object, with their keys. */
+  rootKeyOf: Map<unknown, string>;
+  rootKeys: Set<string>;
+  /** The root flow's start inputs (`startInputsOfFlow`, the rule 004 and 005 share). */
+  startInputs: Set<string>;
+  start: string | null;
+  /** False when an entry of `control_flow_connections` is no readable ControlFlowEdge, or the flow has no start node. */
+  readable: boolean;
+  /**
+   * Preorder and postorder numbers of the dominator tree of the control graph,
+   * for the nodes reachable from the start node: `a` dominates `b` exactly when
+   * pre(a) <= pre(b) and post(b) <= post(a).
+   */
+  pre: Map<string, number>;
+  post: Map<string, number>;
+  /** The DataFlowEdges, by `${destination node}\0${destination input}`. */
+  fedBy: Map<string, Array<{ from: string | null; output: unknown }>>;
+  /** Port names per root node key (memoized; null: a ParallelFlowNode beyond the budget). */
+  ports: Map<string, Set<string> | null>;
+  /** Output titles per resolved subflow object (memoized). */
+  subflowPorts: Map<object, Set<string>>;
+  /** What resolving ParallelFlowNode ports may still cost (see `rootNodePorts`). */
+  parallelBudget: number;
+  work: RuleWork;
+}
+
+/**
+ * The names that are start inputs of the flow: its own
+ * `inputs` AND its StartNode's `inputs` declare it. A value reaches a step from
+ * the start message only for such a name (rules 004, 005 and 013 read this one
+ * helper).
+ */
+function startInputsOfFlow(flow: FlowComponent): Set<string> {
+  const startTitles = new Set(flow.startNode?.inputTitles ?? []);
+  return new Set(flow.flowInputTitles.filter((t) => startTitles.has(t)));
+}
+
+function buildReviewStepGraph(parsed: Record<string, unknown>, work: RuleWork): ReviewStepGraph {
   const rootRefs = isPlainObject(parsed["$referenced_components"]) ? parsed["$referenced_components"] : {};
-  const keys: string[] = [];
+  const rootKeyOf = new Map<unknown, string>();
+  const rootKeys = new Set<string>();
+  let parallelBudget = 0;
   for (const entry of Array.isArray(parsed["nodes"]) ? parsed["nodes"] : []) {
+    work.steps++;
+    parallelBudget++;
     const ref = resolveComponentRef(entry);
-    if (ref !== null && Object.prototype.hasOwnProperty.call(rootRefs, ref) && !keys.includes(ref)) keys.push(ref);
+    if (ref === null || !Object.prototype.hasOwnProperty.call(rootRefs, ref) || rootKeys.has(ref)) continue;
+    rootKeys.add(ref);
+    rootKeyOf.set(rootRefs[ref], ref);
+    const n = rootRefs[ref];
+    if (isPlainObject(n) && n["component_type"] === "ParallelFlowNode" && Array.isArray(n["subflows"])) {
+      parallelBudget += n["subflows"].length;
+    }
   }
-  return keys;
-}
+  const rootFlow = extractFlow(parsed);
+  const startInputs = rootFlow ? startInputsOfFlow(rootFlow) : new Set<string>();
 
-/**
- * Whether a node of the root flow has an output port with this title, the port
- * a DataFlowEdge reads (cinatra#4150, rule 013). The loader hands the flow to
- * pyagentspec, which joins an edge only between declared ports: a node's
- * explicit `outputs` list (entries by `title`) is its ports. Without that list a
- * StartNode offers its `inputs`, and a FlowNode or ParallelFlowNode the
- * `outputs` of its subflow(s); a FlowNode or ParallelFlowNode that lists its
- * outputs still gets a value only for a port its subflow(s) declare. Any other
- * kind offers only its explicit list.
- */
-function rootNodeDeclaresOutput(
-  node: unknown,
-  name: string,
-  rootRefs: Record<string, unknown>,
-): boolean {
-  if (!isPlainObject(node)) return false;
-  const has = (list: unknown) =>
-    Array.isArray(list) && list.some((p) => isPlainObject(p) && p["title"] === name);
-  const explicit = Array.isArray(node["outputs"]) ? node["outputs"] : null;
-  const ownRefs = isPlainObject(node["$referenced_components"]) ? node["$referenced_components"] : {};
-  const flowOf = (value: unknown): Record<string, unknown> | null => {
-    const ref = resolveComponentRef(value);
-    const resolved = ref === null ? value
-      : Object.prototype.hasOwnProperty.call(ownRefs, ref) ? ownRefs[ref]
-        : Object.prototype.hasOwnProperty.call(rootRefs, ref) ? rootRefs[ref] : null;
-    return isPlainObject(resolved) ? resolved : null;
+  // The control graph the compiler orders its steps by (oas-compiler.ts step
+  // 5, `readFlowControlTopology`): every edge from `from_node` to `to_node`,
+  // each branch of a branching node an edge of its own. The compiler's schema
+  // accepts only a ControlFlowEdge with both node references.
+  const start = resolveComponentRef(parsed["start_node"]);
+  const controls = parsed["control_flow_connections"];
+  let readable = Array.isArray(controls) && start !== null;
+  const index = new Map<string, number>();
+  const keys: string[] = [];
+  const succ: number[][] = [];
+  const idOf = (key: string): number => {
+    let i = index.get(key);
+    if (i === undefined) {
+      i = keys.length;
+      index.set(key, i);
+      keys.push(key);
+      succ.push([]);
+    }
+    return i;
   };
-  const subflows =
-    node["component_type"] === "FlowNode" ? [node["subflow"]]
-      : node["component_type"] === "ParallelFlowNode" && Array.isArray(node["subflows"]) ? node["subflows"]
-        : null;
-  if (subflows !== null) {
-    const fromSubflow = subflows.some((s) => has(flowOf(s)?.["outputs"]));
-    return fromSubflow && (explicit === null || has(explicit));
+  if (readable) {
+    idOf(start!);
+    for (const e of controls as unknown[]) {
+      work.steps++;
+      const from = isPlainObject(e) ? resolveComponentRef(e["from_node"]) : null;
+      const to = isPlainObject(e) ? resolveComponentRef(e["to_node"]) : null;
+      if (!isPlainObject(e) || e["component_type"] !== "ControlFlowEdge" || from === null || to === null) {
+        readable = false;
+        break;
+      }
+      succ[idOf(from)]!.push(idOf(to));
+    }
+    parallelBudget += (controls as unknown[]).length;
   }
-  if (explicit !== null) return has(explicit);
-  return node["component_type"] === "StartNode" && has(node["inputs"]);
-}
-
-/**
- * Whether the root flow's control graph makes `source` run before every visit
- * of `gate` (cinatra#4150, rule 013): the gate is reachable from the start node,
- * and with `source` removed it is not. The graph is the one the compiler orders
- * its steps by (`readFlowControlTopology`, oas-compiler.ts step 5): every
- * `control_flow_connections` edge from `from_node` to `to_node`, each branch of
- * a branching node an edge of its own. The compiler's schema accepts only a
- * ControlFlowEdge with both node references; a flow with any other entry, or
- * without a start node, cannot be read and is reported (null).
- */
-function controlDominates(
-  parsed: Record<string, unknown>,
-  source: string,
-  gate: string,
-): "dominates" | "unreachable" | "bypassed" | null {
-  const edges = parsed["control_flow_connections"];
-  const refOf = (v: unknown) => resolveComponentRef(v);
-  if (
-    !Array.isArray(edges) ||
-    refOf(parsed["start_node"]) === null ||
-    !edges.every((e) => isPlainObject(e) && e["component_type"] === "ControlFlowEdge" &&
-      refOf(e["from_node"]) !== null && refOf(e["to_node"]) !== null)
-  ) return null;
-  const { adjacency } = readFlowControlTopology(parsed);
-  const start = refOf(parsed["start_node"])!;
-  const reaches = (removed: string | null): boolean => {
-    if (start === removed) return false;
-    const seen = new Set<string>([start]);
-    const queue = [start];
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      if (id === gate) return true;
-      for (const n of adjacency.get(id) ?? []) {
-        if (n !== removed && !seen.has(n)) { seen.add(n); queue.push(n); }
+  const pre = new Map<string, number>();
+  const post = new Map<string, number>();
+  if (readable) {
+    const order = dominatorTreeOrder(succ, work);
+    for (let i = 0; i < keys.length; i++) {
+      if (order.pre[i]! >= 0) {
+        pre.set(keys[i]!, order.pre[i]!);
+        post.set(keys[i]!, order.post[i]!);
       }
     }
-    return false;
+  }
+
+  const fedBy = new Map<string, Array<{ from: string | null; output: unknown }>>();
+  const dataEdges = Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : [];
+  for (const e of dataEdges) {
+    work.steps++;
+    if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") continue;
+    const to = resolveComponentRef(e["destination_node"]);
+    const input = e["destination_input"];
+    if (to === null || typeof input !== "string") continue;
+    const k = `${to}\u0000${input}`;
+    let list = fedBy.get(k);
+    if (list === undefined) fedBy.set(k, (list = []));
+    list.push({ from: resolveComponentRef(e["source_node"]), output: e["source_output"] });
+  }
+  parallelBudget += dataEdges.length;
+
+  return {
+    rootRefs, rootKeyOf, rootKeys, startInputs, start, readable, pre, post, fedBy,
+    ports: new Map(), subflowPorts: new Map(), parallelBudget, work,
   };
-  if (!reaches(null)) return "unreachable";
-  return reaches(source) ? "bypassed" : "dominates";
+}
+
+/**
+ * Preorder and postorder numbers, by node index, of the dominator tree of the
+ * graph `succ` rooted at index 0 (-1 for an unreachable node). The immediate
+ * dominators come from the algorithm of Lengauer and Tarjan with path
+ * compression, O(E log V); the depth-first search and the compression are
+ * iterative, so a long chain does not exhaust the call stack.
+ */
+function dominatorTreeOrder(succ: number[][], work: RuleWork): { pre: Int32Array; post: Int32Array } {
+  const size = succ.length;
+  const dfn = new Int32Array(size).fill(-1);
+  const vertex: number[] = [];
+  const parent: number[] = [];
+  // Depth-first numbering from the start node.
+  const stack: Array<[number, number]> = [[0, 0]];
+  dfn[0] = 0;
+  vertex.push(0);
+  parent.push(-1);
+  while (stack.length > 0) {
+    const top = stack[stack.length - 1]!;
+    const [v, at] = top;
+    const out = succ[v]!;
+    if (at >= out.length) {
+      stack.pop();
+      continue;
+    }
+    top[1] = at + 1;
+    work.steps++;
+    const w = out[at]!;
+    if (dfn[w] === -1) {
+      dfn[w] = vertex.length;
+      vertex.push(w);
+      parent.push(dfn[v]!);
+      stack.push([w, 0]);
+    }
+  }
+  const n = vertex.length;
+  // Predecessors in depth-first numbers, reachable nodes only.
+  const preds: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    for (const w of succ[vertex[i]!]!) {
+      work.steps++;
+      if (dfn[w]! >= 0) preds[dfn[w]!]!.push(i);
+    }
+  }
+  const semi = Array.from({ length: n }, (_, i) => i);
+  const label = Array.from({ length: n }, (_, i) => i);
+  const ancestor = new Array<number>(n).fill(-1);
+  const idom = new Array<number>(n).fill(0);
+  const bucket: number[][] = Array.from({ length: n }, () => []);
+  const path: number[] = [];
+  const evaluate = (v: number): number => {
+    if (ancestor[v] === -1) return v;
+    let x = v;
+    while (ancestor[ancestor[x]!] !== -1) {
+      work.steps++;
+      path.push(x);
+      x = ancestor[x]!;
+    }
+    while (path.length > 0) {
+      const y = path.pop()!;
+      const a = ancestor[y]!;
+      if (semi[label[a]!]! < semi[label[y]!]!) label[y] = label[a]!;
+      ancestor[y] = ancestor[a]!;
+    }
+    return label[v]!;
+  };
+  for (let w = n - 1; w >= 1; w--) {
+    for (const v of preds[w]!) {
+      work.steps++;
+      const u = evaluate(v);
+      if (semi[u]! < semi[w]!) semi[w] = semi[u]!;
+    }
+    bucket[semi[w]!]!.push(w);
+    const p = parent[w]!;
+    ancestor[w] = p;
+    for (const v of bucket[p]!) {
+      work.steps++;
+      const u = evaluate(v);
+      idom[v] = semi[u]! < semi[v]! ? u : p;
+    }
+    bucket[p] = [];
+  }
+  for (let w = 1; w < n; w++) {
+    if (idom[w] !== semi[w]) idom[w] = idom[idom[w]!]!;
+  }
+  // Pre- and postorder of the dominator tree.
+  const children: number[][] = Array.from({ length: n }, () => []);
+  for (let w = 1; w < n; w++) children[idom[w]!]!.push(w);
+  const pre = new Int32Array(size).fill(-1);
+  const post = new Int32Array(size).fill(-1);
+  let clock = 0;
+  const walk: Array<[number, number]> = [[0, 0]];
+  pre[vertex[0]!] = clock++;
+  while (walk.length > 0) {
+    const top = walk[walk.length - 1]!;
+    const [v, at] = top;
+    if (at >= children[v]!.length) {
+      post[vertex[v]!] = clock++;
+      walk.pop();
+      continue;
+    }
+    top[1] = at + 1;
+    work.steps++;
+    const c = children[v]![at]!;
+    pre[vertex[c]!] = clock++;
+    walk.push([c, 0]);
+  }
+  return { pre, post };
+}
+
+/**
+ * The output ports of a node of the root flow, the ports a DataFlowEdge reads
+ * (cinatra#4150, rule 013). The loader hands the flow to pyagentspec, which
+ * joins an edge only between declared ports: a node's explicit `outputs` list
+ * (entries by `title`) is its ports. Without that list a StartNode offers its
+ * `inputs`, and a FlowNode or ParallelFlowNode the `outputs` of its
+ * subflow(s); a FlowNode or ParallelFlowNode that lists its outputs still gets
+ * a value only for a port its subflow(s) declare. Any other kind offers only
+ * its explicit list. A StartNode's port carries a value only for a start
+ * input of the root flow (`startInputsOfFlow`).
+ *
+ * Every node and every subflow is read once (memoized). A ParallelFlowNode's
+ * ports are the union over its distinct subflows; subflows shared by many
+ * ParallelFlowNodes could make those unions cost more than the document's
+ * size, so their total cost is capped at a budget linear in the document
+ * (`parallelBudget`: the root nodes, their subflow references, the control and
+ * data edges, plus each distinct subflow's outputs when it is first read). A ParallelFlowNode beyond the budget is reported
+ * (null), never accepted.
+ */
+function rootNodePorts(g: ReviewStepGraph, key: string): Set<string> | null {
+  const known = g.ports.get(key);
+  if (known !== undefined) return known;
+  const node = g.rootRefs[key];
+  const titles = (list: unknown): Set<string> => {
+    const out = new Set<string>();
+    if (Array.isArray(list)) {
+      for (const p of list) {
+        g.work.steps++;
+        if (isPlainObject(p) && typeof p["title"] === "string") out.add(p["title"]);
+      }
+    }
+    return out;
+  };
+  let ports = new Set<string>();
+  if (isPlainObject(node)) {
+    const explicit = Array.isArray(node["outputs"]) ? titles(node["outputs"]) : null;
+    const ownRefs = isPlainObject(node["$referenced_components"]) ? node["$referenced_components"] : {};
+    const flowOf = (value: unknown): Record<string, unknown> | null => {
+      const ref = resolveComponentRef(value);
+      const resolved = ref === null ? value
+        : Object.prototype.hasOwnProperty.call(ownRefs, ref) ? ownRefs[ref]
+          : Object.prototype.hasOwnProperty.call(g.rootRefs, ref) ? g.rootRefs[ref] : null;
+      return isPlainObject(resolved) ? resolved : null;
+    };
+    const portsOf = (flow: Record<string, unknown>): Set<string> => {
+      let s = g.subflowPorts.get(flow);
+      if (s === undefined) {
+        g.subflowPorts.set(flow, (s = titles(flow["outputs"])));
+        // A subflow read for the first time adds its own size to the budget.
+        g.parallelBudget += s.size;
+      }
+      return s;
+    };
+    const kind = node["component_type"];
+    let fromSubflows: Set<string> | null = null;
+    if (kind === "FlowNode") {
+      const flow = flowOf(node["subflow"]);
+      fromSubflows = flow ? portsOf(flow) : new Set();
+    } else if (kind === "ParallelFlowNode") {
+      fromSubflows = new Set();
+      const distinct = new Set<Record<string, unknown>>();
+      for (const s of Array.isArray(node["subflows"]) ? node["subflows"] : []) {
+        g.work.steps++;
+        const flow = flowOf(s);
+        if (flow) distinct.add(flow);
+      }
+      for (const flow of distinct) {
+        const own = portsOf(flow);
+        g.parallelBudget -= own.size;
+        if (g.parallelBudget < 0) {
+          g.ports.set(key, null);
+          return null;
+        }
+        for (const t of own) { g.work.steps++; fromSubflows.add(t); }
+      }
+    }
+    if (fromSubflows !== null) {
+      ports = explicit === null ? fromSubflows : new Set([...explicit].filter((t) => fromSubflows!.has(t)));
+    } else if (explicit !== null) {
+      ports = explicit;
+    } else if (kind === "StartNode") {
+      ports = titles(node["inputs"]);
+    }
+    if (kind === "StartNode") ports = new Set([...ports].filter((t) => g.startInputs.has(t)));
+  }
+  g.ports.set(key, ports);
+  return ports;
+}
+
+/**
+ * Rule 013's review-step check for one component (cinatra#4150): the finding
+ * text, or null when the gate gets its targets. `graph` builds the root-flow
+ * reading once, on the first marked component.
+ */
+function reviewStepTargetsMissing(
+  node: Record<string, unknown>,
+  graph: () => ReviewStepGraph,
+): string | null {
+  // The compiler puts the marker on a compiled step only for a node of the
+  // ROOT flow (its steps are the root `nodes`; a FlowNode carries a nested
+  // gate's surfaceGateInputKeys, never its artifactReviewTargetsInput), and
+  // execution routes to the review only on that compiled field. The
+  // application then reads the targets by the marker's input name from the
+  // gate's pause message first, then from the run's start parameters
+  // (resolveDeclaredReviewTargets). The loader renders a gate's declared
+  // inputs into its pause message only when the gate sets
+  // surfaceGateInputs === true, and an input that no DataFlowEdge feeds from
+  // a declared output of a root-flow node renders as null, which the reader
+  // takes as absent. The start parameters hold the root flow's start inputs.
+  // On either road the gate pauses only when the run reaches it: it must be
+  // reachable from the start node along the control edges. Every other shape
+  // opens no review.
+  const cin = (node["metadata"] as Record<string, unknown>)["cinatra"] as Record<string, unknown>;
+  const target = (cin["artifactReview"] as Record<string, unknown>)["targetsInput"];
+  if (typeof target !== "string" || target === "") {
+    return `the marker does not name an input (it must be a non-empty text)`;
+  }
+  if (node["component_type"] !== "InputMessageNode") {
+    return `it is a "${String(node["component_type"])}", not an InputMessageNode`;
+  }
+  const g = graph();
+  const gateKey = g.rootKeyOf.get(node);
+  if (gateKey === undefined) {
+    return `it is not a node of the root flow; the compiler does not carry the marker ` +
+      `through a FlowNode, so a review gate inside a nested flow opens no artifact review`;
+  }
+  if (gateKey === g.start) {
+    return `it is the root flow's start node; a review gate must be a step the start node leads to`;
+  }
+  if (!g.readable) {
+    return `the root flow's control_flow_connections cannot be read (each entry must be a ` +
+      `ControlFlowEdge with from_node and to_node, and the flow needs a start_node), so ` +
+      `nothing shows that the gate runs and that its targets arrive before it`;
+  }
+  if (!g.pre.has(gateKey)) {
+    return `no control path of the root flow leads from its start node to the gate, so the ` +
+      `gate never runs`;
+  }
+  if (g.startInputs.has(target)) return null;
+  if (cin["surfaceGateInputs"] !== true) {
+    return `it does not set metadata.cinatra.surfaceGateInputs: true and "${target}" is not a start input of the flow`;
+  }
+  const declared = Array.isArray(node["inputs"]) &&
+    node["inputs"].some((i) => isPlainObject(i) && i["title"] === target);
+  if (!declared) return `"${target}" is not one of its declared inputs nor a start input of the flow`;
+  // A fed input has a value at the pause only when its source has run: the
+  // source must dominate the gate in the root control graph.
+  const sources = new Set<string>();
+  let overBudget = false;
+  for (const { from, output } of g.fedBy.get(`${gateKey}\u0000${target}`) ?? []) {
+    g.work.steps++;
+    if (from === null || from === gateKey || !g.rootKeys.has(from) || typeof output !== "string") continue;
+    const ports = rootNodePorts(g, from);
+    if (ports === null) { overBudget = true; continue; }
+    if (!ports.has(output)) continue;
+    const pf = g.pre.get(from);
+    if (pf !== undefined && pf <= g.pre.get(gateKey)! && g.post.get(gateKey)! <= g.post.get(from)!) return null;
+    sources.add(from);
+  }
+  if (sources.size === 0) {
+    if (overBudget) {
+      return `its input "${target}" is fed only through a ParallelFlowNode whose subflows ` +
+        `take more work to resolve than the document's size allows, so nothing shows that ` +
+        `the input gets a value`;
+    }
+    return `no DataFlowEdge of the root flow feeds its input "${target}" from an output ` +
+      `that a node of the root flow declares, so the loader renders the input as ` +
+      `null and the review has no targets`;
+  }
+  return `a control path of the root flow reaches the gate without passing through ` +
+    `${[...sources].map((s) => `"${s}"`).join(", ")}, the step(s) feeding "${target}", so the ` +
+    `input can be null when the gate pauses and the review has no targets`;
+}
+
+/** Whether a component carries the artifact-review marker (`metadata.cinatra.artifactReview.targetsInput`). */
+function hasReviewMarker(node: Record<string, unknown>): boolean {
+  const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
+  const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
+  const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
+  return review !== null && Object.prototype.hasOwnProperty.call(review, "targetsInput");
+}
+
+/**
+ * Test seam (cinatra#4150): rule 013's findings for `parsed` with the steps
+ * its review-step check took, to prove the check's work stays linear in the
+ * document.
+ */
+export function measureReviewStepRule(parsed: Record<string, unknown>): {
+  findings: ReviewFinding[];
+  steps: number;
+} {
+  const work: RuleWork = { steps: 0 };
+  const findings = scanInputMessageGateMountability(parsed, work);
+  return { findings, steps: work.steps };
 }
 
 function scanInputMessageGateMountability(
   parsed: Record<string, unknown>,
+  work: RuleWork = { steps: 0 },
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
-  // The root flow's own nodes, by object, with their keys (rule 013 below).
-  const gateRootRefs = isPlainObject(parsed["$referenced_components"]) ? parsed["$referenced_components"] : {};
-  const rootNodeKeyOf = new Map<unknown, string>();
-  for (const key of rootFlowNodeKeys(parsed)) rootNodeKeyOf.set(gateRootRefs[key], key);
+  let built: ReviewStepGraph | null = null;
+  const graph = () => (built ??= buildReviewStepGraph(parsed, work));
   walkComponentObjects(parsed, (node, path) => {
     const componentType = node["component_type"];
 
     // --- artifact-review gate gets its targets (cinatra#4150) ---------------
-    // The compiler puts the marker on a compiled step only for a node of the
-    // ROOT flow (its steps are the root `nodes`; a FlowNode carries a nested
-    // gate's surfaceGateInputKeys, never its artifactReviewTargetsInput), and
-    // execution routes to the review only on that compiled field. The
-    // application then reads the targets by the marker's input name from the
-    // gate's pause message first, then from the run's start parameters
-    // (resolveDeclaredReviewTargets). The loader renders a gate's declared
-    // inputs into its pause message only when the gate sets
-    // surfaceGateInputs === true, and an input that no DataFlowEdge feeds from
-    // a declared output of a root-flow node renders as null, which the reader
-    // takes as absent. The start parameters hold the root flow's inputs. Every
-    // other shape opens no review.
-    const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
-    const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
-    const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
-    if (review && Object.prototype.hasOwnProperty.call(review, "targetsInput")) {
-      const target = review["targetsInput"];
-      const named = (list: unknown) =>
-        Array.isArray(list) && list.some((i) => isPlainObject(i) && i["title"] === target);
-      const gateKey = rootNodeKeyOf.get(node);
-      // The root-flow nodes that a DataFlowEdge feeding the targets input reads.
-      const feeders = () =>
-        (Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : []).flatMap((e) => {
-          if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") return [];
-          const from = resolveComponentRef(e["source_node"]);
-          const output = e["source_output"];
-          return resolveComponentRef(e["destination_node"]) === gateKey &&
-            e["destination_input"] === target &&
-            from !== null && from !== gateKey && [...rootNodeKeyOf.values()].includes(from) &&
-            typeof output === "string" && rootNodeDeclaresOutput(gateRootRefs[from], output, gateRootRefs)
-            ? [from] : [];
-        });
-      // A fed input has a value at the pause only when its source has run: the
-      // source must dominate the gate in the root control graph. The start-input
-      // road needs no such check: the start inputs exist before any step runs.
-      const unordered = (): string | null => {
-        const sources = feeders();
-        if (sources.length === 0) {
-          return `no DataFlowEdge of the root flow feeds its input "${target}" from an output ` +
-            `that a node of the root flow declares, so the loader renders the input as ` +
-            `null and the review has no targets`;
-        }
-        const readings = sources.map((s) => controlDominates(parsed, s, gateKey!));
-        if (readings.includes("dominates")) return null;
-        if (readings.includes(null)) {
-          return `the root flow's control_flow_connections cannot be read (each entry must be a ` +
-            `ControlFlowEdge with from_node and to_node, and the flow needs a start_node), so ` +
-            `nothing shows that the step feeding "${target}" runs before the gate`;
-        }
-        if (readings.includes("unreachable")) {
-          return `no control path of the root flow leads from its start node to the gate`;
-        }
-        return `a control path of the root flow reaches the gate without passing through ` +
-          `${sources.map((s) => `"${s}"`).join(", ")}, the step(s) feeding "${target}", so the ` +
-          `input can be null when the gate pauses and the review has no targets`;
-      };
-      const missing =
-        typeof target !== "string" || target === ""
-          ? `the marker does not name an input (it must be a non-empty text)`
-          : componentType !== "InputMessageNode"
-            ? `it is a "${String(componentType)}", not an InputMessageNode`
-            : gateKey === undefined
-              ? `it is not a node of the root flow; the compiler does not carry the marker ` +
-                `through a FlowNode, so a review gate inside a nested flow opens no artifact review`
-              : named(parsed["inputs"])
-                ? null
-                : cin!["surfaceGateInputs"] !== true
-                  ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${target}" is not a start input of the flow`
-                  : !named(node["inputs"])
-                    ? `"${target}" is not one of its declared inputs nor a start input of the flow`
-                    : unordered();
+    if (hasReviewMarker(node)) {
+      const missing = reviewStepTargetsMissing(node, graph);
       if (missing) {
         findings.push({
           code: "OAS-RUNTIME-013",
@@ -1178,10 +1461,11 @@ function scanInputMessageGateMountability(
             `Gate "${gateLabel(node)}" declares metadata.cinatra.artifactReview.targetsInput ` +
             `but ${missing}. The pause message then carries no review targets, ` +
             `so the application opens no artifact review. A review gate is an ` +
-            `InputMessageNode of the root flow whose targets input is a start input ` +
-            `of the root flow, or that sets surfaceGateInputs: true and declares the ` +
-            `targets input, fed by a DataFlowEdge from an output of a root-flow node that ` +
-            `every control path from the start node passes before the gate. ` +
+            `InputMessageNode of the root flow that the start node reaches along the ` +
+            `control edges, whose targets input is a start input of the root flow ` +
+            `(declared by the flow and its StartNode), or that sets surfaceGateInputs: true ` +
+            `and declares the targets input, fed by a DataFlowEdge from an output of a ` +
+            `root-flow node that every control path from the start node passes before the gate. ` +
             `${HITL_GATE_DOC}`,
           location: path,
           source: "deterministic",
@@ -1437,15 +1721,12 @@ function scanAgentRunIdPropagation(flow: FlowComponent): ReviewFinding[] {
     // either `cinatra_run_id` (canonical) or `agent_run_id` (legacy).
     const startInputs = flow.startNode ? new Set(flow.startNode.inputTitles) : new Set<string>();
     const flowInputs = new Set(flow.flowInputTitles);
+    const startFed = startInputsOfFlow(flow);
     let satisfied = false;
     for (const e of dfeInto) {
       if (e.sourceNodeRef !== flow.startNodeRef) continue;
       const src = e.sourceOutput;
-      if (
-        (src === "cinatra_run_id" || src === "agent_run_id") &&
-        startInputs.has(src) &&
-        flowInputs.has(src)
-      ) {
+      if ((src === "cinatra_run_id" || src === "agent_run_id") && startFed.has(src)) {
         satisfied = true;
         break;
       }
@@ -1478,10 +1759,7 @@ function scanAgentRunIdPropagation(flow: FlowComponent): ReviewFinding[] {
 function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   if (!flow.endNode) return findings;
-  const flowInputTitles = new Set(flow.flowInputTitles);
-  const startInputTitles = flow.startNode
-    ? new Set(flow.startNode.inputTitles)
-    : new Set<string>();
+  const startFed = startInputsOfFlow(flow);
 
   for (const output of flow.endNode.outputTitles) {
     // (a) DFE feeds this output directly.
@@ -1494,7 +1772,7 @@ function scanEndNodeOutputSources(flow: FlowComponent): ReviewFinding[] {
     // (b) Same-named Flow input that trickles through StartNode (start.X → end.X
     // requires StartNode to declare it; the pyagentspec graph tolerates the
     // missing explicit edge in many cases as the loader auto-binds names).
-    if (flowInputTitles.has(output) && startInputTitles.has(output)) continue;
+    if (startFed.has(output)) continue;
     findings.push({
       code: "OAS-RUNTIME-005",
       severity: "blocker",
