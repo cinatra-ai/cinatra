@@ -37,6 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in an extension of kind `agent`, files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | a count per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only counts** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -665,6 +666,88 @@ What it cannot see: a tool used but not declared in `cinatra.consumes`
 (cinatra#4894); a tool core registers on behalf of a pack (above); the owner of a tool the inventory has no row for (until
 cinatra#4895); a pack outside both extension locks.
 
+## Agent extensions ship no program code outside their skills (cinatra#4885)
+
+**Limits, first.** The check COUNTS; it does not judge what a file does. A
+new file of a content kind (a `.json` or a `.md`) is not counted even if
+something executes it. Code inside a connector and code in core are out of
+its scope.
+
+Owner: "functionality that should be done by agents has been built as code,
+which totally goes against the whole purpose of Cinatra." and "Of course,
+skills could also include scripts and here code is ok."
+
+`scripts/audit/agent-extension-code-gate.mjs` runs in job `perpetual-core`
+of `.github/workflows/build-image.yml`, after the companion repositories are
+cloned, followed by its `node --test` step. It needs no judgement about a
+file: no "test", "build", "shipped" or "bin" reading. It classifies nothing
+beyond one closed content rule, and records counts.
+
+**The universe** is the pinned extensions: every `packageName` of both
+extension locks plus every key of `cinatra.devExtensions`, each found in the
+`extensions/` tree by its manifest name. A pinned pack that is missing or
+unreadable, a lock, manifest or `cinatra/*.json` file that does not parse,
+and a pinned pack whose `cinatra.kind` cannot be read are scanner errors
+(exit 2), never a pass. Class 1 applies to packs of kind `agent`; classes 2
+to 4 apply to every pinned pack.
+
+**The four classes**, each a count that may only go down:
+
+1. `nonContentFiles` (per pack) — every file of the pack's tree as the
+   pinned checkout has it (`git ls-files` in the pack's own git checkout,
+   else a walk that follows no symbolic link and skips `node_modules` and
+   `.git`), EXCEPT content by this closed rule (the constant `CONTENT`):
+   - (a) every file under `skills/<entry>/` where `skills/<entry>/SKILL.md`
+     exists: the product's own rule (`upsertSkillsFromDir` in
+     `packages/agents/src/extension-handler.ts` registers exactly
+     `<pack>/skills/<entry>/SKILL.md`); the whole folder is the skill,
+     scripts included. A `SKILL.md` anywhere else makes nothing a skill;
+   - (b) a file whose extension is one of `.json .md .txt .yaml .yml .svg
+     .png .jpg .jpeg .gif .webp .ico .csv`, whose exact name is `LICENSE`,
+     `NOTICE`, `.gitignore`, `.gitattributes`, `.npmignore` or
+     `.editorconfig`, or that lies under the pack's top-level `.github/`
+     (the CI of the pack's own repository).
+
+   A symbolic link (or a gitlink) always counts. Everything else counts:
+   source of any language, extension-less files, `.npmrc`, config scripts,
+   vendored check scripts, tests.
+2. `toolDeclarations` (per pack) — every value of `cinatra.tools`, whether
+   the product (`parseDeclaredTools` in
+   `packages/sdk-extensions/src/manifest.ts`) accepts it or not; only an
+   absent or `null` value declares nothing. Items: a name in the product's
+   vocabulary seen first; `cinatra.tools[<i>]` for any other entry;
+   `cinatra.tools.<key>` per key of an object map; `cinatra.tools` for any
+   other value.
+3. `extensionToolSteps` (per pack and `cinatra/*.json` file) — one walk over
+   the parsed file visits every object once; an object counts when its own
+   `data` (an object, or a string that parses to one) has `tool` equal to
+   `extension_tool`. No URL, node kind or id is read for the count.
+4. `unreadableSteps` (per pack and file) — an object of ApiNode shape (`url`,
+   `http_method` or `component_type: "ApiNode"`) whose `data` is a string that
+   does not parse as JSON (fully or partly templated, such as
+   `"{{ payload }}"`), or whose `tool` is not a plain string or holds `{{`.
+   Recorded, not failed outright; the count only goes down.
+
+**The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
+class `key -> { count, items }`. Only `count` is compared; `items` (the sorted
+paths, tool keys or `id -> module` lines) is information. A count above the
+list fails; a count below it fails as stale until
+`node scripts/audit/agent-extension-code-gate.mjs --write-baseline` lowers it.
+That writer refuses a missing or malformed list and any raised count;
+`--seed` writes the first list only when none exists. The list is compared
+with its copy on the base branch through the shared floor base guard: a
+raised count or a removed class fails. The change that introduces the gate
+has a base holding neither the list nor the script; that one case seeds.
+`--report` prints every count and item.
+
+On the day it landed (pins of main at 12cf13c9f): 254 `nonContentFiles` in
+30 agent packs, 12 `toolDeclarations` in 9 manifests, 17
+`extensionToolSteps` in 9 flows, 0 `unreadableSteps`. Of the 254: 12 tool
+modules under `cinatra/tools/` and 10 runtime files under `src/` (the 22 of
+the issue), 167 files under test folders (`test/`, `tests/`,
+`src/__tests__/`), 30 vendored `extension-kind-gate.mjs`, 30
+`.npmrc`, 3 `vitest.config.ts` and 2 other check scripts.
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -688,6 +771,7 @@ for its floor:
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
+| `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | a raised count in any class, or a class removed | `AGENT_EXTENSION_CODE_BASE` |
 | `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:

@@ -1950,6 +1950,23 @@ jobs:
       - name: Produced-artifact dependency gate tests
         run: node --test scripts/audit/__tests__/extension-produces-deps-gate.test.mjs
 
+      # An extension of kind agent ships no program code of its own outside its
+      # skills (cinatra#4885). Over the pinned universe (both extension locks
+      # plus cinatra.devExtensions) in the cloned-back tree, by manifest name,
+      # it COUNTS per pack: files of an agent pack that are not content (outside
+      # skills/<entry>/ and a closed list of data and text kinds), cinatra.tools
+      # declarations, and per flow file the steps calling extension_tool and the
+      # ApiNode steps whose data cannot be read. Each count only goes down
+      # (compared with the base branch through the shared floor base guard). A
+      # pinned pack it cannot find or read is a scanner error, never a pass.
+      - name: Agent extension code gate (shrink-only)
+        env:
+          AGENT_EXTENSION_CODE_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/agent-extension-code-gate.mjs
+
+      - name: Agent extension code gate tests
+        run: node --test scripts/audit/__tests__/agent-extension-code-gate.test.mjs
+
       # The `@/` import-ban for extensions. PINNED EMPTY (cinatra#172 — the
       # zero-floor flip for the extension→host direction, on the
       # core-extension-import-ban precedent): ANY current hostInternal/
