@@ -128,8 +128,11 @@ export function oboCeilingNonOrgTiers(
 // or skill package to a registry), or answers a person's pending gate in a
 // run. Called on an agent run's frame (a frame that carries a run id), such a
 // tool is served only together with the person's recorded decision for the
-// run's action; `enforceMcpBoundary` answers the call with
-// `outward_effect_requires_recorded_decision` otherwise. A call on a frame
+// run's action. A caller that names the tool's planned owner gets the guarded
+// outward run action (the step proof, the owner's loaded identity, then the
+// single-use consumption of the decision, see `enforceMcpBoundary`); a caller
+// that names no owner is answered with
+// `outward_effect_requires_recorded_decision`. A call on a frame
 // without a run id, and every tool outside this set, take the boundary's other
 // rules. The set names tools, never packages; its census test is
 // __tests__/send-tools-carry-recorded-decision.test.ts. Kept inline in this
@@ -223,6 +226,11 @@ export type McpBoundaryRequest = {
      * enforcement wave can consult it; no boundary decision reads it yet.
      */
     oboCeiling?: OboCeilingChain;
+    /** The run frame's verified step, executing-source proof and run write
+     * authority (cinatra#3745), read by the guarded outward run action only. */
+    verifiedStepId?: string;
+    verifiedExecutedSource?: unknown;
+    orgWriteAuthority?: unknown;
   };
   /** When true, dispatch is via the chat-bridge token (delegated_chat_token perimeter). */
   delegatedRestricted: boolean;
@@ -232,6 +240,21 @@ export type McpBoundaryRequest = {
    * declared.
    */
   declaresOutward?: boolean;
+  /**
+   * cinatra#3745: the owner of the tool as its planned entry resolved it (the
+   * dispatch target), or null when the entry's identity failed. Given, an
+   * outward call on a run frame takes the guarded outward run action; absent,
+   * it is refused with `outward_effect_requires_recorded_decision`.
+   */
+  outwardOwner?: Readonly<{ kind: string; packageName: string; version: string }> | null;
+  /**
+   * cinatra#3745: the names of the tool's two input fields that carry the item
+   * the call acts on and its revision (the planned `outward.subject`), or null
+   * when the tool declares none. Read by the guarded outward run action only.
+   */
+  outwardSubject?: Readonly<{ artifactId: string; representationRevisionId: string }> | null;
+  /** cinatra#3745: the call's prepared arguments, read only for the subject fields. */
+  toolArguments?: unknown;
 };
 
 function statusShouldBlock(status: EnforcementStatus): boolean {
@@ -265,7 +288,58 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
   } as ActorContext;
 }
 
+/**
+ * The boundary decision for one MCP tool call.
+ *
+ * cinatra#3745: an outward call on a run frame whose caller names the tool's
+ * planned owner is admitted for exactly this one call, in this order: the
+ * frame's step proof and the owner's loaded identity are checked; the
+ * boundary's other rules decide; only when they let the call proceed is the
+ * person's recorded decision for this run, step and tool consumed (once,
+ * before the effect), and then the call is admitted. A refusal of the guarded
+ * action, and any failure in it, is audited and answered with
+ * `outward_effect_requires_recorded_decision:<code>`, the code being the
+ * refusal's fixed code (`action_admission_unavailable` for any other failure);
+ * it never carries store text. Every other outward call on a run frame stays
+ * refused.
+ */
 export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
+  if (req.outwardOwner === undefined ||
+      !needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
+    return decideMcpBoundary(req, false);
+  }
+  const perimeter = req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch";
+  let refusalCodeOf: (err: unknown) => string | null = () => null;
+  const refused = async (err: unknown): Promise<McpBoundaryDecision> => {
+    let code: string | null = null;
+    try { code = refusalCodeOf(err); } catch { code = null; }
+    const reason = `${RECORDED_DECISION_REQUIRED_REASON}:${code ?? "action_admission_unavailable"}`;
+    await audit(req, "agent_run", "denied", { mode: "enforced", boundary: perimeter, reason });
+    return { allowed: false, reason, shouldBlock: true };
+  };
+  try {
+    const host = await import("@/lib/extension-host-context");
+    refusalCodeOf = host.runActionRefusalClassCode;
+    // 1 + 2: the step proof from the frame, the owner's loaded identity.
+    const checked = host.checkOutwardRunAction({ frame: req.ctx, toolName: req.primitiveName, owner: req.outwardOwner,
+      subject: req.outwardSubject ?? null, args: req.toolArguments });
+    // The boundary's other rules; a call they refuse never uses the decision up.
+    const decision = await decideMcpBoundary(req, true);
+    if (!decision.allowed && decision.shouldBlock) return decision;
+    // 3: the person's decision, consumed once before the effect.
+    const consumption = await host.consumeOutwardRunAction(checked);
+    // 4: this one call is admitted.
+    await audit(req, "agent_run", "allowed", {
+      mode: "enforced", boundary: perimeter, via: "recorded_decision",
+      consumptionKey: consumption.consumptionKey, stepId: consumption.stepId,
+    });
+    return decision;
+  } catch (err) {
+    return refused(err);
+  }
+}
+
+async function decideMcpBoundary(req: McpBoundaryRequest, outwardAdmitted: boolean): Promise<McpBoundaryDecision> {
   let classification = lookupPrimitiveClassification(req.primitiveName);
 
   // Extension-registered MCP tools (register(ctx) → ctx.mcp.registerTool) are not
@@ -324,7 +398,7 @@ export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBo
   // carve-outs, the unenforced shadow step and every role short-circuit, so it
   // holds whatever the caller's role, the tool's classification status, a
   // carve-out or the enforcement mode.
-  if (needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
+  if (!outwardAdmitted && needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
     await audit(req, classification.resourceType, "denied", {
       mode: "enforced",
       boundary: req.delegatedRestricted ? "delegated_chat_token" : "mcp_handler_dispatch",
