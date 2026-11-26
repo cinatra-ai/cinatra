@@ -822,8 +822,40 @@ test("live: a pack that declares a use of another pack's tool without declaring 
     assert.equal(res.status, 1, res.out);
     assert.match(res.out, /\[undeclaredToolOwnerDeps\] NEW @cinatra-ai\/consumer-agent :: owner_tool/);
     assert.match(res.out, /registered by @cinatra-ai\/owner-connector/);
-    // The core tool is no finding: core owns it.
+    // The core tool is no finding: the rule counts a tool registered outside
+    // extensions/ as core's (see the next test for what that leaves out).
     assert.doesNotMatch(res.out, /core_tool/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: a tool core registers on behalf of a pack counts as core's and is outside the rule", () => {
+  // The owner is read from the registering file only. A host facade that core
+  // registers but that works only with a pack installed (the shape of a blog
+  // publish facade backed by a connector) is core's here, so a use of it
+  // without a dependency on the backing pack passes this rule. The product's
+  // record of such backing packs is the private ownership registry that the
+  // central closure gate reads; this rule does not restate it.
+  const inventory = {
+    primitives: [
+      ...toolInventory.primitives,
+      { primitiveName: "core_facade_backed_by_owner", file: "src/lib/example/mcp/registry.ts", line: 1 },
+    ],
+  };
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([], [consume("core_facade_backed_by_owner")]) },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory,
+  });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /tool-owner rule: 1 declared tool uses, 0 undeclaredToolOwnerDeps;/);
+    assert.doesNotMatch(res.out, /core_facade_backed_by_owner/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

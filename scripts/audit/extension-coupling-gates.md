@@ -607,7 +607,7 @@ or a package name.
 | Reading | Where it comes from |
 | --- | --- |
 | A pack USES a tool | each entry `{ primitive, requirement }` of `cinatra.consumes` in the pack's `package.json`, read as `parseConsumedPrimitives` (`packages/sdk-extensions/src/consumes.ts`) reads it: `primitive` a non-empty string, `requirement` `required` or `optional`, each tool once. Nothing is read from `cinatra/oas.json` and nothing from code files |
-| The tool's OWNER | the row of the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) for the tool: a registering file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core |
+| The tool's OWNER | the row of the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) for the tool: a registering file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core (a tool that core registers on behalf of a pack counts as core's) |
 | The DECLARED dependency | the first entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner, judged as `validateDependencyDeclarations` (`packages/extensions/src/dependency-declaration-validator.ts`) judges it: a REQUIRED use needs an install-blocking edge (required and not peer, `isInstallBlockingEdge` in `packages/extensions/src/dependency-closure.ts`); an OPTIONAL use accepts any declared edge. The gate mirrors the rule (a plain `.mjs` cannot load the TypeScript package), and a drift test reads the sources |
 
 The rule judges declared uses only. A tool that a pack uses in a flow or in
@@ -650,8 +650,19 @@ which the agent does not declare). 4 declared uses are printed as "owner not
 recorded" (`artifact_content_read`, `email_outreach_send_initial_start`,
 `email_outreach_send_initial_status`).
 
+The owner is where the tool is registered, not which pack it needs at run
+time. Some tools are registered by core but work only when a pack is
+installed (for example the blog publish facades that core's blog code
+registers and the LinkedIn or WordPress connector backs). This rule counts
+them as core's and does not judge their use. The product records those
+backing packs in the ownership registry of the private engineering
+repository, which the central declared-vs-used closure gate reads; that
+registry is private by design and is not restated here. No pack at the
+pinned shas declares a use of such a facade today, and core's blog facades
+are being removed (cinatra#4862 to cinatra#4864).
+
 What it cannot see: a tool used but not declared in `cinatra.consumes`
-(cinatra#4894); the owner of a tool the inventory has no row for (until
+(cinatra#4894); a tool core registers on behalf of a pack (above); the owner of a tool the inventory has no row for (until
 cinatra#4895); a pack outside both extension locks.
 
 ## Floors compared with the base branch (cinatra#3832)
