@@ -207,7 +207,7 @@ export async function deliverArtifactReviewResumeIntent(
   try {
     return await deliverWayflowResume(intent, leaseToken, lease, false);
   } finally {
-    lease.stop();
+    await lease.stop();
   }
 }
 
@@ -747,16 +747,29 @@ async function deliverWayflowResume(
   }
 }
 
-type ResumeLeaseKeeper = { fence(): Promise<boolean>; stop(): void };
+type ResumeLeaseKeeper = { fence(): Promise<boolean>; stop(): Promise<void> };
 
 /**
  * cinatra#3745: renew the lease every third of its length while the delivery
  * runs. A refused renewal stops the timer and every later fence refuses; a
  * renewal that throws is logged and retried on the next tick. `fence()` is an
  * awaited renewal, called before every wire action.
+ *
+ * `stop()` clears the timer AND waits for every renewal a tick already started.
+ * Without that wait, a tick's renewal could still write after the delivery
+ * returned: it moved the lease of an intent left for a re-claim one lease length
+ * later (the row stays `delivering` under the same token, which the renewal's
+ * compare-and-set accepts), so the dead-letter pass and the claim skipped it until
+ * that lease ran out. cinatra#4476's state-1 case saw this as a flaky missing
+ * resume. Every started renewal is tracked, not only the newest: a renewal slower
+ * than the interval is still waited for. The wait is bounded by one lease length
+ * (a stalled connection must not hold the delivery and the sequential sweep); a
+ * renewal still pending then can only extend the lease once more, as before.
  */
 function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: number): ResumeLeaseKeeper {
   let lost = false;
+  let stopped = false;
+  const inFlight = new Set<Promise<void>>();
   const renew = async (): Promise<boolean> => {
     if (lost) return false;
     const ok = await renewResumeIntentLease(gateId, leaseToken, leaseMs);
@@ -764,17 +777,35 @@ function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: numb
     return ok;
   };
   const timer = setInterval(() => {
-    renew().then(
+    if (stopped) return;
+    const tick: Promise<void> = renew().then(
       (ok) => {
         if (!ok) clearInterval(timer);
       },
       (err: unknown) => {
         console.warn(`[artifact-review-resume] gate=${gateId} lease renewal failed (${errorLabel(err)}); retried on the next tick`);
       },
-    );
+    ).finally(() => inFlight.delete(tick));
+    inFlight.add(tick);
   }, Math.max(250, Math.floor(leaseMs / 3)));
   (timer as { unref?: () => void }).unref?.();
-  return { fence: renew, stop: () => clearInterval(timer) };
+  return {
+    fence: renew,
+    stop: async () => {
+      stopped = true;
+      clearInterval(timer);
+      if (inFlight.size === 0) return;
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.all([...inFlight]),
+        new Promise<void>((resolve) => {
+          bound = setTimeout(resolve, Math.max(1000, leaseMs));
+          (bound as { unref?: () => void }).unref?.();
+        }),
+      ]);
+      clearTimeout(bound);
+    },
+  };
 }
 
 /** What `releaseClaimedRun` did. */
