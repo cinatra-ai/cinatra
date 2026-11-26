@@ -7,6 +7,7 @@ import {
   bindRunStepToolPolicy,
   CINATRA_EXPECTED_SOURCE_MESSAGE_KEY,
   readAgentTemplateById,
+  readRunPauseSteps,
   readAgentTemplates,
   readAgentTemplateVersionBySemver,
   readAgentTemplateVersionById,
@@ -368,6 +369,39 @@ export async function resolvePinnedRunSnapshot(
   return null;
 }
 
+/**
+ * cinatra#3089: the steps a pause is classified by. A dispatch binds, with the source the loader mounted and selected,
+ * the steps compiled from that source (compileMountedPauseSteps): what classifies a pause is the flow that runs, in an
+ * install's gap between its files and its row and after a failed reload too. A binding without them (written before
+ * they were bound: the rolling-upgrade rule) is classified as before, by the live template row (null when it cannot be
+ * read). Bound steps that cannot be read throw: the caller retries, then stops; it never reads the row for them.
+ */
+export async function readPausePolicyTemplate(
+  run: { id: string; orgId: string; templateId: string },
+): Promise<Pick<AgentTemplateRecord, "approvalPolicy"> | null> {
+  const bound = await readRunPauseSteps(run.id, run.orgId);
+  if (bound) return { approvalPolicy: bound.approvalPolicy as AgentTemplateRecord["approvalPolicy"] };
+  return readAgentTemplateById(run.templateId).catch(() => null);
+}
+
+/** cinatra#3089: the installer's own compile applied to the source the loader mounted (its bytes, digest-checked by
+ *  selectWayflowRunStepToolPolicy). The path names no directory (nothing exists under /dev/null), so no sibling
+ *  manifest is read from the install directory, which a reinstall may already have rewritten; the steps are compiled
+ *  before any sibling read. Undefined when the loader sent no source (an older loader) or the source does not compile
+ *  with this host's compiler (the loader still runs it): the binding carries no steps, and the run's pauses read the
+ *  stored approval policy row as before steps were bound. A compile failure is logged once, by its code only. */
+async function compileMountedPauseSteps(source: string | undefined, packageName: string | null | undefined): Promise<{ approvalPolicy: unknown } | undefined> {
+  // An older loader sends no mounted source: no steps are bound at all, so the run reads as one bound before them.
+  if (source === undefined) return undefined;
+  const { compileOasAgentJson } = await import("./oas-compiler");
+  const compiled = await compileOasAgentJson({ packageName, oasSource: Buffer.from(source, "utf8"), oasSourcePath: "/dev/null/cinatra/oas.json" });
+  if (compiled.ok) return { approvalPolicy: compiled.value.approvalPolicy };
+  // The error text may quote the source, so only its leading code is logged.
+  const code = /^([A-Z][A-Z0-9_]+):/.exec(compiled.error)?.[1] ?? "UNCODED";
+  console.warn(`[pause-steps] the mounted source does not compile with this host's compiler (${code}): no pause steps are bound; its pauses read the stored approval policy`);
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Side-effects gate at the WayFlow dispatch boundary.
 //
@@ -516,7 +550,7 @@ import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
 } from "./field-renderer-bindings.server";
-import { stepFiresRendererGate } from "./orchestrator-gate-predicate";
+import { stepFiresRendererGate, reviewGateNodeSteps, stepForVerifiedPause, ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT, PAUSE_POLICY_UNREAD_TEXT, readPausePolicyWithRetry } from "./orchestrator-gate-predicate";
 import {
   GATE_KEYS_NOT_FROM_RUN_INPUTS,
   readStoredKeyList,
@@ -530,7 +564,7 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY } from "@/lib/agent-run-token";
+import { mintRunToken, CINATRA_EXECUTION_ATTEMPT_MESSAGE_KEY, verifyGateNodeClaim } from "@/lib/agent-run-token";
 import { holdRunAtPublishGate } from "./publish-decision-actions";
 // cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
 // secret). Deliberately NOT the refetch resolver: importing that here would pull
@@ -2289,6 +2323,46 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     legFence = { resumeLeg: { a2aTaskId: task.id, executionAttemptId: claimedGate.executionAttemptId } };
   }
 
+  // The handler's failure path (the `failed` branch below, and a pause that cannot be
+  // placed). cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
+  // mid-flow and then failed has produced output a review may be open on, so the
+  // same question is asked here, BEFORE the terminal announcement: a run that parks
+  // announces no end, because it has not reached one.
+  const failWayflowRun = async (error: string, where: string): Promise<void> => {
+    if (
+      await producedReviewHoldsRun({
+        runId,
+        orgId: run.orgId,
+        fromStatus,
+        stepResults: [],
+        withheld: { status: "failed", error },
+        authority,
+        resumeLeg: legFence?.resumeLeg,
+        where,
+      })
+    ) {
+      return;
+    }
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: error,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+    // Defense-in-depth same-status short-circuit (failed -> failed is also
+    // not in LEGAL_TRANSITIONS, though no real call path should hit this).
+    if (fromStatus === "failed") {
+      return;
+    }
+    await transitionRunStatus(runId, fromStatus, "failed", { error, ...legFence }, authority).catch((e) => {
+      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+      throw e;
+    });
+  };
+
   // cinatra#4264 — the step snapshots this leg carries, verified against THIS
   // handler's own runId (never an id read from the response) and stored BEFORE
   // the resync below, so a response naming another run's task or context cannot
@@ -2398,6 +2472,29 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     // only: no renderer, no generic review task. A missing or unverified claim on a
     // publishing template ends the run failed.
     if (await holdRunAtPublishGate({ run, fromStatus, task, claim: gateNodeClaim, authority })) return;
+    // cinatra#3089: ONE read of the steps for this pause (readPausePolicyTemplate:
+    // those bound from the source that runs), used for every decision below (the
+    // renderer's too). A step that names its gate's node is the step of a pause
+    // by the pause's verified node, never by position. Without a verified node it
+    // cannot be told whether this pause is such a review: the run is stopped
+    // failed, the pause offered as no approval. (No compiled step names a node
+    // yet; the compiler that writes such steps follows.) A read that throws is retried
+    // briefly first (nothing re-drives a dropped report); only then the stop,
+    // through this handler's failure path (failWayflowRun).
+    const stopUnplacedPause = (error: string) => failWayflowRun(error, "unplaced pause");
+    const pauseRead = await readPausePolicyWithRetry(() => readPausePolicyTemplate(run), `run=${runId} task=${task.id}`);
+    if (!pauseRead.ok) {
+      await stopUnplacedPause(PAUSE_POLICY_UNREAD_TEXT);
+      return;
+    }
+    const pauseTemplate = pauseRead.value;
+    const reviewNodeSteps = reviewGateNodeSteps(pauseTemplate?.approvalPolicy?.steps);
+    const verifiedGateNode = reviewNodeSteps.length === 0 ? null
+      : verifyGateNodeClaim({ key: process.env.CINATRA_CONTEXT_ATTEST_KEY, contextId: task.contextId ?? run.a2aContextId, taskId: task.id, claim: gateNodeClaim });
+    if (reviewNodeSteps.length > 0 && verifiedGateNode === null) {
+      await stopUnplacedPause(ARTIFACT_REVIEW_GATE_UNVERIFIED_TEXT);
+      return;
+    }
     const adapter = new DualAdapterDispatch(
       new AgUiAdapter(runId, run.templateId, (event) => publishAgUiEvent(runId, event)),
       new A2UiAdapter(
@@ -2521,7 +2618,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // Read first and on its own, so that neither a template fault nor a
         // fault below lets a run input fill the gate (null stays).
         try {
-          const contextTmpl = await readAgentTemplateById(run.templateId);
+          const contextTmpl = pauseTemplate;
           wayflowSurfaceGateInputKeys = contextTmpl
             ? readTemplateGateKeys(contextTmpl.approvalPolicy?.steps ?? [])
             : null;
@@ -2532,7 +2629,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           resolveRendererIdForKind("context-selector") ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
         await rememberWayflowGateTask(runId, task.id);
       } else {
-        const tmpl = await readAgentTemplateById(run.templateId);
+        const tmpl = pauseTemplate;
         const rawPolicySteps: unknown = tmpl?.approvalPolicy?.steps ?? [];
         // Read before anything can throw on these steps, so the catch below
         // keeps it; an absent template leaves it null.
@@ -2574,6 +2671,26 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         // lists, or null (every run input) when the template was not read.
         wayflowSurfaceGateInputKeys = templateGateKeys;
       }
+    }
+    // cinatra#3089: the one step this pause is drawn as. A verified node that a
+    // node-named step names takes ALL of that step; a position that picked a
+    // node-named step of another node takes none of it (no step: the pause's
+    // own schema through the plain form, every listed key withheld).
+    const pauseStep = verifiedGateNode === null ? { kind: "positional" as const }
+      : stepForVerifiedPause({ nodeSteps: reviewNodeSteps, verifiedNode: verifiedGateNode, positionalStepNumber: wayflowStepNumber });
+    if (pauseStep.kind === "matched") {
+      const s = pauseStep.step.step as { xRenderer?: unknown; schema?: Record<string, unknown>; inputMessageSchema?: Record<string, unknown>; surfaceGateInputKeys?: unknown };
+      wayflowXRenderer = typeof s.xRenderer === "string" ? s.xRenderer : SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = pauseStep.step.stepNumber;
+      wayflowSchema = s.schema ?? s.inputMessageSchema ?? null;
+      wayflowArtifactReviewTargetsInput = pauseStep.step.targetsInput;
+      wayflowSurfaceGateInputKeys = readStoredKeyList(s.surfaceGateInputKeys);
+    } else if (pauseStep.kind === "mispicked") {
+      wayflowXRenderer = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+      wayflowStepNumber = null;
+      wayflowSchema = null;
+      wayflowArtifactReviewTargetsInput = null;
+      wayflowSurfaceGateInputKeys = templateGateKeys;
     }
     // ------------------------------------------------------------------------
     // cinatra#1796 (epic #1620 S13) — MARKED artifact-review gate: pin + route.
@@ -3164,43 +3281,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
 
   if (taskState === "failed") {
     const firstFailPart = task.status?.message?.parts?.[0] as { text?: string } | undefined;
-    const errMsg = firstFailPart?.text ?? "WayFlow task failed";
-    // cinatra#3007 — `failed` is terminal too. A run that wrote an artifact
-    // mid-flow and then failed has produced output a review may be open on, so
-    // the same question is asked here, BEFORE the terminal announcement: a run
-    // that parks announces no end, because it has not reached one.
-    if (
-      await producedReviewHoldsRun({
-        runId,
-        orgId: run.orgId,
-        fromStatus,
-        stepResults: [],
-        withheld: { status: "failed", error: errMsg },
-        authority,
-        resumeLeg: legFence?.resumeLeg,
-        where: "wayflow failed",
-      })
-    ) {
-      return;
-    }
-    await Promise.resolve(
-      publishAgUiEvent(runId, {
-        type: "RUN_ERROR",
-        threadId: runId,
-        runId,
-        message: errMsg,
-        timestamp: Date.now(),
-      } as never),
-    ).catch(() => undefined);
-    // Defense-in-depth same-status short-circuit (failed -> failed is also
-    // not in LEGAL_TRANSITIONS, though no real call path should hit this).
-    if (fromStatus === "failed") {
-      return;
-    }
-    await transitionRunStatus(runId, fromStatus, "failed", { error: errMsg, ...legFence }, authority).catch((e) => {
-      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-      throw e;
-    });
+    await failWayflowRun(firstFailPart?.text ?? "WayFlow task failed", "wayflow failed");
     return;
   }
 
@@ -5285,8 +5366,10 @@ async function runAgentBuilderExecutionJobInner(
         executedSourceSha256: policy.executedSourceSha256, declarationSourceSha256: policy.declarationSourceSha256 };
       const currentDispatchRun = await readAgentRunById(runId);
       if (!currentDispatchRun?.executionAttemptId) throw new Error("step_tool_dispatch_attempt_missing");
+      // cinatra#3089: the steps that classify this run's pauses, compiled from the mounted source and bound with it.
       await bindRunStepToolPolicy({ runId, orgId: run.orgId,
-        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority });
+        executionAttemptId: currentDispatchRun.executionAttemptId, policy, authority: executionAuthority,
+        pauseSteps: await compileMountedPauseSteps(policy.mountedSource, template.packageName) });
       // cinatra#3745: the task's message names the attempt just bound (metadata, never
       // the flow's text input); the runtime signs it in its `s2` pair, so a task of an
       // earlier attempt of this run cannot sign for this one.

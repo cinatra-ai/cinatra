@@ -18,6 +18,7 @@ import "server-only";
 import { z } from "zod";
 import type { HostMcpToolRegistration, DelegatedChatToolClass } from "@cinatra-ai/sdk-extensions";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
+import type { LoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 import { normalizeDelegatedChatToolClass } from "@cinatra-ai/mcp-server/delegated-chat-tool-policy";
 import {
   CapabilityPlanRecorder,
@@ -44,6 +45,14 @@ export type RegisteredExtensionMcpTool = HostMcpToolRegistration & {
    * cannot have reviewed.
    */
   resolvedVersion: string | null;
+  /**
+   * cinatra#3745: the loaded identity the host's loader stamped for the attempt
+   * whose `register(ctx)` produced this registration, or `null` when it stamped
+   * none. Written by the host after the extension's own fields, so a
+   * registration can never name one itself. It travels with the handler, so an
+   * outward call checks and records the identity of the bytes that run.
+   */
+  loadedIdentity?: LoadedExtensionIdentity | null;
 };
 
 class ExtensionMcpRegistryImpl {
@@ -52,7 +61,7 @@ class ExtensionMcpRegistryImpl {
   register(
     packageName: string,
     tool: HostMcpToolRegistration,
-    options?: { resolvedVersion?: string | null },
+    options?: { resolvedVersion?: string | null; loadedIdentity?: LoadedExtensionIdentity | null },
   ): void {
     const name = tool?.name;
     if (!name || typeof name !== "string") {
@@ -82,6 +91,7 @@ class ExtensionMcpRegistryImpl {
       ...tool,
       packageName,
       resolvedVersion: options?.resolvedVersion ?? null,
+      loadedIdentity: options?.loadedIdentity ?? null,
       delegatedChat: normalizeDelegatedChatToolClass(tool.delegatedChat),
     });
   }
@@ -128,7 +138,7 @@ export const extensionMcpRegistry: ExtensionMcpRegistryImpl =
 export function registerExtensionMcpTool(
   packageName: string,
   tool: HostMcpToolRegistration,
-  options?: { resolvedVersion?: string | null },
+  options?: { resolvedVersion?: string | null; loadedIdentity?: LoadedExtensionIdentity | null },
 ): void {
   extensionMcpRegistry.register(packageName, tool, options);
 }
@@ -276,6 +286,10 @@ export type ReplayedExtensionRegistration = {
   delegatedChat?: DelegatedChatToolClass;
   /** The registration's outward declaration (cinatra#3745), as the registration wrote it. */
   outward?: HostMcpToolRegistration["outward"];
+  /** The loaded identity the registry keeps beside this registration's handler (cinatra#3745). */
+  loadedIdentity?: LoadedExtensionIdentity | null;
+  /** The registration's handler, present when `registration` is the registry or retained entry itself. */
+  handler?: (input: unknown) => unknown | Promise<unknown>;
 };
 
 /**
@@ -331,7 +345,21 @@ export function buildReplayedExtensionToolConfig(
       ? primitiveProvenanceStamp({
           ownerPackage: provenance.ownerPackage,
           resolvedVersion: provenance.resolvedVersion ?? UNRESOLVED_EXTENSION_VERSION,
-          ...(provenance.dispatchTarget ? { dispatchTarget: provenance.dispatchTarget } : {}),
+          // cinatra#3745: WHAT IS AUTHORIZED IS WHAT RUNS. An extension dispatch
+          // target carries THIS registration object (when it is the registry or
+          // retained entry itself, i.e. it has a handler) and the loaded identity
+          // kept beside its handler. The declaration planned from this config,
+          // the identity the outward check reads and the handler the host's
+          // pinned dispatch invokes then all come from one object.
+          ...(provenance.dispatchTarget
+            ? { dispatchTarget: provenance.dispatchTarget.kind === "host"
+                ? provenance.dispatchTarget
+                : {
+                    ...provenance.dispatchTarget,
+                    ...(registration.loadedIdentity ? { loadedIdentity: registration.loadedIdentity } : {}),
+                    ...(typeof registration.handler === "function" ? { registration } : {}),
+                  } }
+            : {}),
         })
       : {}),
   };

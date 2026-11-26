@@ -41,6 +41,7 @@ import {
   type TestDeliverySendPort,
 } from "../test-delivery-send-port";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { replayStoreSchema } from "@/lib/test-support/store-schema-replay";
 import { isPlaceholderDbUrl } from "@/lib/test-support/placeholder-db-url";
 
 const dbUrl = process.env.SUPABASE_DB_URL;
@@ -118,16 +119,7 @@ async function provisionSchema(client: Client): Promise<void> {
   // the table shapes never drift from production. Only structural statements;
   // tolerate the handful of seed statements that reference not-yet-seeded rows on
   // a fresh empty schema (the _fixture.ts precedent).
-  for (const q of buildCreateStoreSchemaQueries(SCHEMA)) {
-    const head = q.text.trim().slice(0, 6).toUpperCase();
-    if (head !== "CREATE" && head !== "ALTER " && head !== "DROP T" && head !== "DROP S") continue;
-    try {
-      await client.query(q.text, q.values ?? []);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("does not exist")) throw err;
-    }
-  }
+  await replayStoreSchema(client, buildCreateStoreSchemaQueries(SCHEMA));
 }
 
 beforeAll(async () => {

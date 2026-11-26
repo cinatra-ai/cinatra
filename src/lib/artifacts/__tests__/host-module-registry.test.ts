@@ -203,6 +203,20 @@ describe("cinatra#3471 slice 2 — the LOAD-BOUNDARY conformance (the convergenc
     }
   });
 
+  it("FAILS CLOSED with the NAMED error on a bundle built against a NEWER minor", () => {
+    initWithMemberPrimitives();
+    let caught: unknown = null;
+    try {
+      assertDesignPrimitivesBundleConformance({ __cinatraDesignPrimitivesContract: "1.99.0" });
+    } catch (error) {
+      caught = error;
+    }
+    // red-first-expect: expected null to be an instance of Error
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).name).toBe(DESIGN_PRIMITIVES_CONTRACT_MISMATCH);
+    expect((caught as Error).message).toContain('requires "^1.99.0", but this host serves');
+  });
+
   it("FAILS CLOSED on an unreadable declared contract version", () => {
     initWithMemberPrimitives();
     expect(() =>

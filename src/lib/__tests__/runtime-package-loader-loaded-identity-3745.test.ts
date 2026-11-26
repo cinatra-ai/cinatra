@@ -5,7 +5,8 @@ import type { PackageStoreRecord, ActivationResult, ExtensionHostContext } from 
 // install: only an anchor with an install id and a digest stamps one, a record
 // that fails to register keeps none, a successful unpinned reload retires an
 // older one, a failed attempt never retires a concurrent attempt's newer one,
-// and the capability teardown retires it.
+// the capability teardown retires it, and a stamp becomes current only after
+// the record fully activated (for a default record: after its bootstrap).
 // DI-unit: the SDK driver is a FAKE that drives makeContext/onRegisterSettled
 // like the real one (which verifies the bytes against the anchor and imports
 // the entry before makeContext); the identity registry is REAL.
@@ -52,6 +53,7 @@ vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
 
 import { loadRuntimePackageExtensions } from "@/lib/runtime-package-loader";
 import * as registry from "@/lib/extension-capabilities-registry";
+import * as mcpRegistry from "@/lib/extension-mcp-registry";
 
 const PKG = "@x/mailer";
 const VERSION = "1.2.0";
@@ -87,13 +89,19 @@ function anchor(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function driveWith(registered: boolean) {
+// Like the real driver: one result per register attempt, then one bootstrap result per registered default record.
+function driveWith(registered: boolean, bootstrapResults = true) {
   runRuntimePackageActivation.mockImplementation(async (_root, deps) => {
     const results: ActivationResult[] = [];
     for (const record of deps.records ?? []) {
       deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
       deps.onRegisterSettled?.(record, registered);
       results.push({ packageName: record.packageName, status: registered ? "registered" : "failed" } as ActivationResult);
+    }
+    if (registered && bootstrapResults) {
+      for (const record of deps.records ?? []) {
+        results.push({ packageName: record.packageName, status: "bootstrapped" } as ActivationResult);
+      }
     }
     return results;
   });
@@ -126,7 +134,7 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     const results = await loadRuntimePackageExtensions("/store", {
       resolveInstallAnchors: async () => [anchor(overrides)] as never,
     });
-    expect(results.map((r) => r.status)).toEqual(["registered"]);
+    expect(results.map((r) => r.status)).toEqual(["registered", "bootstrapped"]);
     expect(current()).toBeUndefined();
   });
 
@@ -161,6 +169,59 @@ describe("loadRuntimePackageExtensions — the loaded identity of a verified ins
     });
     expect(current()).toBeUndefined();
     expect(registry.isLoadedExtensionIdentityCurrent(pinned)).toBe(false);
+  });
+
+  // Before the change the stamp is current from makeContext on, so it is current while the bootstrap is still ahead:
+  // red-first-expect: expected true to be false
+  it("makes the stamp current only after the default record's bootstrap passed", async () => {
+    let duringPass: boolean | undefined;
+    runRuntimePackageActivation.mockImplementation(async (_root, deps) => {
+      const record = (deps.records ?? [])[0];
+      deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
+      deps.onRegisterSettled?.(record, true);
+      // The real driver runs the bootstrap pass only after every register settled.
+      duringPass = registry.isLoadedExtensionIdentityCurrent(current());
+      return [
+        { packageName: record.packageName, status: "registered" },
+        { packageName: record.packageName, status: "bootstrapped" },
+      ] as ActivationResult[];
+    });
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    expect(duringPass).toBe(false);
+    expect(registry.isLoadedExtensionIdentityCurrent(current())).toBe(true);
+  });
+
+  it("promotes no stamp when the driver's results do not carry one bootstrap result per registered default", async () => {
+    driveWith(true, false);
+    await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+    expect(current()).toBeUndefined();
+  });
+
+  // Before the change the host writes no identity, so the one the tool named stays on the registration:
+  // red-first-expect: expected { packageName: '@x/mailer', …(4) } to be { packageName: '@x/mailer', …(4) }
+  it("each MCP tool the attempt registers carries the attempt's stamp, never one the tool names", async () => {
+    const named = registry.recordLoadedExtensionIdentity({ packageName: PKG, version: VERSION, installId: "other",
+      digest: "f".repeat(64) });
+    runRuntimePackageActivation.mockImplementation(async (_root, deps) => {
+      const record = (deps.records ?? [])[0];
+      const ctx = deps.makeContext(record.packageName, record.requestedHostPorts ?? [], record);
+      ctx.mcp.registerTool({ name: "mailer_send", description: "send", loadedIdentity: named,
+        handler: async () => ({}) } as Parameters<typeof ctx.mcp.registerTool>[0]);
+      deps.onRegisterSettled?.(record, true);
+      return [
+        { packageName: record.packageName, status: "registered" },
+        { packageName: record.packageName, status: "bootstrapped" },
+      ] as ActivationResult[];
+    });
+    try {
+      await loadRuntimePackageExtensions("/store", { resolveInstallAnchors: async () => [anchor()] as never });
+      const tool = mcpRegistry.listExtensionMcpTools().find((t) => t.name === "mailer_send");
+      expect(tool?.loadedIdentity).toBe(current());
+      expect(tool?.loadedIdentity).not.toBe(named);
+      expect(current()).toMatchObject({ installId: "install-1" });
+    } finally {
+      mcpRegistry.removeExtensionMcpToolsForPackage(PKG);
+    }
   });
 
   it("a failed attempt keeps the identity a concurrent attempt stamped and registered", async () => {

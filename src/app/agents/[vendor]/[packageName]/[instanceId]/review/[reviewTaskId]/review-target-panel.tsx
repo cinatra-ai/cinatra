@@ -142,7 +142,13 @@ export function ReviewTargetPanel({
           `min-w-0` is what lets that happen inside the flex column the island
           body draws: without it the slot takes its width from its content and
           the overflow moves back out to the document. */}
-      <div className="min-w-0 overflow-x-auto p-4" data-review-representation-slot="">
+      {/* THE PDF FLOOR STANDS IN THE SLOT ITSELF (§XI.4's floor drawing): it is
+          one surface with its own rule and padding, straight under the header,
+          so the slot gives it no padding of its own around it. */}
+      <div
+        className="min-w-0 overflow-x-auto p-4 has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0"
+        data-review-representation-slot=""
+      >
         <ReviewTargetMount
           mount={mount}
           props={props}
