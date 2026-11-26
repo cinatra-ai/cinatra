@@ -58,10 +58,11 @@ describe("cinatra#4424 — the dispatch drain no longer calls the CMS repair bri
 
 type LockEntry = { packageName: string; resolvedSha: string };
 const DECLARED = { repairCapable: true, repairFindingsInput: { input: "instructions" } };
-// cinatra#4737 moved both pins to commits whose package.json still declares DECLARED.
+// cinatra#4737 moved both pins to commits whose package.json still declares DECLARED;
+// cinatra#4889 moved the WordPress pin to 53f641b0, which still declares it.
 const CMS_AGENTS = [
   { packageName: "@cinatra-ai/drupal-agent", dir: "drupal-agent", sha: "a070884f194b13e840b098efc8117cab4d0d7894" },
-  { packageName: "@cinatra-ai/wordpress-agent", dir: "wordpress-agent", sha: "b04d467bcf1433337e0f46fc5a9908f914aead84" },
+  { packageName: "@cinatra-ai/wordpress-agent", dir: "wordpress-agent", sha: "53f641b0b447912fe2739a6032a441c2eba02a3c" },
 ] as const;
 
 function devLock(): LockEntry[] {

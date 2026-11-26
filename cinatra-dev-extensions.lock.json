@@ -20,7 +20,7 @@
     {
       "packageName": "@cinatra-ai/apollo-prospecting-agent",
       "repo": "cinatra-ai/apollo-prospecting-agent",
-      "resolvedSha": "8db7cc5e48a58cf58c8a09158f6059a904d0f3c9"
+      "resolvedSha": "be061d1d6344983b1360726993d894a6d07be6a0"
     },
     {
       "packageName": "@cinatra-ai/blog-connector",
@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "0602af42c6e3c7ed0a81f56051e05551dc798988"
+      "resolvedSha": "609a661cf9779069cec9dfeaba9141c54ca4cfd7"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
@@ -425,7 +425,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "b04d467bcf1433337e0f46fc5a9908f914aead84"
+      "resolvedSha": "53f641b0b447912fe2739a6032a441c2eba02a3c"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
