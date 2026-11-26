@@ -592,6 +592,65 @@ finding fails whatever the floor holds. The gate's own writer
 entries that no longer apply and never adds one; it emptied the floor at the
 flip. A test of record pins the checked-in floor as empty.
 
+## Core tests and fixtures that name a pinned pack (cinatra#4853)
+
+**Limits first.** `core-pack-pin-gate.mjs` is a LEXICAL check: it reads
+single strings and does not understand what code does with them. It does not
+see:
+
+- a name or path that code assembles from separate strings
+  (`path.join(ROOT, "extensions", "scope", "name")`, `"@scope/" + name`,
+  a name split across two JSON strings): segments joined by code are out of
+  scope;
+- a pack reached through a helper outside the test locations (a module under
+  `src/` that a test calls);
+- Python tests (`docker/wayflow/tests/*.py` and every other `*.py` file);
+- YAML fixtures.
+
+These remain open in cinatra#4853, which stays open after this check lands.
+
+**The rule.** The files are every git-tracked TypeScript/JavaScript test file
+and JSON fixture under `src/`, `packages/` or `docker/` that lies in a test or
+fixture directory (`__tests__`, `__fixtures__`, `__mocks__`, `tests`, `test`,
+`fixtures`) or is named `*.test.*`, `*.spec.*` or `*.fixture.*`, as
+`git ls-files` lists them. A test file is read with the TypeScript parser only
+to list its string literals and the cooked text of its template parts
+(comments are not read); a JSON fixture is read parsed, every string value and
+every key, after its escapes decode. A string is a finding when it CONTAINS,
+without case and at a token boundary (no letter, digit, `.`, `_` or `-` before
+it; none after it, a `.` only when a name character follows), one of: a pinned
+pack's package name `@scope/name`; its tree path `extensions/scope/name` with
+`/` or `\` separators; or 7 or more leading hex digits of a pinned commit
+(`resolvedSha`). The pinned packs are the rows of the two extension locks. One
+substring test per string replaces every earlier special case: a sub-path, a
+template, a test title, a module mock and a flow fixture's package name or pin
+are all a string that contains the name. The one exemption is structural: the
+module specifier of an `import type` / `export type` declaration and of an
+`import("...")` type. A tracked symbolic link is a finding by itself (a linked
+fixture cannot be judged; it is never followed). A test file or a JSON fixture
+that does not parse fails the check (exit 2), as does a missing lock and a
+listed file that is missing on disk. The names come from `git ls-files -z`
+(each NUL-delimited entry is one path, nothing is parsed); a symbolic link is
+decided on the working file (`lstat`). A file name that holds a control
+character (a code point below 0x20, or 0x7f, a newline included) is a finding by
+itself, because such a name cannot be judged safely; its content is still read
+and judged like any other file's.
+
+**The list.** `core-pack-pin-gate.baseline.json` holds, per file, the count of
+findings per pinned package (no positions, so moving lines does not change
+it). A count above the list fails, so a new mention in a listed file fails; a
+count below it fails until `--write-baseline` lowers it. The writer only
+shrinks: each count becomes the least of the live count, the committed list's
+and, when a base is named, the base list's; a live count above that is refused
+and the run exits 1. A list that is missing, unreadable, JSON `null` or
+malformed is refused, never read as empty; the one exception is the
+introducing change (the base holds neither the list nor the check), whose live
+counts seed it. The list is compared with the base branch through
+`lib/floor-base-guard.mjs` (`CORE_PACK_PIN_BASE`, else `GITHUB_BASE_REF`): a
+raised count or a new entry fails. It runs as the test of record in
+`__tests__/core-pack-pin-gate.test.mjs`, inside the root suite of the job
+"Perpetual core invariants".
+
 ## A declared use of another pack's tool needs a declared dependency (cinatra#4874)
 
 A pack says which host tools (MCP primitives) it uses in
@@ -930,6 +989,7 @@ EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-
 CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
 ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
 ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
+CORE_PACK_PIN_BASE=origin/main node scripts/audit/core-pack-pin-gate.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
