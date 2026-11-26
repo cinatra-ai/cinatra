@@ -155,7 +155,6 @@ describe("cinatra#3862 leg 8 — the scrolling slot holds the representation alo
 // surface with its own rule and padding; the slot gives it no padding of its
 // own around it, and keeps its padding for every other representation.
 describe("cinatra#3459 — the slot draws no padding around the pdf floor", () => {
-  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
   it("drops its padding where the shared pdf shell draws its floor in it", () => {
     const classes = classesOf(panel().slot);
     expect(classes).toContain("has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0");
