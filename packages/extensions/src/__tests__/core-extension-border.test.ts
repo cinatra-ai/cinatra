@@ -94,6 +94,14 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  KNOWN_RULES: Set<string>;
+  rulesListDefects: (doc: unknown, opts?: { requireList?: boolean }) => string[];
+  packStepWordRuns: (packs: Iterable<string>) => Set<string>;
+  kindCrossesBorder: (kind: string, runs: Set<string>) => string | null;
+  scanStepScreenKindTables: (input: { file: string; text: string; packs: Set<string> }) => {
+    findings: Finding[];
+    tables: number;
+  };
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -413,7 +421,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
   });
 
   it("refuses a ledger that gained an entry", () => {
-    const previous = { entries: [entry()] };
+    const previous = { rules: [...gate.KNOWN_RULES], entries: [entry()] };
     const current = {
       entries: [
         entry(),
@@ -634,7 +642,7 @@ describe("core/extension border — the floor is compared with the base branch",
     reason: REASON,
     files: { "src/lib/example-module/a.ts": lines },
   });
-  const ledger = (entries: unknown[]) => ({ entries });
+  const ledger = (entries: unknown[]) => ({ rules: [...gate.KNOWN_RULES], entries });
 
   const fixtures: { cleanup: () => void }[] = [];
   afterEach(() => {
@@ -717,4 +725,141 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('does not grow against the base "HEAD"');
   }, 120_000);
+});
+
+// cinatra#4852: core registers no step-screen kind named after one pack's
+// step. The pack word runs come from the locks; the kind table is found by its
+// shape (`const <NAME>KIND_TABLE = { ... }`), never by a file name.
+describe("core/extension border — pack-step-kind-in-core", () => {
+  const STEP_PACKS = new Set([
+    "@cinatra-ai/acme-invoice-agent",
+    "@cinatra-ai/zephyr-connector",
+    "@cinatra-ai/text-artifact",
+  ]);
+  const TABLE_FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const table = (keys: string[]) =>
+    [
+      "const RENDERER_KIND_TABLE: Record<",
+      "  string,",
+      "  { renderer: ComponentType<P>; makeCondition?: (ids: readonly string[]) => Cond }",
+      "> = {",
+      ...keys.map((k) => `  "${k}": { renderer: Floor, bareAliases: ["${k}"] },`),
+      "};",
+      "",
+    ].join("\n");
+  const scanKinds = (keys: string[]) =>
+    gate.scanStepScreenKindTables({ file: TABLE_FILE, text: table(keys), packs: STEP_PACKS });
+
+  it("finds a kind that carries a pack's step words, and names the line", () => {
+    const r = scanKinds(["list-picker", "acme-invoice-approval"]);
+    expect(r.tables).toBe(1);
+    expect(r.findings.map((f) => [f.rule, f.detail, f.line])).toEqual([
+      ["pack-step-kind-in-core", "acme-invoice-approval", 6],
+    ]);
+    expect(r.findings[0].message).toContain("(acme-invoice)");
+  });
+
+  it("finds a kind that carries a connector's vendor word", () => {
+    expect(scanKinds(["zephyr-sender"]).findings.map((f) => f.detail)).toEqual(["zephyr-sender"]);
+  });
+
+  it("passes a generic kind named for the screen's shape, and an artifact's type word", () => {
+    expect(scanKinds(["list-picker", "form", "artifact-review", "confirmation", "text-input"]).findings).toEqual([]);
+  });
+
+  it("derives the word runs from the pack names, not from a list", () => {
+    const runs = gate.packStepWordRuns(STEP_PACKS);
+    expect(runs.has("acme-invoice")).toBe(true);
+    expect(runs.has("zephyr")).toBe(true);
+    expect(runs.has("acme")).toBe(false);
+    expect(runs.has("text")).toBe(false);
+    expect(gate.kindCrossesBorder("acme-invoice-review", runs)).toBe("acme-invoice");
+  });
+
+  it("does not read a kind table named only in a comment", () => {
+    const text = `// const RENDERER_KIND_TABLE = { "zephyr-sender": 1 };\n`;
+    expect(gate.scanStepScreenKindTables({ file: TABLE_FILE, text, packs: STEP_PACKS })).toEqual({
+      findings: [],
+      tables: 0,
+    });
+  });
+
+  it("finds the standing kinds in the real table, each held by the ledger", () => {
+    const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+    const kinds = r.findings.filter((f) => f.rule === "pack-step-kind-in-core");
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(kinds.filter((f) => r.violations.includes(f))).toEqual([]);
+  });
+
+  it("the committed ledger lists every rule it ratchets", () => {
+    const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    expect(gate.rulesListDefects(doc, { requireList: true })).toEqual([]);
+    expect(gate.rulesListDefects({ entries: [] }, { requireList: true })).toEqual([
+      "the ledger has no `rules` array (the rules it ratchets)",
+    ]);
+  });
+
+  const KIND_KEY = `${TABLE_FILE}::zephyr-sender`;
+  const kindEntry = (key = KIND_KEY) => ({
+    rule: "pack-step-kind-in-core",
+    key,
+    reason: "a standing pack-named kind recorded in a fixture ledger",
+  });
+  const withRules = (rules: string[], entries: unknown[]) => ({ rules, entries });
+  const ALL = () => [...gate.KNOWN_RULES];
+  const BEFORE = () => ALL().filter((r) => r !== "pack-step-kind-in-core");
+
+  it("the pull request that adds the rule seeds its standing kinds once", () => {
+    expect(gate.baselineGrowth(withRules(BEFORE(), []), withRules(ALL(), [kindEntry()]))).toEqual([]);
+  });
+
+  it("once the base lists the rule, a pull request adding a kind entry fails", () => {
+    expect(
+      gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), [kindEntry(), kindEntry(`${TABLE_FILE}::acme-invoice-review`)])),
+    ).toEqual([`new entry: pack-step-kind-in-core::${TABLE_FILE}::acme-invoice-review`]);
+    // also after the rule's last entry left the ledger
+    expect(gate.baselineGrowth(withRules(ALL(), []), withRules(ALL(), [kindEntry()]))).toEqual([
+      `new entry: pack-step-kind-in-core::${KIND_KEY}`,
+    ]);
+  });
+
+  it("the ledger can shrink", () => {
+    expect(gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), []))).toEqual([]);
+  });
+
+  it("the base guard refuses a kind entry the base ledger did not hold", () => {
+    const FLOOR = "config/core-extension-border-baseline.json";
+    const f = floorFixture.makeFloorRepo({
+      base: { [FLOOR]: withRules(ALL(), []) },
+      head: { [FLOOR]: withRules(ALL(), [kindEntry()]) },
+    });
+    try {
+      const r = gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: pack-step-kind-in-core::${KIND_KEY}`]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("a kind entry whose kind left the table is stale, and a tree with no kind table fails closed", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "step-kind-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      const lock = { packages: [...STEP_PACKS].map((packageName) => ({ packageName })) };
+      writeFileSync(path.join(root, "cinatra-required-extensions.lock.json"), JSON.stringify(lock));
+      writeFileSync(path.join(root, "cinatra-dev-extensions.lock.json"), JSON.stringify(lock));
+      mkdirSync(path.join(root, "packages", "agents", "src"), { recursive: true });
+      const baselinePath = path.join(root, "ledger.json");
+      writeFileSync(baselinePath, JSON.stringify(withRules(ALL(), [kindEntry()])));
+      expect(() => gate.scanRepository({ repoRoot: root, baselinePath })).toThrow(/no step-screen kind table/);
+      writeFileSync(path.join(root, TABLE_FILE), table(["list-picker", "acme-invoice-approval"]));
+      const r = gate.scanRepository({ repoRoot: root, baselinePath });
+      expect(r.stale).toEqual([`pack-step-kind-in-core::${KIND_KEY}`]);
+      expect(gate.staleVerdict(r.stale).ok).toBe(false);
+      expect(r.violations.map((f) => f.detail)).toEqual(["acme-invoice-approval"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

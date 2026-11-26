@@ -681,6 +681,22 @@ tests against the repository as checked out, with the run's environment.
 Not guarded yet: the other gates that cinatra#3832 lists, which need a
 workflow change or a floor moved into a file of its own.
 
+**Step-screen kinds named after a pack (cinatra#4852).** The core/extension
+border gate (`scripts/ci/core-extension-border-gate.mjs`, step "Core/extension
+border — base guard" of `gates-pnpm`) has the rule `pack-step-kind-in-core`: a
+key of a step-screen kind table in product code (found by its shape,
+`const <NAME>KIND_TABLE = { ... }`) may not carry a pack's word run. The runs
+come from the two locks: every run of two or more consecutive words of a
+pack's stem (the package name without scope and role suffix), plus the one
+word of a one-word agent or connector stem and a connector's first word (its
+vendor word); a one-word artifact or skill stem is a type word and does not
+count. A tree with no kind table fails closed. Today's kinds are held in the
+gate's ledger, each naming the issue that removes it; the ledger's `rules`
+list names the rules it ratchets, a rule missing from the base's list is
+seeded once in the pull request that adds it, and a listed rule never gains an
+entry against the base. The rule reads names only: a pack-specific kind whose
+words match no pack (`final-list-review`, `send-confirmation`) is not seen.
+
 ### The record road for registers
 
 Two guarded lists are registers of things allowed after a review, not floors
