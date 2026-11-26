@@ -1,4 +1,4 @@
-// red-first-expect: createDefaultSendEmail is not a function
+// red-first-expect: Cannot find module '/src/lib/approved-body-send'
 /**
  * cinatra#3089 — the approved send reads each body as the acting actor, and
  * binds every message to its approved revision before the first mail.
@@ -106,7 +106,6 @@ vi.mock("../email-send-providers", () => ({
 
 import {
   buildLazyDefaultDeps,
-  createDefaultSendEmail,
   createTriggerEmailSendUseCases,
   EMAIL_BODY_TYPE_ID,
   materializeEmailFanout,
@@ -116,6 +115,7 @@ import {
   type MessageSendLedger,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
+import { createDefaultSendEmail } from "../approved-body-send";
 
 // The claim the passthrough route took for the call (cinatra#3089): the decision the call was signed for, else the
 // step's decision, `d-1`; each stubbed decision carries that id unless it names its own.
