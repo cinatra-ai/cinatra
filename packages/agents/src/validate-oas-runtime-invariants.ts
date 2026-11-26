@@ -454,6 +454,27 @@ function walkBridgeApiNodes(
   });
 }
 
+/**
+ * The containers the run's step readers follow from a component (cinatra#4150:
+ * the ONE shape set). A step is read inside `$referenced_components`, a
+ * FlowNode's `subflow` and a ParallelFlowNode's inline `subflows`, the shapes
+ * the compiler's model-step passes (`injectCinatraLlmIntoApiNodes`,
+ * `propagateToolboxesIntoApiNodes`) treat as holding steps. Any other holder (an
+ * AgentNode's `agent`, an Agent's `tools`, a tool's `flow`) is not followed.
+ */
+function stepContainerChildren(o: Record<string, unknown>): Array<[unknown, string]> {
+  const children: Array<[unknown, string]> = [];
+  const refs = o.$referenced_components;
+  if (isPlainObject(refs)) {
+    for (const [k, v] of Object.entries(refs)) children.push([v, `.$referenced_components.${k}`]);
+  }
+  if (isPlainObject(o.subflow)) children.push([o.subflow, ".subflow"]);
+  if (o.component_type === "ParallelFlowNode" && Array.isArray(o.subflows)) {
+    o.subflows.forEach((inlineFlow, index) => children.push([inlineFlow, `.subflows[${index}]`]));
+  }
+  return children;
+}
+
 /** Every ApiNode of a flow document, nested subflows included, whatever its target. */
 function walkApiNodes(
   parsed: Record<string, unknown>,
@@ -461,28 +482,8 @@ function walkApiNodes(
 ): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
-    const o = node as Record<string, unknown>;
-    if (o.component_type === "ApiNode") {
-      visit(o, path);
-    }
-    const refs = o.$referenced_components;
-    if (isPlainObject(refs)) {
-      for (const [k, v] of Object.entries(refs as Record<string, unknown>)) {
-        go(v, `${path}.$referenced_components.${k}`);
-      }
-    }
-    // Subflow on a FlowNode
-    const subflow = o.subflow;
-    if (isPlainObject(subflow)) {
-      go(subflow, `${path}.subflow`);
-    }
-    // Supported parallel flows may inline Flow objects instead of referencing
-    // them from $referenced_components. Keep their indexed paths in findings.
-    if (o.component_type === "ParallelFlowNode" && Array.isArray(o.subflows)) {
-      o.subflows.forEach((inlineFlow, index) => {
-        go(inlineFlow, `${path}.subflows[${index}]`);
-      });
-    }
+    if (node.component_type === "ApiNode") visit(node, path);
+    for (const [child, suffix] of stepContainerChildren(node)) go(child, `${path}${suffix}`);
   }
   go(parsed, "$");
 }
@@ -671,18 +672,21 @@ const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "Pa
  * that covers a step nested in a subflow is the decision of that ancestor. A
  * top-level step is its own ancestor.
  *
- * The walk starts at each top-level node (the root `nodes` list) and follows
- * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
- * `$component_ref` resolves to the innermost enclosing `$referenced_components`
- * that holds its key. `unresolved`: no top-level node holds the step.
- * `ambiguous`: more than one does. `not_publishing`: the one that holds it does
- * not declare `publishes: true` (the JSON boolean) on a node of an action kind.
+ * The walk starts at each top-level node (the root `nodes` list) and is
+ * `nodeStepApiNodes`: the step containers of `stepContainerChildren` (the shape
+ * set the step readers `findStepToolDeclaration` and `hasApiNodeStep` follow),
+ * plus the references a flow's `nodes` and `start_node` and those containers
+ * make; a `$component_ref` resolves to the innermost enclosing
+ * `$referenced_components` that holds its key. `unresolved`: no top-level node
+ * holds the step. `ambiguous`: more than one does. `not_publishing`: the one
+ * that holds it does not declare `publishes: true` (the JSON boolean) on a node
+ * of an action kind.
  */
 export function findPublishingAncestor(document: unknown, stepId: string): PublishingAncestorReading {
   if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return { kind: "unresolved" };
   const rootRefs = isPlainObject(document.$referenced_components) ? document.$referenced_components : {};
   const holders = topLevelNodeKeys(document).filter((key) =>
-    subtreeApiNodes(rootRefs[key], rootRefs).some((node) => node.id === stepId));
+    nodeStepApiNodes(rootRefs[key], rootRefs).some((node) => node.id === stepId));
   if (holders.length === 0) return { kind: "unresolved" };
   if (holders.length > 1) return { kind: "ambiguous" };
   const nodeId = holders[0]!;
@@ -710,14 +714,50 @@ function isPublishingNode(node: unknown): boolean {
 }
 
 /**
- * Every ApiNode in the subtree of a top-level node. The walk visits every child
- * value, lists and single objects alike (so `subflow`, `nodes`, an AgentNode's
- * `agent`, an Agent's `tools`, a tool's `flow` and any other holder), the same
- * shape set as the compiler's publishing traversal (`checkPublishingCallRoutes`
- * in oas-compiler.ts); a `$component_ref` resolves to the innermost enclosing
- * `$referenced_components` that holds its key.
+ * The ApiNode steps of a top-level node, as the run reads them: the step
+ * containers of `stepContainerChildren` (the walk of `walkApiNodes`), and the
+ * references a flow's `nodes` and `start_node` and those containers make. A
+ * reference resolves to an entry of an enclosing `$referenced_components`, which
+ * `walkApiNodes` visits too, so every step found here is a step the run's
+ * declaration reader finds (cinatra#4150: one shape set, not two).
  */
-function subtreeApiNodes(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
+function nodeStepApiNodes(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
+  while (stack.length > 0) {
+    const [value, scopes] = stack.pop()!;
+    if (!isPlainObject(value) || seen.has(value)) continue;
+    seen.add(value);
+    const ref = resolveComponentRef(value);
+    if (ref !== null) {
+      for (let i = scopes.length - 1; i >= 0; i--) {
+        if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
+          stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
+          break;
+        }
+      }
+      continue;
+    }
+    if (value.component_type === "ApiNode") found.push(value);
+    const refs = value.$referenced_components;
+    const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
+    for (const [child] of stepContainerChildren(value)) stack.push([child, inner]);
+    const references = [...(Array.isArray(value.nodes) ? value.nodes : []), value.start_node];
+    for (const entry of references) if (resolveComponentRef(entry) !== null) stack.push([entry, inner]);
+  }
+  return found;
+}
+
+/**
+ * Every ApiNode anywhere under a component: every child value, lists and single
+ * objects alike, and every reference (the holders the compiler's publishing
+ * traversal `checkPublishingCallRoutes` walks). It is NOT a step reader: it only
+ * finds model steps that a publishing node can run in a holder the run does not
+ * read step declarations from (an AgentNode's `agent`, an Agent's `tools`, a
+ * tool's `flow`), so that such a step is reported instead of trusted.
+ */
+function everyApiNodeUnder(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
   const found: Array<Record<string, unknown>> = [];
   const seen = new Set<unknown>();
   const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
@@ -795,20 +835,7 @@ function scanForStepToolDeclarations(
         source: "deterministic",
       });
     }
-    const refs = node.$referenced_components;
-    if (isPlainObject(refs)) {
-      for (const [k, v] of Object.entries(refs)) {
-        walkOtherNodes(v, `${path}.$referenced_components.${k}`, false);
-      }
-    }
-    if (isPlainObject(node.subflow)) {
-      walkOtherNodes(node.subflow, `${path}.subflow`, false);
-    }
-    if (node.component_type === "ParallelFlowNode" && Array.isArray(node.subflows)) {
-      node.subflows.forEach((inlineFlow, index) => {
-        walkOtherNodes(inlineFlow, `${path}.subflows[${index}]`, false);
-      });
-    }
+    for (const [child, suffix] of stepContainerChildren(node)) walkOtherNodes(child, `${path}${suffix}`, false);
   }
   walkOtherNodes(parsed, "$", true);
 
@@ -834,14 +861,21 @@ function scanForStepToolDeclarations(
   // allows a call made after the person's Publish only when the calling step
   // declares the call's tool, and a step's offered tools are known only from
   // that declaration: a step that can call tools (its data.toolbox_ids is not
-  // an empty list) and declares none is refused for every outward call.
+  // an empty list) and declares none is refused for every outward call. The
+  // steps are those the run ties to the node's decision (nodeStepApiNodes, the
+  // reader of findPublishingAncestor); a model step the node can run in any
+  // other holder is refused at run time whatever it declares, so it is
+  // reported as a step that cannot be checked.
   const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  const canCallTools = (step: Record<string, unknown>): boolean => {
+    const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
+    return !(Array.isArray(offered) && offered.length === 0);
+  };
   for (const key of topLevelNodeKeys(parsed)) {
     if (!isPublishingNode(rootRefs[key])) continue;
-    for (const step of subtreeApiNodes(rootRefs[key], rootRefs)) {
-      if (!isModelBridgeApiNode(step)) continue;
-      const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
-      if (Array.isArray(offered) && offered.length === 0) continue;
+    const served = nodeStepApiNodes(rootRefs[key], rootRefs);
+    for (const step of served) {
+      if (!isModelBridgeApiNode(step) || !canCallTools(step)) continue;
       const reading = readStepToolDeclaration(step);
       if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) continue;
       findings.push({
@@ -853,6 +887,22 @@ function scanForStepToolDeclarations(
           `metadata.cinatra.tools. The run refuses every outward call of a step ` +
           `that does not declare the call's tool (action_decision_step_undeclared), ` +
           `even after the person chose Publish. Declare the tools the step calls.`,
+        location: `$.$referenced_components.${key}`,
+        source: "deterministic",
+      });
+    }
+    for (const step of everyApiNodeUnder(rootRefs[key], rootRefs)) {
+      if (served.includes(step) || !isModelBridgeApiNode(step) || !canCallTools(step)) continue;
+      findings.push({
+        code: "OAS-RUNTIME-015",
+        severity: "blocker",
+        message:
+          `Model-bridge step "${idOf(step)}" can run inside the publishing node "${key}" ` +
+          `(metadata.cinatra.publishes: true), but it sits in a holder the run does ` +
+          `not read steps from (an agent, its tools or a tool's flow). Its tool ` +
+          `declaration cannot be checked and the run cannot tie its calls to the ` +
+          `node's Publish decision, so every outward call is refused. Put the step ` +
+          `in the node itself, in its subflow or in a referenced component of it.`,
         location: `$.$referenced_components.${key}`,
         source: "deterministic",
       });
@@ -1045,36 +1095,60 @@ function scanInputMessageGateMountability(
   parsed: Record<string, unknown>,
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
+  // The root flow's own nodes, by object, with their keys (rule 013 below).
+  const gateRootRefs = isPlainObject(parsed["$referenced_components"]) ? parsed["$referenced_components"] : {};
+  const rootNodeKeyOf = new Map<unknown, string>();
+  for (const key of topLevelNodeKeys(parsed)) rootNodeKeyOf.set(gateRootRefs[key], key);
   walkComponentObjects(parsed, (node, path) => {
     const componentType = node["component_type"];
 
     // --- artifact-review gate surfaces its targets (cinatra#4150) ----------
-    // The application reads the targets by the marker's input name from the
+    // The compiler puts the marker on a compiled step only for a node of the
+    // ROOT flow (its steps are the root `nodes`; a FlowNode carries a nested
+    // gate's surfaceGateInputKeys, never its artifactReviewTargetsInput), and
+    // execution routes to the review only on that compiled field. The
+    // application then reads the targets by the marker's input name from the
     // gate's pause message first, then from the run's start parameters
-    // (resolveDeclaredReviewTargets). The loader writes a gate's declared
+    // (resolveDeclaredReviewTargets). The loader renders a gate's declared
     // inputs into its pause message only when the gate sets
-    // surfaceGateInputs === true; the start parameters hold only the ROOT
-    // flow's inputs (a nested flow's inputs never reach them). A gate whose
-    // targets reach neither road opens no review.
+    // surfaceGateInputs === true, and an input no DataFlowEdge of the root
+    // flow feeds renders as null, which the reader takes as absent. The start
+    // parameters hold the root flow's inputs. Every other shape opens no review.
     const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
     const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
     const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
     if (review && Object.prototype.hasOwnProperty.call(review, "targetsInput")) {
       const target = review["targetsInput"];
       const named = (list: unknown) =>
-        typeof target === "string" &&
-        Array.isArray(list) &&
-        list.some((i) => isPlainObject(i) && i["title"] === target);
+        Array.isArray(list) && list.some((i) => isPlainObject(i) && i["title"] === target);
+      const gateKey = rootNodeKeyOf.get(node);
+      const sourced = () =>
+        (Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : []).some((e) => {
+          if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") return false;
+          const from = resolveComponentRef(e["source_node"]);
+          return resolveComponentRef(e["destination_node"]) === gateKey &&
+            e["destination_input"] === target &&
+            from !== null && Object.prototype.hasOwnProperty.call(gateRootRefs, from) &&
+            typeof e["source_output"] === "string" && e["source_output"] !== "";
+        });
       const missing =
-        componentType !== "InputMessageNode"
-          ? `it is a "${String(componentType)}", not an InputMessageNode`
-          : named(parsed["inputs"])
-            ? null
-            : cin!["surfaceGateInputs"] !== true
-              ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${String(target)}" is not a start input of the flow`
-              : !named(node["inputs"])
-                ? `"${String(target)}" is not one of its declared inputs nor a start input of the flow`
-                : null;
+        typeof target !== "string" || target === ""
+          ? `the marker does not name an input (it must be a non-empty text)`
+          : componentType !== "InputMessageNode"
+            ? `it is a "${String(componentType)}", not an InputMessageNode`
+            : gateKey === undefined
+              ? `it is not a node of the root flow; the compiler does not carry the marker ` +
+                `through a FlowNode, so a review gate inside a nested flow opens no artifact review`
+              : named(parsed["inputs"])
+                ? null
+                : cin!["surfaceGateInputs"] !== true
+                  ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${target}" is not a start input of the flow`
+                  : !named(node["inputs"])
+                    ? `"${target}" is not one of its declared inputs nor a start input of the flow`
+                    : !sourced()
+                      ? `no DataFlowEdge of the root flow feeds its input "${target}" from a node, ` +
+                        `so the loader renders the input as null and the review has no targets`
+                      : null;
       if (missing) {
         findings.push({
           code: "OAS-RUNTIME-013",
@@ -1083,9 +1157,9 @@ function scanInputMessageGateMountability(
             `Gate "${gateLabel(node)}" declares metadata.cinatra.artifactReview.targetsInput ` +
             `but ${missing}. The pause message then carries no review targets, ` +
             `so the application opens no artifact review. A review gate is an ` +
-            `InputMessageNode whose targets input is a start input of the root ` +
-            `flow, or that sets surfaceGateInputs: true and declares the targets ` +
-            `input. ${HITL_GATE_DOC}`,
+            `InputMessageNode of the root flow whose targets input is a start input ` +
+            `of the root flow, or that sets surfaceGateInputs: true and declares the ` +
+            `targets input, fed by a DataFlowEdge. ${HITL_GATE_DOC}`,
           location: path,
           source: "deterministic",
         });

@@ -2,13 +2,16 @@
  * cinatra#4150: two flow mistakes that passed every check and failed only in a
  * live run are now refused by the runtime-invariant scan.
  *
- *   1. A gate marked `metadata.cinatra.artifactReview.targetsInput` that does not
- *      set `metadata.cinatra.surfaceGateInputs: true` (or is not an
- *      InputMessageNode, or does not declare the named input): the loader writes
- *      an empty pause message and no artifact review opens (OAS-RUNTIME-013).
+ *   1. A gate marked `metadata.cinatra.artifactReview.targetsInput` whose
+ *      targets do not reach the review: it is not an InputMessageNode of the
+ *      root flow, or its targets input is neither a start input of the root flow
+ *      nor a declared input that surfaceGateInputs: true surfaces and a
+ *      DataFlowEdge feeds. No artifact review opens (OAS-RUNTIME-013).
  *   2. A model-bridge step inside a `publishes: true` node that can call tools
  *      but declares none in `metadata.cinatra.tools`: the run refuses its outward
- *      call with `action_decision_step_undeclared` after Publish (OAS-RUNTIME-015).
+ *      call with `action_decision_step_undeclared` after Publish; and a model
+ *      step the node runs in a holder the run does not read steps from (an
+ *      agent's tool flow), which is refused whatever it declares (OAS-RUNTIME-015).
  *
  * The fleet sweep over every pinned pack is `oas-runtime-invariants.test.ts`
  * (allow-list: `__fixtures__/known-broken-agents.ts`).
@@ -18,7 +21,12 @@ import path from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { checkPublishingCallRoutes } from "../oas-compiler";
-import { scanOasForRuntimeInvariantFindings } from "../validate-oas-runtime-invariants";
+import {
+  findPublishingAncestor,
+  findStepToolDeclaration,
+  hasApiNodeStep,
+  scanOasForRuntimeInvariantFindings,
+} from "../validate-oas-runtime-invariants";
 
 const BRIDGE = "{{CINATRA_BASE_URL}}/api/llm-bridge";
 const PASSTHROUGH = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
@@ -82,6 +90,20 @@ function subflowNode(id: string, inner: Record<string, Node>, cinatra?: Record<s
 }
 
 const review = { artifactReview: { targetsInput: "reviewTargets" } };
+/** A root-flow DataFlowEdge from `from.out` into `to.input`. */
+const edge = (from: string, out: string, to: string, input: string): Node => ({
+  component_type: "DataFlowEdge",
+  name: `${from}_${to}`,
+  source_node: { $component_ref: from },
+  source_output: out,
+  destination_node: { $component_ref: to },
+  destination_input: input,
+});
+/** A root flow with a producer node `make` whose output feeds the gate's targets input. */
+const fed = (gateNode: Node, edges: Node[] = [edge("make", "targets", "g", "reviewTargets")]): Node => ({
+  ...flow({ make: bridge("make"), g: gateNode }, ["make", "g"]),
+  data_flow_connections: edges,
+});
 const codes = (doc: Node, code: string, text: string) =>
   scanOasForRuntimeInvariantFindings(doc).filter((f) => f.code === code && f.message.includes(text));
 
@@ -96,7 +118,7 @@ describe("rule 1: an artifact-review gate surfaces its targets", () => {
 
     const nested = flow({ outer: subflowNode("outer", { inner_gate: gate("inner_gate", { ...review, surfaceGateInputs: "true" }) }) }, ["outer"]);
     expect(codes(nested, "OAS-RUNTIME-013", RULE).map((x) => x.message)).toEqual([
-      expect.stringContaining('Gate "inner_gate"'),
+      expect.stringContaining('Gate "inner_gate" declares metadata.cinatra.artifactReview.targetsInput but it is not a node of the root flow'),
     ]);
   });
 
@@ -113,7 +135,6 @@ describe("rule 1: an artifact-review gate surfaces its targets", () => {
     // (resolveDeclaredReviewTargets); they hold the ROOT flow's inputs only.
     const withStart = (doc: Node) => ({ ...doc, inputs: [{ title: "reviewTargets", type: "array" }] });
     expect(codes(withStart(flow({ g: gate("g", review, { inputs: [] }) }, ["g"])), "OAS-RUNTIME-013", RULE)).toEqual([]);
-    expect(codes(withStart(flow({ o: subflowNode("o", { g: gate("g", review, { inputs: [] }) }) }, ["o"])), "OAS-RUNTIME-013", RULE)).toEqual([]);
 
     const fixture = JSON.parse(readFileSync(path.resolve(__dirname, "../../../../tests/fixtures/review-gate-agent/cinatra-review-fixture/marked-review-gate/cinatra/oas.json"), "utf8"));
     expect(codes(fixture, "OAS-RUNTIME-013", RULE)).toEqual([]);
@@ -124,15 +145,42 @@ describe("rule 1: an artifact-review gate surfaces its targets", () => {
       inputs: [{ title: "reviewTargets", type: "array" }],
     };
     expect(codes(nestedOnly, "OAS-RUNTIME-013", RULE).map((x) => x.message)).toEqual([
-      expect.stringContaining('"reviewTargets" is not a start input of the flow'),
+      expect.stringContaining("is not a node of the root flow"),
     ]);
   });
 
-  it("accepts a conforming review gate, top-level and nested, and an unmarked gate", () => {
+  // cinatra#4150 round 3, finding 2: the compiler carries a nested gate's
+  // surfaceGateInputKeys through its FlowNode, never its
+  // artifactReviewTargetsInput, and execution routes to the review only on that
+  // compiled field, so a nested marked gate opens no review on either road.
+  it("refuses a marked gate inside a nested flow, whatever road it uses", () => {
+    const withStart = (doc: Node) => ({ ...doc, inputs: [{ title: "reviewTargets", type: "array" }] });
+    const startRoad = withStart(flow({ o: subflowNode("o", { g: gate("g", review, { inputs: [] }) }) }, ["o"]));
+    expect(codes(startRoad, "OAS-RUNTIME-013", "is not a node of the root flow")).toHaveLength(1);
+
+    const inner = fed(gate("g", { ...review, surfaceGateInputs: true }));
+    const surfacedRoad = flow({ o: { component_type: "FlowNode", id: "o", name: "o", subflow: inner } }, ["o"]);
+    expect(codes(surfacedRoad, "OAS-RUNTIME-013", "is not a node of the root flow")).toHaveLength(1);
+  });
+
+  // cinatra#4150 round 3, finding 1: the loader renders an input no edge feeds
+  // as null, which resolveDeclaredReviewTargets takes as absent.
+  it("refuses a surfaced targets input that no DataFlowEdge of the root flow feeds", () => {
     const ok = { ...review, surfaceGateInputs: true };
-    expect(codes(flow({ g: gate("g", ok) }, ["g"]), "OAS-RUNTIME-013", RULE)).toEqual([]);
-    expect(codes(flow({ o: subflowNode("o", { g: gate("g", ok) }) }, ["o"]), "OAS-RUNTIME-013", RULE)).toEqual([]);
+    const NOT_FED = 'no DataFlowEdge of the root flow feeds its input "reviewTargets"';
+    expect(codes(flow({ g: gate("g", ok) }, ["g"]), "OAS-RUNTIME-013", NOT_FED)).toHaveLength(1);
+    expect(codes(fed(gate("g", ok), [edge("make", "targets", "g", "otherInput")]), "OAS-RUNTIME-013", NOT_FED)).toHaveLength(1);
+    expect(codes(fed(gate("g", ok), [edge("make", "targets", "elsewhere", "reviewTargets")]), "OAS-RUNTIME-013", NOT_FED)).toHaveLength(1);
+    expect(codes(fed(gate("g", ok), [edge("ghost", "targets", "g", "reviewTargets")]), "OAS-RUNTIME-013", NOT_FED)).toHaveLength(1);
+    const untyped = { ...edge("make", "targets", "g", "reviewTargets"), component_type: undefined };
+    expect(codes(fed(gate("g", ok), [untyped]), "OAS-RUNTIME-013", NOT_FED)).toHaveLength(1);
+  });
+
+  it("accepts a conforming surfaced review gate of the root flow, and an unmarked gate", () => {
+    const ok = { ...review, surfaceGateInputs: true };
+    expect(codes(fed(gate("g", ok)), "OAS-RUNTIME-013", RULE)).toEqual([]);
     expect(codes(flow({ g: gate("g", {}) }, ["g"]), "OAS-RUNTIME-013", RULE)).toEqual([]);
+    expect(codes(flow({ o: subflowNode("o", { g: gate("g", {}) }) }, ["o"]), "OAS-RUNTIME-013", RULE)).toEqual([]);
   });
 });
 
@@ -169,9 +217,12 @@ describe("rule 2: a model step of a publishing node declares its tools", () => {
     expect(codes(passthrough, "OAS-RUNTIME-015", RULE)).toEqual([]);
   });
 
-  // Every shape that can hold a model step inside a publishing node, the same
-  // set the compiler's publishing traversal (checkPublishingCallRoutes) walks.
-  // A shape one walk drops and the other keeps fails one of the two assertions.
+  // cinatra#4150 round 3, finding 3: the run reads a step's declaration
+  // (findStepToolDeclaration, hasApiNodeStep) and ties it to a publishing node
+  // (findPublishingAncestor) through ONE shape set. A model step the node runs
+  // in any other holder (an agent's tool flow, which the compiler's publishing
+  // traversal still walks) is reported as a step that cannot be checked.
+  const UNCHECKED = "sits in a holder the run does not read steps from";
   const helper = (inner: Node, single = false): Node => ({
     component_type: "Agent",
     id: "helper",
@@ -180,7 +231,7 @@ describe("rule 2: a model step of a publishing node declares its tools", () => {
       ? { component_type: "FlowTool", id: "t", name: "t", flow: flow({ s: inner }, ["s"]) }
       : [{ component_type: "FlowTool", id: "t", name: "t", flow: flow({ s: inner }, ["s"]) }],
   });
-  const shapes: Record<string, (inner: Node) => Node> = {
+  const unread: Record<string, (inner: Node) => Node> = {
     "AgentNode.agent > Agent.tools list > tool flow": (inner) =>
       flow({ pub: { component_type: "AgentNode", id: "pub", name: "pub", agent: helper(inner), metadata: { cinatra: { publishes: true } } } }, ["pub"]),
     "Agent.tools as a single object": (inner) =>
@@ -199,11 +250,56 @@ describe("rule 2: a model step of a publishing node declares its tools", () => {
       return flow({ pub: { component_type: "FlowNode", id: "pub", name: "pub", subflow: sub, metadata: { cinatra: { publishes: true } } } }, ["pub"]);
     },
   };
-  for (const [shape, build] of Object.entries(shapes)) {
-    it(`reaches a model step through ${shape}, as the compiler does`, () => {
-      expect(codes(build(bridge("deep")), "OAS-RUNTIME-015", RULE).map((x) => x.message)).toEqual([
-        expect.stringContaining('Model-bridge step "deep" is part of the publishing node "pub"'),
+  const read: Record<string, (inner: Node) => Node> = {
+    "the node itself": (inner) => {
+      const own = ((inner.metadata as Node | undefined)?.cinatra ?? {}) as Node;
+      return flow({ pub: { ...inner, id: "pub", metadata: { cinatra: { ...own, publishes: true } } } }, ["pub"]);
+    },
+    "an inline subflow": (inner) => flow({ pub: subflowNode("pub", { s: inner }, { publishes: true }) }, ["pub"]),
+    "a subflow by $component_ref to a root component": (inner) => {
+      const doc = flow({ pub: { component_type: "FlowNode", id: "pub", name: "pub", subflow: { $component_ref: "sub" }, metadata: { cinatra: { publishes: true } } } }, ["pub"]);
+      (doc.$referenced_components as Record<string, Node>).sub = flow({ s: inner }, ["s"]);
+      return doc;
+    },
+    "a subflow listing a root component in its nodes": (inner) => {
+      const sub = flow({}, []);
+      (sub.nodes as Node[]).push({ $component_ref: "s" });
+      const doc = flow({ pub: { component_type: "FlowNode", id: "pub", name: "pub", subflow: sub, metadata: { cinatra: { publishes: true } } } }, ["pub"]);
+      (doc.$referenced_components as Record<string, Node>).s = inner;
+      return doc;
+    },
+    "a ParallelFlowNode's inline subflows": (inner) =>
+      flow({ pub: { component_type: "ParallelFlowNode", id: "pub", name: "pub", subflows: [flow({ s: inner }, ["s"])], metadata: { cinatra: { publishes: true } } } }, ["pub"]),
+  };
+  const step = (cinatra?: Record<string, unknown>) => bridge("deep", cinatra);
+  const servedById = (doc: Node, id: string) =>
+    hasApiNodeStep(doc, id) && findPublishingAncestor(doc, id).kind === "resolved";
+
+  for (const [shape, build] of Object.entries(read)) {
+    it(`reads a model step in ${shape} as the run does`, () => {
+      const id = shape === "the node itself" ? "pub" : "deep";
+      expect(servedById(build(step()), id)).toBe(true);
+      expect(codes(build(step()), "OAS-RUNTIME-015", RULE).map((x) => x.message)).toEqual([
+        expect.stringContaining(`Model-bridge step "${id}" is part of the publishing node "pub"`),
       ]);
+      const declared = build(step({ tools: ["x_post"] }));
+      expect(findStepToolDeclaration(declared, id)).toEqual({ kind: "declared", tools: ["x_post"] });
+      expect(scanOasForRuntimeInvariantFindings(declared).filter((f) => f.code === "OAS-RUNTIME-015")).toEqual([]);
+    });
+  }
+
+  for (const [shape, build] of Object.entries(unread)) {
+    it(`reports a model step through ${shape} as one that cannot be checked`, () => {
+      // red-first-expect: AssertionError: expected [] to deeply equal [ StringContaining{…} ]
+      expect(servedById(build(step({ tools: ["x_post"] })), "deep")).toBe(false);
+      for (const doc of [build(step()), build(step({ tools: ["x_post"] }))]) {
+        expect(codes(doc, "OAS-RUNTIME-015", UNCHECKED).map((x) => x.message)).toEqual([
+          expect.stringContaining('Model-bridge step "deep" can run inside the publishing node "pub"'),
+        ]);
+        expect(codes(doc, "OAS-RUNTIME-015", RULE)).toEqual([]);
+      }
+      const offeredNone = build(bridge("deep", undefined, { toolbox_ids: [] }));
+      expect(codes(offeredNone, "OAS-RUNTIME-015", UNCHECKED)).toEqual([]);
       const outward = { ...bridge("deep"), url: "https://example.test/hook" };
       expect(checkPublishingCallRoutes(build(outward), ["pub"], {})).toEqual({
         ok: false,
