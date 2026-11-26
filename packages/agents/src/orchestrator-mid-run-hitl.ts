@@ -23,7 +23,8 @@ import { isRetiredHitlStep } from "./retired-hitl-steps";
  * retired strict-ID-set semantics).
  */
 export function hasMidRunHitlBinding(xRenderer: string): boolean {
-  return fieldRendererRegistry
+  // cinatra#3471: no binding makes a retired step mid-run.
+  return !isRetiredHitlStep(xRenderer) && fieldRendererRegistry
     .list()
     .some((e) => e.midRunHitl === true && e.id === xRenderer);
 }

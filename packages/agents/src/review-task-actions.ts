@@ -759,6 +759,9 @@ export async function approveReviewTaskInternal(
       runId,
       inputParamsMerge,
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+      // cinatra#3471: bound to the park the retired check above saw (the run
+      // was read before it), so a run re-parked since matches no row.
+      { expectedPauseGeneration: run.pauseGeneration },
     );
 
     // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN

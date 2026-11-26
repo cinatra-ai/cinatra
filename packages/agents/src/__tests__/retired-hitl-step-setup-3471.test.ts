@@ -26,14 +26,23 @@ const kernelAnswers = vi.hoisted(() => ({
   organization: { archivedAt: null as string | null, archiveEpoch: 0 },
   leaseHeld: false,
 }));
+// The run's live pause generation; `null` = not modelled (the CAS always wins).
+const livePause = vi.hoisted(() => ({ generation: null as number | null }));
 const dbMock = vi.hoisted(() => {
   const state = { updateCalls: 0 };
   const update = () => {
     state.updateCalls += 1;
     return {
       set: (set: Record<string, unknown>) => ({
-        where: () => ({
+        where: (cond: unknown) => ({
           returning: async () => {
+            // cinatra#3471: a CAS bound to a pause generation the run has left matches 0 rows.
+            if (livePause.generation !== null) {
+              const { PgDialect } = await import("drizzle-orm/pg-core");
+              const q = new PgDialect().sqlToQuery(cond as never);
+              const m = /"pause_generation" = \$(\d+)/.exec(q.sql);
+              if (m && q.params[Number(m[1]) - 1] !== livePause.generation) return [];
+            }
             dbWrites.push({ set });
             return [{ id: "row" }];
           },
@@ -112,6 +121,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   dbWrites.length = 0;
   dbMock.state.updateCalls = 0;
+  livePause.generation = null;
   durableRead.mockReset().mockResolvedValue(null);
   storeMock.readAgentRunById.mockResolvedValue({
     id: RUN_ID, templateId: "tpl-s1", orgId: "org-default", runBy: "u1",
@@ -171,6 +181,49 @@ describe("the MCP setup resume (agent_run_resume) and a retired step", () => {
   it("answers an ordinary setup step as before", async () => {
     parkAt("@cinatra-ai/agent-builder:schema-field-fallback");
     expect(await resume()).toMatchObject({ runId: RUN_ID, status: "resuming" });
+    expect(dbWrites).toHaveLength(1);
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+  });
+});
+
+// cinatra#3471 (convergence finding 2): every setup field reuses `setup-<runId>`.
+// Request A reads the run (generation 4) and checks the parked gate (field 1,
+// ordinary); before A writes, another request answers field 1 and the run
+// re-parks (generation 5) on field 2 under a retired id. A's write is bound to
+// the park it checked, so it is refused: nothing merged, nothing queued.
+describe("a stale setup request and a run re-parked on a retired step", () => {
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("refuses the stale write and mutates nothing", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: RUN_ID, templateId: "tpl-s1", orgId: "org-default", runBy: "u1",
+      status: "pending_approval", inputParams: {}, a2aTaskId: null, a2aContextId: null, pauseGeneration: 4,
+    });
+    livePause.generation = 4;
+    durableRead.mockImplementationOnce(async () => {
+      // A's check sees field 1 (ordinary); the run then re-parks on retired field 2.
+      livePause.generation = 5;
+      durableRead.mockResolvedValue({
+        runId: RUN_ID, reviewTaskId: SETUP_ID, xRenderer: "ai-review-panel", fieldName: "second",
+        inputSchema: { type: "string" }, values: {}, materializedAt: "2026-11-26T00:00:01.000Z",
+      });
+      return {
+        runId: RUN_ID, reviewTaskId: SETUP_ID, xRenderer: "@cinatra-ai/agent-builder:schema-field-fallback",
+        fieldName: "name", inputSchema: { type: "string" }, values: {}, materializedAt: "2026-11-26T00:00:00.000Z",
+      };
+    });
+    await expect(approveReviewTaskInternal(SETUP_ID, "actor-1", { name: "Alice" }, "name")).rejects.toMatchObject({ code: "stale_from_status" });
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("answers a request whose park is still current", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: RUN_ID, templateId: "tpl-s1", orgId: "org-default", runBy: "u1",
+      status: "pending_approval", inputParams: {}, a2aTaskId: null, a2aContextId: null, pauseGeneration: 4,
+    });
+    livePause.generation = 4;
+    parkAt("@cinatra-ai/agent-builder:schema-field-fallback");
+    await approveReviewTaskInternal(SETUP_ID, "actor-1", { name: "Alice" }, "name");
     expect(dbWrites).toHaveLength(1);
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(1);
   });

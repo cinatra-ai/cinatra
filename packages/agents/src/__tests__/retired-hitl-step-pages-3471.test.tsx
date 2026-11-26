@@ -82,7 +82,7 @@ vi.mock("../use-ag-ui-run-stream", () => ({
 }));
 
 import { fieldRendererRegistry } from "../field-renderer-registry";
-import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
+import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
 import { __resetFieldRendererComponentMapForTests } from "../field-renderer-components";
 import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
 import { AgentHitlScreenCard } from "../agent-hitl-screen-card";
@@ -157,6 +157,71 @@ describe("the HITL screen card and a retired step", () => {
           runId: RUN_ID,
           screenRef: "hitl-screen-ref-retired",
           gate: { reviewTaskId: g.reviewTaskId, xRenderer: id, inputSchema: SCHEMA, currentValues: {}, fieldName: g.fieldName },
+        };
+        screenStateMock.mockImplementation(async () => asking);
+        globalThis.fetch = (async () =>
+          new Response(JSON.stringify(asking), { status: 200, headers: { "Content-Type": "application/json" } })) as unknown as typeof fetch;
+        const { container } = render(
+          <LifecycleCardSurfaceProvider host={host}>
+            <AgentHitlScreenCard runId={RUN_ID} wireRef={TASK_ID} />
+          </LifecycleCardSurfaceProvider>,
+        );
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+        await waitFor(() => expect(container.textContent ?? "", id).toMatch(/no renderer configured/));
+        expect(continues(container), id).toHaveLength(0);
+        cleanup();
+      }
+    });
+  }
+});
+
+// cinatra#3471 (convergence finding 1): an installed package may still bind a
+// tombstoned id at runtime (`registerFieldRendererBindings`, the call the
+// runtime-bindings hook makes), here to the control-less `cta` kind. The
+// retired id wins over that binding: no surface draws a Continue.
+describe("a runtime binding for a tombstoned id", () => {
+  beforeEach(() => {
+    registerFieldRendererBindings(TOMBSTONED.map((id) => ({ id, kind: "cta", priority: 1000 })));
+  });
+
+  // red-first-expect: @cinatra/email-reviewer-agent:output: expected '1ReviewNoteContinue' to match /no renderer configured/
+  it("gives the stepper no Continue on a setup gate", async () => {
+    globalThis.fetch = (async () => ({ ok: false, status: 503, json: async () => ({}) })) as unknown as typeof fetch;
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    for (const id of TOMBSTONED) {
+      INTERRUPT = { schema: SCHEMA, xRenderer: id, values: {}, reviewTaskId: `setup-${RUN_ID}`, fieldName: "note" };
+      render(
+        <OrchestratorStepperPanel
+          runId={RUN_ID}
+          initialStatus="pending_approval"
+          initialError={null}
+          agUiEnabled={false}
+          agentPackageName="@cinatra-test/retired-agent"
+          inputParams={{}}
+          stepperSteps={[{ index: 1, stepNumber: 0, label: "Review", xRenderer: id }]}
+          agentId="cinatra-test/retired-agent"
+          lgThreadId={null}
+          templateId="tmpl-retired"
+          templateName="Retired Agent"
+        />,
+      );
+      await waitFor(() => expect(document.body.textContent ?? "", id).toMatch(/no renderer configured/));
+      expect(continues(), id).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+    // red-first-expect: @cinatra/email-reviewer-agent:output: expected 'NoteContinue' to match /no renderer configured/
+    it(`gives the HITL card no Continue on a setup gate (${host})`, async () => {
+      for (const id of TOMBSTONED) {
+        const asking = {
+          state: "asking" as const,
+          runId: RUN_ID,
+          screenRef: "hitl-screen-ref-retired",
+          gate: { reviewTaskId: `setup-${RUN_ID}`, xRenderer: id, inputSchema: SCHEMA, currentValues: {}, fieldName: "note" },
         };
         screenStateMock.mockImplementation(async () => asking);
         globalThis.fetch = (async () =>
