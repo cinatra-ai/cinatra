@@ -2146,6 +2146,15 @@ async function handleBridge(req: Request, holdRelease: (release: () => Promise<v
                     (await isInAdminCmsContentEditorPackage(
                       template?.packageName,
                     )),
+                  // cinatra#4150: a step that declares tools gets the tool list
+                  // the server serves this run, so the offer filter keeps the
+                  // server with the declared names it serves. A failed read is
+                  // no tool (fail closed); an undeclared step keeps null.
+                  stepToolPolicy?.kind === "declared" && stepToolPolicy.tools.length > 0
+                    ? await import("@/lib/mcp-server")
+                        .then((m) => m.listAgentRunServedToolNames(runForPorts.id))
+                        .catch(() => [])
+                    : null,
                 );
               const oboTool = await buildLlmMcpServerToolForAgentRun(
                 mcpEffectiveProvider as "openai" | "anthropic",
