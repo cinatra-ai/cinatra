@@ -399,6 +399,22 @@ export type PrimitiveDispatchTarget = {
   readonly version: string;
   /** The primitive name the dispatch resolves against (normalized). */
   readonly name: string;
+  /**
+   * cinatra#3745: the loaded identity of the very registration the dispatch
+   * invokes (its install id and digest, as the host's loader minted it), taken
+   * from the same registry entry as the handler. Carried by reference and never
+   * read here (the host's outward run action reads it, and accepts only the
+   * minted, current object). Absent for a registration the loader stamped no
+   * identity for.
+   */
+  readonly loadedIdentity?: object;
+  /**
+   * cinatra#3745: the registration object (the registry or retained entry)
+   * whose declaration was planned and whose handler the host's pinned
+   * dispatch invokes, carried by reference so the dispatch never looks the
+   * registration up again by name and version. Never read here.
+   */
+  readonly registration?: object;
 };
 
 /** Why a registration could not be given a trustworthy identity. */
@@ -605,7 +621,9 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
     const pkg = readGuarded(target.value, "packageName");
     const ver = readGuarded(target.value, "version");
     const nm = readGuarded(target.value, "name");
-    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok) {
+    const loaded = readGuarded(target.value, "loadedIdentity");
+    const reg = readGuarded(target.value, "registration");
+    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok || !loaded.ok || !reg.ok) {
       return { kind: "failed", failure: "provenance_unreadable" };
     }
     if (
@@ -613,7 +631,9 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       !DISPATCH_KINDS.has(kind.value) ||
       !nonEmptyString(pkg.value) ||
       !nonEmptyString(ver.value) ||
-      !nonEmptyString(nm.value)
+      !nonEmptyString(nm.value) ||
+      (loaded.value !== undefined && loaded.value !== null && typeof loaded.value !== "object") ||
+      (reg.value !== undefined && reg.value !== null && typeof reg.value !== "object")
     ) {
       return { kind: "failed", failure: "provenance_malformed" };
     }
@@ -622,6 +642,8 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       packageName: pkg.value,
       version: ver.value,
       name: nm.value.toLowerCase(),
+      ...(typeof loaded.value === "object" && loaded.value !== null ? { loadedIdentity: loaded.value } : {}),
+      ...(typeof reg.value === "object" && reg.value !== null ? { registration: reg.value } : {}),
     };
   }
 

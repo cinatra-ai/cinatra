@@ -236,8 +236,12 @@ describe("call time: the SAME shared evaluator, over the SAME planned identity",
     // AND it dispatched at the identity that was ADMITTED — the default
     // registration of this package — never across a version.
     expect(pinnedDispatches).toEqual([
-      { kind: "extension-default", packageName: PKG, version: PKG_VERSION, name: "acme_thing_list" },
+      expect.objectContaining({ kind: "extension-default", packageName: PKG, version: PKG_VERSION, name: "acme_thing_list" }),
     ]);
+    // cinatra#3745: and it is pinned to the very registration whose declaration was admitted (the registry entry),
+    // so the dispatch never looks the registration up again by name and version.
+    const admitted = listExtensionMcpTools().find((t) => t.name === "acme_thing_list");
+    expect((pinnedDispatches[0] as { registration?: unknown }).registration).toBe(admitted);
   });
 
   it("refuses the SAME primitive at a DIFFERENT version — an admission does not cross versions", async () => {
