@@ -405,6 +405,12 @@ export type ExtensionRecordIdentityInput = {
   version?: string | null;
   /** Whether the record is the DEFAULT version of its package (default: true). */
   isDefault?: boolean;
+  /**
+   * cinatra#3745: the loaded identity the host's loader stamped for THIS load
+   * attempt (host loader only; omit for legacy/dev ctxs). Every MCP tool this
+   * ctx registers carries it beside its handler.
+   */
+  loadedIdentity?: LoadedExtensionIdentity | null;
 };
 
 function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): {
@@ -759,7 +765,11 @@ function makeMcp(
     // legacy/dev ctx carries none; that registration is then unversioned, and
     // version-bound admission refuses it rather than guessing.
     registerTool: (tool) =>
-      registerExtensionMcpTool(packageName, tool, { resolvedVersion: identity?.version ?? null }),
+      registerExtensionMcpTool(packageName, tool, {
+        resolvedVersion: identity?.version ?? null,
+        // cinatra#3745: the loaded identity of this load attempt, beside the handler.
+        loadedIdentity: identity?.loadedIdentity ?? null,
+      }),
     callPrimitive: makeCallPrimitive(packageName, identity),
     listExternalServers: async () => {
       const { listEnabledGlobalExternalMcpServers } = await import("@/lib/external-mcp-registry");
@@ -1571,7 +1581,10 @@ export function createNonDefaultVersionHostContext(
   const mcp: ExtensionHostContext["mcp"] = granted.has("mcp")
     ? {
         ...base.mcp,
-        registerTool: (tool) => sink.retainMcpTool({ ...tool, packageName }),
+        // cinatra#3745: the host's fields last, so the retained handler carries
+        // this load attempt's loaded identity and never one the tool named.
+        registerTool: (tool) =>
+          sink.retainMcpTool({ ...tool, packageName, loadedIdentity: identity?.loadedIdentity ?? null }),
         // cinatra#1392 S8: a retained (edge-bound-served) handler of this
         // non-default version may itself call host primitives at DISPATCH time.
         // The probe base's callPrimitive throws unconditionally; with a sink
