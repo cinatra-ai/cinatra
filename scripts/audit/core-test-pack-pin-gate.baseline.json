@@ -1,0 +1,1555 @@
+{
+  "note": "Shrink-only floor of core tests and fixtures that pin one pinned pack (cinatra#4853). Each entry moves to the pack's own CI or becomes a synthetic proof; none is ever added. Regenerate (shrink only) with `node scripts/audit/core-test-pack-pin-gate.mjs --write-baseline`.",
+  "entries": [
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/hand_authored_context_subflow.json",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/pinned_blog_draft_writer_context_subflow.json",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/publish_gate_parity.json",
+      "pack": "sha:11753d6c"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/publish_gate_parity.json",
+      "pack": "sha:ed523da6"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/brand-voice-artifact"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "flow",
+      "file": "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_bridge_output_schema.py",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_bridge_output_schema.py",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_gate_mount_both_paths.py",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_gate_mount_both_paths.py",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_gate_mount_both_paths.py",
+      "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "docker/wayflow/tests/test_repo_agents_load.py",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-creation-review.test.ts",
+      "pack": "@cinatra-ai/anthropic-connector"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-creation-review.test.ts",
+      "pack": "@cinatra-ai/code-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-creation-review.test.ts",
+      "pack": "@cinatra-ai/planner-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-creation-review.test.ts",
+      "pack": "@cinatra-ai/security-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-lint-policy-validates.test.ts",
+      "pack": "@cinatra-ai/lint-policy-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/agent-source-review-parity.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/apollo-prospecting-agent-validates.test.ts",
+      "pack": "@cinatra-ai/apollo-prospecting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/artifact-binding-fanout.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/auditor-subflow-parity.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-draft-writer-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-idea-generator-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-image-generator-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-image-prompt-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-image-prompt-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-linkedin-publish-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/blog-wordpress-publish-agent-validates.test.ts",
+      "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/company-discovery-agent-validates.test.ts",
+      "pack": "@cinatra-ai/company-discovery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/contact-discovery-agent-validates.test.ts",
+      "pack": "@cinatra-ai/contact-discovery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/blog-image-prompt-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/context-restoration-oas.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-delivery-agent-validates.test.ts",
+      "pack": "@cinatra-ai/email-delivery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-drafting-auditor-wiring.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-outreach-agent-followup-cleanup.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-outreach-explicit-context-selection-agent-runtime-invariant.test.ts",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-outreach-explicit-context-selection-agent-runtime-invariant.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-recipient-selection-list-only.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/email-recipient-selection-list-only.test.ts",
+      "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/helper-agents-packagename.test.ts",
+      "pack": "@cinatra-ai/code-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/helper-agents-packagename.test.ts",
+      "pack": "@cinatra-ai/planner-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/helper-agents-packagename.test.ts",
+      "pack": "@cinatra-ai/security-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/install-from-package-produces-advisory.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-config-loader-path.integration.test.ts",
+      "pack": "@cinatra-ai/wordpress-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/email-follow-up-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-adoption-gate.test.ts",
+      "pack": "@cinatra-ai/media-transcript-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-bridge-output-declarations.test.ts",
+      "pack": "@cinatra-ai/list-curator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-bridge-output-declarations.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-bridge-output-declarations.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/apollo-prospecting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/company-discovery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/contact-discovery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-delivery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-follow-up-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/email-test-delivery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/lint-policy-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/list-curator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/media-feed-lister-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/media-transcript-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/podcast-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-d-w6-fleet-declarations.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/lifecycle-repair-drupal-producer.integration.test.ts",
+      "pack": "@cinatra-ai/drupal-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/list-curator-agent-validates.test.ts",
+      "pack": "@cinatra-ai/list-curator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/media-feed-lister-agent-validates.test.ts",
+      "pack": "@cinatra-ai/media-feed-lister-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/media-transcript-agent-validates.test.ts",
+      "pack": "@cinatra-ai/media-transcript-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/author-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/drupal-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/planner-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-runtime-invariants.test.ts",
+      "pack": "@cinatra-ai/wordpress-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-skill-free.test.ts",
+      "pack": "@cinatra-ai/author-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-skill-free.test.ts",
+      "pack": "@cinatra-ai/code-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-skill-free.test.ts",
+      "pack": "@cinatra-ai/lint-policy-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-skill-free.test.ts",
+      "pack": "@cinatra-ai/planner-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/oas-skill-free.test.ts",
+      "pack": "@cinatra-ai/security-reviewer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/repair-findings-input-road-4424.test.ts",
+      "pack": "@cinatra-ai/drupal-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/repair-findings-input-road-4424.test.ts",
+      "pack": "@cinatra-ai/wordpress-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/web-research-agent-validates.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/agents/src/__tests__/web-scrape-agent-validates.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/brand-voice-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-declarations.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-agent-produces-plumbing.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-pipeline-idea-pick-declared-3380.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/brand-voice-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/context-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/email-outreach-agent-context-slot.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/email-outreach-agent-explicit-context-selection-agent.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-idea-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-image-generator-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-image-prompt-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-linkedin-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-pipeline-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/email-delivery-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/email-follow-up-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/naming-conformance.test.ts",
+      "pack": "@cinatra-ai/email-recipient-selection-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/podcast-artifacts-episode-registration.test.ts",
+      "pack": "@cinatra-ai/podcast-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/podcast-artifacts-episode-registration.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/podcast-artifacts-episode-registration.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/audio-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/cms-snapshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/document-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/screenshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/slide-deck-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/video-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/extensions/src/__tests__/w3-media-display-registration.test.ts",
+      "pack": "@cinatra-ai/zip-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/dashboard-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/drupal-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/email-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/marketing-icp-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "pack": "@cinatra-ai/marketing-strategy-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/blog-image-artifact-manifest.test.ts",
+      "pack": "@cinatra-ai/blog-image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-content-manifest.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-content-manifest.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-content-manifest.test.ts",
+      "pack": "@cinatra-ai/screenshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-content-manifest.test.ts",
+      "pack": "@cinatra-ai/slide-deck-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-email-legal-manifest.test.ts",
+      "pack": "@cinatra-ai/contract-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-email-legal-manifest.test.ts",
+      "pack": "@cinatra-ai/email-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/brand-voice-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/competitive-analysis-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/marketing-icp-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/marketing-strategy-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/product-portfolio-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/seed-pack-gtm-manifest.test.ts",
+      "pack": "@cinatra-ai/sales-playbook-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/type-disposition-inventory-parity.test.ts",
+      "pack": "@cinatra-ai/drupal-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/type-disposition-inventory-parity.test.ts",
+      "pack": "@cinatra-ai/email-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/objects/src/__tests__/type-disposition-inventory-parity.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/__tests__/widget-chat-skill-id.test.ts",
+      "pack": "@cinatra-ai/drupal-widget-chat-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/blog-content-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/blog-idea-authoring-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/blog-idea-matcher-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/blog-post-matcher-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/chat-assistant-core-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/hitl-prompt-drive-skill"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "packages/skills/src/extension-skill-resolver.test.ts",
+      "pack": "@cinatra-ai/web-research-skill"
+    },
+    {
+      "rule": "read",
+      "file": "src/__tests__/mcp-server-tool-count.test.ts",
+      "pack": "@cinatra-ai/blog-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/__tests__/mcp-server-tool-count.test.ts",
+      "pack": "@cinatra-ai/media-feeds-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/__tests__/mcp-server-tool-count.test.ts",
+      "pack": "@cinatra-ai/social-media-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/__tests__/passthrough-wordpress-review-gate-gets-its-targets.test.ts",
+      "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/binary-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/dashboard-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/drupal-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/markdown-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/audio-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/cms-snapshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/document-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/drupal-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/screenshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/slide-deck-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/video-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/website-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/wordpress-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-display-reachability.test.ts",
+      "pack": "@cinatra-ai/zip-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/screenshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/screenshot-matcher-skill"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/slide-deck-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w3-kind-typed-row-display.integration.test.ts",
+      "pack": "@cinatra-ai/slide-deck-matcher-skill"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/binary-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/dashboard-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/drupal-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/linkedin-artifacts"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/markdown-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-dispatch-matrix.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-edit-capability-repo-wide.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-shared-display-revision-legs.test.ts",
+      "pack": "@cinatra-ai/markdown-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/artifacts/[id]/__tests__/w4-shared-display-revision-legs.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/a2a-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/a2a-server-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/anthropic-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/anthropic-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/apollo-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/apollo-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/github-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/github-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/gmail-gcal-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/gmail-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/gmail-gcal-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/google-appointment-schedules-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/gmail-gcal-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/google-calendar-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/google-oauth-action-extension-gate.test.ts",
+      "pack": "@cinatra-ai/google-oauth-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/linkedin-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/linkedin-oauth-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/nango-actions-extension-gate.test.ts",
+      "pack": "@cinatra-ai/nango-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/openai-skills-action-extension-gate.test.ts",
+      "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/app/campaigns/__tests__/wordpress-delete-action-extension-gate.test.ts",
+      "pack": "@cinatra-ai/wordpress-mcp-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/agent-run-connector-instance-pin-4220.test.ts",
+      "pack": "@cinatra-ai/blog-wordpress-publish-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/appointment-schedule-primitive-ownership.test.ts",
+      "pack": "@cinatra-ai/google-appointment-schedules-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/appointment-schedule-tool-road-egress.test.ts",
+      "pack": "@cinatra-ai/google-appointment-schedules-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/dev-auto-setup-twenty-hook-owner-4112.test.ts",
+      "pack": "@cinatra-ai/twenty-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/extension-install-first-party-e2e.test.ts",
+      "pack": "@cinatra-ai/nango-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/blog-pipeline-install-record-heal.integration.test.ts",
+      "pack": "@cinatra-ai/blog-draft-writer-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/blog-pipeline-install-record-heal.integration.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/blog-pipeline-install-record-heal.integration.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/blog-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/crm-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/email-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/github-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/media-feeds-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/nango-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/resend-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/integration/demote-optional-extension-anchors.test.ts",
+      "pack": "@cinatra-ai/twenty-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/register-blog-providers-capability-bridge.test.ts",
+      "pack": "@cinatra-ai/blog-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/saved-drafts-tool-resolves-3089.test.ts",
+      "pack": "@cinatra-ai/email-drafting-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/__tests__/saved-drafts-tool-resolves-3089.test.ts",
+      "pack": "@cinatra-ai/email-outreach-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/lifecycle-c-w8-image-tool.integration.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/lifecycle-d-w5-dataset-decision.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/lifecycle-d-w5-dataset-decision.test.ts",
+      "pack": "@cinatra-ai/web-research-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/lifecycle-d-w5-dataset-decision.test.ts",
+      "pack": "@cinatra-ai/web-scrape-agent"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/matcher-candidate-source.integration.test.ts",
+      "pack": "@cinatra-ai/marketing-strategy-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/matcher-candidate-source.integration.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-content-matcher.test.ts",
+      "pack": "@cinatra-ai/blog-idea-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-content-matcher.test.ts",
+      "pack": "@cinatra-ai/blog-post-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-content-matcher.test.ts",
+      "pack": "@cinatra-ai/screenshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-content-matcher.test.ts",
+      "pack": "@cinatra-ai/slide-deck-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-email-legal-matcher.test.ts",
+      "pack": "@cinatra-ai/contract-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/brand-voice-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/competitive-analysis-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/marketing-icp-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/marketing-strategy-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/product-portfolio-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/seed-pack-gtm-matcher.test.ts",
+      "pack": "@cinatra-ai/sales-playbook-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/audio-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/cms-snapshot-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/document-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/image-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/json-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/markdown-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/pdf-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/text-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/video-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/artifacts/__tests__/w3-byte-road-contract.test.ts",
+      "pack": "@cinatra-ai/zip-artifact"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/assistant-runtime/__tests__/hosted-mcp-wire-gate.test.ts",
+      "pack": "@cinatra-ai/anthropic-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/assistant-runtime/__tests__/hosted-mcp-wire-gate.test.ts",
+      "pack": "@cinatra-ai/gemini-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/assistant-runtime/__tests__/hosted-mcp-wire-gate.test.ts",
+      "pack": "@cinatra-ai/openai-connector"
+    },
+    {
+      "rule": "read",
+      "file": "src/lib/dev-instance-provisioning/__tests__/dev-instance-provisioning.integration.test.ts",
+      "pack": "@cinatra-ai/nango-connector"
+    }
+  ]
+}

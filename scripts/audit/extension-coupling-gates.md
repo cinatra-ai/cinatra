@@ -592,6 +592,42 @@ finding fails whatever the floor holds. The gate's own writer
 entries that no longer apply and never adds one; it emptied the floor at the
 flip. A test of record pins the checked-in floor as empty.
 
+## Core tests and fixtures that pin one pack (cinatra#4853)
+
+`core-test-pack-pin-gate.mjs` holds the test side of the border. **The rule:**
+a core test or fixture (under `src/`, `packages/` or `docker/`, in a test or
+fixture directory or a `*.test.*` / `test_*.py` file) does not pin one pinned
+pack: it reads, imports or resolves no path inside the materialized
+`extensions/` tree that names a package the two extension locks pin, and no
+fixture that parses as an agent flow (an object with `component_type: "Flow"`)
+carries a pinned-pack marker (a locked package name, or 7 or more leading hex
+digits of a lock's `resolvedSha`). The gate decides this from structure only:
+the literal segments of a path expression (`path.join`, `resolve`, `+`,
+template text, Python `Path /`), import specifiers, the shape of a JSON
+fixture, and the two locks; it names no pack and no file. A path reaches the
+tree when the segments before `extensions` are `.`/`..` or a root held in a
+variable; a path rooted in a temporary directory (`mkdtempSync`,
+`os.tmpdir()`, `tmp_path`, a variable named `tmp…`) or an absolute stand-in
+literal (`/repo/extensions/...`) is a synthetic tree and does not count.
+**Iteration is not a pin:** a fleet test that walks the lock or the tree builds
+the name from a variable, so its path stops at the tree with a hole and no pack
+is found; a file whose path reaches the tree that way is found only for a pack
+whose name it also spells as a whole literal (`"demo-agent"`,
+`"@scope/demo-agent"`). The pins that stood on main when the gate landed are
+held by the shrink-only floor `core-test-pack-pin-gate.baseline.json`, one
+entry per rule, file and pack; a new pin fails, an entry whose pin is gone is
+stale and fails until `--write-baseline` shrinks the floor, and the floor is
+compared with the base branch through `lib/floor-base-guard.mjs`
+(`CORE_TEST_PACK_PIN_BASE`, else `GITHUB_BASE_REF`). It runs as the test of
+record in `__tests__/core-test-pack-pin-gate.test.mjs`, inside the root suite of
+the job "Perpetual core invariants". **What it cannot see:** a flow copied by
+hand that keeps no package name and no pin sha (catching that needs the
+positive rule of cinatra#4853: every flow-shaped fixture carries a synthetic
+marker); a flow embedded as an object literal in a test file instead of a JSON
+fixture; YAML fixtures; a pack name computed from parts (`"demo" + "-agent"`)
+or read from another file; a pack's source reached through a module that is not
+a test (a helper under `src/` that the test calls).
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -856,6 +892,7 @@ EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-
 CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
 ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
 ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
+CORE_TEST_PACK_PIN_BASE=origin/main node scripts/audit/core-test-pack-pin-gate.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
