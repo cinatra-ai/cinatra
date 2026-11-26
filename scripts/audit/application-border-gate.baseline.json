@@ -167,22 +167,6 @@
       "count": 1,
       "owner": "@cinatra-ai/social-media-connector"
     },
-    "packages/trigger-email-send/src/index.ts :: name :: email": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/handlers.ts :: name :: email": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/metadata.ts :: name :: email": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/schemas.ts :: name :: email": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
     "src/app/campaigns/actions.ts :: name :: campaigns": {
       "count": 1,
       "owner": "@cinatra-ai/email-outreach-agent"
@@ -460,22 +444,6 @@
     "packages/sdk-extensions/src/social-media-connector-contract.ts": {
       "count": 0,
       "owner": "@cinatra-ai/social-media-connector"
-    },
-    "packages/trigger-email-send/src/index.ts": {
-      "count": 0,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/handlers.ts": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/metadata.ts": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-delivery-agent"
-    },
-    "packages/trigger-email-send/src/mcp/schemas.ts": {
-      "count": 5,
-      "owner": "@cinatra-ai/email-delivery-agent"
     },
     "src/app/campaigns/actions.ts": {
       "count": 29,

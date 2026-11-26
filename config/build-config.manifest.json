@@ -465,7 +465,6 @@
     { "alias": "@cinatra-ai/linkedin-oauth-connector/actions", "target": "./extensions/cinatra-ai/linkedin-oauth-connector/src/actions.ts" },
     { "alias": "@cinatra-ai/apollo-connector/widgets", "target": "./extensions/cinatra-ai/apollo-connector/src/widgets/index.ts" },
     { "alias": "@cinatra-ai/apollo-connector/widgets/manifest", "target": "./extensions/cinatra-ai/apollo-connector/src/widgets/manifest.ts" },
-    { "alias": "@cinatra-ai/trigger-email-send", "target": "./packages/trigger-email-send/src/index.ts" },
     { "alias": "@cinatra-ai/trigger", "target": "./packages/trigger/src/index.ts" },
     { "alias": "@cinatra-ai/trigger/module", "target": "./packages/trigger/src/integration/module.ts" },
     { "alias": "@cinatra-ai/permissions/mcp-handlers", "target": "./packages/permissions/src/mcp/handlers.ts" },

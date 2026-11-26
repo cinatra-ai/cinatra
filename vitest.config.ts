@@ -75,11 +75,11 @@ export default defineConfig({
         find: /^@cinatra-ai\/skills$/,
         replacement: path.join(__dirname, "tests/__stubs__/cinatra-skills.ts"),
       },
-      // @cinatra-ai/mcp-client and @cinatra-ai/trigger-email-send are light
-      // barrel leaves (no heavy transitive deps) imported by several
-      // root-vitest-covered modules (e.g. src/app/api/chat, src/app/api/agents,
-      // src/lib/trigger-email-send-use-cases). Map them straight to source so
-      // the barrels resolve without the tsconfig/vitest path gap.
+      // @cinatra-ai/mcp-client is a light barrel leaf (no heavy transitive
+      // deps) imported by several root-vitest-covered modules (e.g.
+      // src/app/api/chat, src/app/api/agents,
+      // src/lib/trigger-email-send-use-cases). Map it straight to source so
+      // the barrel resolves without the tsconfig/vitest path gap.
       {
         find: "@cinatra-ai/mcp-client",
         replacement: path.join(
@@ -149,13 +149,6 @@ export default defineConfig({
       {
         find: "@cinatra-ai/objects/classifier-signals",
         replacement: path.join(__dirname, "packages/objects/src/classifier-signals.ts"),
-      },
-      {
-        find: "@cinatra-ai/trigger-email-send",
-        replacement: path.join(
-          __dirname,
-          "packages/trigger-email-send/src/index.ts",
-        ),
       },
       // src/lib/__tests__/background-jobs-actor-context.test.ts imports
       // getActorContext from @cinatra-ai/llm. The actor-context

@@ -56,7 +56,7 @@ surface. Grouped overview:
 
 - **Agent core** — `agents` (template/version/run lifecycle, workflow
   compilation, triggers, orchestration), `workflows` (a versioned, scheduled
-  DAG engine over Postgres), `trigger` and `trigger-email-send` (run triggers),
+  DAG engine over Postgres), `trigger` (run triggers),
   `a2a` and `agent-ui-protocol` (Agent-to-Agent calling and UI event streaming).
 - **LLM** — `llm` (the unified orchestration layer: provider adapters, MCP tool
   injection, skill delivery, usage telemetry).
