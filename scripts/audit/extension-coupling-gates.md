@@ -594,7 +594,7 @@ flip. A test of record pins the checked-in floor as empty.
 
 ## Core tests and fixtures that pin one pack (cinatra#4853)
 
-`core-test-pack-pin-gate.mjs` holds the test side of the border. **The rule:**
+`core-pack-pin-gate.mjs` holds the test side of the border. **The rule:**
 a core TypeScript/JavaScript test or JSON fixture (under `src/`, `packages/`
 or `docker/`, in a test or fixture directory or a `*.test.*` / `*.spec.*` /
 `*.fixture.*` file) does not pin one pinned pack: it reads, imports or
@@ -639,12 +639,12 @@ pack whose name it also spells as a whole literal (`"demo-agent"`,
 name in a variable does not trigger this widening, because it is as often a
 URL route (`/extensions/upload`) or a core directory. The pins that stood on
 main when the gate landed are held by the shrink-only floor
-`core-test-pack-pin-gate.baseline.json`, one entry per rule, file and pack; a
+`core-pack-pin-gate.baseline.json`, one entry per rule, file and pack; a
 new pin fails, an entry whose pin is gone is stale and fails until
 `--write-baseline` shrinks the floor, and the floor is compared with the base
-branch through `lib/floor-base-guard.mjs` (`CORE_TEST_PACK_PIN_BASE`, else
+branch through `lib/floor-base-guard.mjs` (`CORE_PACK_PIN_BASE`, else
 `GITHUB_BASE_REF`). It runs as the test of record in
-`__tests__/core-test-pack-pin-gate.test.mjs`, inside the root suite of the job
+`__tests__/core-pack-pin-gate.test.mjs`, inside the root suite of the job
 "Perpetual core invariants".
 
 **Not covered yet: Python tests.** The Python tests under
@@ -930,7 +930,7 @@ EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-
 CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
 ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
 ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
-CORE_TEST_PACK_PIN_BASE=origin/main node scripts/audit/core-test-pack-pin-gate.mjs
+CORE_PACK_PIN_BASE=origin/main node scripts/audit/core-pack-pin-gate.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline

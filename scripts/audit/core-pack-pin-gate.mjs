@@ -40,7 +40,7 @@
 // (`docker/wayflow/tests`) ARE NOT COVERED YET: their follow-up is part of
 // cinatra#4853.
 //
-// THE FLOOR (scripts/audit/core-test-pack-pin-gate.baseline.json) is
+// THE FLOOR (scripts/audit/core-pack-pin-gate.baseline.json) is
 // SHRINK-ONLY. It holds the pins that stood on main when the gate landed, one
 // entry per rule, file and pack; cinatra#4853 moves them to the packs' own CI.
 //   - a pin outside the floor fails;
@@ -49,21 +49,21 @@
 //   - --write-baseline never writes a new entry;
 //   - the floor is compared with its copy on the base branch through the
 //     shared guard scripts/audit/lib/floor-base-guard.mjs: a new entry fails.
-//     The base is CORE_TEST_PACK_PIN_BASE when set, else the pull request's
+//     The base is CORE_PACK_PIN_BASE when set, else the pull request's
 //     base branch (GITHUB_BASE_REF). A base that holds neither the floor nor
 //     this gate is the introducing change and imposes nothing.
 //
-// CI: the test of record in scripts/audit/__tests__/core-test-pack-pin-gate.test.mjs
+// CI: the test of record in scripts/audit/__tests__/core-pack-pin-gate.test.mjs
 // runs this check in the root suite (`pnpm test:root`), which the job
 // "Perpetual core invariants" runs on every pull request.
 //
 // Exit 0 clean, 1 findings / stale / grown floor, 2 scanner error.
 //
 // Usage:
-//   node scripts/audit/core-test-pack-pin-gate.mjs                  # check
-//   node scripts/audit/core-test-pack-pin-gate.mjs --report         # print every pin, floored ones included
-//   node scripts/audit/core-test-pack-pin-gate.mjs --write-baseline # shrink the floor
-//   CORE_TEST_PACK_PIN_BASE=<ref> node ...                          # also fail if the floor GREW vs <ref>
+//   node scripts/audit/core-pack-pin-gate.mjs                  # check
+//   node scripts/audit/core-pack-pin-gate.mjs --report         # print every pin, floored ones included
+//   node scripts/audit/core-pack-pin-gate.mjs --write-baseline # shrink the floor
+//   CORE_PACK_PIN_BASE=<ref> node ...                          # also fail if the floor GREW vs <ref>
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
@@ -74,10 +74,10 @@ import { compareFloorWithBase, newKeys, readFileAtBase } from "./lib/floor-base-
 const ts = tsDefault;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = join(__dirname, "..", "..");
-export const GATE_REL = "scripts/audit/core-test-pack-pin-gate.mjs";
-export const BASELINE_REL = "scripts/audit/core-test-pack-pin-gate.baseline.json";
-export const FLOOR_BASE_VAR = "CORE_TEST_PACK_PIN_BASE";
-const TAG = "[core-test-pack-pin-gate]";
+export const GATE_REL = "scripts/audit/core-pack-pin-gate.mjs";
+export const BASELINE_REL = "scripts/audit/core-pack-pin-gate.baseline.json";
+export const FLOOR_BASE_VAR = "CORE_PACK_PIN_BASE";
+const TAG = "[core-pack-pin-gate]";
 
 /** The committed locks whose rows are the pinned packs. */
 export const LOCKS = ["cinatra-required-extensions.lock.json", "cinatra-dev-extensions.lock.json"];
@@ -612,7 +612,7 @@ export function checkFloor(floorKeys, findings) {
  */
 export function checkBaseGuard({ root = REPO_ROOT, env = process.env, headKeys }) {
   const result = compareFloorWithBase({
-    gate: "core-test-pack-pin-gate",
+    gate: "core-pack-pin-gate",
     envVar: FLOOR_BASE_VAR,
     floorPath: BASELINE_REL,
     headFloor: headKeys,
@@ -678,7 +678,7 @@ function writeBaseline(root) {
     note:
       "Shrink-only floor of core tests and fixtures that pin one pinned pack (cinatra#4853). " +
       "Each entry moves to the pack's own CI or becomes a synthetic proof; none is ever added. " +
-      "Regenerate (shrink only) with `node scripts/audit/core-test-pack-pin-gate.mjs --write-baseline`.",
+      "Regenerate (shrink only) with `node scripts/audit/core-pack-pin-gate.mjs --write-baseline`.",
     entries: keep.map(({ rule, file, pack }) => ({ rule, file, pack })),
   };
   writeFileSync(floorPath, JSON.stringify(doc, null, 2) + "\n");

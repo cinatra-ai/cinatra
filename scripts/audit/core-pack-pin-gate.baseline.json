@@ -1,5 +1,5 @@
 {
-  "note": "Shrink-only floor of core tests and fixtures that pin one pinned pack (cinatra#4853). Each entry moves to the pack's own CI or becomes a synthetic proof; none is ever added. Regenerate (shrink only) with `node scripts/audit/core-test-pack-pin-gate.mjs --write-baseline`.",
+  "note": "Shrink-only floor of core tests and fixtures that pin one pinned pack (cinatra#4853). Each entry moves to the pack's own CI or becomes a synthetic proof; none is ever added. Regenerate (shrink only) with `node scripts/audit/core-pack-pin-gate.mjs --write-baseline`.",
   "entries": [
     {
       "rule": "flow",

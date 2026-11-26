@@ -1,4 +1,4 @@
-// core-test-pack-pin-gate tests (cinatra#4853).
+// core-pack-pin-gate tests (cinatra#4853).
 //
 // The fixture trees are temporary repositories whose locks pin packages of the
 // owner `@example-org/…`; no real pack is named. The last block is the TEST OF
@@ -21,7 +21,7 @@ import {
   normalizePath,
   runGate,
   scanCorePins,
-} from "../core-test-pack-pin-gate.mjs";
+} from "../core-pack-pin-gate.mjs";
 import { makeFloorRepo } from "./floor-base-fixture.mjs";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 function tree(files) {
-  const root = mkdtempSync(join(tmpdir(), "core-test-pack-pin-"));
+  const root = mkdtempSync(join(tmpdir(), "core-pack-pin-"));
   roots.push(root);
   for (const [rel, content] of Object.entries({ ...LOCKS, ...files })) {
     mkdirSync(dirname(join(root, rel)), { recursive: true });
@@ -323,8 +323,8 @@ describe("the floor", () => {
     expect(() => loadPinnedPacks(root)).toThrow(ScannerError);
   });
 
-  describe("compared with the base branch (CORE_TEST_PACK_PIN_BASE)", () => {
-    const env = { CORE_TEST_PACK_PIN_BASE: "origin/main" };
+  describe("compared with the base branch (CORE_PACK_PIN_BASE)", () => {
+    const env = { CORE_PACK_PIN_BASE: "origin/main" };
     const repo = (base, head) => {
       const r = makeFloorRepo({ base: { ...LOCKS, ...base }, head });
       roots.push(r.root);
@@ -363,7 +363,7 @@ describe("the floor", () => {
     it("fails closed when the base holds the gate but not its floor, or does not resolve", () => {
       const root = repo({ [GATE_REL]: "// gate", [PIN_TEST]: PIN_SRC }, { [BASELINE_REL]: floor([entry]) });
       expect(runGate({ root, env }).ok).toBe(false);
-      expect(runGate({ root, env: { CORE_TEST_PACK_PIN_BASE: "origin/nope" } }).ok).toBe(false);
+      expect(runGate({ root, env: { CORE_PACK_PIN_BASE: "origin/nope" } }).ok).toBe(false);
     });
   });
 });
