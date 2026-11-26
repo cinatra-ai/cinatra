@@ -413,7 +413,13 @@ describe("§III the target island", () => {
     const { container } = renderOn("chat_thread");
     await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
     const frame = container.querySelector("iframe")!;
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts allow-same-origin");
+    // EXACTLY these three tokens. `allow-downloads` is the one permission the
+    // owner added (cinatra#3459): the download links the island draws are dead
+    // without it. Anything more would widen what a type renderer may do.
+    // red-first-expect: expected 'allow-scripts allow-same-origin' to be
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-same-origin allow-downloads",
+    );
     // The src is a RELATIVE first-party path — the island is never fetched from
     // another origin, and the ref is the only thing in the query.
     expect(frame.getAttribute("src")?.startsWith("/")).toBe(true);

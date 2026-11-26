@@ -653,6 +653,82 @@ export function hasApiNodeStep(document: unknown, stepId: string): boolean {
   return found;
 }
 
+export type PublishingAncestorReading =
+  | { kind: "resolved"; nodeId: string }
+  | { kind: "unresolved" }
+  | { kind: "ambiguous" }
+  | { kind: "not_publishing"; nodeId: string };
+
+/** The node kinds that can be the publishing action (the compiler's and the loader's set). */
+const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "ParallelFlowNode"]);
+
+/**
+ * The top-level node of a flow document whose subtree holds the ApiNode step
+ * with the given id (cinatra#3745). A publish decision is recorded only for a
+ * top-level node that declares `metadata.cinatra.publishes: true`, keyed by its
+ * key in the root `$referenced_components` (the compiler's
+ * `collectPublishingSteps` and the loader's gate insertion), so the decision
+ * that covers a step nested in a subflow is the decision of that ancestor. A
+ * top-level step is its own ancestor.
+ *
+ * The walk starts at each top-level node (the root `nodes` list) and follows
+ * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
+ * `$component_ref` resolves to the innermost enclosing `$referenced_components`
+ * that holds its key. `unresolved`: no top-level node holds the step.
+ * `ambiguous`: more than one does. `not_publishing`: the one that holds it does
+ * not declare `publishes: true` (the JSON boolean) on a node of an action kind.
+ */
+export function findPublishingAncestor(document: unknown, stepId: string): PublishingAncestorReading {
+  if (!isPlainObject(document) || typeof stepId !== "string" || stepId === "") return { kind: "unresolved" };
+  const rootRefs = isPlainObject(document.$referenced_components) ? document.$referenced_components : {};
+  const topLevel: string[] = [];
+  for (const entry of Array.isArray(document.nodes) ? document.nodes : []) {
+    const ref = resolveComponentRef(entry);
+    if (ref !== null && Object.prototype.hasOwnProperty.call(rootRefs, ref) && !topLevel.includes(ref)) topLevel.push(ref);
+  }
+  const holdsStep = (start: unknown): boolean => {
+    const seen = new Set<unknown>();
+    const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
+    while (stack.length > 0) {
+      const [value, scopes] = stack.pop()!;
+      if (!isPlainObject(value) || seen.has(value)) continue;
+      seen.add(value);
+      const ref = resolveComponentRef(value);
+      if (ref !== null) {
+        for (let i = scopes.length - 1; i >= 0; i--) {
+          if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
+            stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
+            break;
+          }
+        }
+        continue;
+      }
+      if (value.component_type === "ApiNode" && value.id === stepId) return true;
+      const refs = value.$referenced_components;
+      const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
+      if (isPlainObject(refs)) for (const child of Object.values(refs)) stack.push([child, inner]);
+      for (const key of ["subflow", "start_node"]) stack.push([value[key], inner]);
+      for (const key of ["subflows", "nodes"]) {
+        const list = value[key];
+        if (Array.isArray(list)) for (const child of list) stack.push([child, inner]);
+      }
+    }
+    return false;
+  };
+  const holders = topLevel.filter((key) => holdsStep(rootRefs[key]));
+  if (holders.length === 0) return { kind: "unresolved" };
+  if (holders.length > 1) return { kind: "ambiguous" };
+  const nodeId = holders[0]!;
+  const node = rootRefs[nodeId] as Record<string, unknown>;
+  const metadata = isPlainObject(node.metadata) ? node.metadata : null;
+  const cinatra = metadata && isPlainObject(metadata.cinatra) ? metadata.cinatra : null;
+  const publishes = cinatra !== null && cinatra.publishes === true;
+  if (!publishes || typeof node.component_type !== "string" || !PUBLISHING_ACTION_KINDS.has(node.component_type)) {
+    return { kind: "not_publishing", nodeId };
+  }
+  return { kind: "resolved", nodeId };
+}
+
 function scanForStepToolDeclarations(
   parsed: Record<string, unknown>,
 ): ReviewFinding[] {

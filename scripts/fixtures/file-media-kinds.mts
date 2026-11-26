@@ -2,17 +2,24 @@
 // kinds the review island's byte road serves, and optionally open a real review
 // gate that pins all six.
 // Run with: node --env-file=.env.local scripts/fixtures/file-media-kinds.mjs
-//   --org ... --user ... [--review-run]
+//   --org ... --user ... [--review-run | --promote <kind>=<extension>]
+// --promote confirms that extension's meaning for the filed upload of that kind
+// through the type picker's own server action, as the person's Confirm does
+// (e.g. --promote pdf=@cinatra-ai/slide-deck-artifact makes the pdf a deck).
 import { parseArgs } from "node:util";
 import {
-  assertMediaFixtureRuntime, fileMediaKindSamples, normalizeFixtureIds, seedMediaKindReviewRun,
+  assertMediaFixtureRuntime, fileMediaKindSamples, normalizeFixtureIds, parsePromoteOption, promoteFiledUpload,
+  seedMediaKindReviewRun,
 } from "./lib/file-media-kinds.ts";
 
 assertMediaFixtureRuntime();
 const { values } = parseArgs({ options: {
-  org: { type: "string" }, user: { type: "string" }, "review-run": { type: "boolean" },
+  org: { type: "string" }, user: { type: "string" }, "review-run": { type: "boolean" }, promote: { type: "string" },
 } });
 if (values.org === undefined || values.user === undefined) throw new Error("--org and --user are required");
+// A review run pins the six revisions it was given; a promotion would move one of them.
+if (values["review-run"] && values.promote !== undefined) throw new Error("--promote does not combine with --review-run");
+const promote = values.promote === undefined ? null : parsePromoteOption(values.promote);
 const ids = normalizeFixtureIds({ orgId: values.org, userId: values.user });
 if (values["review-run"] && (!process.env.SUPABASE_DB_URL || !process.env.REDIS_URL || !process.env.BULLMQ_QUEUE_NAME)) {
   throw new Error("--review-run needs an isolated database, Redis and an explicit queue name");
@@ -25,3 +32,4 @@ if (values["review-run"]) {
   // creation is seeded; WayFlow pauses the run and the executor pins the six.
   console.log(JSON.stringify(await seedMediaKindReviewRun({ ...ids, filed })));
 }
+if (promote) console.log(JSON.stringify({ promoted: await promoteFiledUpload({ ...ids, filed, ...promote }) }));
