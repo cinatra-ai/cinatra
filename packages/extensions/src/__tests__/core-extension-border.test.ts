@@ -420,7 +420,6 @@ describe("core/extension border — the ratchet only shrinks", () => {
     ...over,
   });
 
-  // red-first-expect: none (only the fixture gained a rules list)
   it("refuses a ledger that gained an entry", () => {
     const previous = { rules: [...gate.KNOWN_RULES], entries: [entry()] };
     const current = {
@@ -655,7 +654,6 @@ describe("core/extension border — the floor is compared with the base branch",
     return f.root;
   }
 
-  // red-first-expect: none (only the fixture gained a rules list)
   it("a ledger that gained an entry FAILS against the base", () => {
     const root = repo({ [FLOOR]: ledger([domainEntry(3)]) }, { [FLOOR]: ledger([domainEntry(3), typeEntry()]) });
     const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
@@ -815,7 +813,6 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     expect(gate.baselineGrowth(withRules(BEFORE(), []), withRules(ALL(), [kindEntry()]))).toEqual([]);
   });
 
-  // red-first-expect: none (a new entry of any rule failed before too; this pins it with the rules list)
   it("once the base lists the rule, a pull request adding a kind entry fails", () => {
     expect(
       gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), [kindEntry(), kindEntry(`${TABLE_FILE}::acme-invoice-review`)])),
@@ -826,12 +823,10 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     ]);
   });
 
-  // red-first-expect: none (the ledger could shrink before too; this pins it)
   it("the ledger can shrink", () => {
     expect(gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), []))).toEqual([]);
   });
 
-  // red-first-expect: none (the base guard refused a new entry before too; this pins it with the rules list)
   it("the base guard refuses a kind entry the base ledger did not hold", () => {
     const FLOOR = "config/core-extension-border-baseline.json";
     const f = floorFixture.makeFloorRepo({
@@ -928,7 +923,6 @@ describe("core/extension border — an unreadable kind table entry fails the che
     ]);
   });
 
-  // red-first-expect: none (the real table is read whole before and after; this pins it)
   it("the real kind table is read whole: no unreadable entry", () => {
     const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
     expect(r.findings.filter((f) => f.detail.startsWith("unreadable entry"))).toEqual([]);
@@ -1119,7 +1113,6 @@ describe("core/extension border — only a truly new rule may seed (the migratio
   };
   const preRulesBase = { [FLOOR]: { entries: [e(A, "a1")] }, [SCRIPT]: BASE_SCRIPT };
 
-  // red-first-expect: none (every new entry failed before; this pins that a known rule still cannot seed)
   it("a zero-entry rule the base script knows cannot gain an entry", () => {
     const r = run(preRulesBase, { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(B, "b1")] } });
     expect(r.ok).toBe(false);
@@ -1132,7 +1125,6 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     expect(r.ok).toBe(true);
   });
 
-  // red-first-expect: none (a listed rule could not grow before either)
   it("on the next change the seeded rule cannot grow", () => {
     const r = run(
       { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] }, [SCRIPT]: BASE_SCRIPT },
@@ -1164,7 +1156,6 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${C}`]);
   });
 
-  // red-first-expect: none (a rule the base lacks seeded before too; this pins it next to the append-only check)
   it("a rule added on top of the base's list still seeds once", () => {
     const r = run(
       { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
