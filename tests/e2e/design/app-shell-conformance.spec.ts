@@ -305,9 +305,14 @@ test.describe("top-bar edge anchoring (cinatra#1284, reverses #1091)", () => {
     const contentCapLeft = rowBox.left + capInset;
     const contentCapRight = rowBox.right - capInset;
 
-    // THE fix: the left element sits at the available-area left edge + gutter,
-    // NOT at the centred content-cap left edge.
-    expect(leftBox.left).toBeCloseTo(rowBox.left + GUTTER, 0);
+    // THE fix: the row's first element sits at the available-area left edge +
+    // gutter, NOT at the centred content-cap left edge. That first element is
+    // the sidebar toggle; the breadcrumb follows it directly (owner's decision
+    // of 2026-11-26: the toggle stands in front of the breadcrumb).
+    const toggleBox = await rect(row.locator('[data-slot="sidebar-trigger"]'));
+    expect(toggleBox.left).toBeCloseTo(rowBox.left + GUTTER, 0);
+    expect(leftBox.left).toBeGreaterThanOrEqual(toggleBox.right);
+    expect(leftBox.left - toggleBox.right).toBeLessThanOrEqual(GUTTER);
     // …and demonstrably to the LEFT of where the content-cap stage would place
     // it (a regression to #1091 makes leftBox.left ≈ contentCapLeft and fails).
     expect(leftBox.left).toBeLessThan(contentCapLeft - GUTTER);
