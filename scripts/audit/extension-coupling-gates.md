@@ -37,6 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | an extension of kind `agent` that ships program code of its own outside its skills (class `codeFiles`), a pinned manifest declaring `cinatra.tools` (class `toolDeclarations`), a pinned flow step calling the core tool `extension_tool` (class `extensionToolSteps`) | `package :: path` / `package :: tool name` / `package :: node id` | `agent-extension-code-gate.baseline.json` — **shrink-only list**, every entry naming its road in `notes` (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -592,6 +593,86 @@ finding fails whatever the floor holds. The gate's own writer
 entries that no longer apply and never adds one; it emptied the floor at the
 flip. A test of record pins the checked-in floor as empty.
 
+## Agent extensions ship no program code outside their skills (cinatra#4885)
+
+Owner: "functionality that should be done by agents has been built as code,
+which totally goes against the whole purpose of Cinatra." and "Of course,
+skills could also include scripts and here code is ok." A connector may hold
+code: it wraps an outside system. A generic guarantee (reading exactly the
+approved revision, doing an effect once, filing exactly the approved set)
+belongs in core, offered once to every agent.
+
+`scripts/audit/agent-extension-code-gate.mjs` runs in job `perpetual-core`
+of `.github/workflows/build-image.yml`, after the companion repositories are
+cloned. It decides from structure only — the manifest's `cinatra.kind`, the
+files in the pack, the manifest's `files` list and the parsed flow — and its
+code names no pack, no tool and no file of a pack.
+
+**The universe** is the pinned extensions: every `packageName` of both
+extension locks plus every key of `cinatra.devExtensions`, each found in the
+`extensions/` tree by its manifest name. A pinned pack that cannot be found or
+read, a lock, manifest or flow that does not parse, and a pinned pack whose
+`cinatra.kind` cannot be read are scanner errors (exit 2), never a pass.
+
+**What counts**, each its own class on the recorded list:
+
+1. `codeFiles` — in a pack of kind `agent`, a file with a program-code
+   extension (`.js .mjs .cjs .ts .mts .cts .tsx .jsx .py .sh`, the one constant
+   `PROGRAM_CODE_EXTENSIONS`: the JavaScript and TypeScript forms core's border
+   gate scans, plus Python and shell; `.d.ts` counts), anywhere in the pack,
+   except:
+   - inside a **skill folder**: a folder of the pack, never its root, that
+     holds a file named `SKILL.md`, at any depth below it;
+   - a **test or build file** of the pack that the manifest does **not ship**.
+     A test file sits under a folder named `test`, `tests`, `__tests__`,
+     `__mocks__` or `__fixtures__`, or is named `*.test.*` / `*.spec.*`; a
+     build file sits at the pack root (the vendored `extension-kind-gate.mjs`
+     and other check scripts), under the top-level `scripts/` folder or under a
+     top-level dot folder. Shipping is read from `files` in `package.json`:
+     plain entries ship a path or a folder, `!` entries take one back. When
+     `files` is absent, not an array of strings, or holds a glob, everything
+     ships, so such a file counts. Every other code file counts whether it
+     ships or not: the materialized tree, not the package, is what a dev
+     build loads.
+2. `toolDeclarations` — a pinned manifest of any kind declaring
+   `cinatra.tools`, one entry per declared tool name.
+3. `extensionToolSteps` — a passthrough ApiNode in a pinned flow
+   (`cinatra/oas.json`, parsed) whose `data.tool` is `extension_tool`, read with
+   the passthrough reader of `scripts/ci/pin-advance-host-tools.mjs`; one entry
+   per node id.
+
+**Counted, not failed**: the fixed (non-model) flow steps of every agent that
+call any tool through the passthrough, printed per agent on every run, so a
+later change can ratchet them.
+
+**The recorded list** (`agent-extension-code-gate.baseline.json`) holds the
+findings of the day it landed and only shrinks. A finding it does not hold
+fails; an entry whose finding is gone fails as stale until
+`node scripts/audit/agent-extension-code-gate.mjs --write-baseline` shrinks the
+list (that command refuses to add an entry). The list is compared with its copy
+on the base branch through the shared floor base guard: a new entry or a
+removed class fails. The change that introduces the gate has a base that holds
+neither the list nor the script; that one case seeds the list. `notes` names
+the road each entry leaves by (delete it, generic core machinery, or agent
+work as a flow step with a skill: cinatra#4889 to cinatra#4893); it is never
+diffed. `--report` prints every finding with its line count.
+
+On the day it landed: 22 `codeFiles` in 12 agent packs (the 12 tool modules
+under `cinatra/tools/`, 2,116 lines, plus 10 files under `src/`), 12
+`toolDeclarations` in 9 manifests, 17 `extensionToolSteps` in 9 flows, and 36
+counted tool steps in 14 agents.
+
+**What it cannot decide**, left to a reading by a person:
+
+- whether code inside a connector is domain behaviour (a connector's code is
+  never counted);
+- whether a function in core is truly generic (core is not scanned here);
+- whether a screen renderer in an agent pack is presentation or behaviour (it
+  counts as code; its road is decided by a reading);
+- whether a test or build file, unshipped, is loaded at run time anyway (it is
+  left out by its place and name alone);
+- how much a recorded file grows: the list records files, not their size.
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -615,6 +696,7 @@ for its floor:
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
+| `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | a new entry in any class, or a class removed | `AGENT_EXTENSION_CODE_BASE` |
 
 The rules the helper holds for every gate:
 
