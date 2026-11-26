@@ -755,17 +755,21 @@ type ResumeLeaseKeeper = { fence(): Promise<boolean>; stop(): Promise<void> };
  * renewal that throws is logged and retried on the next tick. `fence()` is an
  * awaited renewal, called before every wire action.
  *
- * `stop()` clears the timer AND waits for a renewal a tick already started. Without
- * that wait, a tick's renewal could still write after the delivery returned: it
- * moved the lease of an intent left for a re-claim one lease length later (the
- * row stays `delivering` under the same token, which the renewal's compare-and-set
- * accepts), so the dead-letter pass and the claim skipped it until that lease ran
- * out. cinatra#4476's state-1 case saw this as a flaky missing resume.
+ * `stop()` clears the timer AND waits for every renewal a tick already started.
+ * Without that wait, a tick's renewal could still write after the delivery
+ * returned: it moved the lease of an intent left for a re-claim one lease length
+ * later (the row stays `delivering` under the same token, which the renewal's
+ * compare-and-set accepts), so the dead-letter pass and the claim skipped it until
+ * that lease ran out. cinatra#4476's state-1 case saw this as a flaky missing
+ * resume. Every started renewal is tracked, not only the newest: a renewal slower
+ * than the interval is still waited for. The wait is bounded by one lease length
+ * (a stalled connection must not hold the delivery and the sequential sweep); a
+ * renewal still pending then can only extend the lease once more, as before.
  */
 function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: number): ResumeLeaseKeeper {
   let lost = false;
   let stopped = false;
-  let ticking: Promise<unknown> = Promise.resolve();
+  const inFlight = new Set<Promise<void>>();
   const renew = async (): Promise<boolean> => {
     if (lost) return false;
     const ok = await renewResumeIntentLease(gateId, leaseToken, leaseMs);
@@ -774,14 +778,15 @@ function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: numb
   };
   const timer = setInterval(() => {
     if (stopped) return;
-    ticking = renew().then(
+    const tick: Promise<void> = renew().then(
       (ok) => {
         if (!ok) clearInterval(timer);
       },
       (err: unknown) => {
         console.warn(`[artifact-review-resume] gate=${gateId} lease renewal failed (${errorLabel(err)}); retried on the next tick`);
       },
-    );
+    ).finally(() => inFlight.delete(tick));
+    inFlight.add(tick);
   }, Math.max(250, Math.floor(leaseMs / 3)));
   (timer as { unref?: () => void }).unref?.();
   return {
@@ -789,7 +794,16 @@ function keepResumeIntentLease(gateId: string, leaseToken: string, leaseMs: numb
     stop: async () => {
       stopped = true;
       clearInterval(timer);
-      await ticking;
+      if (inFlight.size === 0) return;
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.all([...inFlight]),
+        new Promise<void>((resolve) => {
+          bound = setTimeout(resolve, Math.max(1000, leaseMs));
+          (bound as { unref?: () => void }).unref?.();
+        }),
+      ]);
+      clearTimeout(bound);
     },
   };
 }

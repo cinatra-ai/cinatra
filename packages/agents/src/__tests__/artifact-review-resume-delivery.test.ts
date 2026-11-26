@@ -1358,6 +1358,68 @@ describe("cinatra#1796 — artifact-review resume-delivery worker", () => {
       }
     });
 
+    /** Lets every queued promise callback run (no timer is advanced; setImmediate is not faked). */
+    async function flush() {
+      for (let i = 0; i < 20; i++) await new Promise<void>((r) => setImmediate(r));
+    }
+
+    it("cinatra#4476 the delivery returns only after every renewal a tick started, also one slower than the interval", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      try {
+        let release!: () => void;
+        sendTaskSpy.mockImplementationOnce(() => new Promise((res) => {
+          release = () => res({ id: "task-x", status: { state: "completed" } });
+        }));
+        const pending = deliverArtifactReviewResumeIntent(intent(), { leaseMs: 3000 });
+        await vi.waitFor(() => expect(sendTaskSpy).toHaveBeenCalledTimes(1));
+        let finishFirst!: (ok: boolean) => void;
+        let finishSecond!: (ok: boolean) => void;
+        gateStoreMock.renewResumeIntentLease
+          .mockImplementationOnce(() => new Promise<boolean>((r) => { finishFirst = r; }))
+          .mockImplementationOnce(() => new Promise<boolean>((r) => { finishSecond = r; }));
+        vi.advanceTimersByTime(1000); // the first tick's renewal: still pending at the next tick
+        vi.advanceTimersByTime(1000); // the second tick's renewal
+        let settled = false;
+        void pending.then(() => { settled = true; }, () => { settled = true; });
+        release();
+        finishSecond(true);
+        await flush();
+        expect(settled).toBe(false); // the older renewal can still write: the delivery waits for it
+        finishFirst(true);
+        expect(await pending).toBe("delivered");
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cinatra#4476 a stalled renewal holds the delivery's end for at most one lease length", async () => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+      try {
+        let release!: () => void;
+        sendTaskSpy.mockImplementationOnce(() => new Promise((res) => {
+          release = () => res({ id: "task-x", status: { state: "completed" } });
+        }));
+        const pending = deliverArtifactReviewResumeIntent(intent(), { leaseMs: 3000 });
+        await vi.waitFor(() => expect(sendTaskSpy).toHaveBeenCalledTimes(1));
+        gateStoreMock.renewResumeIntentLease.mockImplementationOnce(() => new Promise<boolean>(() => undefined));
+        vi.advanceTimersByTime(1000); // a tick's renewal that never answers
+        let settled = false;
+        void pending.then(() => { settled = true; }, () => { settled = true; });
+        release();
+        await flush();
+        expect(settled).toBe(false);
+        vi.advanceTimersByTime(2999);
+        await flush();
+        expect(settled).toBe(false);
+        vi.advanceTimersByTime(1);
+        expect(await pending).toBe("delivered");
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("T7 the sweep claims one row at a time with its lease, and stops at the first empty claim", async () => {
       gateStoreMock.claimPendingResumeIntents.mockResolvedValueOnce([intent({ gateId: "g-a" })]);
       const summary = await sweepArtifactReviewResumeIntents({ limit: 3, leaseMs: 9000 });
