@@ -18,7 +18,9 @@ import {
   isPublishRowDeclaration,
   isPublishRowInput,
   PUBLISH_DECISION_MAX_NOTE_LENGTH,
+  PUBLISH_LIST_ROW_ITEMS_MAX,
   PUBLISH_ROW_INPUT_MAX,
+  publishRowKind,
   type PublishRowDeclaration,
 } from "./publish-decision-card";
 import { agentRunOutwardActionPolicies, agentRunPublishDecisions, agentRuns } from "./schema";
@@ -560,4 +562,140 @@ export async function listDueParked(limit: number, now?: Date, afterId?: string)
     .orderBy(asc(agentRunPublishDecisions.expiresAt), asc(agentRunPublishDecisions.id))
     .limit(limit);
   return rows.map(deserialize);
+}
+
+/**
+ * The ONE list of records a person released with a decision (cinatra#3089), for a caller that acts on such a list after
+ * the release. A candidate is a surfaced value (by own key) that is, or is JSON text of, a list of 1 to
+ * PUBLISH_LIST_ROW_ITEMS_MAX records whose own keys are exactly `entryFields`, each a string. Answers:
+ *   - `{ ok: true, list: null }`: the decision surfaced no candidate;
+ *   - `{ ok: false }`: `shownFields` is not a set of distinct entry fields on distinct, named columns; or the decision
+ *     is not released by a person; or two or more values are candidates (which one was meant cannot be told); or no
+ *     declared list row shows the list record for record, in the same order (a row is drawn from a surfaced list of
+ *     records, the records only, as the card draws it);
+ *   - `{ ok: true, list }`: the one candidate, as parsed.
+ * A row shows a record when, for EACH `shownFields` entry, the row declares the named `column` (a column `field` of
+ * the row) and the record's string value of that column equals the entry's value of `field`. Each column proves one
+ * field only, so one drawn cell never shows two fields. A shown value is compared exactly, byte for byte: no trimming,
+ * no letter case, no Unicode normalisation, since the caller sends the entry's value as it is, and what is sent must be
+ * what the card drew (the card draws a cell's string as it is, publishDecisionCardRows). Errors name no value.
+ */
+export function releasedDecisionList(input: {
+  decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
+  entryFields: readonly string[];
+  /** For each entry field the card must show, the row column (its `field`) that shows it. */
+  shownFields: ReadonlyArray<{ field: string; column: string }>;
+}): { ok: true; list: Array<Record<string, string>> | null } | { ok: false; error: string } {
+  const { decision, entryFields, shownFields } = input;
+  const columnsNamed = new Set(shownFields.map((s) => s.column));
+  const fieldsNamed = new Set(shownFields.map((s) => s.field));
+  if (
+    shownFields.length === 0 ||
+    columnsNamed.size !== shownFields.length ||
+    fieldsNamed.size !== shownFields.length ||
+    shownFields.some((s) => typeof s.column !== "string" || s.column === "" || !entryFields.includes(s.field))
+  ) {
+    return { ok: false, error: "the fields a list row must show are not distinct entry fields on distinct columns" };
+  }
+  if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
+    return { ok: false, error: "the publish decision is not released by a person" };
+  }
+  const own = (o: object, key: string) => Object.prototype.hasOwnProperty.call(o, key);
+  const surfaced = decision.surfacedValues;
+  const wanted = [...entryFields].sort().join("\u0000");
+  const asList = (value: unknown): Array<Record<string, string>> | null => {
+    let list = value;
+    if (typeof list === "string") {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        return null;
+      }
+    }
+    if (!Array.isArray(list) || list.length === 0 || list.length > PUBLISH_LIST_ROW_ITEMS_MAX) return null;
+    const ok = list.every(
+      (e) =>
+        isPlainObject(e) &&
+        Object.keys(e).sort().join("\u0000") === wanted &&
+        entryFields.every((f) => own(e, f) && typeof e[f] === "string"),
+    );
+    return ok ? (list as Array<Record<string, string>>) : null;
+  };
+  const candidates = Object.keys(surfaced).flatMap((key) => {
+    const list = own(surfaced, key) ? asList(surfaced[key]) : null;
+    return list ? [{ key, list }] : [];
+  });
+  if (candidates.length === 0) return { ok: true, list: null };
+  if (candidates.length > 1) {
+    return { ok: false, error: `the publish decision surfaced ${candidates.length} lists of that shape, so which one was released cannot be told` };
+  }
+  const { key: listKey, list } = candidates[0]!;
+  const shownOnRow = (decision.declaredRows ?? []).some((row) => {
+    if (publishRowKind(row) !== "list" || !own(surfaced, row.input)) return false;
+    const raw = surfaced[row.input];
+    if (!Array.isArray(raw)) return false;
+    const records = raw.filter(isPlainObject);
+    if (records.length !== list.length) return false;
+    const columns = (row as { columns?: ReadonlyArray<{ field: string }> }).columns;
+    if (!Array.isArray(columns)) return false;
+    const drawn = new Set(columns.map((c) => c.field));
+    if (shownFields.some(({ column }) => !drawn.has(column))) return false;
+    return list.every((entry, i) => {
+      const record = records[i]!;
+      return shownFields.every(({ field, column }) => {
+        const cell = own(record, column) ? record[column] : undefined;
+        return typeof cell === "string" && typeof entry[field] === "string" && cell === entry[field];
+      });
+    });
+  });
+  if (!shownOnRow) {
+    return { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
+  }
+  // The card carried the bodies: an artifacts row of the decision reads the same surfaced value, and the card draws an
+  // artifacts row only over a list (never JSON text) whose every record names an artifact and a revision, each a
+  // non-empty id with no space (the review-target reading of the card's island). WHAT THIS DOES NOT PROVE: that the
+  // panel finished drawing on the releaser's screen. The server does not see the screen. The card keeps Allow disabled
+  // until every items row has drawn its pinned revisions (design XV.1, "Allow waits for the items"); what the server
+  // holds is the release itself (released, by a person, of this decision), and the send then reads each named revision
+  // again (current-decided-revision-read.ts) before it mails it.
+  const raw = surfaced[listKey];
+  const targetId = (v: unknown) => typeof v === "string" && v.length > 0 && !v.includes(" ");
+  const bodiesOnCard =
+    Array.isArray(raw) &&
+    raw.every((e) => isPlainObject(e) && targetId(e.artifactId) && targetId(e.representationRevisionId)) &&
+    (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "artifacts" && row.input === listKey);
+  if (!bodiesOnCard) {
+    return { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
+  }
+  return { ok: true, list };
+}
+
+/**
+ * The text a person was SHOWN for `input` on a released decision's card (cinatra#3089). The card draws a declared text
+ * row (a row with no `kind`, `publishRowKind` "text") for a surfaced plain value that is not blank, and drops it otherwise.
+ * Answers:
+ *   - `{ ok: true, value }`: a declared text row of `input` drew this string, as it is (the card draws it untrimmed, so
+ *     the caller compares and sends this very value);
+ *   - `{ ok: true, value: null }`: the decision surfaced nothing, or a blank string, for `input` (the card drew nothing);
+ *   - `{ ok: false }`: the decision is not released by a person, or surfaced a value for `input` that is not a string,
+ *     or a non-blank string that no declared text row drew (a value no person saw is never released).
+ */
+export function releasedDecisionText(input: {
+  decision: Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">;
+  input: string;
+}): { ok: true; value: string | null } | { ok: false; error: string } {
+  const { decision } = input;
+  if (decision.status !== "released" || typeof decision.decidedBy !== "string" || decision.decidedBy === "") {
+    return { ok: false, error: "the publish decision is not released by a person" };
+  }
+  const surfaced = decision.surfacedValues;
+  if (!Object.prototype.hasOwnProperty.call(surfaced, input.input) || surfaced[input.input] === undefined) {
+    return { ok: true, value: null };
+  }
+  const raw = surfaced[input.input];
+  if (typeof raw !== "string") return { ok: false, error: `the publish decision surfaced ${input.input} as no text` };
+  if (raw.trim() === "") return { ok: true, value: null };
+  const drawn = (decision.declaredRows ?? []).some((row) => publishRowKind(row) === "text" && row.input === input.input);
+  if (!drawn) return { ok: false, error: `the publish decision surfaced ${input.input}, but no row of its card showed it` };
+  return { ok: true, value: raw };
 }
