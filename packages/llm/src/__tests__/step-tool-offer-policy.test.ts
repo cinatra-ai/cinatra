@@ -23,6 +23,42 @@ describe("provider-independent declared-tool ceiling",()=>{
   expect(restrictMcpServerOffer({},null,{kind:"declared",tools:["a"]})).toBeNull();
   expect(restrictStepToolOffers([{type:"mcp",serverUrl:"https://example.test",serverLabel:"s",allowedTools:["b"]}] as never,{kind:"declared",tools:["a"]})).toBeUndefined();
  });
+ // cinatra#4150: the product's own tool server (reserved label "cinatra") without a catalog ceiling is
+ // offered exactly the step's declared names; a third-party server without a catalog is still dropped.
+ const selfMcp=(allowedTools:string[]|null)=>({type:"mcp",serverUrl:"https://self.test/api/mcp",serverLabel:"cinatra",allowedTools});
+ // red-first-expect: AssertionError: expected undefined to deeply equal [ { type: 'mcp', …(3) } ]
+ it("offers the product's own server with exactly the declared names when it has no catalog ceiling",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([selfMcp(null),{type:"function",name:"other"}] as never,{kind:"declared",tools:["a","b"]}))
+   .toEqual([selfMcp(["a","b"])]);
+ });
+ // Guard (passes before and after): a known ceiling still bounds the offer, so a declared name the server does not list is not offered.
+ it("offers the product's own server only the declared names its known ceiling lists",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([selfMcp(["a","c"])] as never,{kind:"declared",tools:["a","zz"]})).toEqual([selfMcp(["a"])]);
+ });
+ // Guard (passes before and after): only the reserved label is the product's own server.
+ it("still drops a third-party server with an unknown catalog",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([{type:"mcp",serverUrl:"https://x.test",serverLabel:"ext",allowedTools:null}] as never,
+   {kind:"declared",tools:["a"]})).toBeUndefined();
+ });
+ // red-first-expect: AssertionError: expected [ { type: 'function', name: 'a' } ] to deeply equal [ { type: 'mcp', …(3) }, …(1) ]
+ it("the own server's declared-names catalog leaves a declared name to the other tool that carries it",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([selfMcp(null),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
+   .toEqual([selfMcp(["b"]),{type:"function",name:"a"}]);
+ });
+ // Guard (passes before and after): a known ceiling that lists a name another tool carries keeps it ambiguous.
+ it("a declared name the own server's known ceiling and a function both carry is not offered",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([selfMcp(["a","b"]),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
+   .toEqual([selfMcp(["b"])]);
+ });
+ it("leaves the product's own server unrestricted for a step without declarations",async()=>{
+  await loadPolicy();
+  expect(restrictStepToolOffers([selfMcp(null)] as never,{kind:"undeclared"})).toEqual([selfMcp(null)]);
+ });
  it("drops ambiguous duplicate functions rather than choosing arbitrary credentials/handlers",async()=>{
   await loadPolicy();
   expect(restrictStepToolOffers([{type:"function",name:"a"},{type:"function",name:"a"}] as never,{kind:"declared",tools:["a"]})).toBeUndefined();

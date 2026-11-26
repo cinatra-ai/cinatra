@@ -2159,6 +2159,7 @@ export async function resolveConfiguredLlmRuntime(input?: {
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
 import { SKILL_FILE_READ_TOOL_NAME as SKILL_READ_FACING_NAME } from "./tools/skill-read-tool";
 import { SANDBOX_EXECUTE_TOOL_NAME as SANDBOX_FACING_NAME } from "./execution-plane";
+import { isReservedFirstPartyServerLabel } from "./mcp-materializer";
 
 /** Provider built-in tool kinds; never a function tool or an MCP server. */
 export type StepBuiltinToolType = "shell" | "container_skills" | "web_search" | "sandbox_execution";
@@ -2238,6 +2239,17 @@ function modelFacingToolNames(tool: LlmTool): string[] {
   const name = "name" in tool && typeof tool.name === "string" ? tool.name : kind;
   return name ? [name] : [];
 }
+/** cinatra#4150: every name the offered tools other than `self` carry (function and built-in names, and
+ * the known names of other MCP servers), so the own server's declared-names catalog never claims them. */
+function namesOfOtherTools(tools: readonly LlmTool[], self: LlmTool): Set<string> {
+  const names = new Set<string>();
+  for (const t of tools) {
+    if (t === self) continue;
+    if (t.type === "mcp") for (const n of t.allowedTools ?? []) names.add(n);
+    else for (const n of modelFacingToolNames(t)) names.add(n);
+  }
+  return names;
+}
 /** Last filter AFTER every toolbox, skill and execution injection, for every adapter. */
 export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
   policy: StepToolOfferPolicy | undefined): LlmTool[] | undefined {
@@ -2268,7 +2280,14 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
     let retained: LlmTool | null = null; let key: string;
     if (tool.type === "mcp") {
       // No trustworthy catalog ceiling => suppress the server, never unrestricted [].
-      retained = restrictMcpServerOffer(tool, tool.allowedTools ?? null, policy);
+      // cinatra#4150: except the product's own tool server (the reserved label every external
+      // ingress drops). Without a ceiling its offer is the step's declared names that no other
+      // offered tool carries: never more than the step declared, and the server itself refuses a
+      // name the step does not declare (assertRunStepToolAllowed) or the caller may not use. A
+      // third-party server without a catalog stays dropped.
+      const catalog = tool.allowedTools ?? (isReservedFirstPartyServerLabel(tool.serverLabel)
+        ? policy.tools.filter((n) => !namesOfOtherTools(tools ?? [], tool).has(n)) : null);
+      retained = restrictMcpServerOffer(tool, catalog, policy);
       key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;
       if (retained?.type === "mcp") for (const name of retained.allowedTools ?? []) carry(name);
     } else {

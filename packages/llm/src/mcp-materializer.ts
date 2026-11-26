@@ -120,6 +120,18 @@ export function normalizeMcpServerName(label: string): string {
   return collapsed.slice(start, end);
 }
 
+/**
+ * The product's own tool server's label (`buildCinatraMcpServerTool` in mcp-access.ts). Reserved:
+ * every external MCP ingress drops a server that presents it (`withoutReservedFirstPartyLabelTools`),
+ * so a server carrying it is the product's own one.
+ */
+export const RESERVED_FIRST_PARTY_SERVER_LABEL = "cinatra";
+
+/** Whether a label is the reserved first-party label, compared normalized as the ingress filter does. */
+export function isReservedFirstPartyServerLabel(label: string): boolean {
+  return normalizeMcpServerName(label) === RESERVED_FIRST_PARTY_SERVER_LABEL;
+}
+
 // ---------------------------------------------------------------------------
 // URL validation
 // ---------------------------------------------------------------------------

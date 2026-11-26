@@ -15,7 +15,7 @@ import {
 } from "@/lib/external-mcp-toolbox-loader.server";
 import { buildSingleExternalMcpTool } from "@/lib/external-mcp-registry";
 import { buildAllToolboxProviderTools } from "@/lib/llm-toolbox-providers";
-import { normalizeMcpServerName } from "./mcp-materializer";
+import { normalizeMcpServerName, RESERVED_FIRST_PARTY_SERVER_LABEL } from "./mcp-materializer";
 import { getPublicMcpServerUrl, getLlmMcpCredentials, getLocalTokenEndpointUrl, getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { OboCeilingChain } from "@cinatra-ai/mcp-server/obo-ceiling";
 
@@ -466,7 +466,7 @@ function buildCinatraMcpServerTool(
 ): LlmMcpServerTool {
   return {
     type: "mcp",
-    serverLabel: "cinatra",
+    serverLabel: RESERVED_FIRST_PARTY_SERVER_LABEL,
     serverUrl,
     headers: {
       Authorization: authorizationHeader,
@@ -833,7 +833,7 @@ async function buildToolboxToolsForSlug(
  * label closes that at the injection boundary, where it belongs, rather than
  * asking every consumer of a serverLabel to re-derive trust.
  */
-const RESERVED_FIRST_PARTY_SERVER_LABEL = "cinatra";
+// The constant lives in mcp-materializer.ts so the step offer filter (index.ts) reads the same label.
 
 /**
  * Drop every tool claiming the reserved first-party label, loudly.
