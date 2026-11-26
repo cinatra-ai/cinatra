@@ -754,13 +754,13 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     const r = scanKinds(["list-picker", "acme-invoice-approval"]);
     expect(r.tables).toBe(1);
     expect(r.findings.map((f) => [f.rule, f.detail, f.line])).toEqual([
-      ["pack-step-kind-in-core", "acme-invoice-approval", 6],
+      ["pack-step-kind-in-core", "acme-invoice-approval (@cinatra-ai/acme-invoice-agent)", 6],
     ]);
     expect(r.findings[0].message).toContain("(acme-invoice)");
   });
 
   it("finds a kind that carries a connector's vendor word", () => {
-    expect(scanKinds(["zephyr-sender"]).findings.map((f) => f.detail)).toEqual(["zephyr-sender"]);
+    expect(scanKinds(["zephyr-sender"]).findings.map((f) => f.detail)).toEqual(["zephyr-sender (@cinatra-ai/zephyr-connector)"]);
   });
 
   it("passes a generic kind named for the screen's shape, and an artifact's type word", () => {
@@ -799,7 +799,7 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     ]);
   });
 
-  const KIND_KEY = `${TABLE_FILE}::zephyr-sender`;
+  const KIND_KEY = `${TABLE_FILE}::zephyr-sender (@cinatra-ai/zephyr-connector)`;
   const kindEntry = (key = KIND_KEY) => ({
     rule: "pack-step-kind-in-core",
     key,
@@ -857,7 +857,7 @@ describe("core/extension border — pack-step-kind-in-core", () => {
       const r = gate.scanRepository({ repoRoot: root, baselinePath });
       expect(r.stale).toEqual([`pack-step-kind-in-core::${KIND_KEY}`]);
       expect(gate.staleVerdict(r.stale).ok).toBe(false);
-      expect(r.violations.map((f) => f.detail)).toEqual(["acme-invoice-approval"]);
+      expect(r.violations.map((f) => f.detail)).toEqual(["acme-invoice-approval (@cinatra-ai/acme-invoice-agent)"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -879,21 +879,20 @@ describe("core/extension border — an unreadable kind table entry fails the che
     const text =
       `const PACK_KIND = "zephyr-sender";\nconst GENERIC = 'list-picker' as const;\n` +
       tableOf(`  [PACK_KIND]: { renderer: Floor },\n  [GENERIC]: { renderer: Picker },`);
-    expect(scan(text)).toEqual(["zephyr-sender"]);
+    expect(scan(text)).toEqual(["zephyr-sender (@cinatra-ai/zephyr-connector)"]);
   });
 
   it("judges a computed string or plain template-literal key", () => {
     expect(scan(tableOf('  ["zephyr-sender"]: { renderer: Floor },\n  [`acme-invoice-review`]: { renderer: Floor },'))).toEqual([
-      "zephyr-sender",
-      "acme-invoice-review",
+      "zephyr-sender (@cinatra-ai/zephyr-connector)",
+      "acme-invoice-review (@cinatra-ai/acme-invoice-agent)",
     ]);
   });
 
-  // red-first-expect: none (passed before; pins that the fail-closed read keeps these readable forms)
   it("reads a numeric key, a shorthand key and an `as const` or `satisfies` wrapped table", () => {
     expect(scan(tableOf("  1: { renderer: Floor },\n  cta,\n  form: { renderer: Form },", " as const"))).toEqual([]);
     expect(scan(tableOf('  "zephyr-sender": { renderer: Floor },', " satisfies Record<string, Entry>"))).toEqual([
-      "zephyr-sender",
+      "zephyr-sender (@cinatra-ai/zephyr-connector)",
     ]);
   });
 
@@ -940,6 +939,182 @@ describe("core/extension border — an unreadable kind table entry fails the che
   it("the real kind table is read whole: no unreadable entry", () => {
     const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
     expect(r.findings.filter((f) => f.detail.startsWith("unreadable entry"))).toEqual([]);
+  });
+});
+
+// cinatra#4852, third round: the kind tables are read from the TypeScript
+// syntax tree, never by text patterns, and each finding names the pinned
+// package(s) whose words it carries, so the ledger keeps a pack in the
+// universe after it leaves the locks.
+describe("core/extension border — pack-step-kind-in-core reads the syntax tree", () => {
+  const STEP_PACKS = new Set(["@cinatra-ai/acme-invoice-agent", "@cinatra-ai/zephyr-connector"]);
+  const FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const Z = "zephyr-sender (@cinatra-ai/zephyr-connector)";
+  const scanIn = (file: string, text: string) => gate.scanStepScreenKindTables({ file, text, packs: STEP_PACKS });
+  const scan = (text: string, file = FILE) => scanIn(file, text).findings.map((f) => f.detail);
+  const tableOf = (body: string, name = "RENDERER_KIND_TABLE") =>
+    `const ${name}: Record<string, Entry> = {\n${body}\n};\n`;
+
+  it("reads a pack-named key after an entry whose value holds a regex literal with a brace", () => {
+    const text = tableOf(
+      '  "list-picker": { renderer: Picker, makeCondition: (v: string) => /\\}/.test(v) },\n' +
+        '  "zephyr-sender": { renderer: Floor },',
+    );
+    expect(scan(text)).toEqual([Z]);
+  });
+
+  it("reads past braces in a template literal, a string, a comment, and nested object values", () => {
+    const text = tableOf(
+      [
+        "  // a comment with a brace }",
+        '  "list-picker": { renderer: Picker, label: "a } brace", hint: `x ${"}"} y`, nested: { deep: { deeper: {} } } },',
+        "  /* } */ form: { renderer: Form },",
+        '  "zephyr-sender": { renderer: Floor },',
+      ].join("\n"),
+    );
+    expect(scan(text)).toEqual([Z]);
+  });
+
+  it("refuses a write to the table spread over several lines", () => {
+    const text =
+      tableOf('  "list-picker": { renderer: Picker },') +
+      'RENDERER_KIND_TABLE[\n  "zephyr-sender"\n] = { renderer: Floor };\n' +
+      "Object.defineProperty(\n  RENDERER_KIND_TABLE,\n  KIND,\n  { value: Floor },\n);\n" +
+      "Reflect.set(RENDERER_KIND_TABLE, KIND, Floor);\n" +
+      "(RENDERER_KIND_TABLE as Record<string, Entry>).extra = Floor;\n" +
+      "[RENDERER_KIND_TABLE.other] = [Floor];\n";
+    expect(scan(text)).toEqual([
+      'unreadable entry: RENDERER_KIND_TABLE[ "zephyr-sender" ] =',
+      "unreadable entry: Object.defineProperty(RENDERER_KIND_TABLE",
+      "unreadable entry: Reflect.set(RENDERER_KIND_TABLE",
+      "unreadable entry: (RENDERER_KIND_TABLE as Record<string, Entry>).extra =",
+      "unreadable entry: RENDERER_KIND_TABLE.other (a destructuring target)",
+    ]);
+  });
+
+  it("follows a plain alias, and refuses a table that escapes into a literal (the destructured alias)", () => {
+    const text =
+      tableOf('  "list-picker": { renderer: Picker },') +
+      "const alias = RENDERER_KIND_TABLE;\n" +
+      'alias["zephyr-sender"] = { renderer: Floor };\n' +
+      "const [t] = [RENDERER_KIND_TABLE];\n" +
+      "const { k } = { k: RENDERER_KIND_TABLE };\n";
+    expect(scan(text)).toEqual([
+      'unreadable entry: alias["zephyr-sender"] =',
+      "unreadable entry: the table escapes: [RENDERER_KIND_TABLE]",
+      "unreadable entry: the table escapes: k: RENDERER_KIND_TABLE",
+    ]);
+  });
+
+  it("refuses a table handed to code the gate cannot read, and passes its reads", () => {
+    const text =
+      tableOf('  "list-picker": { renderer: Picker },') +
+      "export const kinds = Object.keys(RENDERER_KIND_TABLE).sort();\n" +
+      'const has = "x" in RENDERER_KIND_TABLE && RENDERER_KIND_TABLE.x?.renderer !== undefined;\n' +
+      "type K = keyof typeof RENDERER_KIND_TABLE;\n" +
+      "for (const k in RENDERER_KIND_TABLE) {}\n" +
+      "register(RENDERER_KIND_TABLE);\n";
+    expect(scan(text)).toEqual(["unreadable entry: the table escapes: register(RENDERER_KIND_TABLE)"]);
+  });
+
+  it("refuses a write to an imported table, also through a namespace or a renamed import", () => {
+    const text =
+      'import { RENDERER_KIND_TABLE as table } from "./kinds";\n' +
+      'import * as kinds from "./kinds";\n' +
+      'table["zephyr-sender"] = Floor;\n' +
+      "kinds.RENDERER_KIND_TABLE.extra = Floor;\n";
+    expect(scan(text)).toEqual([
+      'unreadable entry: table["zephyr-sender"] =',
+      "unreadable entry: kinds.RENDERER_KIND_TABLE.extra =",
+    ]);
+  });
+
+  it("reads a table exported in another statement, two tables in one file, and a table inside a function", () => {
+    const text =
+      tableOf('  "zephyr-sender": { renderer: Floor },') +
+      "export { RENDERER_KIND_TABLE };\n" +
+      tableOf('  "acme-invoice-review": { renderer: Floor },', "OTHER_KIND_TABLE") +
+      "export function make() {\n" +
+      '  const localKindTable = { "zephyr-sender": 1 } as const;\n' +
+      "  return Object.keys(localKindTable);\n" +
+      "}\n";
+    const r = scanIn(FILE, text);
+    expect(r.tables).toBe(3);
+    expect(r.findings.map((f) => [f.detail, f.line])).toEqual([
+      [Z, 2],
+      ["acme-invoice-review (@cinatra-ai/acme-invoice-agent)", 6],
+      [`${Z} (occurrence 2)`, 9],
+    ]);
+  });
+
+  it("reads a TSX table whose values hold JSX, and fails closed on a file that does not parse", () => {
+    const tsx = tableOf(
+      '  "list-picker": { render: () => <div className="a}">{"}"}</div> },\n  "zephyr-sender": { render: () => <Floor /> },',
+    );
+    expect(scan(tsx, "packages/agents/src/synthetic-kind-table.tsx")).toEqual([Z]);
+    const broken = tableOf('  "list-picker": { renderer: Picker ,,, },\n  "zephyr-sender": {');
+    expect(scan(broken)[0]).toMatch(/^unreadable entry: \(the file does not parse: /);
+  });
+
+  it("refuses a method or an accessor in the table", () => {
+    expect(scan(tableOf("  get zephyrSender() { return Floor; },\n  form() { return Form; },"))).toEqual([
+      "unreadable entry: get zephyrSender",
+      "unreadable entry: method form",
+    ]);
+  });
+
+  it("names the pinned package(s) each kind matched", () => {
+    const packs = new Set([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector", "@cinatra-ai/text-artifact"]);
+    const r = gate.scanStepScreenKindTables({ file: FILE, text: tableOf('  "zephyr-sender": 1,\n  "text-input": 2,'), packs });
+    expect(r.findings.map((f) => f.detail)).toEqual([
+      "zephyr-sender (@cinatra-ai/zephyr-connector, @cinatra-ai/zephyr-mail-connector)",
+    ]);
+  });
+
+  // The reviewer's case: a pack leaves the locks while its kind stays in the
+  // core table. The kind's ledger row names the pack, so the pack stays in the
+  // universe and the row stays live until the kind itself leaves the table.
+  describe("a pack that leaves the locks", () => {
+    const LEDGER_KEY = `${FILE}::${Z}`;
+    const setup = (lockPacks: string[], kinds: string[]) => {
+      const root = mkdtempSync(path.join(tmpdir(), "step-kind-unpin-"));
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      const lock = { packages: lockPacks.map((packageName) => ({ packageName })) };
+      writeFileSync(path.join(root, "cinatra-required-extensions.lock.json"), JSON.stringify(lock));
+      writeFileSync(path.join(root, "cinatra-dev-extensions.lock.json"), JSON.stringify(lock));
+      mkdirSync(path.join(root, "packages", "agents", "src"), { recursive: true });
+      writeFileSync(path.join(root, FILE), tableOf(kinds.map((k) => `  "${k}": { renderer: Floor },`).join("\n")));
+      const baselinePath = path.join(root, "ledger.json");
+      const entries = [{ rule: "pack-step-kind-in-core", key: LEDGER_KEY, reason: "fixture" }];
+      writeFileSync(baselinePath, JSON.stringify({ rules: [...gate.KNOWN_RULES], entries }));
+      return { repoRoot: root, baselinePath };
+    };
+
+    it("keeps the kind's row live after the pack is unpinned, and stale once the kind is gone", () => {
+      const kept = setup(["@cinatra-ai/acme-invoice-agent"], ["list-picker", "zephyr-sender"]);
+      const gone = setup(["@cinatra-ai/acme-invoice-agent"], ["list-picker"]);
+      try {
+        const r = gate.scanRepository(kept);
+        expect(r.stale).toEqual([]);
+        expect(r.violations).toEqual([]);
+        expect(r.findings.filter((f) => f.rule === "pack-step-kind-in-core").map((f) => f.detail)).toEqual([Z]);
+        expect(gate.scanRepository(gone).stale).toEqual([`pack-step-kind-in-core::${LEDGER_KEY}`]);
+      } finally {
+        rmSync(kept.repoRoot, { recursive: true, force: true });
+        rmSync(gone.repoRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the recorded row when a pack added to the locks matches the same kind", () => {
+      const f = setup([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector"], ["zephyr-sender"]);
+      try {
+        const r = gate.scanRepository(f);
+        expect(r.stale).toEqual([]);
+        expect(r.violations).toEqual([]);
+      } finally {
+        rmSync(f.repoRoot, { recursive: true, force: true });
+      }
+    });
   });
 });
 

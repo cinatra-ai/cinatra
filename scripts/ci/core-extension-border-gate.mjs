@@ -59,6 +59,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -447,165 +448,490 @@ export function kindCrossesBorder(kind, runs) {
   return null;
 }
 
-/** A step-screen kind table: `const <NAME>KIND_TABLE = { "<kind>": ... }`. The
- *  rule follows the shape, as the passthrough rule follows `*TOOLS`, not one
- *  module's name. */
-const KIND_TABLE_RE = /(?:const|let|var)\s+([A-Za-z0-9_$]*(?:KIND_TABLE|KindTable))\b/g;
-
-function skipString(text, i) {
-  const quote = text[i];
-  let j = i + 1;
-  while (j < text.length && text[j] !== quote) j += text[j] === "\\" ? 2 : 1;
-  return j + 1;
+/** The pinned packages whose word runs a kind's name carries (cinatra#4852),
+ *  sorted: the lock-derived words that make it a finding. Each one is named in
+ *  the finding's detail, so the ledger key carries the package identity the
+ *  way every other rule's key does, and `loadPackUniverse` keeps a pack the
+ *  ledger names in the universe after it leaves the locks. */
+export function kindMatchedPacks(kind, packs) {
+  const words = String(kind).split(/[-_]/).filter(Boolean);
+  const kindRuns = new Set();
+  for (let k = 1; k <= words.length; k += 1) {
+    for (let i = 0; i + k <= words.length; i += 1) kindRuns.add(words.slice(i, i + k).join("-"));
+  }
+  const out = [];
+  for (const p of packs) {
+    for (const run of packStepWordRuns([p])) {
+      if (kindRuns.has(run)) {
+        out.push(String(p));
+        break;
+      }
+    }
+  }
+  return out.sort();
 }
 
-/** The literal name a computed key `[expr]` stands for: a string literal, a
- *  template literal with no substitution, or an identifier bound once in the
- *  same file by `const NAME = "<literal>"`. Anything else is null. */
-function resolveComputedKey(expr, masked) {
-  const lit = /^(?:"([^"\\]*)"|'([^'\\]*)'|`([^`\\$]*)`)$/.exec(expr);
-  if (lit) return lit[1] ?? lit[2] ?? lit[3];
-  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(expr)) return null;
-  const decl = new RegExp(
-    `\\bconst\\s+${expr.replace(/\$/g, "\\$")}\\s*(?::[^=;]+)?=\\s*(?:"([^"\\\\]*)"|'([^'\\\\]*)'|\`([^\`\\\\$]*)\`)\\s*(?:as\\s+const\\s*)?[;\\n]`,
-    "g",
-  );
-  const values = new Set([...masked.matchAll(decl)].map((m) => m[1] ?? m[2] ?? m[3]));
-  // An imported name has no same-file const; a name also bound by let, var or
-  // function may hold another value.
-  const rebound = new RegExp(`\\b(?:let|var|function)\\s+${expr.replace(/\$/g, "\\$")}\\b`);
-  if (values.size !== 1 || rebound.test(masked)) return null;
-  return [...values][0];
+/** A step-screen kind table is recognised by its NAME, as the passthrough rule
+ *  follows `*TOOLS`, never by one module's file name: a `const`, `let` or `var`
+ *  binding (at any depth, in any product file) whose identifier ends in
+ *  `KIND_TABLE` or `KindTable`. The same name shape marks a REFERENCE to a
+ *  table (declared in the file, imported, or `ns.<NAME>KIND_TABLE`), so a
+ *  write in another file is seen too. */
+const KIND_TABLE_NAME_RE = /^[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)$/;
+
+function scriptKindOf(file) {
+  if (/\.tsx$/.test(file)) return ts.ScriptKind.TSX;
+  if (/\.jsx$/.test(file)) return ts.ScriptKind.JSX;
+  if (/\.[mc]?js$/.test(file)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
 }
 
 const compact = (s) => s.replace(/\s+/g, " ").trim().slice(0, 80);
 
-/** The top-level entries of the object literal a kind table is initialised
- *  with, each with its index in the text: `{ kind, index }` for a key read to
- *  a literal name, `{ unreadable, index }` for one the scanner cannot read (a
- *  computed key it cannot resolve, a spread, a table that is not an object
- *  literal, or one declared without an initializer). FAIL CLOSED: an entry is
- *  read or reported, never skipped. */
-export function kindTableKeys(masked, declIndex) {
-  const n = masked.length;
-  let i = declIndex;
-  let depth = 0;
-  // The type annotation: walk to the `=` at depth 0 (not `==` or `=>`).
-  for (; i < n; i += 1) {
-    const c = masked[i];
-    if (c === '"' || c === "'" || c === "`") {
-      i = skipString(masked, i) - 1;
+/** The expression a type wrapper or parentheses hold: `x as const`,
+ *  `x satisfies T`, `(x)`, `<T>x`, `x!`. */
+function unwrap(node) {
+  let n = node;
+  while (
+    n &&
+    (ts.isParenthesizedExpression(n) ||
+      ts.isAsExpression(n) ||
+      ts.isSatisfiesExpression(n) ||
+      ts.isTypeAssertionExpression(n) ||
+      ts.isNonNullExpression(n))
+  ) {
+    n = n.expression;
+  }
+  return n;
+}
+
+/** The outermost wrapper (parentheses or a type wrapper) around `node`. */
+function climb(node) {
+  let n = node;
+  while (
+    n.parent &&
+    (ts.isParenthesizedExpression(n.parent) ||
+      ts.isAsExpression(n.parent) ||
+      ts.isSatisfiesExpression(n.parent) ||
+      ts.isTypeAssertionExpression(n.parent) ||
+      ts.isNonNullExpression(n.parent))
+  ) {
+    n = n.parent;
+  }
+  return n;
+}
+
+function walk(node, visit) {
+  visit(node);
+  ts.forEachChild(node, (c) => walk(c, visit));
+}
+
+const isAssignmentOperator = (kind) =>
+  kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment;
+
+/** Every binding of `name` in the file and what it holds: the value when the
+ *  binding is `const NAME = "<string>"` (a string or a plain template, through
+ *  `as const` / `satisfies`), else null (a `let`, `var`, parameter, import,
+ *  function, class, destructured name or a const of any other value). */
+function bindingsOf(sf, name) {
+  const out = [];
+  walk(sf, (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name) {
+      const isConst = (ts.getCombinedNodeFlags(n) & ts.NodeFlags.Const) !== 0;
+      const init = n.initializer ? unwrap(n.initializer) : undefined;
+      const literal = init && (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init));
+      out.push(isConst && literal ? init.text : null);
+      return;
+    }
+    if (
+      (ts.isParameter(n) ||
+        ts.isBindingElement(n) ||
+        ts.isFunctionDeclaration(n) ||
+        ts.isClassDeclaration(n) ||
+        ts.isEnumDeclaration(n) ||
+        ts.isImportSpecifier(n) ||
+        ts.isImportClause(n) ||
+        ts.isNamespaceImport(n) ||
+        ts.isImportEqualsDeclaration(n)) &&
+      n.name &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name
+    ) {
+      out.push(null);
+    }
+  });
+  return out;
+}
+
+/** The literal name a computed key `[expr]` stands for: a string literal, a
+ *  template literal with no substitution, or an identifier whose EVERY binding
+ *  in the file is a `const` holding one and the same string. Anything else is
+ *  null. */
+function resolveComputedKey(sf, expr) {
+  const e = unwrap(expr);
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+  if (!ts.isIdentifier(e)) return null;
+  const values = bindingsOf(sf, e.text);
+  if (values.length === 0 || values.includes(null) || new Set(values).size !== 1) return null;
+  return values[0];
+}
+
+/** The entries of one kind table declaration, each with its node: `{ kind,
+ *  node }` for a key read to a literal name, `{ unreadable, node }` for one the
+ *  gate cannot read (an unresolvable computed key, a spread, a method or an
+ *  accessor, a table that is not an object literal, or one declared without an
+ *  initializer). FAIL CLOSED: an entry is read or reported, never skipped. */
+export function kindTableEntries(sf, decl) {
+  if (!decl.initializer) return [{ unreadable: "(no initializer)", node: decl }];
+  const init = unwrap(decl.initializer);
+  if (!ts.isObjectLiteralExpression(init)) {
+    return [{ unreadable: compact(decl.initializer.getText(sf)), node: decl.initializer }];
+  }
+  const entries = [];
+  for (const p of init.properties) {
+    if (ts.isSpreadAssignment(p)) {
+      entries.push({ unreadable: `...${compact(p.expression.getText(sf))}`, node: p });
       continue;
     }
-    if (c === "=" && masked[i + 1] === ">") {
-      i += 1;
+    if (ts.isMethodDeclaration(p) || ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p)) {
+      const how = ts.isGetAccessorDeclaration(p) ? "get " : ts.isSetAccessorDeclaration(p) ? "set " : "method ";
+      entries.push({ unreadable: `${how}${compact(p.name.getText(sf))}`, node: p });
       continue;
     }
-    if ("({[<".includes(c)) depth += 1;
-    else if (")}]>".includes(c)) depth -= 1;
-    else if (c === "=" && depth === 0 && masked[i + 1] !== "=") break;
-    else if (c === ";" && depth === 0) return [{ unreadable: "(no initializer)", index: declIndex }];
-  }
-  if (i >= n) return [{ unreadable: "(no initializer)", index: declIndex }];
-  i += 1;
-  while (i < n && /\s/.test(masked[i])) i += 1;
-  if (masked[i] !== "{") {
-    const end = masked.indexOf(";", i);
-    return [{ unreadable: compact(masked.slice(i, end === -1 ? n : end)), index: i }];
-  }
-  const keys = [];
-  depth = 0;
-  let expectKey = false;
-  for (; i < n; i += 1) {
-    const c = masked[i];
-    if (depth === 1 && expectKey && !/\s/.test(c) && c !== "}") {
-      expectKey = false;
-      const rest = masked.slice(i);
-      const m = /^(?:"([^"\\]*)"|'([^'\\]*)'|([A-Za-z_$][A-Za-z0-9_$]*)|(\d+(?:\.\d+)?))\s*([:,}(])/.exec(rest);
-      if (m && (m[5] === ":" || m[3] !== undefined)) {
-        keys.push({ kind: m[4] !== undefined ? String(Number(m[4])) : (m[1] ?? m[2] ?? m[3]), index: i });
-      } else if (c === "[") {
-        let j = i + 1;
-        for (let d = 1; j < n; j += 1) {
-          const cj = masked[j];
-          if (cj === '"' || cj === "'" || cj === "`") j = skipString(masked, j) - 1;
-          else if (cj === "[") d += 1;
-          else if (cj === "]" && (d -= 1) === 0) break;
-        }
-        const expr = masked.slice(i + 1, j).trim();
-        const kind = resolveComputedKey(expr, masked);
-        keys.push(kind === null ? { unreadable: `[${compact(expr)}]`, index: i } : { kind, index: i });
+    if (ts.isShorthandPropertyAssignment(p)) {
+      entries.push({ kind: p.name.text, node: p });
+      continue;
+    }
+    if (ts.isPropertyAssignment(p)) {
+      const name = p.name;
+      if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) {
+        entries.push({ kind: name.text, node: p });
+      } else if (ts.isNumericLiteral(name)) {
+        entries.push({ kind: String(Number(name.text)), node: p });
+      } else if (ts.isComputedPropertyName(name)) {
+        const kind = resolveComputedKey(sf, name.expression);
+        entries.push(
+          kind === null ? { unreadable: `[${compact(name.expression.getText(sf))}]`, node: p } : { kind, node: p },
+        );
       } else {
-        const end = rest.search(/[,\n}]/);
-        keys.push({ unreadable: compact(rest.slice(0, end === -1 ? rest.length : end)), index: i });
+        entries.push({ unreadable: compact(name.getText(sf)), node: p });
       }
-    }
-    if (c === '"' || c === "'" || c === "`") {
-      i = skipString(masked, i) - 1;
       continue;
     }
-    if ("({[".includes(c)) {
-      depth += 1;
-      if (depth === 1) expectKey = true;
-    } else if (")}]".includes(c)) {
-      depth -= 1;
-      if (depth === 0) break;
-    } else if (c === "," && depth === 1) expectKey = true;
+    entries.push({ unreadable: compact(p.getText(sf)), node: p });
   }
-  return keys;
+  return entries;
+}
+
+/** Calls that write into their first argument, and calls that only read it. */
+const WRITE_CALLS = new Set([
+  "Object.assign",
+  "Object.defineProperty",
+  "Object.defineProperties",
+  "Object.setPrototypeOf",
+  "Reflect.set",
+  "Reflect.defineProperty",
+  "Reflect.setPrototypeOf",
+]);
+const READ_CALLS = new Set([
+  "Object.keys",
+  "Object.values",
+  "Object.entries",
+  "Object.getOwnPropertyNames",
+  "Object.getOwnPropertyDescriptor",
+  "Object.getOwnPropertyDescriptors",
+  "Object.getPrototypeOf",
+  "Object.hasOwn",
+  "Object.freeze",
+  "Object.isFrozen",
+  "Reflect.has",
+  "Reflect.get",
+  "Reflect.ownKeys",
+  "Reflect.getOwnPropertyDescriptor",
+  "JSON.stringify",
+]);
+
+/** The assignment that `node` (inside an array or object literal) is a
+ *  destructuring target of, or null. */
+function destructuringTargetOf(node) {
+  let n = climb(node);
+  for (;;) {
+    const p = n.parent;
+    if (!p) return null;
+    if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken && p.left === n) {
+      return n === climb(node) ? null : p;
+    }
+    if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.initializer === n) return p;
+    if (
+      ts.isArrayLiteralExpression(p) ||
+      ts.isObjectLiteralExpression(p) ||
+      ts.isSpreadElement(p) ||
+      ts.isSpreadAssignment(p) ||
+      ts.isParenthesizedExpression(p) ||
+      (ts.isPropertyAssignment(p) && p.initializer === n) ||
+      (ts.isShorthandPropertyAssignment(p) && p.name === n)
+    ) {
+      n = p;
+      continue;
+    }
+    return null;
+  }
+}
+
+/** True when the identifier is a name being declared, a property name or part
+ *  of a type, not a value reference. */
+function isNotAValueReference(id) {
+  const p = id.parent;
+  if (!p) return true;
+  if (
+    (ts.isVariableDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isFunctionDeclaration(p) ||
+      ts.isClassDeclaration(p) ||
+      ts.isEnumDeclaration(p) ||
+      ts.isInterfaceDeclaration(p) ||
+      ts.isTypeAliasDeclaration(p) ||
+      ts.isPropertyAssignment(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isPropertySignature(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isEnumMember(p) ||
+      ts.isBindingElement(p) ||
+      ts.isImportClause(p) ||
+      ts.isNamespaceImport(p) ||
+      ts.isJsxAttribute(p)) &&
+    p.name === id
+  ) {
+    return true;
+  }
+  if (ts.isBindingElement(p) && p.propertyName === id) return true;
+  if (ts.isImportSpecifier(p) || ts.isExportSpecifier(p)) return true;
+  for (let a = p; a; a = a.parent) {
+    if (ts.isTypeNode(a) || ts.isExpressionWithTypeArguments(a) || ts.isQualifiedName(a)) return true;
+  }
+  return false;
+}
+
+/** The kind tables of one file and every use of them after the declaration
+ *  (cinatra#4852), from the TypeScript syntax tree. Returns the declarations
+ *  (`{ decl }`) and the uses the gate must refuse (`{ unreadable, node }`): a
+ *  write to the table (element or property access as the target of any
+ *  assignment operator, `++`/`--`, a destructuring target, a whole-table
+ *  reassignment, `Object.assign` / `defineProperty` / `defineProperties` and
+ *  the Reflect writers, in any line layout), and a table that ESCAPES the
+ *  gate's reading (handed to a function the gate does not know as a reader,
+ *  put into another literal, returned). A plain alias `const t = TABLE` (or
+ *  `t = TABLE`, or `import { TABLE as t }`) is followed: its uses are judged
+ *  as the table's own. */
+export function kindTableUses(sf) {
+  const declarations = [];
+  walk(sf, (n) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      KIND_TABLE_NAME_RE.test(n.name.text) &&
+      !(n.parent?.parent && (ts.isForOfStatement(n.parent.parent) || ts.isForInStatement(n.parent.parent)))
+    ) {
+      declarations.push(n);
+    }
+  });
+
+  // The names that stand for a table: the name shape, plus the plain aliases
+  // bound from a table name (to a fixed point, so an alias of an alias counts).
+  const aliases = new Set();
+  const isTableName = (name) => KIND_TABLE_NAME_RE.test(name) || aliases.has(name);
+  const refOf = (expr) => {
+    const e = expr && unwrap(expr);
+    if (!e) return false;
+    if (ts.isIdentifier(e)) return isTableName(e.text);
+    return ts.isPropertyAccessExpression(e) && KIND_TABLE_NAME_RE.test(e.name.text);
+  };
+  for (let grew = true; grew; ) {
+    grew = false;
+    walk(sf, (n) => {
+      let alias = null;
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && refOf(n.initializer)) alias = n.name.text;
+      else if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isIdentifier(n.left) &&
+        refOf(n.right)
+      ) {
+        alias = n.left.text;
+      } else if (ts.isImportSpecifier(n) && n.propertyName && KIND_TABLE_NAME_RE.test(n.propertyName.text)) {
+        alias = n.name.text;
+      }
+      if (alias && !isTableName(alias)) {
+        aliases.add(alias);
+        grew = true;
+      }
+    });
+  }
+
+  const refused = [];
+  const refuse = (unreadable, node) => refused.push({ unreadable, node });
+  const text = (n) => compact(n.getText(sf));
+  const declNames = new Set(declarations.map((d) => d.name));
+
+  const judge = (ref) => {
+    const expr = climb(ref);
+    const p = expr.parent;
+    if (!p) return;
+    // A member of the table: a read, unless it is written.
+    if ((ts.isPropertyAccessExpression(p) || ts.isElementAccessExpression(p)) && p.expression === expr) {
+      const access = climb(p);
+      const q = access.parent;
+      if (q && ts.isBinaryExpression(q) && q.left === access && isAssignmentOperator(q.operatorToken.kind)) {
+        refuse(`${text(p)} ${q.operatorToken.getText(sf)}`, ref);
+      } else if (
+        q &&
+        (ts.isPrefixUnaryExpression(q) || ts.isPostfixUnaryExpression(q)) &&
+        (q.operator === ts.SyntaxKind.PlusPlusToken || q.operator === ts.SyntaxKind.MinusMinusToken)
+      ) {
+        refuse(`${text(p)} ${q.operator === ts.SyntaxKind.PlusPlusToken ? "++" : "--"}`, ref);
+      } else if (destructuringTargetOf(p)) {
+        refuse(`${text(p)} (a destructuring target)`, ref);
+      }
+      return;
+    }
+    if (ts.isCallExpression(p) || ts.isNewExpression(p)) {
+      if (p.expression === expr) return; // called, not handed on
+      const callee = text(p.expression);
+      const first = p.arguments?.[0] === expr;
+      if (ts.isCallExpression(p) && first && WRITE_CALLS.has(callee)) refuse(`${callee}(${text(expr)}`, ref);
+      else if (!(ts.isCallExpression(p) && READ_CALLS.has(callee))) refuse(`the table escapes: ${text(p)}`, ref);
+      return;
+    }
+    if (ts.isVariableDeclaration(p) && p.initializer === expr) return; // an alias (followed) or a destructured read
+    if (ts.isBinaryExpression(p)) {
+      const op = p.operatorToken.kind;
+      if (p.left === expr && isAssignmentOperator(op)) {
+        refuse(`${text(expr)} ${p.operatorToken.getText(sf)}`, ref);
+        return;
+      }
+      if (p.right === expr && op === ts.SyntaxKind.EqualsToken && ts.isIdentifier(p.left)) return; // an alias
+      if (
+        (p.right === expr && op === ts.SyntaxKind.InKeyword) ||
+        op === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+        op === ts.SyntaxKind.EqualsEqualsToken ||
+        op === ts.SyntaxKind.ExclamationEqualsToken ||
+        op === ts.SyntaxKind.InstanceOfKeyword
+      ) {
+        return;
+      }
+      refuse(`the table escapes: ${text(p)}`, ref);
+      return;
+    }
+    if ((ts.isForOfStatement(p) || ts.isForInStatement(p)) && p.expression === expr) return;
+    if (ts.isTypeOfExpression(p) || ts.isVoidExpression(p) || ts.isDeleteExpression(p)) return;
+    if (ts.isSpreadAssignment(p)) return; // `{ ...TABLE }` copies it
+    if (ts.isExportAssignment(p)) return;
+    if ((ts.isPrefixUnaryExpression(p) || ts.isPostfixUnaryExpression(p)) && p.operator === ts.SyntaxKind.ExclamationToken) return;
+    refuse(`the table escapes: ${text(p)}`, ref);
+  };
+
+  walk(sf, (n) => {
+    if (ts.isIdentifier(n)) {
+      if (declNames.has(n)) return;
+      if (!isTableName(n.text)) return;
+      if (ts.isPropertyAccessExpression(n.parent) && n.parent.name === n) {
+        // `ns.<NAME>KIND_TABLE`: the whole access is the reference.
+        if (KIND_TABLE_NAME_RE.test(n.text)) judge(n.parent);
+        return;
+      }
+      if (isNotAValueReference(n)) return;
+      if (ts.isShorthandPropertyAssignment(n.parent) && destructuringTargetOf(n)) {
+        refuse(`${n.text} (a destructuring target)`, n);
+        return;
+      }
+      judge(n);
+    }
+  });
+  refused.sort((a, b) => a.node.getStart(sf) - b.node.getStart(sf));
+  return { declarations, refused };
 }
 
 /** A step-screen kind registered in core under a name that carries one pack's
  *  word run (cinatra#4852). Core keeps generic machinery under kinds named for
  *  a screen's shape; the step itself belongs to the agent that declares it.
- *  Returns the findings and the number of kind tables the file holds. */
+ *  The file is read with the TypeScript parser, never by text patterns. Each
+ *  finding names in its detail the pinned package(s) whose words it carries
+ *  (`gmail-sender (@cinatra-ai/gmail-connector)`). Returns the findings and
+ *  the number of kind tables the file declares. */
 export function scanStepScreenKindTables({ file, text, packs }) {
   if (!/(?:KIND_TABLE|KindTable)/.test(text)) return { findings: [], tables: 0 };
-  const masked = maskComments(text);
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKindOf(file));
   const runs = packStepWordRuns(packs);
   const findings = [];
   const counts = new Map();
-  let tables = 0;
-  const unreadable = (text, index) =>
+  const lineAt = (node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  const unreadable = (what, node) =>
     findings.push(
       finding(
         "pack-step-kind-in-core",
         file,
-        lineOf(masked, index),
-        occurrenceDetail(counts, "pack-step-kind-in-core", `unreadable entry: ${text}`),
+        lineAt(node),
+        occurrenceDetail(counts, "pack-step-kind-in-core", `unreadable entry: ${what}`),
         "unreadable kind table entry: the gate cannot read this entry to a literal kind name, so it cannot judge it; " +
-          "write the kind table as an object literal of string keys (a computed key only from a string or a same-file const) and add no entries after it",
+          "write the kind table as an object literal of string keys (a computed key only from a string or a same-file const), " +
+          "add no entries after it and hand it to no code the gate cannot read",
       ),
     );
-  for (const decl of masked.matchAll(KIND_TABLE_RE)) {
-    tables += 1;
-    for (const key of kindTableKeys(masked, decl.index + decl[0].length)) {
-      if (key.unreadable !== undefined) {
-        unreadable(key.unreadable, key.index);
+  // A file that does not parse cannot be read whole: fail closed.
+  for (const d of sf.parseDiagnostics ?? []) {
+    unreadable(`(the file does not parse: ${compact(ts.flattenDiagnosticMessageText(d.messageText, " "))})`, sf);
+    break;
+  }
+  const { declarations, refused } = kindTableUses(sf);
+  for (const decl of declarations) {
+    for (const entry of kindTableEntries(sf, decl)) {
+      if (entry.unreadable !== undefined) {
+        unreadable(entry.unreadable, entry.node);
         continue;
       }
-      const { kind, index } = key;
-      const run = kindCrossesBorder(kind, runs);
+      const run = kindCrossesBorder(entry.kind, runs);
       if (!run) continue;
-      findings.push(
-        finding(
-          "pack-step-kind-in-core",
-          file,
-          lineOf(masked, index),
-          occurrenceDetail(counts, "pack-step-kind-in-core", kind),
-          `core registers a step-screen kind named after one pack (${run}); the agent declares its step with a generic kind named for the screen's shape`,
-        ),
+      const matched = kindMatchedPacks(entry.kind, packs);
+      const f = finding(
+        "pack-step-kind-in-core",
+        file,
+        lineAt(entry.node),
+        occurrenceDetail(counts, "pack-step-kind-in-core", `${entry.kind} (${matched.join(", ")})`),
+        `core registers a step-screen kind named after one pack (${run}); the agent declares its step with a generic kind named for the screen's shape`,
       );
+      f.kind = entry.kind;
+      f.packages = matched;
+      findings.push(f);
     }
   }
-  // An entry added after the declaration (`T[k] = …`, `T.k ??= …`,
-  // `Object.assign(T, …)`) is not in the literal the gate reads.
-  for (const m of masked.matchAll(KIND_TABLE_WRITE_RE)) unreadable(compact(m[0]), m.index);
-  return { findings, tables };
+  for (const r of refused) unreadable(r.unreadable, r.node);
+  return { findings, tables: declarations.length };
 }
 
-const KIND_TABLE_WRITE_RE =
-  /\b[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)\s*(?:\[[^\]\n]*\]|\.[A-Za-z_$][A-Za-z0-9_$]*)\s*(?:\?\?|\|\||&&)?=(?![=>])|\bObject\.(?:assign|defineProperty|defineProperties)\(\s*[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)\b/g;
+const KIND_KEY_RE = /^(.*?)::(.+?) \((@[^()]+)\)(?: \(occurrence (\d+)\))?$/;
+
+/** A kind finding keeps the detail its ledger entry recorded while every
+ *  package that entry names still matches the kind (they stay in the pack
+ *  universe through the ledger): a pack ADDED to the locks that also matches
+ *  the kind does not re-key a standing entry. The kind, the file and the
+ *  occurrence must be the same. */
+export function keepRecordedKindDetails(findings, baselineEntries) {
+  const recorded = new Map();
+  for (const e of baselineEntries ?? []) {
+    if (e?.rule !== "pack-step-kind-in-core") continue;
+    const m = KIND_KEY_RE.exec(String(e.key ?? ""));
+    if (!m) continue;
+    recorded.set(`${m[1]}::${m[2]}::${m[4] ?? "1"}`, { detail: String(e.key).slice(m[1].length + 2), packages: m[3].split(", ") });
+  }
+  for (const f of findings) {
+    if (f.rule !== "pack-step-kind-in-core" || !f.kind) continue;
+    const occ = /\(occurrence (\d+)\)$/.exec(f.detail)?.[1] ?? "1";
+    const r = recorded.get(`${f.file}::${f.kind}::${occ}`);
+    if (r && r.detail !== f.detail && r.packages.every((p) => f.packages.includes(p))) f.detail = r.detail;
+  }
+  return findings;
+}
 
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
@@ -980,6 +1306,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       kindTables += kinds.tables;
     }
   }
+  keepRecordedKindDetails(findings, baseline.entries);
   // FAIL CLOSED (cinatra#4852): a tree whose product code holds no step-screen
   // kind table would turn the rule off in silence, so it is refused.
   if (kindTables === 0) {

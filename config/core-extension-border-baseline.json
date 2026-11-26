@@ -105,37 +105,37 @@
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::blog-idea-selection",
+      "key": "packages/agents/src/register-default-renderers.ts::blog-idea-selection (@cinatra-ai/blog-connector, @cinatra-ai/blog-idea-artifact, @cinatra-ai/blog-idea-authoring-skill, @cinatra-ai/blog-idea-generator-agent, @cinatra-ai/blog-idea-matcher-skill)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::email-drafts-review",
+      "key": "packages/agents/src/register-default-renderers.ts::email-drafts-review (@cinatra-ai/email-connector)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::follow-up-cadence",
+      "key": "packages/agents/src/register-default-renderers.ts::follow-up-cadence (@cinatra-ai/email-follow-up-agent)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::gmail-sender",
+      "key": "packages/agents/src/register-default-renderers.ts::gmail-sender (@cinatra-ai/gmail-connector)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::linkedin-draft-review",
+      "key": "packages/agents/src/register-default-renderers.ts::linkedin-draft-review (@cinatra-ai/linkedin-connector, @cinatra-ai/linkedin-oauth-connector)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::test-delivery-input",
+      "key": "packages/agents/src/register-default-renderers.ts::test-delivery-input (@cinatra-ai/email-test-delivery-agent)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-step-kind-in-core",
-      "key": "packages/agents/src/register-default-renderers.ts::wordpress-draft-confirm",
+      "key": "packages/agents/src/register-default-renderers.ts::wordpress-draft-confirm (@cinatra-ai/wordpress-agent, @cinatra-ai/wordpress-assistant-connector, @cinatra-ai/wordpress-mcp-connector)",
       "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
     },
     {
