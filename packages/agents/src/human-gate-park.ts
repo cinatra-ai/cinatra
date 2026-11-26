@@ -307,6 +307,28 @@ export async function parkRunOnHumanGate(
             `remains the gate's artifact`,
         );
       }
+      // THE FRAME SHOWS THE STORED CARD (cinatra#3470). Two first parks of one
+      // pause on different builds can stamp different cards; the row keeps the
+      // first, and the answer is checked against the row. So the stored card is
+      // read back, and if its digest differs from this frame's, the stored one
+      // is emitted as the latest frame. A read that fails fails the park.
+      if (options.midRunStep && persistError === null) {
+        let settled: HumanGateArtifact;
+        try {
+          settled = await withDeclaredScreenOfStep(artifact, options.midRunStep.readPausedRow, needsRow);
+        } catch (err) {
+          return fail(`the step's recorded card could not be read back (${describe(err)})`);
+        }
+        const digestOf = (a: HumanGateArtifact): unknown =>
+          (a.schema[DECLARED_SCREEN_KEY] as { digest?: unknown } | undefined)?.digest;
+        if (digestOf(settled) !== digestOf(artifact)) {
+          try {
+            await emitInterrupt(settled);
+          } catch (err) {
+            return fail(`the step's recorded card could not be emitted (${describe(err)})`);
+          }
+        }
+      }
     }
     if (alreadyParked) {
       console.log(

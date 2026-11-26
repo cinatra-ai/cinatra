@@ -31,6 +31,8 @@ vi.mock("@/lib/generated/agent-bindings", async (orig) => ({
 
 import { parkRunOnHumanGate, type HumanGateArtifact } from "../human-gate-park";
 import { writeDurableHitlGateArtifact } from "../store";
+import { declaredHitlCheckedAnswer } from "../hitl-gate-submit";
+import { declaredCardOfStep } from "../review-task-actions";
 
 /** The stored form of a card: the card and the sha-256 of its canonical JSON. */
 const canon = (v: unknown): string =>
@@ -207,5 +209,58 @@ describe("a step that carries a card is not parked without its row", () => {
     expect(outcome.outcome).toBe("parked");
     expect(writes).toBe(1);
     expect(parkRun).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("two first parks of one pause on different builds (cinatra#3470)", () => {
+  it("both frames end on the card the row kept, and an answer to that card is accepted", async () => {
+    // An in-memory row store with the row writer's rule: the first card of a
+    // pause (same renderer) is kept whatever a later write brings.
+    let row: { xRenderer: string; inputSchema: Record<string, unknown> } | null = null;
+    const write = (a: HumanGateArtifact) => {
+      const kept = row && row.xRenderer === a.xRenderer && Object.hasOwn(row.inputSchema, "x-declared-screen")
+        ? { ...a.schema, "x-declared-screen": row.inputSchema["x-declared-screen"] }
+        : a.schema;
+      row = { xRenderer: a.xRenderer, inputSchema: kept };
+    };
+    const parkOn = async (staleFirstRead: boolean) => {
+      const frames: Array<Record<string, unknown>> = [];
+      let reads = 0;
+      const outcome = await parkRunOnHumanGate({
+        runId: "run-3470",
+        gateLabel: "card step",
+        alreadyParked: false,
+        buildArtifact: async () => ({ schema: { type: "object" }, xRenderer: ID, values: {}, reviewTaskId: "wayflow-3470" }),
+        emitInterrupt: (a) => void frames.push(a.schema),
+        readBackGate: async () => ({ reviewTaskId: "wayflow-3470", xRenderer: ID }),
+        // The second worker read "no row" before the first one's write landed.
+        midRunStep: {
+          readPausedRow: async () =>
+            (reads++ === 0 && staleFirstRead) || row === null ? { read: "none" as const } : { read: "row" as const, gate: row },
+        },
+        persistArtifact: async (a) => write(a),
+        parkRun: async () => {},
+        failRun: async () => {},
+        attempts: 1,
+        delayMs: 0,
+      });
+      return { outcome, last: frames.at(-1) };
+    };
+    deploy(SCREEN);
+    const first = await parkOn(false);
+    deploy(SCREEN_V2);
+    const second = await parkOn(true);
+    expect(first.outcome.outcome).toBe("parked");
+    expect(second.outcome.outcome).toBe("parked");
+    expect(first.last).toEqual({ type: "object", ...stored(SCREEN) });
+    expect(second.last).toEqual({ type: "object", ...stored(SCREEN) });
+    const card = declaredCardOfStep({ read: "row", gate: row! });
+    if (card === null || card === "unknown") throw new Error("the row holds no readable card");
+    const answer = { angle: "Why runs need a record" };
+    const sent = { ...answer, userResponse: JSON.stringify(answer), approved: true };
+    expect(declaredHitlCheckedAnswer(card, {}, sent)).not.toHaveProperty("refusal");
+    // The visible card's fields are the stored card's: an answer to the newer build's card is refused.
+    const hook = { hook: "A hook" };
+    expect(declaredHitlCheckedAnswer(card, {}, { ...hook, userResponse: JSON.stringify(hook), approved: true })).toHaveProperty("refusal");
   });
 });
