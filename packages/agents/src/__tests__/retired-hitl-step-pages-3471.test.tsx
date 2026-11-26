@@ -142,15 +142,21 @@ describe("the orchestrator stepper and a retired step", () => {
 });
 
 describe("the HITL screen card and a retired step", () => {
-  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) {
+  // A mid-run gate and a setup gate (`setup-<runId>` with its field name) are
+  // both drawn through the card: neither gets a Continue under a retired id.
+  const GATES = [
+    { name: "mid-run gate", reviewTaskId: TASK_ID, fieldName: undefined as string | undefined },
+    { name: "setup gate", reviewTaskId: `setup-${RUN_ID}`, fieldName: "note" as string | undefined },
+  ];
+  for (const host of ["run_card", "chat_thread"] as LifecycleCardHost[]) for (const g of GATES) {
     // red-first-expect: to have a length of +0 but got 1
-    it(`${host}: shows the no-renderer paragraph and no Continue for every tombstoned id`, async () => {
+    it(`${host}, ${g.name}: shows the no-renderer paragraph and no Continue for every tombstoned id`, async () => {
       for (const id of TOMBSTONED) {
         const asking = {
           state: "asking" as const,
           runId: RUN_ID,
           screenRef: "hitl-screen-ref-retired",
-          gate: { reviewTaskId: TASK_ID, xRenderer: id, inputSchema: SCHEMA, currentValues: {}, fieldName: undefined },
+          gate: { reviewTaskId: g.reviewTaskId, xRenderer: id, inputSchema: SCHEMA, currentValues: {}, fieldName: g.fieldName },
         };
         screenStateMock.mockImplementation(async () => asking);
         globalThis.fetch = (async () =>

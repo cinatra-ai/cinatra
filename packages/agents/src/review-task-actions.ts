@@ -367,6 +367,12 @@ export async function approveReviewTaskInternal(
       );
     }
 
+    // cinatra#3471: a setup gate parked under a retired renderer id is answered
+    // by nothing either. The gate's own durable row (keyed `setup-<runId>`, the
+    // renderer id the setup loop stored) decides, never the caller's payload;
+    // refused before the merge, the status flip and the enqueue below.
+    if (await parkedStepIsRetired(runId, reviewTaskId)) throw new Error(RETIRED_HITL_STEP_REFUSAL);
+
     // Build the inputParams JSONB-merge fragment (single-field or grouped
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
