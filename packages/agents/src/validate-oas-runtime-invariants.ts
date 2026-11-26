@@ -113,6 +113,7 @@ import {
   ARTIFACT_MATERIALIZE_TOOL,
   ARTIFACT_PAGE_CAPTURE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
+  readFlowControlTopology,
 } from "./artifact-binding";
 import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 import {
@@ -1044,6 +1045,48 @@ function rootNodeDeclaresOutput(
   return node["component_type"] === "StartNode" && has(node["inputs"]);
 }
 
+/**
+ * Whether the root flow's control graph makes `source` run before every visit
+ * of `gate` (cinatra#4150, rule 013): the gate is reachable from the start node,
+ * and with `source` removed it is not. The graph is the one the compiler orders
+ * its steps by (`readFlowControlTopology`, oas-compiler.ts step 5): every
+ * `control_flow_connections` edge from `from_node` to `to_node`, each branch of
+ * a branching node an edge of its own. The compiler's schema accepts only a
+ * ControlFlowEdge with both node references; a flow with any other entry, or
+ * without a start node, cannot be read and is reported (null).
+ */
+function controlDominates(
+  parsed: Record<string, unknown>,
+  source: string,
+  gate: string,
+): "dominates" | "unreachable" | "bypassed" | null {
+  const edges = parsed["control_flow_connections"];
+  const refOf = (v: unknown) => resolveComponentRef(v);
+  if (
+    !Array.isArray(edges) ||
+    refOf(parsed["start_node"]) === null ||
+    !edges.every((e) => isPlainObject(e) && e["component_type"] === "ControlFlowEdge" &&
+      refOf(e["from_node"]) !== null && refOf(e["to_node"]) !== null)
+  ) return null;
+  const { adjacency } = readFlowControlTopology(parsed);
+  const start = refOf(parsed["start_node"])!;
+  const reaches = (removed: string | null): boolean => {
+    if (start === removed) return false;
+    const seen = new Set<string>([start]);
+    const queue = [start];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (id === gate) return true;
+      for (const n of adjacency.get(id) ?? []) {
+        if (n !== removed && !seen.has(n)) { seen.add(n); queue.push(n); }
+      }
+    }
+    return false;
+  };
+  if (!reaches(null)) return "unreachable";
+  return reaches(source) ? "bypassed" : "dominates";
+}
+
 function scanInputMessageGateMountability(
   parsed: Record<string, unknown>,
 ): ReviewFinding[] {
@@ -1076,16 +1119,42 @@ function scanInputMessageGateMountability(
       const named = (list: unknown) =>
         Array.isArray(list) && list.some((i) => isPlainObject(i) && i["title"] === target);
       const gateKey = rootNodeKeyOf.get(node);
-      const sourced = () =>
-        (Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : []).some((e) => {
-          if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") return false;
+      // The root-flow nodes that a DataFlowEdge feeding the targets input reads.
+      const feeders = () =>
+        (Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : []).flatMap((e) => {
+          if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") return [];
           const from = resolveComponentRef(e["source_node"]);
           const output = e["source_output"];
           return resolveComponentRef(e["destination_node"]) === gateKey &&
             e["destination_input"] === target &&
             from !== null && from !== gateKey && [...rootNodeKeyOf.values()].includes(from) &&
-            typeof output === "string" && rootNodeDeclaresOutput(gateRootRefs[from], output, gateRootRefs);
+            typeof output === "string" && rootNodeDeclaresOutput(gateRootRefs[from], output, gateRootRefs)
+            ? [from] : [];
         });
+      // A fed input has a value at the pause only when its source has run: the
+      // source must dominate the gate in the root control graph. The start-input
+      // road needs no such check: the start inputs exist before any step runs.
+      const unordered = (): string | null => {
+        const sources = feeders();
+        if (sources.length === 0) {
+          return `no DataFlowEdge of the root flow feeds its input "${target}" from an output ` +
+            `that a node of the root flow declares, so the loader renders the input as ` +
+            `null and the review has no targets`;
+        }
+        const readings = sources.map((s) => controlDominates(parsed, s, gateKey!));
+        if (readings.includes("dominates")) return null;
+        if (readings.includes(null)) {
+          return `the root flow's control_flow_connections cannot be read (each entry must be a ` +
+            `ControlFlowEdge with from_node and to_node, and the flow needs a start_node), so ` +
+            `nothing shows that the step feeding "${target}" runs before the gate`;
+        }
+        if (readings.includes("unreachable")) {
+          return `no control path of the root flow leads from its start node to the gate`;
+        }
+        return `a control path of the root flow reaches the gate without passing through ` +
+          `${sources.map((s) => `"${s}"`).join(", ")}, the step(s) feeding "${target}", so the ` +
+          `input can be null when the gate pauses and the review has no targets`;
+      };
       const missing =
         typeof target !== "string" || target === ""
           ? `the marker does not name an input (it must be a non-empty text)`
@@ -1100,11 +1169,7 @@ function scanInputMessageGateMountability(
                   ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${target}" is not a start input of the flow`
                   : !named(node["inputs"])
                     ? `"${target}" is not one of its declared inputs nor a start input of the flow`
-                    : !sourced()
-                      ? `no DataFlowEdge of the root flow feeds its input "${target}" from an output ` +
-                        `that a node of the root flow declares, so the loader renders the input as ` +
-                        `null and the review has no targets`
-                      : null;
+                    : unordered();
       if (missing) {
         findings.push({
           code: "OAS-RUNTIME-013",
@@ -1115,7 +1180,8 @@ function scanInputMessageGateMountability(
             `so the application opens no artifact review. A review gate is an ` +
             `InputMessageNode of the root flow whose targets input is a start input ` +
             `of the root flow, or that sets surfaceGateInputs: true and declares the ` +
-            `targets input, fed by a DataFlowEdge from an output a root-flow node declares. ` +
+            `targets input, fed by a DataFlowEdge from an output of a root-flow node that ` +
+            `every control path from the start node passes before the gate. ` +
             `${HITL_GATE_DOC}`,
           location: path,
           source: "deterministic",

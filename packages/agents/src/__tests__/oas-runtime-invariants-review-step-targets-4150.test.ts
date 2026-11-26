@@ -5,7 +5,8 @@
  * (OAS-RUNTIME-013): the gate must be an InputMessageNode of the root flow, and
  * its targets input must be a start input of the root flow, or a declared input
  * that surfaceGateInputs: true surfaces and that a DataFlowEdge of the root flow
- * feeds from an output a root-flow node declares.
+ * feeds from an output of a root-flow node that every control path from the
+ * start node passes before the gate.
  *
  * The fleet sweep over every pinned pack is `oas-runtime-invariants.test.ts`
  * (allow-list: `__fixtures__/known-broken-agents.ts`).
@@ -18,6 +19,21 @@ import { scanOasForRuntimeInvariantFindings } from "../validate-oas-runtime-inva
 
 type Node = Record<string, unknown>;
 
+/** A ControlFlowEdge of the flow. */
+const ctl = (from: string, to: string, branch: string | null = null): Node => ({
+  component_type: "ControlFlowEdge",
+  name: `${from}->${to}`,
+  from_node: { $component_ref: from },
+  from_branch: branch,
+  to_node: { $component_ref: to },
+});
+/** The control chain start -> each of `keys` in order -> end. */
+const chain = (keys: string[]): Node[] => {
+  const all = ["start", ...keys, "end"];
+  return all.slice(1).map((to, i) => ctl(all[i]!, to));
+};
+
+/** A flow whose control edges run start -> each of `top` in order -> end. */
 function flow(components: Record<string, Node>, top: string[], outputs: Node[] = []): Node {
   return {
     agentspec_version: "26.1.0",
@@ -28,7 +44,7 @@ function flow(components: Record<string, Node>, top: string[], outputs: Node[] =
     outputs,
     start_node: { $component_ref: "start" },
     nodes: ["start", ...top, "end"].map((k) => ({ $component_ref: k })),
-    control_flow_connections: [],
+    control_flow_connections: chain(top),
     data_flow_connections: [],
     $referenced_components: {
       start: { component_type: "StartNode", id: "start", name: "start", inputs: [] },
@@ -88,6 +104,7 @@ const fed = (
   data_flow_connections: edges,
 });
 const RULE = "declares metadata.cinatra.artifactReview.targetsInput";
+const BYPASSED = 'reaches the gate without passing through "make"';
 const NOT_FED = 'no DataFlowEdge of the root flow feeds its input "reviewTargets"';
 const codes = (doc: Node, text: string) =>
   scanOasForRuntimeInvariantFindings(doc).filter((f) => f.code === "OAS-RUNTIME-013" && f.message.includes(text));
@@ -176,7 +193,7 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
 
   it("refuses an edge whose source is not a node of the root flow", () => {
     // A component of the root `$referenced_components` that the root `nodes` do not list.
-    const unlisted = {
+    const unlisted: Node = {
       ...flow({ g: gate("g", surfaced) }, ["g"]),
       data_flow_connections: [edge("make", "targets", "g", "reviewTargets")],
     };
@@ -218,7 +235,7 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
 
   it("accepts an edge from the StartNode's inputs, and refuses one from an input the StartNode does not have", () => {
     const fromStart = (inputs: Node[]): Node => {
-      const doc = {
+      const doc: Node = {
         ...flow({ g: gate("g", surfaced) }, ["g"]),
         data_flow_connections: [edge("start", "targets", "g", "reviewTargets")],
       };
@@ -232,5 +249,78 @@ describe("OAS-RUNTIME-013: a review step gets its targets (cinatra#4150)", () =>
   it("leaves an unmarked gate alone, and still refuses a marked one beside it", () => {
     const doc = flow({ plain: gate("plain", {}), o: subflowNode("o", { inner: gate("inner", {}) }), g: gate("g", review) }, ["plain", "o", "g"]);
     expect(codes(doc, RULE).map((x) => x.message)).toEqual([expect.stringContaining('Gate "g"')]);
+  });
+
+  // The edge alone does not deliver: the loader renders the input from the
+  // producer's output only after the producer has run, and execution follows
+  // the control edges. The producer must lie on every control path from the
+  // start node to the gate.
+  describe("the feeding step runs before the gate on every control path", () => {
+    const withControl = (control: Node[], extra: Record<string, Node> = {}, top: string[] = ["make", "g"]): Node => {
+      const doc = fed(gate("g", surfaced));
+      Object.assign(doc.$referenced_components as Record<string, Node>, extra);
+      return { ...doc, nodes: ["start", ...top, "end"].map((k) => ({ $component_ref: k })), control_flow_connections: control };
+    };
+
+    it("accepts a producer upstream of the gate on the single path", () => {
+      expect(codes(withControl(chain(["make", "g"])), RULE)).toEqual([]);
+    });
+
+    it("refuses a producer downstream of the gate", () => {
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(withControl(chain(["g", "make"])), BYPASSED)).toHaveLength(1);
+    });
+
+    it("refuses a producer the control graph never reaches", () => {
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(withControl(chain(["g"])), BYPASSED)).toHaveLength(1);
+    });
+
+    it("refuses a producer on only one of two branches that both reach the gate", () => {
+      const branch = { component_type: "BranchingNode", id: "pick", name: "pick", mapping: { a: "a" } };
+      const other = producer("other", []);
+      const control = [
+        ctl("start", "pick"),
+        ctl("pick", "make", "a"),
+        ctl("pick", "other", "default"),
+        ctl("make", "g"),
+        ctl("other", "g"),
+        ctl("g", "end"),
+      ];
+      const doc = withControl(control, { pick: branch, other }, ["pick", "make", "other", "g"]);
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(doc, BYPASSED)).toHaveLength(1);
+      // With the producer before the branch it runs on both paths.
+      const before = withControl(
+        [ctl("start", "make"), ctl("make", "pick"), ctl("pick", "other", "a"), ctl("pick", "g", "default"), ctl("other", "g"), ctl("g", "end")],
+        { pick: branch, other },
+        ["make", "pick", "other", "g"],
+      );
+      expect(codes(before, RULE)).toEqual([]);
+    });
+
+    // A revisited gate pauses on every visit, so the rule asks for dominance:
+    // a loop back to the producer before the gate passes; a loop whose first
+    // visit of the gate comes before the producer is refused, although later
+    // visits would carry targets.
+    it("decides a loop by dominance: producer before the first visit passes, after it is refused", () => {
+      const loopBefore = withControl([ctl("start", "make"), ctl("make", "g"), ctl("g", "make"), ctl("g", "end")]);
+      expect(codes(loopBefore, RULE)).toEqual([]);
+      const loopAfter = withControl([ctl("start", "g"), ctl("g", "make"), ctl("make", "g"), ctl("g", "end")]);
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(loopAfter, BYPASSED)).toHaveLength(1);
+    });
+
+    it("refuses a gate the start node never reaches, and a flow whose control edges cannot be read", () => {
+      const unreachable = withControl([ctl("start", "make"), ctl("make", "end")]);
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(unreachable, "no control path of the root flow leads from its start node to the gate")).toHaveLength(1);
+      const unreadable = withControl([...chain(["make", "g"]), { component_type: "ControlFlowEdge", name: "broken", from_node: { $component_ref: "g" } }]);
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(unreadable, "control_flow_connections cannot be read")).toHaveLength(1);
+      const untyped = withControl(chain(["make", "g"]).map((e) => ({ ...e, component_type: "Edge" })));
+      // red-first-expect: expected [] to have a length of 1 but got +0
+      expect(codes(untyped, "control_flow_connections cannot be read")).toHaveLength(1);
+    });
   });
 });
