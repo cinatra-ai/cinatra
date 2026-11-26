@@ -51,7 +51,13 @@ import {
   readOnlyArtifactEdit,
 } from "@/lib/artifacts/artifact-renderer-props";
 import { hostArtifactContentBuilder } from "./review-surface-roads";
-import { readArtifactPageReviewReading } from "./artifact-page-review-reading";
+import {
+  readArtifactPageReviewReading,
+  readArtifactPageRevisionReview,
+  revisionReviewReading,
+} from "./artifact-page-review-reading";
+import { ArtifactMetaLine } from "./artifact-meta-line";
+import { ReviewGateSettled } from "@cinatra-ai/agents/review-gate-states";
 import { admittedDashboardLiveAddress, readArtifactTypeGate } from "./artifact-type-read-gate";
 import {
   artifactDisplayTitle,
@@ -298,7 +304,20 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
   // THE REVIEW READING (cinatra#3092). Read here, past the row's own read
   // authorization and the type's own read gate above, so a reader the row is
   // hidden from learns nothing of its reviews.
-  const review = await readArtifactPageReviewReading({ orgId, artifactId: id });
+  //
+  // THE REVISION SHOWN, AS A REVIEW TARGET (§XI): pinned where a gate of this
+  // organization pins it, settled once that review is decided. An open review
+  // anywhere on the artifact hands the pending reading, and so does an open
+  // review the revision read sees (the two reads can disagree if a review opens
+  // between them); otherwise a revision a person approved hands the continued
+  // reading, on the review card's own rule, so the display draws its own
+  // continued reading inside it.
+  const [openReading, revisionReview] = await Promise.all([
+    readArtifactPageReviewReading({ orgId, artifactId: id }),
+    readArtifactPageRevisionReview({ orgId, artifactId: id, revisionId }),
+  ]);
+  const review =
+    openReading ?? revisionReviewReading(revisionReview, displayedArtifact.sourceUrl);
 
   // The normalized, serializable renderer props snapshot (AC-5) — supplied to an
   // extension-shipped renderer; the host context never crosses into it.
@@ -371,6 +390,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
     revisionId,
     ownerName,
     display: displayIdentity,
+    pinned: revisionReview.pinned,
   });
   // `PageHeader` broadcasts this string to the trail's leaf crumb, so it is the
   // one place the Breadcrumb rule against a raw id in a name's place lands.
@@ -405,7 +425,7 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
             </span>
           </span>
         }
-        meta={header.metaCells.join(" · ")}
+        meta={<ArtifactMetaLine cells={header.metaCells} pinnedCellIndex={header.pinnedCellIndex} />}
         // THE HEADER CARRIES NO DOWNLOAD. The drawing closes this header at the
         // mono meta line, and it gives the download to the KIND: the pdf's own
         // download floor (§XI.2, §XI.4), the download card of a file nothing can
@@ -474,6 +494,18 @@ export default async function ArtifactDetailPage({ params }: PageProps) {
             )
           }
         />
+        {/* THE SETTLED MARKER, BELOW THE WHOLE DISPLAY (§XI, §XI.5, §XI.7,
+            §XI.8; cinatra#3092): "The host draws only Continued / Decided on the
+            revision above. beneath the whole display", a block of its own and
+            never a row inside it, with no second status. The review card's own
+            component and words, drawn only for a decided review of the revision
+            shown; no display draws one of its own. The drawing sets it 10px
+            under the display, inside this column's 24px gap. */}
+        {revisionReview.settled ? (
+          <div className="-mt-3.5">
+            <ReviewGateSettled outcome={revisionReview.settled.outcome} />
+          </div>
+        ) : null}
       </PageContent>
     </Main>
   );

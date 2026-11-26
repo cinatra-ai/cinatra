@@ -41,9 +41,6 @@ vi.mock("@/lib/artifacts/artifact-content-substance-reader", () => ({
 vi.mock("@/lib/lifecycle/review-island-byte-road", () => ({
   buildIslandArtifactByteMinter: () => () => null,
 }));
-vi.mock("@/lib/lifecycle/widget-capture-egress", () => ({
-  buildBrokerCapturePair: () => null,
-}));
 
 import * as hostProps from "@/lib/artifacts/artifact-renderer-props";
 import { ArtifactStructuredDataView } from "@/components/artifacts/artifact-structured-data-view";
@@ -245,5 +242,21 @@ describe("(4) core never draws the road", () => {
     const html = renderToStaticMarkup(createElement(ArtifactStructuredDataView, { props }));
     expect(html).not.toContain(CUBE_ROUTE);
     expect(html).not.toContain("cubejs");
+  });
+});
+
+describe("(5) the roads a surface can choose (cinatra#3862 leg 8)", () => {
+  // A surface names its byte road, its content channel, its data road and its
+  // dashboard live address reader. It used to name a fifth, the builder of a
+  // target's pinned before/after pictures; those are not drawn on any surface
+  // now (lifecycle cards, section III), so the contract has no such road.
+  // red-first-expect: expected [ 'byteMinter', 'buildContent', …(3) ] to deeply equal [ 'byteMinter', 'buildContent', …(2) ]
+  it("the roads contract names the byte, content, data and dashboard roads, and no other", () => {
+    const body = /export interface ReviewSurfaceRoads \{([\s\S]*?)\n\}/.exec(
+      source("src/app/artifacts/[id]/review-surface-roads.ts"),
+    )?.[1];
+    expect(body).toBeDefined();
+    const fields = [...body!.matchAll(/^ {2}([A-Za-z_$][\w$]*)\??:/gm)].map((m) => m[1]);
+    expect(fields).toEqual(["byteMinter", "buildContent", "dataRoad", "dashboardLiveAddress"]);
   });
 });

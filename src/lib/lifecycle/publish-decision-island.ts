@@ -154,9 +154,8 @@ export const PUBLISH_DECISION_ISLAND_PORTS: PublishDecisionIslandPorts = {
       // The decision is the card's, not this frame's: no display offers the live navigation.
       reading: "pending",
     }),
-  // An ordinary pairing: a publish target's pinned pictures are read by the target itself (published vs proposed).
-  stream: ({ orgId, started, roads }) =>
-    streamReviewTargets(orgId, started, () => Promise.resolve({ kind: "ordinary" as const }), roads),
+  // Each target streams behind its own preparation; no stored capture pair is drawn (cinatra#3862).
+  stream: ({ started }) => streamReviewTargets(started),
 };
 
 /** The island's surface for one artifacts row of a publish card. */

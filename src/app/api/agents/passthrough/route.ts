@@ -36,6 +36,7 @@ import {
 } from "@/lib/artifact-page-capture-shaper";
 import {
   shapeTestDeliverySendInput,
+  shapeTestDeliveryRunSendInput,
   shapeTestDeliverySendResult,
 } from "./test-delivery-seam";
 import {
@@ -127,6 +128,10 @@ const ALLOWED_TOOLS = new Set([
   // run-bound frame established below (never the request body).
   "email_test_delivery_run_send",
   "email_test_delivery_parse_action",
+  // cinatra#4150: the pinned plan of a campaign test send. Sends nothing; its
+  // answer feeds the run's publish card and the pinned send. Same run-bound
+  // frame (run, campaign, submission from the frame, never the body).
+  "campaign_test_send_plan",
   // Run-scoped drafts-review PERSIST primitive (cinatra#1959) — the re-entrant
   // drafts / follow-ups gate's post-resume `apply` node dispatches this to write
   // the operator's reviewed per-recipient edits onto the run's own draft-bundle
@@ -175,6 +180,8 @@ const RUN_SCOPED_CONTEXT_TOOLS = new Set<string>([
   // context-id-bound run row's a2aTaskId) as its ledger dedupe identity.
   "email_test_delivery_run_send",
   "email_test_delivery_parse_action",
+  // cinatra#4150 — reads verifiedRunScopeId and verifiedSubmissionId like the send.
+  "campaign_test_send_plan",
   // #1959 — persists the reviewed drafts onto the run's own draft-bundle object;
   // reads verifiedRunScopeId from the frame (never the caller-supplied runId).
   "email_outreach_initial_drafts_update",
@@ -354,7 +361,11 @@ TOOL_INPUT_SHAPERS.artifact_page_capture = (raw) => shapeArtifactPageCaptureInpu
 // lives in ./test-delivery-seam (zero-dep, unit-tested). It JSON-parses the
 // gate's `envelopeJson` (the ApiNode cannot pass native id arrays — wayflowcore
 // stringifies json_body templates) and projects the send fields the handler reads.
-TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliverySendInput(raw);
+// cinatra#4150: a body carrying `planJson` is the PINNED shape (the plan the
+// publish card showed), forwarded as `pinnedPlanJson`; any other body keeps the
+// envelope projection above unchanged. The plan primitive takes the envelope.
+TOOL_INPUT_SHAPERS.email_test_delivery_run_send = (raw) => shapeTestDeliveryRunSendInput(raw);
+TOOL_INPUT_SHAPERS.campaign_test_send_plan = (raw) => shapeTestDeliverySendInput(raw);
 
 // email-outreach drafts-review persist input shaping (cinatra#1959) — the pure
 // shaper lives in ./drafts-review-seam (zero-dep, unit-tested). It parses the

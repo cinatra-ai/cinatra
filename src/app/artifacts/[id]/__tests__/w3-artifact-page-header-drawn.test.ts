@@ -18,7 +18,7 @@
  *    owner level / visibility, MIME, and updated time."
  *
  * and §XI's own-page readings, whose meta line is drawn without the pinned
- * marker because the artifact's own page pins nothing:
+ * marker where no review stands (a revision a gate pinned carries it, cinatra#3092):
  *
  *   "@cinatra-ai/email-artifacts:body · revision rev_4c21… · Team · Private ·
  *    text/markdown"
@@ -164,7 +164,7 @@ describe("the header model the artifact's own page draws", () => {
     expect(model.kindLabel).toBe("Default artifact");
   });
 
-  it("carries NO pinned marker: the artifact's own page pins nothing", () => {
+  it("carries NO pinned marker where no review stands on the revision shown", () => {
     const model = buildArtifactDetailHeader({
       artifact: row(),
       mime: "image/png",
@@ -172,6 +172,35 @@ describe("the header model the artifact's own page draws", () => {
       now: NOW,
     });
     expect(model.metaCells).not.toContain("pinned");
+    expect(model.pinnedCellIndex).toBeNull();
+  });
+
+  it("names a pinned revision with its pinned marker, right after the revision (cinatra#3092, §XI)", () => {
+    const model = buildArtifactDetailHeader({
+      artifact: row(),
+      mime: "image/png",
+      revisionId: "rev_11b8c4d2",
+      pinned: true,
+      now: NOW,
+    });
+    expect(model.metaCells.slice(0, 3)).toEqual([
+      "@cinatra-ai/image-artifact:image",
+      "revision rev_11b8…",
+      "pinned",
+    ]);
+    expect(model.pinnedCellIndex).toBe(2);
+  });
+
+  it("draws no pinned marker on a line with no revision to name", () => {
+    const model = buildArtifactDetailHeader({
+      artifact: row(),
+      mime: "image/png",
+      revisionId: null,
+      pinned: true,
+      now: NOW,
+    });
+    expect(model.metaCells).not.toContain("pinned");
+    expect(model.pinnedCellIndex).toBeNull();
   });
 
   it("titles the page with the artifact's own title", () => {

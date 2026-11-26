@@ -57,8 +57,69 @@ export type TestDeliveryPerformResult =
  *  set the package persists into the ledger claim BEFORE any send; on failure a
  *  user-correctable reason routed straight to the gate. */
 export type TestDeliveryPrepareResult =
-  | { ok: true; recipientEmail: string; selectedDraftIds: string[] }
+  | {
+      ok: true;
+      recipientEmail: string;
+      selectedDraftIds: string[];
+      /** cinatra#4150: the From of every message and each selected draft (in send order, with its revision, subject and
+       *  a short body preview), read in the same pass. The plan primitive needs both and refuses a result without them. */
+      sender?: TestDeliverySender;
+      drafts?: TestDeliveryPlannedDraft[];
+    }
   | { ok: false; reason: "no_drafts_selected" | "invalid_recipient" | "campaign_access_denied" };
+
+/** The From of a test message: the campaign's sender, as the message carries it. */
+export type TestDeliverySender = { email: string; name: string };
+
+/** A planned draft. `revision` names the draft's subject and body as they were read; any edit gives another. */
+export type TestDeliveryPlannedDraft = { id: string; revision: string; subject: string; preview: string };
+
+/** The pinned plan of a test send (cinatra#4150): exactly what a publish card showed and what the send mails. */
+export type TestDeliveryPinnedPlan = {
+  campaignId: string;
+  sender: TestDeliverySender;
+  recipientEmail: string;
+  drafts: Array<{ id: string; revision: string }>;
+};
+
+/** The revision a pinned plan names for a draft (cinatra#4150): the SHA-256, in hex, of the JSON of its subject and
+ *  body. Any edit of either gives another revision. Web Crypto, so this leaf still imports nothing. */
+export async function testDraftRevision(draft: { subject: string; body: string }): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify([draft.subject, draft.body]));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The longest recipient address a test send takes (RFC 5321 path bound). */
+export const TEST_SEND_RECIPIENT_MAX = 320;
+
+/** THE recipient rule of a test send (cinatra#4150), one for the plan, the pinned send and the selection send: the
+ *  address as typed with its outer spaces removed, holding an `@`, at most TEST_SEND_RECIPIENT_MAX characters. Answers
+ *  the address to send to, or null for one the send refuses. A plan built from an address this accepts is never
+ *  refused for its recipient when it is sent. */
+export function testSendRecipient(typed: unknown): string | null {
+  if (typeof typed !== "string") return null;
+  const address = typed.trim();
+  return address.length > 0 && address.length <= TEST_SEND_RECIPIENT_MAX && address.includes("@") ? address : null;
+}
+
+/** The longest preview of a draft a publish card shows. */
+export const TEST_SEND_PREVIEW_MAX = 140;
+
+/** THE preview of a draft (cinatra#4150): the first characters of the text the test message carries (its body with
+ *  merge tokens replaced, as the host renders it), on one line. The plan answers it for the card, and the pinned send
+ *  computes it again from the draft it reads, so the preview a person approved is the body that is mailed. */
+export function testSendPreview(messageText: string): string {
+  const line = messageText.replace(/\s+/g, " ").trim();
+  return line.length > TEST_SEND_PREVIEW_MAX ? `${line.slice(0, TEST_SEND_PREVIEW_MAX - 1)}…` : line;
+}
+
+/** The pinned send's result: the phase-2 result, `plan_changed` when the campaign no longer matches the plan (a draft
+ *  edited or removed, the sender changed), or `campaign_access_denied` when the run owner can no longer read the
+ *  campaign; in both refusals nothing was sent. */
+export type TestDeliveryPinnedPerformResult =
+  | TestDeliveryPerformResult
+  | { ok: false; reason: "plan_changed" | "campaign_access_denied"; message: string; deliveredDraftIds: string[] };
 
 /** Run projection the port receives — ONLY package-read fields, never caller
  *  authority. `dependentInstallId` is included because the canonical owner-context
@@ -109,6 +170,22 @@ export interface TestDeliverySendPort {
     recipientEmail: string;
     selectedDraftIds: string[];
   }): Promise<TestDeliveryPerformResult>;
+
+  /**
+   * Phase 2 of a PINNED send (cinatra#4150): sends exactly `plan` (its sender, its recipient, its drafts at their
+   * revisions) and nothing else. The campaign and the drafts are read again; any difference from the plan answers
+   * `plan_changed` before any message goes out. Optional so a host that has not wired it fails closed (the handler
+   * records the send as refused, never a phantom success).
+   */
+  performPinnedSend?(params: {
+    run: TestDeliveryPortRun;
+    submissionId: string;
+    plan: TestDeliveryPinnedPlan;
+    /** What the approved publish card showed of each draft, in plan order (absent when no decision governs the call):
+     *  each re-read draft's subject must be the shown subject and its preview (testSendPreview) the shown preview,
+     *  else `plan_changed`. */
+    shownDrafts?: ReadonlyArray<{ subject: string; preview: string }>;
+  }): Promise<TestDeliveryPinnedPerformResult>;
 
   /**
    * Crash reconciliation for a ledger row stuck in `sending` past its lease.

@@ -11,7 +11,7 @@
  * with the guarded GET and renders it in the isolated subprocess. Those
  * primitives (the trimmed host seams, the guarded fetch, the subprocess render,
  * the degrade reasons and their copy) move to `registered-page-render.ts`. The
- * pinned-capture store, its view and its route stay for leg 8b. The signed
+ * pinned-capture store, its view and its route left later in leg 8. The signed
  * preview target of the policy module and its secret lookup leave in l8a2.
  *
  * Source text, not behaviour: the invariant is the absence of the modules and
@@ -50,8 +50,7 @@ const RETIRED_NAME_RES = RETIRED_NAMES.map((name) => new RegExp(`\\b${name}\\b`)
 
 // A reference to either module: its file name, or an import specifier that ends
 // in the module name. The object type id `@cinatra-ai/objects:cms-preview-capture`
-// and the sibling modules (`cms-preview-capture-store`, `-view`, `-policy`) are
-// no match: they stay.
+// and the sibling module `cms-preview-capture-policy` are no match: they stay.
 const MODULE_REFERENCE_RES = [
   /cms-preview-capture\.ts/,
   /["'`](?:@\/lib\/artifacts\/|\.\.?\/(?:[\w.-]+\/)*)cms-preview-capture["'`]/,
@@ -86,9 +85,9 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
 
   it("no code, test, gate list or inventory under src/, packages/, scripts/ or config/ names either module or a retired entry", () => {
     const files = SCAN_ROOTS.flatMap((root) => scannedFiles(path.join(REPO_ROOT, root)));
-    // The walk must reach the page capture, the store and the floor, or an empty scan passes.
+    // The walk must reach the page capture, the policy module and the floor, or an empty scan passes.
     expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/registered-page-capture.ts"));
-    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/cms-preview-capture-store.ts"));
+    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/cms-preview-capture-policy.ts"));
     expect(files).toContain(path.join(REPO_ROOT, "scripts/audit/application-border-gate.baseline.json"));
     const namers = files
       .filter((file) => path.resolve(file) !== SELF)
@@ -114,7 +113,7 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
     }
   });
 
-  it("the page capture keeps its primitives in their own module, and the leg 8b modules stay", () => {
+  it("the page capture keeps its primitives in their own module, and the policy, inertness and render modules stay", () => {
     expect(existsSync(path.join(REPO_ROOT, KEPT_PRIMITIVES))).toBe(true);
     const kept = read(KEPT_PRIMITIVES);
     for (const name of [
@@ -130,13 +129,17 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
     expect(read("src/lib/artifacts/registered-page-capture.ts")).toContain('from "./registered-page-render"');
     expect(read("src/lib/artifact-page-capture-tool.ts")).toContain('from "@/lib/artifacts/registered-page-render"');
     for (const rel of [
-      "src/lib/artifacts/cms-preview-capture-store.ts",
-      "src/lib/artifacts/cms-preview-capture-view.ts",
       "src/lib/artifacts/cms-preview-capture-policy.ts",
       "src/lib/artifacts/cms-preview-inertness.ts",
       "scripts/preview-capture/isolated-render.mjs",
     ]) {
       expect(existsSync(path.join(REPO_ROOT, rel))).toBe(true);
+    }
+  });
+
+  it("the pinned-capture store and its view are gone", () => {
+    for (const rel of ["src/lib/artifacts/cms-preview-capture-store.ts", "src/lib/artifacts/cms-preview-capture-view.ts"]) {
+      expect(existsSync(path.join(REPO_ROOT, rel)), rel).toBe(false);
     }
   });
 });

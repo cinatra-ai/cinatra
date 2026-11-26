@@ -27,19 +27,15 @@
 //
 // WHAT THIS FILE DRIVES: the panel's fallback argument and the view it now
 // builds, through the REAL mount — the floor node and its diagnostic composer
-// are the shipped ones and are not replaced. The pinned-capture pair is
-// replaced because it is additive context with its own suite, exactly as the
-// sibling overflow file replaces it. The mount is an async server component, so
-// the tree is rendered through the streaming server renderer, which resolves it.
+// are the shipped ones and are not replaced. The mount is an async server
+// component, so the tree is rendered through the streaming server renderer,
+// which resolves it.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 import { renderToReadableStream } from "react-dom/server";
 import type { ReactElement } from "react";
-
-vi.mock(
-  "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-pinned-capture",
-  () => ({ ReviewPinnedCapture: () => null }),
-);
 
 import { resolveArtifactDisplayMount } from "@/app/artifacts/[id]/renderer-resolution";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
@@ -110,7 +106,6 @@ async function panel(prepared: Prepared): Promise<Element> {
   const tree = ReviewTargetPanel({
     prepared,
     orgId: "org-1",
-    capturePair: null,
   }) as ReactElement;
   const stream = await renderToReadableStream(tree);
   document.body.innerHTML = await new Response(stream).text();
@@ -199,5 +194,26 @@ describe("the package the RESOLVER answers reaches the rendered diagnostic (cina
       'review target unavailable — package "@acme/support", slot "detail", reason "no-display"',
     );
     expect(floor?.querySelector(VIEW), "the view beneath it").not.toBeNull();
+  });
+});
+
+describe("cinatra#3862 leg 8 — the floor is the whole fallback: the panel takes no picture input", () => {
+  // A target whose renderer does not resolve shows the floor, the same fall on
+  // every host, and nothing beside it: the panel used to take the pinned
+  // before/after pictures as additive context under the floor. Those are not
+  // drawn anywhere now (lifecycle cards, section III), so the panel's inputs
+  // are the prepared target, the trusted organization scope and the frame flag.
+  // The panel's own parameter list is read: a render cannot show an input that
+  // draws nothing when it is absent.
+  // red-first-expect: expected [ 'prepared', 'orgId', …(2) ] to deeply equal [ 'prepared', 'orgId', 'framed' ]
+  it("names prepared, orgId and framed as its only inputs", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel.tsx"), "utf8");
+    const params = /export function ReviewTargetPanel\(\{([^}]*)\}/.exec(source)?.[1];
+    expect(params).toBeDefined();
+    const names = params!
+      .split(",")
+      .map((part) => part.split("=")[0]!.trim())
+      .filter(Boolean);
+    expect(names).toEqual(["prepared", "orgId", "framed"]);
   });
 });

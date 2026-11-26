@@ -11,7 +11,7 @@ import "server-only";
 //
 // THE LADDER, and why it is in this order. Each rung is cheaper and less
 // disclosing than the next, and the order is the fail-closed discipline
-// `capture-capability-serving.ts` and `loadReviewGateSurface` already use: never
+// `loadReviewGateSurface` already uses: never
 // touch a store on behalf of a caller who has not yet proven the previous rung.
 //
 //   1. TRANSPORT SHAPE. The request must present itself as a SUBRESOURCE load
@@ -19,8 +19,7 @@ import "server-only";
 //      page can forge them; pasting the address into a tab is a `document`
 //      navigation and a foreign page mounting it is `cross-site`. Both are
 //      refused before a byte of work happens. This is NOT proof the requester
-//      is a browser — see the capture module's statement of exactly that limit,
-//      which holds here word for word.
+//      is a browser.
 //   2. THE CAPABILITY ITSELF — sealed, unexpired, under its OWN key label.
 //   3. THE LIVE PRINCIPAL — the `cwu_` row behind the sealed `jti` still alive
 //      and still bound to the same person, org, site, client, instance and
