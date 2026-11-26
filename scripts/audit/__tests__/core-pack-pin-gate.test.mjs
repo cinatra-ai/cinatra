@@ -118,7 +118,12 @@ const c = "${SHA.slice(0, 6)}"; const d = "${SHA.slice(0, 8)}aa"; const e = "${S
       namedTypes: `import { type X } from "${DEMO}";`,
       title: `describe("${DEMO}", () => {});`,
       require: `const m = require("${DEMO}");`,
-      mock: `vi.mock("${DEMO}", () => ({}));`,
+      // The `vi` is spliced in so that this file's own text holds no mock call:
+      // vitest turns every static import of a file whose text shows one into a
+      // dynamic import, and a missing module is then reported by a root path
+      // (`/scripts/…`) that the red-first check cannot match to the file the
+      // change adds. The fixture text is the same.
+      mock: `${"vi"}.mock("${DEMO}", () => ({}));`,
     };
     const files = {};
     for (const [k, v] of Object.entries({ ...typeOnly, ...counted })) files[`${T}${k}.test.ts`] = v;
