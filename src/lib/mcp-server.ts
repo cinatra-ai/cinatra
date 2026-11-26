@@ -12,7 +12,7 @@ export type {
   CapturedMcpToolHandler,
   ReplayedExtensionRegistration,
 } from "./extension-mcp-registry";
-import type { CapabilityPlan, PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
+import { plannedServableNames, type CapabilityPlan, type PrimitiveDispatchTarget } from "@cinatra-ai/mcp-server/capability-plan";
 import type { DelegatedChatAdmissionSnapshot } from "@cinatra-ai/mcp-server/delegated-chat-admission";
 import {
   resolveDurableRunContext,
@@ -501,6 +501,27 @@ export async function buildDelegatedChatCapabilityPlan(input?: {
     return { entries: [], outcomes: [], servable: [] };
   }
   return captured;
+}
+
+/**
+ * cinatra#4150: the tool names this server serves an agent run's on-behalf-of
+ * request, from the same pass and plan its `tools/list` comes from (the
+ * `unrestricted` mode and the verified run id the transport uses for that
+ * delegation). A ceiling for an offer, never a grant: every call is still
+ * authorized by the server. No plan reads as no tool.
+ */
+export async function listAgentRunServedToolNames(verifiedAgentRunId: string): Promise<string[]> {
+  let captured: CapabilityPlan | undefined;
+  await createMcpRuntimeServer({
+    name: "cinatra-mcp-server",
+    version: "0.2.0",
+    registerCapabilities: registerAllCapabilities,
+    registerRequestContext: { verifiedAgentRunId },
+    onCapabilityPlan: (plan) => {
+      captured = plan;
+    },
+  });
+  return captured ? plannedServableNames(captured) : [];
 }
 
 /** A captured MCP tool handler — the SDK callback `(args, extra) => CallToolResult`. */

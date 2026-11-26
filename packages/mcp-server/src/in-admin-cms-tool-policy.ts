@@ -130,9 +130,18 @@ export function isInAdminCmsMcpToolAllowed(name: string): boolean {
  * module header). Returns the explicit in-admin CMS allowlist (a fresh mutable
  * copy for the `LlmMcpServerTool.allowedTools` field) for an in-admin CMS
  * content-editor run, or `null` (unrestricted — unchanged behavior) otherwise.
+ *
+ * cinatra#4150: `servedToolNames` is the tool list the server serves this run,
+ * passed for a step that declares its tools (a step's offer filter keeps a
+ * server only with a known list). With it, the result is that list, narrowed
+ * to the in-admin allowlist for a content-editor run: never wider than either.
  */
 export function resolveAgentRunCinatraMcpAllowedTools(
   isInAdminCmsContentEditor: boolean,
+  servedToolNames: readonly string[] | null = null,
 ): string[] | null {
-  return isInAdminCmsContentEditor ? [...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS] : null;
+  const pinned = isInAdminCmsContentEditor ? [...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS] : null;
+  if (servedToolNames === null) return pinned;
+  const served = [...new Set(servedToolNames)];
+  return pinned === null ? served : pinned.filter((name) => served.includes(name));
 }
