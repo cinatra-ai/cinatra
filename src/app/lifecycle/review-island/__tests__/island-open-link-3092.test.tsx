@@ -59,7 +59,6 @@ afterEach(() => {
 function panel(key: string): HTMLElement {
   const div = document.createElement("div");
   div.setAttribute("data-island-target-key", key);
-  div.className = "contents";
   document.body.appendChild(div);
   return div;
 }
