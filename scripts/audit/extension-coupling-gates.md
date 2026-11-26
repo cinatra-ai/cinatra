@@ -645,6 +645,79 @@ raised count or a new entry fails. It runs as the test of record in
 `__tests__/core-pack-pin-gate.test.mjs`, inside the root suite of the job
 "Perpetual core invariants".
 
+## A declared use of another pack's tool needs a declared dependency (cinatra#4874)
+
+A pack says which host tools (MCP primitives) it uses in
+`package.json#cinatra.consumes`. When another pack registers such a tool,
+installing the consumer does not install the tool's owner unless the
+consumer also declares that owner in `cinatra.dependencies`. The rule is a
+finding class of `scripts/audit/extension-produces-deps-gate.mjs` (CI: job
+`perpetual-core`, step "Produced-artifact dependency gate", with its tests in
+the next step; no own workflow step). The gate's code names no pack and no
+tool; a test of record checks that no string in it is a tool of the inventory
+or a package name.
+
+| Reading | Where it comes from |
+| --- | --- |
+| A pack USES a tool | each entry `{ primitive, requirement }` of `cinatra.consumes` in the pack's `package.json`, read as `parseConsumedPrimitives` (`packages/sdk-extensions/src/consumes.ts`) reads it: `primitive` a non-empty string, `requirement` `required` or `optional`, each tool once. Nothing is read from `cinatra/oas.json` and nothing from code files |
+| The tool's OWNER | the row of the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) for the tool: a registering file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core (a tool that core registers on behalf of a pack counts as core's) |
+| The DECLARED dependency | the first entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner, judged as `validateDependencyDeclarations` (`packages/extensions/src/dependency-declaration-validator.ts`) judges it: a REQUIRED use needs an install-blocking edge (required and not peer, `isInstallBlockingEdge` in `packages/extensions/src/dependency-closure.ts`); an OPTIONAL use accepts any declared edge. The gate mirrors the rule (a plain `.mjs` cannot load the TypeScript package), and a drift test reads the sources |
+
+The rule judges declared uses only. A tool that a pack uses in a flow or in
+code but does NOT declare in `cinatra.consumes` is outside it. Whether every
+used tool is declared is the business of the product's own validator and of
+the run-time check tracked in cinatra#4894; that is the remaining part of
+cinatra#4874, which stays open after this rule merges.
+
+A use of the pack's own tool or of a core tool is no finding. A tool with no
+inventory row cannot be judged: the use is printed as "owner not recorded" on
+every run, does not fail and is not listed (completing the inventory is
+tracked in cinatra#4895). An inventory row that names two owners, or a file
+under `extensions/` in no pack of the synced tree, is a contradiction and
+fails the gate (never listed). A `consumes` entry the rule cannot read (a
+missing or unknown `requirement`, a tool declared twice), a manifest that does
+not parse or a missing inventory fails too.
+
+The class `undeclaredToolOwnerDeps`, listed in
+`extension-produces-deps-gate.baseline.json` as `{ consumer: { tool: reason } }`:
+the owner is another pack, and it is not in the consumer's
+`cinatra.dependencies`, or it is there as an optional or peer edge while the
+use is required (the validator's `REQUIREMENT_MISMATCH`). Every map the rule
+keys by a name from data is a `Map` or an object without a prototype, so a
+tool named `constructor` or `__proto__` is a finding like any other.
+
+The list holds today's findings, each with its reason. A NEW finding fails,
+a STALE entry (no longer found) fails, an entry without a reason fails, and
+the class is never removed (an empty class is written `{}`). The list may only
+shrink against the base branch: the shared floor base guard compares it with
+the copy on the base (own variable `EXTENSION_PRODUCES_DEPS_BASE`). A class
+absent from the base copy is the one-time seed of the change that introduces
+it. An entry leaves when the consumer's repository declares the owner (or
+stops declaring the tool) and its pin is bumped.
+
+Seeded on 2026-11-26 at the pins of both extension locks: 31 declared tool
+uses, 3 `undeclaredToolOwnerDeps` (`list-curator-agent` declares
+`crm_account_get`, `crm_list_create` and `crm_list_member_add` as required in
+its `cinatra.consumes`; the inventory records them for the CRM connector,
+which the agent does not declare). 4 declared uses are printed as "owner not
+recorded" (`artifact_content_read`, `email_outreach_send_initial_start`,
+`email_outreach_send_initial_status`).
+
+The owner is where the tool is registered, not which pack it needs at run
+time. Some tools are registered by core but work only when a pack is
+installed (for example the blog publish facades that core's blog code
+registers and the LinkedIn or WordPress connector backs). This rule counts
+them as core's and does not judge their use. The product records those
+backing packs in the ownership registry of the private engineering
+repository, which the central declared-vs-used closure gate reads; that
+registry is private by design and is not restated here. No pack at the
+pinned shas declares a use of such a facade today, and core's blog facades
+are being removed (cinatra#4862 to cinatra#4864).
+
+What it cannot see: a tool used but not declared in `cinatra.consumes`
+(cinatra#4894); a tool core registers on behalf of a pack (above); the owner of a tool the inventory has no row for (until
+cinatra#4895); a pack outside both extension locks.
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -668,6 +741,7 @@ for its floor:
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
+| `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
 
