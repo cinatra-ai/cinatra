@@ -255,6 +255,12 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
 // the VALUE's safety (in-package containment, symlink escape, `.svg`-only,
 // SVG-sanitizer verdict) is owned fail-closed by `resolveDeclaredLogo` at
 // generation. Narrowly additive — unknown keys stay rejected.
+//
+// `borderWords` (cinatra#4848): the words an extension declares as its own,
+// which core's border checks read (see `./border-words`). Every pinned pack
+// declares it, artifact packs included (an artifact pack with no word declares
+// empty lists and a reason), so the artifact bridge must not reject it.
+// CI data only: no host consumer reads it. Narrowly additive.
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
   "apiVersion",
@@ -267,6 +273,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "views",
   "fieldRenderers",
   "dashboardContribution",
+  "borderWords",
 ]);
 
 // ===========================================================================

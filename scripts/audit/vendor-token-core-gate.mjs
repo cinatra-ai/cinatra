@@ -9,8 +9,8 @@
 // vendor directly rather than its extension package (PR #969 proved the gap:
 // a vendor-literal route mirroring a superseded twin passed every gate).
 //
-// WHAT THIS GATE SCANS. Core source under `src/` + `packages/` for the frozen
-// VENDOR_TOKENS set, in exactly the three surfaces the gap analysis named:
+// WHAT THIS GATE SCANS. Core source under `src/` + `packages/` for the vendor
+// words (see THE WORDS below), in exactly the three surfaces the gap analysis named:
 //   - FILE PATHS (filenames AND directory/route segments — a Next.js route
 //     dir like `src/app/api/webhooks/<vendor>/` is a path segment hit for
 //     every file under it);
@@ -36,8 +36,11 @@
 //   - the VENDOR_TOKEN_BASE monotonic guard refuses a committed baseline that
 //     grew vs the base branch (no regenerate-to-pass), failing CLOSED on
 //     flag-like or unresolvable refs.
-// There is no data path (baseline, regenerate, env) that can raise the floor;
-// only a reviewed change to this gate and its tests can alter the semantics.
+// ONE growth is admitted, by `--write-baseline` run with VENDOR_TOKEN_BASE set
+// and by the base guard (the application border gate's class 1 admission): a
+// NEW key whose file is BYTE-IDENTICAL at the base reference — the code did
+// not change, only the words did (a pinned pack newly declaring a word core
+// already spells). A key already on the floor never grows this way.
 //
 // SANCTIONED SURFACES (enumerated in scripts/audit/extension-coupling-gates.md,
 // per the epic #978 categories (a)-(e)) are excluded from the scan:
@@ -55,14 +58,17 @@
 // The dev/required extension locks live at the repo root and `docker/`
 // fixtures outside the scan roots, so they need no carve-out here.
 //
-// TOKEN SET. Frozen, grounded in the epic #978 residual clusters. NOT in the
-// set (explicit non-goal, mirroring the epic): `nango` (the sanctioned
-// credential-broker MECHANISM — the model the epic points core AT) and the
-// LLM-provider names (`openai`/`anthropic`/`gemini` — the packages/llm
-// provider layer plus its /configuration + /setup surfaces are core-owned
-// model mechanism, not connector vendor code; extension-package coupling
-// there is still policed by the pinned-empty lexeme gates). Growing or
-// shrinking the token set is a reviewed change to this file and its tests.
+// THE WORDS (cinatra#4848). This gate names no word. It reads the `vendor`
+// list of lib/border-words.mjs: the union of the `cinatra.borderWords.vendor`
+// words the pinned extensions declare in their own manifests and the
+// temporary, shrink-only bridge scripts/audit/border-words-bridge.json (the
+// words no pack declares yet). A malformed declaration, a word both in the
+// bridge and declared, a bridge that grew against VENDOR_TOKEN_BASE, and —
+// once the bridge is empty — a pinned pack without the declaration each fail;
+// an absent or partial extension tree is a scanner error (exit 2). The
+// non-goals of epic #978 stay non-goals by declaration: `nango` (the
+// credential-broker MECHANISM) and the LLM-provider names are words no pack
+// declares as a vendor word.
 //
 // Usage:
 //   node scripts/audit/vendor-token-core-gate.mjs                  # --check (default)
@@ -75,6 +81,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
 import { PERMANENT_EXEMPT_FILES } from "./lib/extension-reference-classification.mjs";
+import {
+  BorderWordsError,
+  bridgeAtRef,
+  bridgeGrowth,
+  fileUnchangedAtRef,
+  loadBorderWords,
+} from "./lib/border-words.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..");
@@ -82,24 +95,17 @@ const BASELINE_PATH = join(__dirname, "vendor-token-core-gate.baseline.json");
 
 const SCAN_ROOTS = ["src/", "packages/"];
 
-// The frozen vendor token set (see the TOKEN SET note above). Tokens shorter
-// than SUBSTRING_MIN_LEN match path/specifier sub-tokens EXACTLY (so `wp`
-// matches `wp-drupal-contract.ts` but never the `wp` inside `swap`); longer
-// tokens also match as a SUBSTRING of a segment (so `wordpress` catches a
-// squashed `wordpressapi.ts` evasion).
-export const VENDOR_TOKENS = Object.freeze([
-  "wordpress",
-  "wp",
-  "drupal",
-  "linkedin",
-  "github",
-  "youtube",
-  "resend",
-  "google",
-  "twenty",
-  "apollo",
-]);
+// How a word matches (the words themselves: THE WORDS above). Words shorter
+// than SUBSTRING_MIN_LEN match path/specifier sub-tokens EXACTLY (so a
+// two-letter word matches `<word>-contract.ts` but never the same letters
+// inside a longer token); longer words also match as a SUBSTRING of a segment
+// (so a squashed `<word>api.ts` evasion is caught).
 const SUBSTRING_MIN_LEN = 5;
+
+/** The vendor words the gate reads under `repoRoot` (declared ∪ bridge). Exported for tests and sibling guards. */
+export function vendorWords(repoRoot = REPO_ROOT) {
+  return loadBorderWords(repoRoot).words.vendor;
+}
 
 // Sanctioned-surface exclusions — enumerated (with rationale) in
 // scripts/audit/extension-coupling-gates.md. Prefixes are directory scopes;
@@ -162,7 +168,7 @@ export function isExemptFile(rel) {
 
 /**
  * Split a path segment / specifier segment into lowercase sub-tokens on
- * non-alphanumeric AND camelCase boundaries (`wordpressApi` -> ["wordpress",
+ * non-alphanumeric AND camelCase boundaries (`acmeApi` -> ["acme",
  * "api"]). Exported for tests.
  */
 export function subTokens(segment) {
@@ -181,7 +187,7 @@ export function segmentMatchesToken(segment, token) {
 }
 
 /** Vendor tokens present in a slash-separated path/specifier, with per-token segment counts. */
-export function tokenHits(pathLike, tokens = VENDOR_TOKENS) {
+export function tokenHits(pathLike, tokens) {
   const segments = pathLike.split("/").filter(Boolean);
   const hits = new Map();
   for (const token of tokens) {
@@ -215,7 +221,7 @@ function listFiles(repoRoot = REPO_ROOT) {
  * { [`<file> :: path :: <token>` | `<file> :: import :: <specifier>`]: count }.
  * `files` is injectable for tests (repo-relative, forward-slash).
  */
-export function scanVendorTokens(repoRoot = REPO_ROOT, files = listFiles(repoRoot)) {
+export function scanVendorTokens(repoRoot = REPO_ROOT, files = listFiles(repoRoot), tokens = vendorWords(repoRoot)) {
   const occ = {};
   for (const rel of files) {
     if (isExemptFile(rel)) continue;
@@ -225,7 +231,7 @@ export function scanVendorTokens(repoRoot = REPO_ROOT, files = listFiles(repoRoo
     if (!existsSync(join(repoRoot, rel))) continue;
 
     // Surface 1+2: filename + directory/route segments.
-    for (const [token, count] of tokenHits(rel)) {
+    for (const [token, count] of tokenHits(rel, tokens)) {
       occ[`${rel} :: path :: ${token}`] = count;
     }
 
@@ -240,7 +246,7 @@ export function scanVendorTokens(repoRoot = REPO_ROOT, files = listFiles(repoRoo
     const specCounts = new Map();
     for (const spec of extractImportSpecifiers(stripComments(source))) {
       if (isSanctionedSpecifier(spec)) continue;
-      if (tokenHits(spec).size === 0) continue;
+      if (tokenHits(spec, tokens).size === 0) continue;
       specCounts.set(spec, (specCounts.get(spec) ?? 0) + 1);
     }
     for (const [spec, count] of specCounts) {
@@ -262,6 +268,21 @@ export function diffGrown(baseline, current) {
     if (c > base) grown.push(`${k} (${base} -> ${c})`);
   }
   return grown.sort();
+}
+
+/**
+ * Growth of `committed` against `base` minus the one admission: a NEW key
+ * whose file is byte-identical at the base (`isUnchangedAtBase(file)`) — the
+ * words moved, the code did not. A key already in `base` never grows this way.
+ */
+export function admittedGrowth(base, committed, { isUnchangedAtBase }) {
+  const grown = [];
+  for (const entry of diffGrown(base, committed)) {
+    const key = entry.replace(/ \(\d+ -> \d+\)$/, "");
+    if (!Object.prototype.hasOwnProperty.call(base, key) && isUnchangedAtBase(key.split(" :: ")[0])) continue;
+    grown.push(entry);
+  }
+  return grown;
 }
 
 /** Baseline keys whose CURRENT count fell below the baseline count (stale floor). */
@@ -299,7 +320,22 @@ function writeBaselineFile(occurrences) {
 
 function main() {
   const args = process.argv.slice(2);
-  const current = scanVendorTokens();
+  const baseRef = process.env.VENDOR_TOKEN_BASE;
+  let words;
+  try {
+    words = loadBorderWords(REPO_ROOT);
+  } catch (err) {
+    const why = err instanceof BorderWordsError ? err.message : err?.stack ?? String(err);
+    console.error(`[vendor-token-core-gate] scanner error: ${why}`);
+    process.exit(2);
+  }
+  if (words.problems.length) {
+    console.error(`[vendor-token-core-gate] FAIL — ${words.problems.length} border-word problem(s) (cinatra#4848):`);
+    words.problems.forEach((p) => console.error("  ! " + p));
+    process.exit(1);
+  }
+  words.warnings.forEach((w) => console.warn(`[vendor-token-core-gate] warning: ${w}`));
+  const current = scanVendorTokens(REPO_ROOT, listFiles(REPO_ROOT), words.words.vendor);
   const totalOcc = Object.values(current).reduce((a, b) => a + b, 0);
   const totalFiles = new Set(Object.keys(current).map((k) => k.split(" :: ")[0])).size;
 
@@ -310,7 +346,11 @@ function main() {
     // instead of re-baselining it.
     if (existsSync(BASELINE_PATH)) {
       const committed = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).occurrences ?? {};
-      const grown = diffGrown(committed, current);
+      // Byte identity is read at the base reference only: without VENDOR_TOKEN_BASE
+      // nothing is admitted (a file committed with a new edge is identical at HEAD).
+      const isUnchangedAtBase =
+        baseRef && !baseRef.startsWith("-") ? (rel) => fileUnchangedAtRef(REPO_ROOT, baseRef, rel) : () => false;
+      const grown = admittedGrowth(committed, current, { isUnchangedAtBase });
       if (grown.length) {
         console.error(
           `[vendor-token-core-gate] FAIL — refusing to write a GROWN baseline (the floor is shrink-only; ` +
@@ -334,9 +374,9 @@ function main() {
   const baseline = JSON.parse(readFileSync(BASELINE_PATH, "utf8")).occurrences ?? {};
 
   // Monotonic guard: the committed baseline must be a subset of the base
-  // branch's (it may only shrink — no regenerate-to-pass). Fails CLOSED on
-  // flag-like or unresolvable refs.
-  const baseRef = process.env.VENDOR_TOKEN_BASE;
+  // branch's (it may only shrink — no regenerate-to-pass) except the admitted
+  // word-born key, and the bridge's vendor list may only shrink. Fails CLOSED
+  // on flag-like or unresolvable refs.
   if (baseRef) {
     if (baseRef.startsWith("-")) {
       console.error(`[vendor-token-core-gate] FAIL — VENDOR_TOKEN_BASE="${baseRef}" is flag-like.`);
@@ -369,8 +409,25 @@ function main() {
     } catch {
       baseText = null; // ref resolves but file absent → introducing PR, no constraint
     }
+    let baseBridge;
+    try {
+      baseBridge = bridgeAtRef(REPO_ROOT, baseRef);
+    } catch (err) {
+      console.error(`[vendor-token-core-gate] FAIL — ${err.message}`);
+      process.exit(1);
+    }
+    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("vendor: ")) : [];
+    if (bridgeGrew.length) {
+      console.error(
+        `[vendor-token-core-gate] FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words; cinatra#4848):`,
+      );
+      bridgeGrew.forEach((e) => console.error("  + " + e));
+      process.exit(1);
+    }
     if (baseText) {
-      const grew = diffGrown(JSON.parse(baseText).occurrences ?? {}, baseline);
+      const grew = admittedGrowth(JSON.parse(baseText).occurrences ?? {}, baseline, {
+        isUnchangedAtBase: (rel) => fileUnchangedAtRef(REPO_ROOT, baseRef, rel),
+      });
       if (grew.length) {
         console.error(
           `[vendor-token-core-gate] FAIL — committed baseline GREW vs ${baseRef} ` +
@@ -415,7 +472,8 @@ function main() {
   }
 
   console.log(
-    `[vendor-token-core-gate] OK — ${totalOcc} tolerated vendor-token occurrence(s) across ${totalFiles} file(s); 0 new ` +
+    `[vendor-token-core-gate] OK — ${totalOcc} tolerated vendor-token occurrence(s) across ${totalFiles} file(s); 0 new; ` +
+      `${words.words.vendor.length} vendor word(s) (${words.bridge.vendor.length} from the bridge) over ${words.packCount} pinned pack(s) ` +
       `(shrink-only residual floor — epic cinatra-ai/cinatra#978; sanctioned surfaces enumerated in scripts/audit/extension-coupling-gates.md).`,
   );
 }

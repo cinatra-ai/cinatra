@@ -1,0 +1,33 @@
+{
+  "note": "TEMPORARY BRIDGE (cinatra#4848): the border words no pinned extension declares yet. Core's vendor gate (vendor-token-core-gate.mjs, list `vendor`) and class 2 of the application border gate (application-border-gate.mjs, list `domain`) read the union of the words the pinned extensions declare in their own manifest (`cinatra.borderWords`) and this file. SHRINK-ONLY: a word leaves this file in the pull request that advances the pin of the pack that declares it (a word both here and declared fails); a word never enters it (growth against the base fails). It must reach empty; then a pinned pack without the declaration fails. See scripts/audit/extension-coupling-gates.md.",
+  "vendor": [
+    "apollo",
+    "drupal",
+    "github",
+    "google",
+    "linkedin",
+    "resend",
+    "twenty",
+    "wordpress",
+    "wp",
+    "youtube"
+  ],
+  "domain": [
+    "appointment",
+    "blog",
+    "campaign",
+    "campaigns",
+    "cms",
+    "crm",
+    "email",
+    "icp",
+    "mail",
+    "newsletter",
+    "outreach",
+    "playbook",
+    "podcast",
+    "portfolio",
+    "prospecting",
+    "social"
+  ]
+}
