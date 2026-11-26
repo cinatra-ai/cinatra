@@ -22,6 +22,7 @@ import {
 import {
   KNOWN_FIELD_RENDERER_KINDS,
   KNOWN_A2UI_TRANSLATOR_KINDS,
+  validateFieldRendererDeclarations,
 } from "../../../../scripts/extensions/agent-binding-kinds.mjs";
 import {
   GENERATED_FIELD_RENDERER_BINDINGS,
@@ -72,12 +73,13 @@ const PARITY_TABLE: ReadonlyArray<
   ["@cinatra-ai/context-selection-agent:context-selector", ContextSelectorRenderer as never, 90],
   ["context-selector", ContextSelectorRenderer as never, 90],
   // MIGRATED field-renderer COMPONENTS (cinatra#1625 S8/M3): list-curator's
-  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent),
-  // blog-linkedin's draft-review (→ @cinatra-ai/blog-linkedin-publish-agent) and
-  // blog-wordpress's draft-confirm (→ @cinatra-ai/blog-wordpress-publish-agent).
+  // scrape-schema-review + final-list-review (→ @cinatra-ai/list-curator-agent)
+  // and blog-linkedin's draft-review (→ @cinatra-ai/blog-linkedin-publish-agent).
   // Their ids now resolve to the ExtensionFieldRenderer wrapper (still priority
   // 90, same strict-id condition) — asserted in the dedicated migrated-binding
-  // block below, not in this frozen host-component table.
+  // block below, not in this frozen host-component table. blog-wordpress's
+  // draft-confirm is retired (cinatra#3650, #4150): its id resolves to no
+  // renderer, asserted in its own case below.
   // follow-up-cadence (2 scoped ids + bare alias) MIGRATED into
   // @cinatra-ai/email-artifacts (cinatra#1625) — now the
   // ExtensionFieldRenderer wrapper at priority 90 (both scoped ids load the SAME
@@ -173,7 +175,6 @@ describe("resolution parity with the retired hand map", () => {
     ["@cinatra-ai/list-curator-agent:scrape-schema-review", 90],
     ["@cinatra-ai/list-curator-agent:final-list-review", 90],
     ["@cinatra-ai/blog-linkedin-publish-agent:draft-review", 90],
-    ["@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", 90],
     // follow-up-cadence relocated into @cinatra-ai/email-artifacts
     // (cinatra#1625): BOTH scoped ids load the same pack component, priority 90.
     ["@cinatra-ai/email-follow-up-agent:follow-up-cadence", 90],
@@ -214,6 +215,22 @@ describe("resolution parity with the retired hand map", () => {
       expect(resolved.displayName).toBe(`ExtensionFieldRenderer(${id})`);
     },
   );
+
+  // cinatra#3650 / #4150: the WordPress publish pack at this pin declares no
+  // field renderer (the host's review card, then its publish card, replace its
+  // draft-confirm screen), so the bundled tree carries no binding for the old
+  // id. The KIND stays in the host's vocabulary: a workspace that still has an
+  // older version of the pack installed at runtime keeps its binding, so a run
+  // parked on that screen keeps the host's schema floor with its Continue (the
+  // runtime-path case below).
+  it("the WordPress draft-confirm id has no bundled binding at this pin, and its kind stays", () => {
+    // red-first-expect: expected true to be false
+    const id = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+    expect(GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === id)).toBe(false);
+    expect(resolveWith(id), id).toBeNull();
+    expect(KNOWN_FIELD_RENDERER_KINDS).toContain("wordpress-draft-confirm");
+    expect(knownFieldRendererKinds()).toContain("wordpress-draft-confirm");
+  });
 
   it.each([
     ["@cinatra-ai/email-outreach-agent:gmail-sender"],
@@ -371,7 +388,6 @@ describe("the idea step's binding holds its Continue until a pick", () => {
 describe("mid-run HITL classification parity", () => {
   it.each([
     "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm",
     "@cinatra-ai/context-selection-agent:context-selector",
     // cinatra#1959: the pack-served re-entrant drafts / follow-ups gates carry
     // midRunHitl:true in the merged bindings (email-artifacts declares it), so the
@@ -434,6 +450,30 @@ describe("kind vocabulary cannot drift", () => {
 });
 
 describe("registerFieldRendererBindings (runtime path)", () => {
+  it("an older WordPress publish pack installed at runtime keeps its draft-confirm step on the floor, with its Continue", () => {
+    // The declaration the pack shipped before this pin (version 0.5.0).
+    const id = "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm";
+    const { entries, errors } = validateFieldRendererDeclarations(
+      "@cinatra-ai/blog-wordpress-publish-agent",
+      [
+        {
+          id,
+          kind: "wordpress-draft-confirm",
+          priority: 90,
+          midRunHitl: true,
+          component: { entry: "./src/renderers/draft-confirm.tsx", propsApiVersion: 1 },
+        },
+      ],
+    );
+    expect(errors.join("\n")).toBe("");
+    registerFieldRendererBindings(entries);
+    const entry = resolveWith(id);
+    expect(entry?.renderer).toBe(SchemaOnlyFloorRenderer);
+    expect(entry?.drawsOwnSubmit).toBe(true);
+    expect(hasMidRunHitlBinding(id)).toBe(true);
+    expect(classifyMidRunHitl(id)).toBe(true);
+  });
+
   it("registers a runtime binding idempotently and skips unknown kinds with a warning", () => {
     registerFieldRendererBindings([
       { id: "@cinatra-ai/future-agent:thing", kind: "cta", priority: 70 },
