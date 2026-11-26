@@ -7,7 +7,7 @@
 // job "Perpetual core invariants") refuses a new pin, a stale entry or a grown
 // floor on every pull request.
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,13 +15,13 @@ import {
   BASELINE_REL,
   GATE_REL,
   REPO_ROOT,
-  MODULE_SPECIFIER_CALLS,
   ScannerError,
   isCoreTestPath,
   loadPinnedPacks,
   normalizePath,
   runGate,
   scanCorePins,
+  writeBaseline,
 } from "../core-pack-pin-gate.mjs";
 import { makeFloorRepo } from "./floor-base-fixture.mjs";
 
@@ -158,7 +158,7 @@ mkdirSync(path.join(tmp, "extensions/example-org/demo-agent"), { recursive: true
   });
 
   it("does not find a pack named only as a label, or `extensions` used as a word", () => {
-    const src = `expect(label("@example-org/demo-agent")).toBe("Demo");
+    const src = `it("@example-org/demo-agent", () => expect(label(x)).toBe("Demo"));
 expect(crumbs(["configuration", "extensions", "x"])).toEqual([]);
 expect(route("/extensions/upload")).toBe(true);`;
     expect(pins({ [`${T}label.test.ts`]: src })).toEqual([]);
@@ -346,11 +346,6 @@ describe("module mocks name a module like an import does", () => {
   const VI = ["doMock", "doUnmock", "importActual", "importMock", "mock", "unmock"];
   const JEST = ["createMockFromModule", "doMock", "dontMock", "genMockFromModule", "mock", "requireActual", "requireMock", "setMock", "unmock"];
 
-  it("lists every call it reads in one table, for vi and for jest", () => {
-    expect([...(MODULE_SPECIFIER_CALLS?.vi ?? [])].sort()).toEqual(VI);
-    expect([...(MODULE_SPECIFIER_CALLS?.jest ?? [])].sort()).toEqual(JEST);
-  });
-
   it("finds a pinned package named by each call of the table, on vi and on jest", () => {
     const files = {};
     for (const [recv, names] of [["vi", VI], ["jest", JEST]]) {
@@ -375,6 +370,63 @@ describe("module mocks name a module like an import does", () => {
       [`${T}made-up.test.ts`]: `${V}.mock("@made-up-org/made-up-agent", () => ({}));\n${J}.mock("@made-up-org/other", () => ({}));`,
       [`${T}core.test.ts`]: `${V}.mock("@/lib/db", () => ({}));\n${V}.unmock("node:fs");`,
     };
+    expect(pins(files)).toEqual([]);
+  });
+});
+
+describe("a pinned package name counts wherever it stands, whoever receives it", () => {
+  const DEMO = "@example-org/demo-agent";
+  const P = `"${DEMO}"`;
+  const each = (srcs) => Object.fromEntries(Object.entries(srcs).map(([k, v]) => [`${T}${k}.test.ts`, v]));
+  const all = (files) => Object.keys(files).sort().map((f) => `read :: ${f} :: ${DEMO}`);
+
+  it("finds the name passed to an aliased require, a renamed mock or any call", () => {
+    const files = each({
+      aliased: `const req = createRequire(import.meta.url);\nconst p = req.resolve(${P});`,
+      aliasedSub: `const r = createRequire(import.meta.url);\nconst m = r(${P} + "/x");`,
+      renamedMock: `const mockModule = vi.mock;\nmockModule(${P}, () => ({}));`,
+      anyCall: `const m = load(${P});`,
+      wrapped: `const p = req.resolve((${P} as string));`,
+    });
+    expect(pins(files)).toEqual(all(files));
+  });
+
+  it("finds the name or a sub-path of it in an array, an object value and a template", () => {
+    const files = each({
+      array: `const mods = ["node:fs", ${P}];`,
+      object: `const cfg = { alias: { x: "${DEMO}/src/x" } };`,
+      template: "const s = `" + DEMO + "`;",
+      templateHead: "const s = `" + DEMO + "/${sub}`;",
+      message: `expect(m, ${P}).toBeDefined();`,
+    });
+    expect(pins(files)).toEqual(all(files));
+  });
+
+  it("exempts a test title (describe, it, test and their each, skip and only forms) and a type-only load, nothing else", () => {
+    const titles = each({
+      describe: `describe(${P}, () => {});`,
+      it: `it(${P}, () => {});`,
+      test: `test("${DEMO}/x", () => {});`,
+      skip: `it.skip(${P}, () => {});`,
+      only: `describe.only(${P}, () => {});`,
+      each: `test.each([1])(${P}, () => {});`,
+      onlyEach: `it.only.each([1])(${P}, () => {});`,
+      typeOf: `type M = typeof import(${P});`,
+    });
+    const notTitles = each({
+      secondArg: `it("loads", () => load(${P}));`,
+      otherCall: `bench(${P}, () => {});`,
+      otherForm: `it.todo(${P});`,
+    });
+    expect(pins({ ...titles, ...notTitles })).toEqual(all(notTitles));
+  });
+
+  it("does not find a made-up package or a name that only starts like a pinned one", () => {
+    const files = each({
+      madeUp: `const p = req.resolve("@made-up-org/made-up-agent");`,
+      longer: `const p = req.resolve("${DEMO}-extra");`,
+      prose: `expect(msg).toBe("see ${DEMO} docs");`,
+    });
     expect(pins(files)).toEqual([]);
   });
 });
@@ -497,6 +549,89 @@ describe("the floor", () => {
       expect(runGate({ root, env }).ok).toBe(false);
       expect(runGate({ root, env: { CORE_PACK_PIN_BASE: "origin/nope" } }).ok).toBe(false);
     });
+  });
+});
+
+describe("the list writer only shrinks (--write-baseline)", () => {
+  const PIN_TEST = `${T}demo.test.ts`;
+  const PIN_SRC = `const d = path.join(ROOT, "extensions", "example-org", "demo-agent");`;
+  const OTHER_TEST = `${T}other.test.ts`;
+  const OTHER_SRC = `const d = path.join(ROOT, "extensions", "example-org", "other-artifact");`;
+  const entry = { rule: "read", file: PIN_TEST, pack: "@example-org/demo-agent" };
+  const other = { rule: "read", file: OTHER_TEST, pack: "@example-org/other-artifact" };
+  const floor = (entries) => ({ note: "test", entries });
+  const env = { CORE_PACK_PIN_BASE: "origin/main" };
+  const repo = (base, head) => {
+    const r = makeFloorRepo({ base: { ...LOCKS, ...base }, head });
+    roots.push(r.root);
+    return r.root;
+  };
+  const floorAt = (root) => JSON.parse(readFileSync(join(root, BASELINE_REL), "utf8"));
+
+  it("refuses a missing floor when the base holds one; writes nothing", () => {
+    // red-first-expect: writeBaseline is not a function
+    const root = repo({ [GATE_REL]: "// gate", [PIN_TEST]: PIN_SRC, [BASELINE_REL]: floor([entry]) }, { [OTHER_TEST]: OTHER_SRC });
+    rmSync(join(root, BASELINE_REL));
+    const r = writeBaseline({ root, env });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toMatch(/REFUSED[\s\S]*missing/);
+    expect(existsSync(join(root, BASELINE_REL))).toBe(false);
+  });
+
+  it("refuses a floor that is JSON null or not a floor", () => {
+    // red-first-expect: writeBaseline is not a function
+    for (const bad of ["null\n", "{}\n", "not json"]) {
+      const root = repo({ [GATE_REL]: "// gate", [PIN_TEST]: PIN_SRC, [BASELINE_REL]: floor([entry]) }, { [OTHER_TEST]: OTHER_SRC, [BASELINE_REL]: bad });
+      const r = writeBaseline({ root, env });
+      expect(r.ok, bad).toBe(false);
+      expect(readFileSync(join(root, BASELINE_REL), "utf8")).toBe(bad);
+    }
+  });
+
+  it("refuses to seed without a base, and names the variable to set", () => {
+    // red-first-expect: writeBaseline is not a function
+    const root = tree({ [PIN_TEST]: PIN_SRC });
+    const r = writeBaseline({ root, env: {} });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toMatch(/CORE_PACK_PIN_BASE/);
+    expect(existsSync(join(root, BASELINE_REL))).toBe(false);
+  });
+
+  it("shrinks: drops an entry whose pin is gone", () => {
+    // red-first-expect: writeBaseline is not a function
+    const root = repo(
+      { [GATE_REL]: "// gate", [PIN_TEST]: PIN_SRC, [OTHER_TEST]: OTHER_SRC, [BASELINE_REL]: floor([entry, other]) },
+      { [OTHER_TEST]: "// moved to the pack's own CI\n" },
+    );
+    const r = writeBaseline({ root, env });
+    expect(r.ok, r.lines.join("\n")).toBe(true);
+    expect(floorAt(root).entries).toEqual([entry]);
+  });
+
+  it("refuses growth: a new pin, and an entry the head floor added but the base floor does not hold", () => {
+    // red-first-expect: writeBaseline is not a function
+    const root = repo(
+      { [GATE_REL]: "// gate", [PIN_TEST]: PIN_SRC, [BASELINE_REL]: floor([entry]) },
+      { [OTHER_TEST]: OTHER_SRC, [BASELINE_REL]: floor([entry, other]) },
+    );
+    const r = writeBaseline({ root, env });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toMatch(/REFUSED[\s\S]*other-artifact/);
+    expect(floorAt(root).entries).toEqual([entry]);
+    // Without a base, a pin the floor does not hold is refused as well.
+    const local = tree({ [PIN_TEST]: PIN_SRC, [OTHER_TEST]: OTHER_SRC, [BASELINE_REL]: floor([entry]) });
+    const l = writeBaseline({ root: local, env: {} });
+    expect(l.ok).toBe(false);
+    expect(floorAt(local).entries).toEqual([entry]);
+  });
+
+  it("seeds the introducing change: the base holds neither the floor nor the gate", () => {
+    // red-first-expect: writeBaseline is not a function
+    const root = repo({ [PIN_TEST]: PIN_SRC }, { [GATE_REL]: "// gate", [OTHER_TEST]: OTHER_SRC });
+    const r = writeBaseline({ root, env });
+    expect(r.ok, r.lines.join("\n")).toBe(true);
+    expect(r.lines.join("\n")).toMatch(/SEEDED/);
+    expect(floorAt(root).entries).toEqual([entry, other]);
   });
 });
 

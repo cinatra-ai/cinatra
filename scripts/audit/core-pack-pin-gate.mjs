@@ -11,9 +11,11 @@
 //           dropped, `..` resolved, `/` `\` and repeats collapsed, ASCII
 //           %-escapes decoded), WHEREVER it is rooted (the repository, a
 //           temporary directory, an absolute stand-in, a core directory), or
-//           a test file imports `@<scope>/<name>` (or a subpath) — where
-//           `@<scope>/<name>` is a package a committed extension lock pins
-//           (compared without case). A test that rebuilds a
+//           a test file spells `@<scope>/<name>` (or a sub-path) as a whole
+//           string literal in ANY position (an import, any call, whoever
+//           receives it, an array, an object) except a type-only load and a
+//           test title (TITLE_CALLS) — where `@<scope>/<name>` is a package a
+//           committed extension lock pins (compared without case). A test that rebuilds a
 //           pinned pack's tree in a temporary folder still names that pack in
 //           core; a test that needs a made-up pack uses a made-up name, which
 //           matches no lock and is no finding;
@@ -46,7 +48,11 @@
 //   - a pin outside the floor fails;
 //   - an entry whose pin is gone is STALE and fails until --write-baseline
 //     shrinks the floor;
-//   - --write-baseline never writes a new entry;
+//   - --write-baseline never writes a new entry: it writes only live pins the
+//     committed floor (and the base's floor, when a base is named) holds; a
+//     missing, unreadable, `null` or malformed floor is REFUSED, except on the
+//     introducing change (the base holds neither the floor nor the gate),
+//     which seeds it;
 //   - the floor is compared with its copy on the base branch through the
 //     shared guard scripts/audit/lib/floor-base-guard.mjs: a new entry fails.
 //     The base is CORE_PACK_PIN_BASE when set, else the pull request's
@@ -69,7 +75,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import tsDefault from "typescript";
-import { compareFloorWithBase, newKeys, readFileAtBase } from "./lib/floor-base-guard.mjs";
+import { PULL_REQUEST_BASE_VAR, compareFloorWithBase, newKeys, readFileAtBase } from "./lib/floor-base-guard.mjs";
 
 const ts = tsDefault;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -156,8 +162,11 @@ export function listCoreTestFiles(root = REPO_ROOT) {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
+    } catch (e) {
+      // An absent core root holds no test; a directory that cannot be read is
+      // not an empty one: the gate fails closed.
+      if (e?.code === "ENOENT" && CORE_ROOTS.some((r) => join(root, r) === dir)) return;
+      throw new ScannerError(`${TAG} cannot read ${relative(root, dir) || "."} (${e?.code ?? e?.message}); the gate fails closed`);
     }
     for (const e of entries) {
       if (SKIP_DIRS.has(e.name)) continue;
@@ -218,17 +227,35 @@ function outerExpression(node) {
 }
 
 /**
- * The calls that name a module by their first argument, and so count like an
- * import (the one table; a call not listed here names no module). A bare name
- * matches on any receiver (`require`, `jest.requireActual`, `vi.importActual`);
- * `vi` and `jest` list the calls read only on that receiver: the module mocks
- * and their helpers.
+ * The test-title calls: the FIRST argument of `describe`, `it` or `test`, or of
+ * one of their `.each`, `.skip` and `.only` forms (`it.skip(...)`,
+ * `describe.each(rows)(...)`, `it.only.each(rows)(...)`), is a title, the one
+ * place a whole literal may spell a pinned package's name (packsOfFile). The
+ * table is explicit; a call not listed here takes no title.
  */
-export const MODULE_SPECIFIER_CALLS = Object.freeze({
-  anyReceiver: Object.freeze(["require", "importActual", "requireActual"]),
-  vi: Object.freeze(["mock", "doMock", "unmock", "doUnmock", "importActual", "importMock"]),
-  jest: Object.freeze(["mock", "doMock", "unmock", "dontMock", "requireActual", "requireMock", "setMock", "createMockFromModule", "genMockFromModule"]),
+export const TITLE_CALLS = Object.freeze({
+  names: Object.freeze(["describe", "it", "test"]),
+  forms: Object.freeze(["each", "skip", "only"]),
 });
+
+/** True when the call's first argument is a test title (TITLE_CALLS). */
+function isTitleCall(call) {
+  let callee = unwrapExpression(call.expression);
+  // `describe.each(rows)` returns the call that takes the title.
+  if (ts.isCallExpression(callee)) callee = unwrapExpression(callee.expression);
+  while (ts.isPropertyAccessExpression(callee)) {
+    if (!TITLE_CALLS.forms.includes(callee.name.text)) return false;
+    callee = unwrapExpression(callee.expression);
+  }
+  return ts.isIdentifier(callee) && TITLE_CALLS.names.includes(callee.text);
+}
+
+/** True when the literal is a test title: the first argument of a TITLE_CALLS call, under any wrapper. */
+function isTestTitle(node) {
+  const outer = outerExpression(node);
+  const parent = outer.parent;
+  return !!parent && ts.isCallExpression(parent) && parent.arguments[0] === outer && isTitleCall(parent);
+}
 
 function calleeName(expr) {
   expr = unwrapExpression(expr);
@@ -365,9 +392,10 @@ export function packsInChain({ text, after = null }, pinned) {
 }
 
 /**
- * The pinned pack a whole string literal names: `@scope/name`, `scope/name`
- * or the directory name `name` alone. Only consulted in a file whose paths
- * reach the tree with the name left to a variable.
+ * The pinned pack a whole string literal names as a directory: `scope/name`
+ * or the name `name` alone. Only consulted in a file whose paths reach the
+ * tree with the name left to a variable. (A literal that spells the package
+ * `@scope/name` or a sub-path of it counts everywhere: packsOfFile.)
  */
 export function packNamedByLiteral(value, pinned) {
   const v = value.toLowerCase();
@@ -380,10 +408,18 @@ export function packNamedByLiteral(value, pinned) {
 
 /**
  * The verdict over one file's chains and whole literals: every pack its paths
- * spell, and, when a path reaches the tree with the name in a variable, every
- * pack a whole literal of the file names (the name the variable takes).
+ * spell; in a test file (`packageNames`), every pack whose PACKAGE NAME a
+ * whole literal spells (`@scope/name` or a sub-path `@scope/name/...`),
+ * WHEREVER the literal stands: an import or a call of any kind
+ * (`x.resolve(...)`, `anything(...)`), an array element, an object value — the
+ * position is not read, so no alias of `require` or of a mock hides it; and,
+ * when a path reaches the tree with the name in a variable, every pack a whole
+ * literal names as a directory (the name the variable takes). The caller
+ * leaves out only the literals structure exempts (a type-only load's
+ * specifier, a test title). A JSON fixture's package names are the flow
+ * rule's (flowMarkers).
  */
-export function packsOfFile(chains, literals, pinned) {
+export function packsOfFile(chains, literals, pinned, { packageNames = false } = {}) {
   const found = new Set();
   let reachesTree = false;
   for (const c of chains) {
@@ -391,11 +427,12 @@ export function packsOfFile(chains, literals, pinned) {
     for (const p of r.packs) found.add(p);
     reachesTree ||= r.reachesTree;
   }
-  if (reachesTree) {
-    for (const v of literals) {
-      const p = packNamedByLiteral(v, pinned);
-      if (p) found.add(p);
-    }
+  for (const v of literals) {
+    const pkg = packageNames ? packageOfSpecifier(v) : null;
+    if (pkg && pinned.names.has(pkg)) found.add(pkg);
+    if (!reachesTree) continue;
+    const p = packNamedByLiteral(v, pinned);
+    if (p) found.add(p);
   }
   return found;
 }
@@ -423,24 +460,6 @@ function isPartOfLargerPath(node) {
 }
 
 /**
- * True when the call loads the module its first argument names: a dynamic
- * import, `require`, `require.resolve`, `import.meta.resolve`, or a call of
- * MODULE_SPECIFIER_CALLS.
- */
-function namesModule(call, sf) {
-  if (call.expression.kind === ts.SyntaxKind.ImportKeyword) return true;
-  const callee = unwrapExpression(call.expression);
-  const name = calleeName(callee);
-  if (name === null) return false;
-  if (MODULE_SPECIFIER_CALLS.anyReceiver.includes(name)) return true;
-  if (!ts.isPropertyAccessExpression(callee)) return false;
-  const receiver = unwrapExpression(callee.expression);
-  if (name === "resolve" && /^(require|import\.meta)$/.test(receiver.getText(sf))) return true;
-  const receiverName = ts.isIdentifier(receiver) ? receiver.text : ts.isPropertyAccessExpression(receiver) ? receiver.name.text : null;
-  return (receiverName === "vi" || receiverName === "jest") && MODULE_SPECIFIER_CALLS[receiverName].includes(name);
-}
-
-/**
  * True when an import or export-from loads no value: `import type ...`,
  * `export type ... from`, or every named specifier carries `type` with no
  * default or namespace binding (`import { type X, type Y } from`). A mixed
@@ -460,7 +479,7 @@ export function isTypeOnlyImportOrExport(node) {
   return !!clause && ts.isNamedExports(clause) && clause.elements.length > 0 && clause.elements.every((e) => e.isTypeOnly);
 }
 
-/** Every pinned pack a JS/TS test file reads, imports or resolves. */
+/** Every pinned pack a JS/TS test file reads, or names by its package name. */
 export function scanScriptText(rel, text, pinned) {
   const kind = /\.tsx$/.test(rel) ? ts.ScriptKind.TSX : /\.jsx$/.test(rel) ? ts.ScriptKind.JSX : /\.[cm]?ts$/.test(rel) ? ts.ScriptKind.TS : ts.ScriptKind.JS;
   const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true, kind);
@@ -469,32 +488,16 @@ export function scanScriptText(rel, text, pinned) {
   const literals = [];
   // The specifier of a load that loads no value (a type-only import or
   // export-from, `import type X = require(...)`, a `typeof import("...")` type)
-  // is exempt from both rules: structure decides it, not its text.
+  // is exempt from both rules: structure decides it, not its text. Every other
+  // specifier is a whole literal like any other (packsOfFile).
   const typeOnlySpecifiers = new Set();
   const visit = (node) => {
-    // An import, export-from, dynamic import, require, require.resolve, module
-    // mock or actual-import helper (MODULE_SPECIFIER_CALLS) whose specifier is a
-    // pinned package, read through any wrapper.
-    let spec = null;
     if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) {
-      if (!isTypeOnlyImportOrExport(node)) spec = node.moduleSpecifier.text;
-      else typeOnlySpecifiers.add(node.moduleSpecifier);
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      ts.isStringLiteral(unwrapExpression(node.moduleReference.expression))
-    ) {
-      const literal = unwrapExpression(node.moduleReference.expression);
-      if (!node.isTypeOnly) spec = literal.text;
-      else typeOnlySpecifiers.add(literal);
+      if (isTypeOnlyImportOrExport(node)) typeOnlySpecifiers.add(node.moduleSpecifier);
+    } else if (ts.isImportEqualsDeclaration(node) && node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) {
+      typeOnlySpecifiers.add(unwrapExpression(node.moduleReference.expression));
     } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
       typeOnlySpecifiers.add(node.argument.literal);
-    } else if (ts.isCallExpression(node) && node.arguments.length > 0 && ts.isStringLiteralLike(unwrapExpression(node.arguments[0]))) {
-      if (namesModule(node, sf)) spec = unwrapExpression(node.arguments[0]).text;
-    }
-    if (spec !== null) {
-      const pkg = packageOfSpecifier(spec);
-      if (pkg && pinned.names.has(pkg)) found.add(pkg);
     }
     if (typeOnlySpecifiers.has(node)) return;
     if (
@@ -507,11 +510,14 @@ export function scanScriptText(rel, text, pinned) {
     ) {
       chains.push(...chainsOf(piecesOf(node)));
     }
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push(node.text);
+    // A whole literal (a template's head too: the value starts with it), unless
+    // it is a test title.
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && !isTestTitle(node)) literals.push(node.text);
+    if (ts.isTemplateExpression(node) && !isTestTitle(node)) literals.push(node.head.text);
     ts.forEachChild(node, visit);
   };
   visit(sf);
-  for (const p of packsOfFile(chains, literals, pinned)) found.add(p);
+  for (const p of packsOfFile(chains, literals, pinned, { packageNames: true })) found.add(p);
   return found;
 }
 
@@ -736,13 +742,47 @@ export function runGate({ root = REPO_ROOT, env = process.env } = {}) {
   return { ok, lines, findings, added, stale };
 }
 
-function writeBaseline(root) {
+/**
+ * The shrink-only writer: `{ ok, lines, entries? }`. It writes ONLY entries
+ * that are live, that the committed floor holds, and, when a base is named
+ * (CORE_PACK_PIN_BASE, else GITHUB_BASE_REF: the guard's base), that the
+ * base's floor holds. A committed floor that is missing, unreadable, `null` or
+ * not a floor is REFUSED, never read as empty: the one exception is the
+ * introducing change, whose base holds neither the floor nor this gate; then
+ * the live pins seed the floor. A live pin that may not be written is refused,
+ * and the run fails.
+ */
+export function writeBaseline({ root = REPO_ROOT, env = process.env } = {}) {
   const floorPath = join(root, BASELINE_REL);
-  const previous = existsSync(floorPath) ? JSON.parse(readFileSync(floorPath, "utf8")) : null;
+  const refuse = (...why) => ({ ok: false, lines: why.map((w) => `${TAG} --write-baseline REFUSED — ${w}`) });
+  let headKeys = null;
+  let headProblem = null;
+  if (!existsSync(floorPath)) headProblem = `the floor ${BASELINE_REL} is missing; an absent floor is not an empty one`;
+  else {
+    try {
+      headKeys = parseFloor(readFileSync(floorPath, "utf8"));
+    } catch (e) {
+      headProblem = `the floor ${BASELINE_REL} is not a readable floor (${e.message})`;
+    }
+  }
+  // The guard resolves (and fetches) the base; with an empty head it can only
+  // hold, so `baseFloor` is the base's floor.
+  const base = checkBaseGuard({ root, env, headKeys: [] });
+  if (base.status === "unreadable") return refuse(...base.lines.map((l) => l.replace(/^\[[^\]]*\] /, "")));
+  let allowed = null;
+  if (headProblem !== null) {
+    if (base.status === "no-base") {
+      return refuse(`${headProblem}. Seeding needs the base: set ${FLOOR_BASE_VAR} (or ${PULL_REQUEST_BASE_VAR} on a pull request) to the base the change lands on.`);
+    }
+    if (base.status !== "introducing") return refuse(`${headProblem}; the base "${base.ref}" holds the floor. Restore it from the base and shrink that.`);
+  } else allowed = new Set(headKeys);
+  if (base.status === "held") {
+    const onBase = new Set(base.baseFloor);
+    allowed = new Set([...allowed].filter((k) => onBase.has(k)));
+  }
   const findings = scanCorePins(root);
-  const prevKeys = previous ? new Set(parseFloor(JSON.stringify(previous))) : null;
-  const keep = prevKeys ? findings.filter((f) => prevKeys.has(keyOf(f))) : findings;
-  const refused = prevKeys ? findings.filter((f) => !prevKeys.has(keyOf(f))) : [];
+  const keep = allowed ? findings.filter((f) => allowed.has(keyOf(f))) : findings;
+  const refused = allowed ? findings.filter((f) => !allowed.has(keyOf(f))) : [];
   const doc = {
     note:
       "Shrink-only floor of core tests and fixtures that pin one pinned pack (cinatra#4853). " +
@@ -751,18 +791,25 @@ function writeBaseline(root) {
     entries: keep.map(({ rule, file, pack }) => ({ rule, file, pack })),
   };
   writeFileSync(floorPath, JSON.stringify(doc, null, 2) + "\n");
-  console.log(`${TAG} floor written (${doc.entries.length} entries).`);
+  const lines = [
+    ...base.lines,
+    allowed
+      ? `${TAG} floor written (${doc.entries.length} entries, shrink only).`
+      : `${TAG} floor SEEDED (${doc.entries.length} entries): the base "${base.ref}" holds neither the floor nor the gate.`,
+  ];
   if (refused.length) {
-    console.log(`${TAG} ${refused.length} new pin(s) NOT written — the floor only shrinks:`);
-    for (const f of refused) console.log(`  ! ${keyOf(f)}`);
+    lines.push(
+      `${TAG} --write-baseline REFUSED ${refused.length} pin(s) the floor${base.status === "held" ? " or its base copy" : ""} does not hold — the floor only shrinks:`,
+      ...refused.map((f) => `  ! ${keyOf(f)}`),
+    );
   }
+  return { ok: refused.length === 0, lines, entries: doc.entries };
 }
 
 function main() {
   const args = process.argv.slice(2);
-  if (args.includes("--write-baseline")) return writeBaseline(REPO_ROOT);
-  const result = runGate();
-  if (args.includes("--report")) {
+  const result = args.includes("--write-baseline") ? writeBaseline() : runGate();
+  if (args.includes("--report") && result.findings) {
     console.log(`${TAG} ${result.findings.length} pin(s) in the tree:`);
     for (const f of result.findings) console.log(`  ${keyOf(f)}`);
   }

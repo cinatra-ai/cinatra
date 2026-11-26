@@ -599,7 +599,8 @@ a core TypeScript/JavaScript test or JSON fixture (under `src/`, `packages/`
 or `docker/`, in a test or fixture directory or a `*.test.*` / `*.spec.*` /
 `*.fixture.*` file) does not pin one pinned pack: it reads, imports or
 resolves no path inside the materialized `extensions/` tree that names a
-package the two extension locks pin, and no fixture that parses as an agent
+package the two extension locks pin, no test file spells a pinned package's
+name in a string literal, and no fixture that parses as an agent
 flow (an object with `component_type: "Flow"`) carries a pinned-pack marker (a
 locked package name, or 7 or more leading hex digits of a lock's
 `resolvedSha`). The gate decides this from structure only: test files are
@@ -630,19 +631,26 @@ skipped. A load that loads no value is exempt from both rules, by structure:
 `import type`, `export type`, every named specifier marked `type` with no
 default or namespace binding, `import type X = require(...)`, and a
 `typeof import("...")` type; `import x = require(...)` and
-`requireActual(...)` count. **A module mock names its module like an
-import:** the first argument of `vi.mock`, `vi.doMock`, `vi.unmock`,
-`vi.doUnmock`, `vi.importActual`, `vi.importMock` and the `jest.*` calls of
-the same kind (`MODULE_SPECIFIER_CALLS` in the script is the one table) counts
-as a specifier. **A wrapper hides nothing:** the scanner reads an expression
+`requireActual(...)` count. **A pinned package's name counts wherever it
+stands:** in a test file, a whole string literal (a template's head too) that
+is a pinned package's name or a sub-path of it (`@scope/name`,
+`@scope/name/...`) is a finding in ANY position: an import specifier, the
+argument of any call (`require`, an aliased `createRequire` result's
+`req.resolve(...)`, a module mock, a renamed mock, an assertion), an array
+element, an object value or key. The scanner does not track who receives the
+literal, so no alias hides it. The exemptions are structural only: a type-only
+load (above), comments, and a test title, the first argument of `describe`,
+`it` or `test` or of their `.each`, `.skip` and `.only` forms (`TITLE_CALLS`
+in the script is the one table). A JSON fixture's package names stay with the
+flow rule. **A wrapper hides nothing:** the scanner reads an expression
 through parentheses, `as`, `satisfies`, a non-null `!`, a type assertion
 `<T>x` and `await`, wherever it looks at an expression (a path, a specifier,
 a callee). **Iteration is not a pin:** a fleet test that
 walks the lock or the tree builds the name from a variable, so its path stops
 at the tree with a hole and no pack is found; a file whose path reaches the
 tree that way (rooted in a variable or a relative `.`/`..`) is found for every
-pack whose name it also spells as a whole literal (`"demo-agent"`,
-`"@scope/demo-agent"`). An absolute or prefixed `extensions/<word>` with the
+pack whose directory name it also spells as a whole literal (`"demo-agent"`,
+`"scope/demo-agent"`). An absolute or prefixed `extensions/<word>` with the
 name in a variable does not trigger this widening, because it is as often a
 URL route (`/extensions/upload`) or a core directory. The pins that stood on
 main when the gate landed are held by the shrink-only floor
@@ -650,7 +658,15 @@ main when the gate landed are held by the shrink-only floor
 new pin fails, an entry whose pin is gone is stale and fails until
 `--write-baseline` shrinks the floor, and the floor is compared with the base
 branch through `lib/floor-base-guard.mjs` (`CORE_PACK_PIN_BASE`, else
-`GITHUB_BASE_REF`). It runs as the test of record in
+`GITHUB_BASE_REF`). **The writer only shrinks:** `--write-baseline` writes
+only live pins that the committed floor holds and, when a base is named, that
+the base's floor holds; a live pin outside them is refused and the run exits
+1. A committed floor that is missing, unreadable, JSON `null` or not a floor
+is refused, never read as empty; the one exception is the introducing change
+(the base holds neither the floor nor the gate), whose live pins seed the
+floor. Without a base variable a seed is refused with the variable to set. A
+core root that is absent holds no test; one that cannot be read fails the
+scan. It runs as the test of record in
 `__tests__/core-pack-pin-gate.test.mjs`, inside the root suite of the job
 "Perpetual core invariants".
 
