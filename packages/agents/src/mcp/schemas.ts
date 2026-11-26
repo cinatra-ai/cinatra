@@ -311,7 +311,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
        * follow-up milestone.)
        */
       agentDependencies: z.record(z.string(), z.string()).optional().describe("[DEPRECATED — use the canonical cinatra.dependencies vocabulary] Child agent dependencies for orchestrator templates. Maps packageName to semver range (e.g. { '@cinatra/stage-1': '^1.0.0' }). Pass {} to clear all dependencies."),
-      approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package."),
+      approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package. For a package whose source the runtime mounts, a run takes its steps from the installed version, so an approvalPolicy edit applies only to agents without a mounted source."),
     }),
   },
   "agent_export": {

@@ -82,6 +82,43 @@ describe("the loader's selected source, read before dispatch", () => {
   }
  });
 
+ it("carries the mounted file's own text when its digest is the mounted source's, and refuses one that is not (cinatra#3089)", async () => {
+  env();
+  const file = JSON.stringify({ flow: { id: "mounted" } });
+  const p = await selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" },
+   answer({ selectedSourceBinding: { ...binding, sourceSha256: sha(file), mountedSource: file } }) as unknown as typeof fetch);
+  // red-first-expect: expected undefined to be
+  expect(p.mountedSource).toBe(file);
+  for (const mountedSource of [file + " ", ""]) {
+   await expect(selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" },
+    answer({ selectedSourceBinding: { ...binding, sourceSha256: sha(file), mountedSource } }) as unknown as typeof fetch)).rejects.toThrow("step_tool_loader_binding_invalid");
+  }
+ });
+
+ it("a mounted file that is the declaration source byte for byte is sent once, as a marker; its digest is still checked (cinatra#3089)", async () => {
+  env();
+  const select = (b: Record<string, unknown>) => selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" },
+   answer({ selectedSourceBinding: b }) as unknown as typeof fetch);
+  // red-first-expect: expected undefined to be
+  expect((await select({ ...binding, sourceSha256: sha(graph), mountedSourceIsDeclarationSource: true })).mountedSource).toBe(graph);
+  for (const bad of [
+   { ...binding, mountedSourceIsDeclarationSource: true },
+   { ...binding, sourceSha256: sha(graph), mountedSourceIsDeclarationSource: "yes" },
+   { ...binding, sourceSha256: sha(graph), mountedSourceIsDeclarationSource: true, mountedSource: graph },
+  ]) {
+   await expect(select(bad)).rejects.toThrow("step_tool_loader_binding_invalid");
+  }
+ });
+
+ it("a transformed source of about 5 MiB fits with both copies, the declaration source and the mounted file (cinatra#3089)", async () => {
+  env();
+  const big = (pad: string) => JSON.stringify({ flow: { id: "step", pad: pad.repeat(5 * 1024 * 1024) } });
+  const declared = big("d"), file = big("m");
+  const p = await selectWayflowRunStepToolPolicy({ agentUrl: "http://wayflow.test:3010/agents/v/s", contextId: "c" },
+   answer({ selectedSourceBinding: { ...binding, declarationSource: declared, declarationSourceSha256: sha(declared), sourceSha256: sha(file), mountedSource: file } }) as unknown as typeof fetch);
+  expect(p.mountedSource === file).toBe(true);
+ });
+
  it("never sends the bridge token to another origin or a non-agent path", async () => {
   env();
   for (const agentUrl of ["http://elsewhere.test:3010/agents/v/s", "http://wayflow.test:3011/agents/v/s", "http://wayflow.test:3010/other/v/s",
