@@ -1,5 +1,6 @@
 /**
- * Allowlist for documented OAS-RUNTIME findings — CURRENTLY EMPTY.
+ * Allowlist for documented OAS-RUNTIME findings. Shrink-only: an entry is
+ * deleted in the PR that pins the cured pack (the sweep fails on a clean entry).
  *
  * This map encodes any "runtime-backed-agent" design exception, where a
  * context-using agent declares a `contextRefs` EndNode output with NO
@@ -43,7 +44,21 @@ export type AllowlistEntry = {
   reason: string;
 };
 
-export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {};
+export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {
+  // cinatra#4150: main's pin ed523da6 has a review gate whose targets cannot
+  // arrive (it does not set surfaceGateInputs: true and its targets input is no
+  // start input), so the run opens no artifact review. Delete this entry in the
+  // PR that pins the cured pack.
+  "blog-wordpress-publish-agent": {
+    phase: "cinatra#4150",
+    expectedCodes: ["OAS-RUNTIME-013"],
+    expectedBlockerCount: 1,
+    expectedLocations: [
+      'Gate "review_post" declares metadata.cinatra.artifactReview.targetsInput but it does not set metadata.cinatra.surfaceGateInputs: true',
+    ],
+    reason: "pinned at ed523da6 before its review gate surfaces its targets",
+  },
+};
 
 /**
  * Asserts that structured `findings` for `slug` match the documented

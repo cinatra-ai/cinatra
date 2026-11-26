@@ -994,12 +994,134 @@ const HITL_GATE_DOC =
   "See docs/internals/workflows/agent-run-hitl-prompt-primitives.md " +
   '("Pinned-runtime contract for the gate node", cinatra#1830/#2140).';
 
+/** The keys, in the root `$referenced_components`, of the root flow's own nodes (its `nodes` list). */
+function rootFlowNodeKeys(parsed: Record<string, unknown>): string[] {
+  const rootRefs = isPlainObject(parsed["$referenced_components"]) ? parsed["$referenced_components"] : {};
+  const keys: string[] = [];
+  for (const entry of Array.isArray(parsed["nodes"]) ? parsed["nodes"] : []) {
+    const ref = resolveComponentRef(entry);
+    if (ref !== null && Object.prototype.hasOwnProperty.call(rootRefs, ref) && !keys.includes(ref)) keys.push(ref);
+  }
+  return keys;
+}
+
+/**
+ * Whether a node of the root flow has an output port with this title, the port
+ * a DataFlowEdge reads (cinatra#4150, rule 013). The loader hands the flow to
+ * pyagentspec, which joins an edge only between declared ports: a node's
+ * explicit `outputs` list (entries by `title`) is its ports. Without that list a
+ * StartNode offers its `inputs`, and a FlowNode or ParallelFlowNode the
+ * `outputs` of its subflow(s); a FlowNode or ParallelFlowNode that lists its
+ * outputs still gets a value only for a port its subflow(s) declare. Any other
+ * kind offers only its explicit list.
+ */
+function rootNodeDeclaresOutput(
+  node: unknown,
+  name: string,
+  rootRefs: Record<string, unknown>,
+): boolean {
+  if (!isPlainObject(node)) return false;
+  const has = (list: unknown) =>
+    Array.isArray(list) && list.some((p) => isPlainObject(p) && p["title"] === name);
+  const explicit = Array.isArray(node["outputs"]) ? node["outputs"] : null;
+  const ownRefs = isPlainObject(node["$referenced_components"]) ? node["$referenced_components"] : {};
+  const flowOf = (value: unknown): Record<string, unknown> | null => {
+    const ref = resolveComponentRef(value);
+    const resolved = ref === null ? value
+      : Object.prototype.hasOwnProperty.call(ownRefs, ref) ? ownRefs[ref]
+        : Object.prototype.hasOwnProperty.call(rootRefs, ref) ? rootRefs[ref] : null;
+    return isPlainObject(resolved) ? resolved : null;
+  };
+  const subflows =
+    node["component_type"] === "FlowNode" ? [node["subflow"]]
+      : node["component_type"] === "ParallelFlowNode" && Array.isArray(node["subflows"]) ? node["subflows"]
+        : null;
+  if (subflows !== null) {
+    const fromSubflow = subflows.some((s) => has(flowOf(s)?.["outputs"]));
+    return fromSubflow && (explicit === null || has(explicit));
+  }
+  if (explicit !== null) return has(explicit);
+  return node["component_type"] === "StartNode" && has(node["inputs"]);
+}
+
 function scanInputMessageGateMountability(
   parsed: Record<string, unknown>,
 ): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
+  // The root flow's own nodes, by object, with their keys (rule 013 below).
+  const gateRootRefs = isPlainObject(parsed["$referenced_components"]) ? parsed["$referenced_components"] : {};
+  const rootNodeKeyOf = new Map<unknown, string>();
+  for (const key of rootFlowNodeKeys(parsed)) rootNodeKeyOf.set(gateRootRefs[key], key);
   walkComponentObjects(parsed, (node, path) => {
     const componentType = node["component_type"];
+
+    // --- artifact-review gate gets its targets (cinatra#4150) ---------------
+    // The compiler puts the marker on a compiled step only for a node of the
+    // ROOT flow (its steps are the root `nodes`; a FlowNode carries a nested
+    // gate's surfaceGateInputKeys, never its artifactReviewTargetsInput), and
+    // execution routes to the review only on that compiled field. The
+    // application then reads the targets by the marker's input name from the
+    // gate's pause message first, then from the run's start parameters
+    // (resolveDeclaredReviewTargets). The loader renders a gate's declared
+    // inputs into its pause message only when the gate sets
+    // surfaceGateInputs === true, and an input that no DataFlowEdge feeds from
+    // a declared output of a root-flow node renders as null, which the reader
+    // takes as absent. The start parameters hold the root flow's inputs. Every
+    // other shape opens no review.
+    const meta = isPlainObject(node["metadata"]) ? node["metadata"] : null;
+    const cin = meta && isPlainObject(meta["cinatra"]) ? meta["cinatra"] : null;
+    const review = cin && isPlainObject(cin["artifactReview"]) ? cin["artifactReview"] : null;
+    if (review && Object.prototype.hasOwnProperty.call(review, "targetsInput")) {
+      const target = review["targetsInput"];
+      const named = (list: unknown) =>
+        Array.isArray(list) && list.some((i) => isPlainObject(i) && i["title"] === target);
+      const gateKey = rootNodeKeyOf.get(node);
+      const sourced = () =>
+        (Array.isArray(parsed["data_flow_connections"]) ? parsed["data_flow_connections"] : []).some((e) => {
+          if (!isPlainObject(e) || e["component_type"] !== "DataFlowEdge") return false;
+          const from = resolveComponentRef(e["source_node"]);
+          const output = e["source_output"];
+          return resolveComponentRef(e["destination_node"]) === gateKey &&
+            e["destination_input"] === target &&
+            from !== null && from !== gateKey && [...rootNodeKeyOf.values()].includes(from) &&
+            typeof output === "string" && rootNodeDeclaresOutput(gateRootRefs[from], output, gateRootRefs);
+        });
+      const missing =
+        typeof target !== "string" || target === ""
+          ? `the marker does not name an input (it must be a non-empty text)`
+          : componentType !== "InputMessageNode"
+            ? `it is a "${String(componentType)}", not an InputMessageNode`
+            : gateKey === undefined
+              ? `it is not a node of the root flow; the compiler does not carry the marker ` +
+                `through a FlowNode, so a review gate inside a nested flow opens no artifact review`
+              : named(parsed["inputs"])
+                ? null
+                : cin!["surfaceGateInputs"] !== true
+                  ? `it does not set metadata.cinatra.surfaceGateInputs: true and "${target}" is not a start input of the flow`
+                  : !named(node["inputs"])
+                    ? `"${target}" is not one of its declared inputs nor a start input of the flow`
+                    : !sourced()
+                      ? `no DataFlowEdge of the root flow feeds its input "${target}" from an output ` +
+                        `that a node of the root flow declares, so the loader renders the input as ` +
+                        `null and the review has no targets`
+                      : null;
+      if (missing) {
+        findings.push({
+          code: "OAS-RUNTIME-013",
+          severity: "blocker",
+          message:
+            `Gate "${gateLabel(node)}" declares metadata.cinatra.artifactReview.targetsInput ` +
+            `but ${missing}. The pause message then carries no review targets, ` +
+            `so the application opens no artifact review. A review gate is an ` +
+            `InputMessageNode of the root flow whose targets input is a start input ` +
+            `of the root flow, or that sets surfaceGateInputs: true and declares the ` +
+            `targets input, fed by a DataFlowEdge from an output a root-flow node declares. ` +
+            `${HITL_GATE_DOC}`,
+          location: path,
+          source: "deterministic",
+        });
+      }
+    }
 
     if (componentType === "PluginInputMessageNode") {
       findings.push({
