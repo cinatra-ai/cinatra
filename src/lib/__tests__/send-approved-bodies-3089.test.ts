@@ -156,7 +156,8 @@ function releasedCardFor(named: unknown, campaignId: unknown = CAMPAIGN_ID, show
       recipients: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
       ...(named === undefined ? {} : { emailBodies: named }),
     },
-    declaredRows: [
+    // A card with no list (the packs pinned today) declares no list row and no artifacts row.
+    declaredRows: named === undefined ? [] : [
       { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
       { kind: "artifacts", input: "emailBodies" },
     ],
@@ -313,9 +314,10 @@ function makeFixture(opts?: {
     } as Parameters<typeof materializeEmailFanout>[1]),
   );
   // The decision the send asks for: a case reads which step it asked for.
-  // A case that names no list calls from a step no publish decision governs.
+  // A case that names no list calls under a released card that declared no list (the packs pinned today): a claimed
+  // call always has a governing decision; a claimed call with none is refused (decision_missing).
   const readPublishDecision = vi.fn(async (_runId: string, _stepId: string): Promise<StepPublishDecision | null> =>
-    named === undefined ? null : releasedCardFor(named, CAMPAIGN_ID, shown));
+    releasedCardFor(named, CAMPAIGN_ID, shown));
   let lastGoverning: StepPublishDecision | null = null;
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
@@ -444,7 +446,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     await expectRefused(
       makeFixture(),
       { releasedList: [approved[0], approved[1], { ...approved[0], contactId: "c3" }] },
-      "approved body 3 names artifact art-1 a second time",
+      "approved body 3 names an artifact a second time",
     );
   });
 
@@ -459,7 +461,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
           { artifactId: "art-9", representationRevisionId: "rev-2", contactId: "c9", recipientEmail: "nine@example.com", subject: "S" },
         ],
       },
-      "approved body 3 is for contact c9, which no draft of the bundle names",
+      "approved body 3 is for a contact that no draft of the bundle names",
     );
   });
 
@@ -467,14 +469,14 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     await expectRefused(
       makeFixture(),
       { releasedList: [approved[0], { ...approved[1], contactId: "c1" }] },
-      "approved bodies 1 and 2 are both for contact c1",
+      "approved bodies 1 and 2 are for one contact",
     );
   });
 
   it("R8 a body that carries another contact than its entry refuses the whole send", async () => {
     const store = makeStore();
     store.get("art-2")!.data = { contactId: "c1", campaignId: CAMPAIGN_ID };
-    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 2 is the body of contact c1, not of contact c2");
+    await expectRefused(makeFixture({ store }), { releasedList: approved }, "approved body 2 is the body of another contact than its draft's");
   });
 
   it("U1 the reference-only form is unchanged for a run without bodies filed for review", async () => {
@@ -525,7 +527,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
       { ...approved[1]!, contactId: "c1", recipientEmail: "one@example.com", subject: "Bundle subject one" },
     ];
     const fx = makeFixture({ store });
-    await expectRefused(fx, { releasedList: swapped }, "approved body 1 is not the body of draft 2 of the bundle (contact c2)");
+    await expectRefused(fx, { releasedList: swapped }, "approved body 1 is not the body of draft 2 of the bundle");
     expect(fx.sendLedger.rows.size).toBe(0);
   });
 
@@ -564,7 +566,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     await expectRefused(
       makeFixture({ drafts }),
       { releasedList: approved },
-      "approved body 2 is not the body of draft 2 of the bundle (contact c2)",
+      "approved body 2 is not the body of draft 2 of the bundle",
     );
   });
 
@@ -655,7 +657,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(
       makeFixture({ drafts }),
       { releasedList: approved },
-      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      `draft 2 of the bundle: ${ADDRESS_CHANGED}`,
       ["two@example.com", "new-two@example.org"],
     );
   });
@@ -670,7 +672,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(
       makeFixture({ drafts, recipients }),
       { releasedList: approved },
-      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      `draft 2 of the bundle: ${ADDRESS_CHANGED}`,
       ["two@example.com", "moved@example.org"],
     );
   });
@@ -678,12 +680,12 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
   it("A3 a subject changed on the draft after the card refuses the whole send, even when the body artifact still carries the old one", async () => {
     // art-1 carries its own subject, equal to the draft's subject on the card.
     const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: "Changed subject one" } : d));
-    await expectCardRefused(makeFixture({ drafts }), { releasedList: approved }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+    await expectCardRefused(makeFixture({ drafts }), { releasedList: approved }, `draft 1 of the bundle: ${SUBJECT_CHANGED}`);
   });
 
   it("A3b a subject changed on a draft without a subject of its own on the body artifact refuses the whole send", async () => {
     const drafts = bundleDrafts.map((d) => (d.recipientId === "c2" ? { ...d, subject: "Changed subject two" } : d));
-    await expectCardRefused(makeFixture({ drafts }), { releasedList: approved }, `draft 2 of the bundle (contact c2): ${SUBJECT_CHANGED}`);
+    await expectCardRefused(makeFixture({ drafts }), { releasedList: approved }, `draft 2 of the bundle: ${SUBJECT_CHANGED}`);
   });
 
   it("A4 a body artifact's own subject that differs from the card's subject neither blocks the send nor is mailed: nobody was shown it", async () => {
@@ -713,7 +715,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     const store = makeStore();
     store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "bundle subject one" };
     const entries = [{ ...approved[0]!, subject: "bundle subject one" }, approved[1]];
-    await expectCardRefused(makeFixture({ store }), { releasedList: entries }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
+    await expectCardRefused(makeFixture({ store }), { releasedList: entries }, `draft 1 of the bundle: ${SUBJECT_CHANGED}`);
   });
 
   it("A5b the mailed subject is the entry's subject byte for byte, not trimmed", async () => {
@@ -744,7 +746,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(
       makeFixture(),
       { releasedList: [approved[0], { ...approved[1]!, recipientEmail: "Two@EXAMPLE.com" }] },
-      `draft 2 of the bundle (contact c2): ${ADDRESS_CHANGED}`,
+      `draft 2 of the bundle: ${ADDRESS_CHANGED}`,
       ["two@example.com"],
     );
   });
@@ -770,7 +772,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(
       makeFixture({ store }),
       { releasedList: entries },
-      "approved body 3 is for draft 3 of the bundle (contact c3), which has no address",
+      "approved body 3 is for draft 3 of the bundle, which has no address",
       ["three@example.com"],
     );
   });
@@ -779,7 +781,7 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(
       makeFixture(),
       { releasedList: JSON.stringify(approved) },
-      "no artifacts row of the released publish decision draws the bodies of the released list",
+      "the released list of the publish decision was refused (released_list_bodies_not_drawn)",
       ["one@example.com", "two@example.com"],
     );
   });
@@ -880,10 +882,13 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
     const unclaimed = makeFixture({ readPublishDecision: null, claim: false });
     expect((await unclaimed.start({})).status).toBe("completed");
     expect(governing.readDecisionForRunNode).not.toHaveBeenCalled();
-    // A step no publishing node governs keeps the reference-only form.
+    // A step no publishing node governs keeps the reference-only form when its call carries no claim; a claimed call
+    // whose step governs no decision is refused, never sent down the old road (cinatra#3089).
     governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(NESTED_GRAPH));
-    const unrelated = makeFixture({ readPublishDecision: null, callingRun: { runId: "run-1", stepId: "draft" } });
+    const unrelated = makeFixture({ readPublishDecision: null, callingRun: { runId: "run-1", stepId: "draft" }, claim: false });
     expect((await unrelated.start({})).status).toBe("completed");
+    const claimedUnrelated = makeFixture({ readPublishDecision: null, callingRun: { runId: "run-1", stepId: "draft" } });
+    await expectRefused(claimedUnrelated, {}, "(decision_missing)");
   });
 
   it("G4 a call signed for a publish decision is served only by that decision", async () => {
@@ -892,10 +897,10 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
     await expectRefused(
       makeFixture({ callingRun: signed, readPublishDecision: card("d-newer") }),
       {},
-      "the call was signed for another publish decision than the one that governs step send of run run-1",
+      "the call was signed for another publish decision than the one that governs the calling step",
     );
     await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: card(undefined) }), {}, "signed for another publish decision");
-    await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: async () => null }), {}, "signed for another publish decision");
+    await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: async () => null }), {}, "(decision_missing)");
     const served = makeFixture({ callingRun: signed, readPublishDecision: card("d-signed") });
     expect((await served.start({})).status).toBe("completed");
     expect(served.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
@@ -920,7 +925,7 @@ describe("cinatra#3089 — the released decision's list", () => {
 // What the card showed is what is compared and what is sent: a released value
 // is never trimmed, folded or normalised on the way to the mail.
 describe("cinatra#3089 — what is sent is byte for byte what the card showed", () => {
-  const SHOWN_DIFFERS = "no list row of the released publish decision shows each record of the released list";
+  const SHOWN_DIFFERS = "the released list of the publish decision was refused (released_list_not_shown)";
   const variants: Array<[string, string]> = [
     ["leading and trailing spaces", " Bundle subject one "],
     ["an inner double space", "Bundle  subject one"],
@@ -976,13 +981,13 @@ describe("cinatra#3089 — what is sent is byte for byte what the card showed", 
     await expectCardRefused(
       makeFixture(),
       { releasedList: [{ ...approved[0]!, recipientEmail: "  one@example.com " }, approved[1]] },
-      "approved body 1 carries its recipientEmail with white space around it",
+      "approved body 1 carries an id, a contact or an address with white space around it",
       ["one@example.com"],
     );
     await expectCardRefused(
       makeFixture(),
       { releasedList: [{ ...approved[0]!, contactId: " c1" }, approved[1]] },
-      "approved body 1 carries its contactId with white space around it",
+      "approved body 1 carries an id, a contact or an address with white space around it",
     );
   });
 
@@ -1087,7 +1092,7 @@ describe("cinatra#3089 — the approved send reads the decision its call claimed
     const fx = makeFixture({ decisions: { current: [parked] } });
     const result = await inFrame(claimOf("d-A"), () => fx.start({}));
     expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("not released by a person");
+    expect(result.errorMessage).toContain("(decision_not_released)");
     expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 

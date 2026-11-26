@@ -178,7 +178,8 @@ function releasedCardFor(named: unknown) {
       recipients: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })),
       ...(named === undefined ? {} : { emailBodies: named }),
     },
-    declaredRows: [
+    // A card with no list (the packs pinned today) declares no list row and no artifacts row.
+    declaredRows: named === undefined ? [] : [
       { kind: "list", input: "recipients", columns: [{ field: "email" }, { field: "subject" }] },
       { kind: "artifacts", input: "emailBodies" },
     ],
@@ -299,9 +300,7 @@ function makeFixture(opts?: {
   const governing = () =>
     opts && "decision" in opts
       ? opts.decision
-      : named === undefined
-        ? null
-        : { ...(opts?.decisionId ? { id: opts.decisionId } : {}), ...releasedCardFor(named) };
+      : { ...(opts?.decisionId ? { id: opts.decisionId } : {}), ...releasedCardFor(named) };
   const deps: TriggerEmailSendDeps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
@@ -313,7 +312,7 @@ function makeFixture(opts?: {
     // The run of the call follows the case's run: none when the case has none.
     readCallingRun: async () =>
       withClaim(runId ? { runId, stepId: "send", ...(opts?.decisionId ? { publishDecisionId: opts.decisionId } : {}) } : null),
-    // A case that names no list calls from a step no publish decision governs.
+    // A case that names no list calls under a released card that declared no list (the packs pinned today).
     readPublishDecision: async () => withDecisionId(governing() as object | null),
     readClaimedPublishDecision: async (_runId: string, decisionId: string) => {
       const decision = withDecisionId(governing() as { id?: string } | null);
@@ -486,7 +485,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const skipped = vi.fn(async (): Promise<EmailFanoutResult> => ({ bodies: [], skipped: { bodies: true } }));
     for (const [emit, words] of [
       [emitEmailFanout, "draft 2 of the bundle was not bound to its approved body"],
-      [skipped, `the body type ${EMAIL_BODY_TYPE_ID} is not registered`],
+      [skipped, "the email body type is not registered"],
     ] as const) {
       const fx = makeFixture({ emitEmailFanout: emit });
       const result = await fx.start({ releasedList: approved });
@@ -522,7 +521,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const deliveries = (to: string) => sent.filter((m) => m.to[0] === to).length;
     expect(["p1@example.com", "p2@example.com", "p3@example.com"].map(deliveries)).toEqual([1, 0, 1]);
     expect(done).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 1, inDoubtCount: 1 });
-    expect(done.errorMessage).toContain("draft 2 (email-body:run-1:art-2)");
+    expect(done.errorMessage).toContain("draft 2");
     expect(done.errorMessage).toContain("in doubt");
   });
 
@@ -575,7 +574,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     const result = await fx.start({ releasedList: approved });
     expect(fx.sent.map((m) => m.to[0])).toEqual(["p2@example.com", "p3@example.com"]);
     expect(result).toMatchObject({ status: "failed", sentCount: 2, alreadySentCount: 0, inDoubtCount: 1 });
-    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:art-1)");
+    expect(result.errorMessage).toContain("draft 1");
     expect(result.errorMessage).toContain("in doubt");
   });
 
@@ -683,7 +682,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     // The mail went out: all three were handed over.
     expect(fx.sent).toHaveLength(3);
     expect(result).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
-    expect(result.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written");
+    expect(result.errorMessage).toContain("draft 1 was mailed, but its sent record could not be written");
     // A record that is not open is not written again.
     expect(markDone).toHaveBeenCalledTimes(3);
   });
@@ -708,7 +707,7 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
       .mockRejectedValueOnce(new Error("connection reset"));
     const first = await makeFixture({ sendLedger, sent }).start({ releasedList: approved });
     expect(first).toMatchObject({ status: "failed", sentCount: 3, inDoubtCount: 1 });
-    expect(first.errorMessage).toContain("draft 1 (email-body:run-1:art-1) was mailed, but its sent record could not be written (send_record_write_failed)");
+    expect(first.errorMessage).toContain("draft 1 was mailed, but its sent record could not be written (send_record_write_failed)");
     expect(first.errorMessage).not.toContain("connection reset");
     expect(markDone).toHaveBeenCalledTimes(5);
     const retry = await makeFixture({ sendLedger, sent }).start({ releasedList: approved });
@@ -768,11 +767,11 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
     // Stopped at the first provider failure: recipient three was not attempted by this call.
     expect(first.sendEmail.mock.calls.map((c) => (c[0] as { to: string[] }).to[0])).toEqual(["p1@example.com", "p2@example.com"]);
     expect(failed).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 0, inDoubtCount: 1 });
-    // The answer names the message in doubt by draft, message and contact, says that no later send mails it and that
+    // The answer names the message in doubt by its draft only, says that no later send mails it and that
     // clearing it is a manual check with the mail provider; it names no address.
-    expect(failed.errorMessage).toContain("draft 2 (email-body:run-1:art-2) for contact c2");
+    expect(failed.errorMessage).toContain("draft 2 is in doubt");
     expect(failed.errorMessage).toContain("never mailed again by this or any later send, also not under a new approval");
-    expect(failed.errorMessage).toContain("Nothing in the app clears an in-doubt mark; this is a manual check");
+    expect(failed.errorMessage).toContain("Nothing in the app clears an in-doubt mark. This is a manual check");
     expect(failed.errorMessage).not.toMatch(/@example\.com/);
 
     // A NEW approval: another released decision of the same step, signed for its own call.
@@ -780,7 +779,7 @@ describe("cinatra#3089 — one send per decision, one mail per recipient across 
     const rest = await second.start({ releasedList: approved });
     expect(second.sendEmail.mock.calls.map((c) => (c[0] as { to: string[] }).to[0])).toEqual(["p3@example.com"]);
     expect(rest).toMatchObject({ status: "failed", sentCount: 1, alreadySentCount: 1, inDoubtCount: 1 });
-    expect(rest.errorMessage).toContain("draft 2 (email-body:run-1:art-2) for contact c2");
+    expect(rest.errorMessage).toContain("draft 2 is in doubt");
     // Handed to the provider across both calls: recipient one once, recipient two once (the failed hand-over, never
     // again), recipient three once; delivered: one and three.
     const attempts = [...first.sendEmail.mock.calls, ...second.sendEmail.mock.calls].map((c) => (c[0] as { to: string[] }).to[0]);

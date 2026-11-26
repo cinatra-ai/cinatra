@@ -32,10 +32,13 @@
  * WHAT A PUBLISHING STEP MAY SEND (cinatra#3089): a call that carries a
  * publish claim for its verified step is checked against the ONE decision its
  * road claimed for it, and every gap refuses the whole send before any mail,
- * with a named code. When that decision surfaced a released list, the send
- * mails, for each draft with an address, the text of ITS released body
- * revision, never the bundle's body. Every other call (no claim, or no
- * released list) is sent exactly as before (`takesReleasedListRoad`).
+ * with a named code. When that decision's card declared a released list, the
+ * send mails, for each draft with an address, the text of ITS released body
+ * revision, never the bundle's body, and a declared list that is not exact is
+ * refused. Every other call (no claim, or a card that declared no list) is
+ * sent exactly as before (`road` in `runInitialSend`). Every answer of a call
+ * that entered the released-list road passes `releasedRoadAnswer`: fixed codes
+ * and numbers only.
  *
  * THE INVARIANT OF THE APPROVED SEND (cinatra#3089): an approved body is handed
  * to a recipient at most once across all calls and all decisions. Each message
@@ -57,8 +60,12 @@ import {
   bodyRefusalCode,
   createDefaultSendEmail,
   IN_DOUBT_MANUAL_CHECK,
+  releasedRoadAnswer,
+  releasedRoadRefusal,
+  releasedRoadText,
   SEND_FAILURE_CODE,
 } from "./approved-body-send";
+import type { ReleasedRoadCode, ReleasedRoadText } from "./approved-body-send";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -714,11 +721,8 @@ export async function materializeEmailFanout(
         const approved = approvedBodies.get(index - 1);
         if (!approved) continue;
         const externalId = emailBodyExternalId(runScopeId, approved.artifactId);
-        if (!deps.bindBody) {
-          throw new EmailBodyRefusedError(
-            `the email body ${externalId} cannot be bound: the fan-out has no binder for approved bodies`,
-          );
-        }
+        // The approved form's texts name the draft by its position only (`releasedRoadText`).
+        if (!deps.bindBody) throw new EmailBodyRefusedError(releasedRoadText("fanout_no_binder", [index]));
         let bound: EmailFanoutBodyWriteResult;
         try {
           bound = await deps.bindBody({
@@ -730,12 +734,12 @@ export async function materializeEmailFanout(
           });
         } catch {
           // The binder's thrown text is never passed on (a store error may quote stored data): a fixed reason.
-          throw new EmailBodyRefusedError(`the email body ${externalId} could not be bound (bind_failed)`);
+          throw new EmailBodyRefusedError(releasedRoadText("fanout_bind_failed", [index], "bind_failed"));
         }
         if (!bound.ok) {
           // Nor is a refusal's text (the binder's store error lands in it): a fixed code, as above.
           const code = /\bis already bound to revision\b/.test(String(bound.error)) ? "already_bound" : "bind_refused";
-          throw new EmailBodyRefusedError(`the email body ${externalId} was refused (${code})`);
+          throw new EmailBodyRefusedError(releasedRoadText("fanout_bind_refused", [index], code));
         }
         bodies.push({
           typeId: EMAIL_BODY_TYPE_ID,
@@ -809,14 +813,11 @@ async function loadDefaultEmitEmailFanout(): Promise<
     try {
       const listed = (await client.typesList()) as { types?: Array<{ type: string }> };
       registeredTypes = new Set((listed?.types ?? []).map((t) => t.type));
-    } catch (err) {
+    } catch {
       // The approved form needs every message bound to its revision before
       // any mail, so a failed discovery refuses that send (cinatra#3089).
-      if (args.approvedBodies) {
-        throw new EmailBodyRefusedError(
-          `the registered object types could not be read, so no message can be bound to its approved body: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
+      // The discovery's own text is never passed on (it may quote internal state): a fixed code.
+      if (args.approvedBodies) throw new EmailBodyRefusedError(releasedRoadText("types_unreadable"));
       // The reference-only form keeps its behaviour: if type discovery fails,
       // stay dormant rather than risk a misclassified write — the projection
       // is best-effort there and must never break the send.
@@ -921,6 +922,8 @@ async function runInitialSend(args: {
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
+  /** Set while the call is on the released-list road (see THE ROAD OF THE SEND). */
+  road: { released: boolean };
 }): Promise<InitialSendStateRow> {
   const {
     input,
@@ -937,20 +940,24 @@ async function runInitialSend(args: {
     readRevisionStateUnderLock,
   } = args;
   /**
-   * THE ROAD OF THE SEND (cinatra#3089). A send takes the released-list road
-   * (each draft matched to the body revision a person released, bound to it and
-   * mailed at most once) only when the call carries BOTH a verified publish
-   * claim for its step AND a governing decision that surfaced a released list.
-   * Every other send (no claim, or a decision with no released list: every
-   * send of the packs pinned today, and a person's plain send) takes the old
-   * road and is sent exactly as before. The old road stays open until the
-   * pinned packs surface the released list; the piece that closes it is
-   * tracked on issue 3089.
+   * THE ROAD OF THE SEND (cinatra#3089), decided from what the governing
+   * decision's CARD DECLARED, never from whether a list could be read:
+   *   - no claim on the call, or a claimed, released decision whose card
+   *     declared no list row and no artifacts row (every send of the packs
+   *     pinned today, a person's plain send): the OLD road, sent exactly as
+   *     before;
+   *   - a card that declared such a row, with a released list of the exact
+   *     form: the RELEASED-LIST road;
+   *   - anything else on a claimed call (a declared list that is not exact, a
+   *     claim with no verified step, no decision, a decision that cannot be
+   *     read or is not the claimed one): REFUSED with a fixed code, never the
+   *     old road.
+   * `road.released` is set from the moment the call carries a claim (and while
+   * the calling run is read), and cleared only when the decision sends it down
+   * the old road: the caller then builds the answer through
+   * `releasedRoadAnswer` (fixed codes and numbers only).
    */
-  const takesReleasedListRoad = (
-    run: CallingRun | null,
-    list: Array<Record<string, string>> | null,
-  ): boolean => run?.claim !== undefined && run.stepId !== undefined && list !== null;
+  const { road } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
     status: "running",
@@ -972,6 +979,114 @@ async function runInitialSend(args: {
   }
 
   try {
+    const refuse = (key: ReleasedRoadText, numbers: readonly number[] = [], code?: ReleasedRoadCode): never => {
+      throw releasedRoadRefusal(key, numbers, code ?? key);
+    };
+    const textOf = (value: unknown): string | undefined =>
+      typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+    // A value of the released decision is used exactly as it was frozen and
+    // shown: never trimmed. An id or an address must carry no white space
+    // around it; a subject is compared byte for byte.
+    const exactOf = (value: unknown): string | undefined =>
+      typeof value === "string" && value !== "" && value.trim() === value ? value : undefined;
+
+    // THE RUN OF THE SEND (cinatra#3089) is the run of the call, from the
+    // server's own context of the call; a run id written in a bundle never
+    // decides it. It is read, and the road decided, before the bundle is
+    // fetched, so every text of a claimed call passes the answer's guard.
+    let callingRun: CallingRun | null = null;
+    road.released = true;
+    try {
+      callingRun = await readCallingRun();
+    } catch {
+      refuse("calling_run_unreadable");
+    }
+    const callRunId = callingRun?.runId ?? null;
+    const stepId = callingRun?.stepId;
+    const claim = callingRun?.claim;
+    road.released = claim !== undefined;
+
+    // WHAT A PERSON APPROVED (cinatra#3089) is the publish decision a person
+    // released for the calling step: its values were frozen when the step
+    // stopped, and the card was drawn from them. The approved list is the ONE
+    // surfaced list of approved bodies that a list row of the card showed
+    // (address and subject columns) and an artifacts row drew
+    // (`releasedDecisionList`). The sender is the text the card's own row
+    // showed (`releasedDecisionText`); the campaign is the decision's surfaced
+    // `campaignId`, which must be the campaign the call names. Nothing of the
+    // request decides what is mailed.
+    let released: {
+      list: Array<Record<string, string>>;
+      campaignId: string;
+      senderEmail: string | undefined;
+    } | null = null;
+    if (claim) {
+      // A claim with no verified run or step cannot name its decision: refused, never the old road.
+      if (!callRunId || !stepId) refuse("claim_without_step");
+      let governing: StepPublishDecision | null = null;
+      try {
+        governing = await readPublishDecision(callRunId!, stepId!);
+      } catch {
+        refuse("decision_unreadable");
+      }
+      // A claimed call whose step governs no decision is refused, never sent down the old road.
+      if (!governing) return refuse("decision_missing");
+      // The decision the runtime signed for this call names the visit it was
+      // made under: the governing decision must be that very decision.
+      const signed = callingRun?.publishDecisionId;
+      if (signed !== undefined && governing.id !== signed) refuse("decision_signed_other");
+      // THE SEND USES EXACTLY ONE DECISION (cinatra#3089): the one the call's
+      // road claimed for this call (`claim`), read by that id in the run's
+      // current attempt. A claim of another run, a claim the signed decision
+      // contradicts, a claimed decision that cannot be read, one the current
+      // attempt no longer holds (a reset left it behind), or one a newer
+      // decision of the step superseded is refused before any mail; a claimed
+      // decision that is not released is refused by the list read below.
+      if (claim.runId !== callRunId) refuse("decision_claim_other_run");
+      if (signed !== undefined && signed !== claim.decisionId) refuse("decision_claim_conflict");
+      let decision: StepPublishDecision | null = null;
+      try {
+        decision = await readClaimedPublishDecision(callRunId!, claim.decisionId);
+      } catch {
+        refuse("decision_claim_unreadable");
+      }
+      if (!decision || decision.id !== claim.decisionId) return refuse("decision_claim_not_current");
+      if (governing.id !== claim.decisionId) refuse("decision_claim_superseded");
+      const { releasedDecisionList, releasedDecisionText } = await import("@cinatra-ai/agents/publish-decision-store");
+      const read = releasedDecisionList({
+        decision,
+        entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
+        shownFields: [
+          { field: "recipientEmail", column: "email" },
+          { field: "subject", column: "subject" },
+        ],
+      });
+      // THE THREE ROADS, as the reader tells them apart: refused (a declared
+      // list that is not exact, or any other refusal), old (the card declared
+      // no list), released (the exact list).
+      if (!read.ok) return refuse("released_list_refused", [], read.code);
+      if (read.list === null) {
+        road.released = false;
+      } else {
+        const surfaced = decision.surfacedValues;
+        const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
+        if (textOf(frozenCampaign) === undefined) refuse("campaign_missing");
+        const campaignId = exactOf(frozenCampaign) ?? refuse("campaign_spaced");
+        if (campaignId !== input.campaignId) refuse("campaign_other");
+        // The reader's own text is never passed on: a fixed code.
+        const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
+        if (!shownSender.ok) return refuse("sender_refused");
+        const senderEmail = shownSender.value ?? undefined;
+        if (senderEmail !== undefined && exactOf(senderEmail) === undefined) refuse("sender_spaced");
+        // The call's sender, when it names one, must be the shown sender byte for byte.
+        const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
+        if (callSender !== undefined && callSender !== senderEmail) {
+          refuse(senderEmail ? "sender_other" : "sender_not_shown");
+        }
+        released = { list: read.list, campaignId, senderEmail };
+      }
+    }
+
     const [draftEnv, recipEnv] = await Promise.all([
       getObjectByRef(input.approvedDraftBundleRef, actor),
       getObjectByRef(input.confirmedRecipientsRef, actor),
@@ -995,129 +1110,6 @@ async function runInitialSend(args: {
         sentCount: 0,
         errorMessage: "Approved draft bundle has no drafts.",
       };
-    }
-    const refuse = (reason: string): never => {
-      throw new Error(`The send was refused before any email went out: ${reason}`);
-    };
-    const textOf = (value: unknown): string | undefined =>
-      typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
-    // A value of the released decision is used exactly as it was frozen and
-    // shown: never trimmed. An id or an address must carry no white space
-    // around it; a subject is compared byte for byte.
-    const exactOf = (value: unknown): string | undefined =>
-      typeof value === "string" && value !== "" && value.trim() === value ? value : undefined;
-
-    // THE RUN OF THE SEND (cinatra#3089) is the run of the call, from the
-    // server's own context of the call; a run id written in a bundle never
-    // decides it. No reader's text reaches the answer: a fixed code.
-    let callingRun: CallingRun | null = null;
-    try {
-      callingRun = await readCallingRun();
-    } catch {
-      refuse("the run of this call could not be read (calling_run_unreadable)");
-    }
-    const callRunId = callingRun?.runId ?? null;
-
-    // A CALL THAT CARRIES A CLAIM has entered the released-list road: the
-    // decision its road claimed is read and checked, and every gap refuses the
-    // whole send before any mail (fail closed). A call without a claim reads
-    // no decision and takes the old road (`takesReleasedListRoad`).
-    //
-    // WHAT A PERSON APPROVED (cinatra#3089) is the publish decision a person
-    // released for the calling step: its values were frozen when the step
-    // stopped, and the card was drawn from them. The approved list is the ONE
-    // surfaced list of approved bodies that a list row of the card showed
-    // (address and subject columns) and an artifacts row drew
-    // (`releasedDecisionList`). The sender is the text the card's own row
-    // showed (`releasedDecisionText`); the campaign is the decision's surfaced
-    // `campaignId`, which must be the campaign the call names. Nothing of the
-    // request decides what is mailed.
-    let released: {
-      list: Array<Record<string, string>>;
-      campaignId: string;
-      senderEmail: string | undefined;
-    } | null = null;
-    const stepId = callingRun?.stepId;
-    const claim = callingRun?.claim;
-    if (callRunId && stepId && claim) {
-      const decisionOf = `step ${stepId} of run ${callRunId}`;
-      let governing: StepPublishDecision | null = null;
-      try {
-        governing = await readPublishDecision(callRunId, stepId);
-      } catch {
-        refuse(`the publish decision of ${decisionOf} could not be read (decision_unreadable)`);
-      }
-      // The decision the runtime signed for this call names the visit it was
-      // made under: the governing decision must be that very decision.
-      const signed = callingRun?.publishDecisionId;
-      if (signed !== undefined && governing?.id !== signed) {
-        refuse(`the call was signed for another publish decision than the one that governs ${decisionOf} (decision_signed_other)`);
-      }
-      // THE SEND USES EXACTLY ONE DECISION (cinatra#3089): the one the call's
-      // road claimed for this call (`claim`), read by that id in the run's
-      // current attempt. A claim of another run, a claim the signed decision
-      // contradicts, a claimed decision that cannot be read, one the current
-      // attempt no longer holds (a reset left it behind), or one a newer
-      // decision of the step superseded is refused before any mail; a claimed
-      // decision that is not released is refused by the list read below.
-      let decision: StepPublishDecision | null = null;
-      if (governing) {
-        if (claim.runId !== callRunId) refuse(`the call claimed a publish decision of another run (${decisionOf}) (decision_claim_other_run)`);
-        if (signed !== undefined && signed !== claim.decisionId) {
-          refuse(`the call was signed for another publish decision than the one it claimed (${decisionOf}) (decision_claim_conflict)`);
-        }
-        try {
-          decision = await readClaimedPublishDecision(callRunId, claim.decisionId);
-        } catch {
-          refuse(`the publish decision this call claimed could not be read (${decisionOf}) (decision_claim_unreadable)`);
-        }
-        if (!decision || decision.id !== claim.decisionId) {
-          refuse(`the publish decision this call claimed is not a decision of the current attempt of the run (${decisionOf}) (decision_claim_not_current)`);
-        }
-        if (governing.id !== claim.decisionId) {
-          refuse(`the publish decision this call claimed was superseded by a newer decision of the step (${decisionOf}) (decision_claim_superseded)`);
-        }
-      }
-      if (decision) {
-        const { releasedDecisionList, releasedDecisionText } = await import("@cinatra-ai/agents/publish-decision-store");
-        const read = releasedDecisionList({
-          decision,
-          entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
-          shownFields: [
-            { field: "recipientEmail", column: "email" },
-            { field: "subject", column: "subject" },
-          ],
-        });
-        if (!read.ok) return refuse(`${read.error} (${decisionOf})`);
-        // A released decision with no list of approved bodies takes the old
-        // road (`takesReleasedListRoad`): the packs pinned today surface none.
-        if (takesReleasedListRoad(callingRun, read.list) && read.list) {
-          const surfaced = decision.surfacedValues;
-          const frozenCampaign = Object.prototype.hasOwnProperty.call(surfaced, "campaignId") ? surfaced.campaignId : undefined;
-          if (textOf(frozenCampaign) === undefined) refuse(`the released publish decision carries no campaign (${decisionOf})`);
-          const campaignId = exactOf(frozenCampaign)
-            ?? refuse(`the released publish decision carries its campaign with white space around it (${decisionOf})`);
-          if (campaignId !== input.campaignId) {
-            refuse(`the call names another campaign than the released publish decision carries (${decisionOf})`);
-          }
-          const shownSender = releasedDecisionText({ decision, input: "senderEmail" });
-          if (!shownSender.ok) return refuse(`${shownSender.error} (${decisionOf})`);
-          const senderEmail = shownSender.value ?? undefined;
-          if (senderEmail !== undefined && exactOf(senderEmail) === undefined) {
-            refuse(`the sender the released publish card showed carries white space around it (${decisionOf})`);
-          }
-          // The call's sender, when it names one, must be the shown sender byte for byte.
-          const callSender = textOf(input.senderEmail) === undefined ? undefined : input.senderEmail;
-          if (callSender !== undefined && callSender !== senderEmail) {
-            refuse(
-              senderEmail
-                ? `the call names another sender than the released publish card showed (${decisionOf})`
-                : `the call names a sender the released publish card did not show (${decisionOf})`,
-            );
-          }
-          released = { list: read.list, campaignId, senderEmail };
-        }
-      }
     }
 
     // THE APPROVED FORM mails, for each draft with an address, the text of ITS
@@ -1163,26 +1155,26 @@ async function runInitialSend(args: {
       for (const [i, entry] of released.list.entries()) {
         const position = i + 1;
         if (textOf(entry.artifactId) === undefined || textOf(entry.representationRevisionId) === undefined) {
-          refuse(`approved body ${position} names no artifact revision`);
+          refuse("entry_no_revision", [position]);
         }
         // The released values are used as frozen: an id or address with white
         // space around it is refused rather than trimmed (see `exactOf`).
         for (const field of ["artifactId", "representationRevisionId", "contactId", "recipientEmail"] as const) {
           if (textOf(entry[field]) !== undefined && exactOf(entry[field]) === undefined) {
-            refuse(`approved body ${position} carries its ${field} with white space around it`);
+            refuse("entry_spaced", [position]);
           }
         }
         if (namedArtifacts.has(entry.artifactId!)) {
-          refuse(`approved body ${position} names artifact ${entry.artifactId} a second time`);
+          refuse("entry_artifact_twice", [position]);
         }
         namedArtifacts.add(entry.artifactId!);
-        const contact = textOf(entry.contactId) ?? refuse(`approved body ${position} names no contact`);
+        const contact = textOf(entry.contactId) ?? refuse("entry_no_contact", [position]);
         const earlier = bodyByContact.get(contact);
         if (earlier) {
-          refuse(`approved bodies ${earlier.position} and ${position} are both for contact ${contact}`);
+          refuse("entry_contact_twice", [earlier.position, position]);
         }
         if (textOf(entry.recipientEmail) === undefined) {
-          refuse(`approved body ${position} names no recipient address`);
+          refuse("entry_no_address", [position]);
         }
         bodyByContact.set(contact, {
           artifactId: entry.artifactId!,
@@ -1201,17 +1193,17 @@ async function runInitialSend(args: {
       for (const [contact, body] of bodyByContact) {
         const matches = draftsByContact.get(contact) ?? [];
         if (matches.length === 0) {
-          refuse(`approved body ${body.position} is for contact ${contact}, which no draft of the bundle names`);
+          refuse("entry_no_draft", [body.position]);
         }
         if (matches.length > 1) {
-          refuse(`approved body ${body.position} is for contact ${contact}, which ${matches.length} drafts of the bundle name`);
+          refuse("entry_many_drafts", [body.position, matches.length]);
         }
       }
       for (const [index, draft] of drafts.entries()) {
         if (!recipientEmailFor(draft, recipients)) continue; // never mailed
         const contact = contactOf(draft);
         if (!contact || !bodyByContact.has(contact)) {
-          refuse(`draft ${index + 1} of the bundle has an address but no approved body`);
+          refuse("draft_no_body", [index + 1]);
         }
       }
       // The address mailed is the released entry's, never the bundle's. The
@@ -1219,45 +1211,45 @@ async function runInitialSend(args: {
       // equal it, so a bundle changed after the card refuses the send rather
       // than being mailed or ignored. Both are the intended recipient BEFORE the
       // development redirect, a separate, later replacement in the email
-      // connector. The refusal names the draft and its contact, never an
-      // address.
+      // connector. The refusal names the draft by its position only.
       for (const [contact, body] of bodyByContact) {
         const index = draftsByContact.get(contact)![0]!;
-        const where = `draft ${index + 1} of the bundle (contact ${contact})`;
         const resolved = recipientEmailFor(drafts[index]!, recipients);
-        if (!resolved) {
-          refuse(`approved body ${body.position} is for ${where}, which has no address`);
-        }
-        if (resolved!.trim() !== body.recipientEmail) {
-          refuse(`${where}: the recipient's address changed after the card was shown`);
-        }
+        if (!resolved) refuse("draft_no_address", [body.position, index + 1]);
+        if (resolved!.trim() !== body.recipientEmail) refuse("address_changed", [index + 1]);
       }
 
       approvedByIndex = new Map();
       for (const [contact, body] of bodyByContact) {
-        const read = await readDecidedBody(
-          {
-            artifactId: body.artifactId,
-            representationRevisionId: body.representationRevisionId,
-            runId,
-          },
-          actor,
-        );
+        let read: DecidedBodyRead;
+        try {
+          read = await readDecidedBody(
+            {
+              artifactId: body.artifactId,
+              representationRevisionId: body.representationRevisionId,
+              runId,
+            },
+            actor,
+          );
+        } catch {
+          // A read that throws is a failed read: its text is never passed on.
+          read = { ok: false, error: "could not be read" };
+        }
         if (!read.ok) {
           // The reader's text is never passed on (a failed read embeds the store's error): a fixed code.
-          return refuse(`approved body ${body.position} was refused (${bodyRefusalCode(read.error)})`);
+          return refuse("body_refused", [body.position], bodyRefusalCode(read.error));
         }
         const ownContact = textOf(read.data.contactId);
         if (ownContact !== undefined && ownContact !== contact) {
-          refuse(`approved body ${body.position} is the body of contact ${ownContact}, not of contact ${contact}`);
+          refuse("body_other_contact", [body.position]);
         }
         if (textOf(read.data.campaignId) !== released.campaignId) {
-          refuse(`approved body ${body.position} is not filed for campaign ${released.campaignId}`);
+          refuse("body_other_campaign", [body.position]);
         }
         const index = draftsByContact.get(contact)![0]!;
         const draftText = String(drafts[index]!.body ?? drafts[index]!.bodyHtml ?? "");
         if (read.text.trimEnd() !== draftText.trimEnd()) {
-          refuse(`approved body ${body.position} is not the body of draft ${index + 1} of the bundle (contact ${contact})`);
+          refuse("body_not_draft", [body.position, index + 1]);
         }
         // ONE subject per message: the one the released card showed, which the
         // send mails. The subject the bundle's draft holds must equal it
@@ -1266,7 +1258,7 @@ async function runInitialSend(args: {
         // shows its text and title), so it neither decides the mailed subject
         // nor blocks it.
         if ((drafts[index]!.subject ?? "(no subject)") !== body.subject) {
-          refuse(`draft ${index + 1} of the bundle (contact ${contact}): the subject changed after the card was shown`);
+          refuse("subject_changed", [index + 1]);
         }
         approvedByIndex.set(index, {
           artifactId: body.artifactId,
@@ -1311,21 +1303,15 @@ async function runInitialSend(args: {
       } catch (fanoutErr) {
         if (fanoutErr instanceof EmailBodyRefusedError) throw fanoutErr;
         // The fan-out's thrown text is never passed on (a store error may quote stored data): a fixed code.
-        throw new EmailBodyRefusedError(
-          "The send was refused before any email went out: the messages could not be bound to their approved bodies (bind_failed)",
-        );
+        throw releasedRoadRefusal("bind_failed");
       }
       if (fanout.skipped.bodies) {
-        throw new EmailBodyRefusedError(
-          `The send was refused before any email went out: the body type ${EMAIL_BODY_TYPE_ID} is not registered, so no message was bound to its approved body`,
-        );
+        throw releasedRoadRefusal("body_type_unregistered");
       }
       for (const b of fanout.bodies) messageIdByArtifact.set(b.objectId, b.externalId);
       for (const [index, body] of approvedByIndex) {
         if (!messageIdByArtifact.has(body.artifactId)) {
-          throw new EmailBodyRefusedError(
-            `The send was refused before any email went out: draft ${index + 1} of the bundle was not bound to its approved body`,
-          );
+          throw releasedRoadRefusal("draft_not_bound", [index + 1]);
         }
       }
     } else if (runScopeId) {
@@ -1372,7 +1358,7 @@ async function runInitialSend(args: {
     if (approvedByIndex && callRunId) {
       let sentCount = 0;
       let alreadySentCount = 0;
-      const inDoubt: string[] = [];
+      const inDoubt: number[] = [];
       // Mailed (handed over), but no sent record could be written.
       const unrecorded: string[] = [];
       // Refused at its send time: the body was no longer decided (or read
@@ -1386,11 +1372,12 @@ async function runInitialSend(args: {
         const approved = approvedByIndex.get(index);
         const outputId = approved ? messageIdByArtifact.get(approved.artifactId) : undefined;
         if (!approved || !outputId) {
-          stopped = `draft ${index + 1} of the bundle has no bound approved body, so it was not sent`;
+          stopped = releasedRoadText("not_bound_stop", [index + 1]);
           break;
         }
-        const name = `draft ${index + 1} (${outputId})`;
-        let notDecidedNow: string | undefined;
+        // A message is named by its draft's position only, in the answer and in the log.
+        const draft1 = [index + 1];
+        let notDecidedNow: ReturnType<typeof bodyRefusalCode> | undefined;
         const outcome = await performRevisionEffectOnce({
           claimKey: {
             runId: callRunId,
@@ -1466,45 +1453,34 @@ async function runInitialSend(args: {
         const failure = outcome.failure;
         if (!failure) {
           if (outcome.inDoubt) {
-            inDoubt.push(`${name} for contact ${approved.contactId}`);
-            console.warn(
-              `[trigger-email-send] ${name} of run ${callRunId} is claimed but not recorded as sent; it was not mailed again`,
-            );
+            inDoubt.push(index + 1);
+            console.warn(`[trigger-email-send] ${releasedRoadText("in_doubt", draft1)}: claimed but not recorded as sent, not mailed again`);
           }
           continue;
         }
         if (failure.stage === "refused") {
-          refusedAtSend.push(`${name} was not sent, its body was refused when its mail was claimed (${bodyRefusalCode(failure.reason)})`);
+          refusedAtSend.push(releasedRoadText("refused_at_claim", draft1, bodyRefusalCode(failure.reason)));
           continue;
         }
         if (failure.stage === "not_started" && notDecidedNow !== undefined) {
-          refusedAtSend.push(`${name} was not sent, its body was refused at its send time (${notDecidedNow})`);
+          refusedAtSend.push(releasedRoadText("refused_at_send", draft1, notDecidedNow));
           continue;
         }
         if (failure.stage === "mark") {
-          unrecorded.push(`${name} was mailed, but its sent record could not be written (${SEND_FAILURE_CODE.mark}) (contact ${approved.contactId})`);
-          console.warn(
-            `[trigger-email-send] ${name} of run ${callRunId} was mailed but could not be recorded as sent; it is in doubt (${SEND_FAILURE_CODE.mark})`,
-          );
+          unrecorded.push(releasedRoadText("mark", draft1, SEND_FAILURE_CODE.mark));
+          console.warn(`[trigger-email-send] ${releasedRoadText("mark", draft1, SEND_FAILURE_CODE.mark)}: it is in doubt`);
           continue;
         }
-        if (outcome.inDoubt) inDoubt.push(`${name} for contact ${approved.contactId}`);
-        stopped =
-          failure.stage === "claim"
-            ? `the mail of ${name} could not be claimed, so it was not sent (${SEND_FAILURE_CODE.claim})`
-            : failure.stage === "not_started"
-              ? `${name} was not sent, no mail provider was reached (${SEND_FAILURE_CODE.not_started})`
-              : failure.stage === "release"
-                ? `${name} was not sent, and its claim could not be given back (${SEND_FAILURE_CODE.release})`
-                : `the mail provider failed on ${name}, which may or may not have gone out (${SEND_FAILURE_CODE.act})`;
-        console.warn(`[trigger-email-send] ${name} of run ${callRunId} stopped the send (${SEND_FAILURE_CODE[failure.stage]})`);
+        if (outcome.inDoubt) inDoubt.push(index + 1);
+        stopped = releasedRoadText(failure.stage, draft1, SEND_FAILURE_CODE[failure.stage]);
+        console.warn(`[trigger-email-send] ${stopped}: it stopped the send`);
         break;
       }
       const problems = [
         ...refusedAtSend,
         ...(stopped ? [stopped] : []),
         ...unrecorded,
-        ...(inDoubt.length > 0 ? [`${inDoubt.length} message(s) are in doubt: ${inDoubt.join(", ")}`] : []),
+        ...(inDoubt.length > 0 ? [releasedRoadText("in_doubt_count", [inDoubt.length]), ...inDoubt.map((n) => releasedRoadText("in_doubt", [n]))] : []),
         ...(inDoubt.length + unrecorded.length > 0 ? [IN_DOUBT_MANUAL_CHECK] : []),
       ];
       return {
@@ -1856,7 +1832,9 @@ export function createTriggerEmailSendUseCases(
     async startInitialSend(input, actor) {
       let defaults: TriggerEmailSendDeps | null = null;
       const fallback = () => (defaults ??= buildLazyDefaultDeps());
-      const result = await runInitialSend({
+      const road = { released: false };
+      const row = await runInitialSend({
+        road,
         input,
         actor,
         sendEmail: deps.sendEmail,
@@ -1872,6 +1850,18 @@ export function createTriggerEmailSendUseCases(
         messageSendLedger: deps.messageSendLedger,
         readRevisionStateUnderLock: deps.readRevisionStateUnderLock ?? fallback().readRevisionStateUnderLock!,
       });
+      // THE ONE PLACE the answer of a released-list call is built (cinatra#3089): its `errorMessage`, returned and
+      // persisted, passes `releasedRoadAnswer` (fixed codes and numbers only). The old road's answer is untouched.
+      const result =
+        road.released && row.errorMessage !== undefined
+          ? {
+              ...row,
+              // The fan-out's one fixed text that names the (constant) body type.
+              errorMessage: releasedRoadAnswer(row.errorMessage, [
+                `the object type ${EMAIL_BODY_TYPE_ID} is not registered, so no message can be bound to its approved body`,
+              ]),
+            }
+          : row;
       sendStateByCampaign.set(input.campaignId, result);
       return {
         operationId: input.campaignId,

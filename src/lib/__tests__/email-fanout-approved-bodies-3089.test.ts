@@ -57,14 +57,16 @@ describe("the email fan-out of the approved form", () => {
         { bindBody, registeredTypes: new Set([EMAIL_BODY_TYPE_ID]) } as unknown as Deps,
       );
     // A refusal's text is not passed on either (the binder's store error lands in it): a fixed code.
-    // red-first-expect: to throw error including 'the email body email-body:run-1:art-1
+    // The draft is named by its position only, never by an id (cinatra#3089).
+    // red-first-expect: to throw error including 'the email body of draft 1
     const refused = run(async () => ({ ok: false, error: "already bound to rev-0" }));
-    await expect(refused).rejects.toThrow("the email body email-body:run-1:art-1 was refused (bind_refused)");
+    await expect(refused).rejects.toThrow("the email body of draft 1 was refused (bind_refused)");
+    await expect(refused).rejects.not.toThrow("run-1");
     await expect(refused).rejects.not.toThrow("rev-0");
     const thrown = run(async () => {
       throw new Error("stored secret text");
     });
-    await expect(thrown).rejects.toThrow("the email body email-body:run-1:art-1 could not be bound (bind_failed)");
+    await expect(thrown).rejects.toThrow("the email body of draft 1 could not be bound (bind_failed)");
     await expect(thrown).rejects.not.toThrow("stored secret text");
     await expect(run(undefined)).rejects.toThrow("the fan-out has no binder for approved bodies");
   });

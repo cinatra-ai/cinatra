@@ -4,6 +4,7 @@
  * manual-check text of a message in doubt. Moved verbatim out of
  * `trigger-email-send-use-cases.ts`.
  */
+import type { ReleasedListRefusal } from "@cinatra-ai/agents/publish-decision-store";
 import type { TriggerEmailSendDeps } from "./trigger-email-send-use-cases";
 
 /**
@@ -54,9 +55,10 @@ export function createDefaultSendEmail(): TriggerEmailSendDeps["sendEmail"] {
       routing.applyDevModeOverride(message);
       connectorId = provider.definition.connectorId;
       send = facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
-    } catch (err) {
+    } catch {
+      // The routing's or the mailbox status's own text (it can name the mailbox) is kept nowhere: a fixed code.
       const { EffectNotStartedError } = await import("./artifacts/materialization-ledger");
-      throw new EffectNotStartedError(err instanceof Error ? err.message : String(err));
+      throw new EffectNotStartedError(SEND_FAILURE_CODE.not_started);
     }
     return send(message, { ...options, connectorId });
   };
@@ -82,9 +84,9 @@ export const SEND_FAILURE_CODE = {
  *  an in-doubt mark: it is a manual check. */
 export const IN_DOUBT_MANUAL_CHECK =
   "A message in doubt is never mailed again by this or any later send, also not under a new approval: the mail " +
-  "provider may have accepted it. Check the sent mail of the connected mailbox for each message named (by its contact, " +
-  "in this campaign) to learn whether it went out. Nothing in the app clears an in-doubt mark; this is a manual check, " +
-  "and a message that did not go out must be sent by hand";
+  "provider may have accepted it. Check the sent mail of the connected mailbox for each message named (by its draft in " +
+  "the bundle of this campaign) to learn whether it went out. Nothing in the app clears an in-doubt mark. This is a " +
+  "manual check, and a message that did not go out must be sent by hand";
 
 /**
  * THE FIXED CODE OF A BODY READ THAT REFUSED (cinatra#3089). The decided-revision readers return a refusal as text,
@@ -92,10 +94,10 @@ export const IN_DOUBT_MANUAL_CHECK =
  * that text never reaches the answer or the log. The send passes on only the code read here from the readers' own
  * fixed phrases; any other text, a failed read included, answers `body_read_failed`.
  */
-export function bodyRefusalCode(text: string): string {
+export function bodyRefusalCode(text: string): (typeof BODY_REFUSAL_CODES)[number] {
   // A failed read ("... could not be read: <store text>") is matched first, so no store text can pick another code.
   if (/ could not be read/.test(text)) return "body_read_failed";
-  const known: Array<[RegExp, string]> = [
+  const known: Array<[RegExp, (typeof BODY_REFUSAL_CODES)[number]]> = [
     [/ is not its current revision\b/, "body_superseded"],
     [/ was decided against /, "body_decided_against"],
     [/ still waits on an open decision$/, "body_decision_open"],
@@ -106,4 +108,153 @@ export function bodyRefusalCode(text: string): string {
     [/ is of type "/, "body_wrong_type"],
   ];
   return known.find(([re]) => re.test(text))?.[1] ?? "body_read_failed";
+}
+
+/** The codes `bodyRefusalCode` answers, and `body_changed` (another text at the send time) (cinatra#3089). */
+export const BODY_REFUSAL_CODES = [
+  "body_read_failed",
+  "body_superseded",
+  "body_decided_against",
+  "body_decision_open",
+  "body_repaired",
+  "body_not_approved",
+  "body_not_filed_in_run",
+  "body_not_visible",
+  "body_wrong_type",
+  "body_changed",
+] as const;
+
+/**
+ * THE ANSWERS OF THE RELEASED-LIST ROAD (cinatra#3089): every text that road can put in a send's answer, by its code.
+ * A `#` stands for a number (a position in the bundle or the list, or a count): the only value a text carries. No id,
+ * address, contact, campaign, reader text or error message is ever filled in.
+ */
+export const RELEASED_ROAD_TEXT = {
+  // Refused before any mail (`releasedRoadRefusal`).
+  calling_run_unreadable: "the run of this call could not be read",
+  claim_without_step: "the call claimed a publish decision, but no verified step made it",
+  decision_unreadable: "the publish decision of the calling step could not be read",
+  decision_missing: "the call claimed a publish decision, but the calling step governs none",
+  decision_signed_other: "the call was signed for another publish decision than the one that governs the calling step",
+  decision_claim_other_run: "the call claimed a publish decision of another run",
+  decision_claim_conflict: "the call was signed for another publish decision than the one it claimed",
+  decision_claim_unreadable: "the publish decision this call claimed could not be read",
+  decision_claim_not_current: "the publish decision this call claimed is not a decision of the current attempt of the run",
+  decision_claim_superseded: "the publish decision this call claimed was superseded by a newer decision of the step",
+  released_list_refused: "the released list of the publish decision was refused",
+  campaign_missing: "the released publish decision carries no campaign",
+  campaign_spaced: "the released publish decision carries its campaign with white space around it",
+  campaign_other: "the call names another campaign than the released publish decision carries",
+  sender_refused: "the sender of the released publish card could not be read",
+  sender_spaced: "the sender the released publish card showed carries white space around it",
+  sender_other: "the call names another sender than the released publish card showed",
+  sender_not_shown: "the call names a sender the released publish card did not show",
+  entry_no_revision: "approved body # names no artifact revision",
+  entry_spaced: "approved body # carries an id, a contact or an address with white space around it",
+  entry_artifact_twice: "approved body # names an artifact a second time",
+  entry_no_contact: "approved body # names no contact",
+  entry_contact_twice: "approved bodies # and # are for one contact",
+  entry_no_address: "approved body # names no recipient address",
+  entry_no_draft: "approved body # is for a contact that no draft of the bundle names",
+  entry_many_drafts: "approved body # is for a contact that # drafts of the bundle name",
+  draft_no_body: "draft # of the bundle has an address but no approved body",
+  draft_no_address: "approved body # is for draft # of the bundle, which has no address",
+  address_changed: "draft # of the bundle: the recipient's address changed after the card was shown",
+  body_refused: "approved body # was refused",
+  body_other_contact: "approved body # is the body of another contact than its draft's",
+  body_other_campaign: "approved body # is not filed for the released campaign",
+  body_not_draft: "approved body # is not the body of draft # of the bundle",
+  subject_changed: "draft # of the bundle: the subject changed after the card was shown",
+  bind_failed: "the messages could not be bound to their approved bodies",
+  body_type_unregistered: "the email body type is not registered, so no message was bound to its approved body",
+  draft_not_bound: "draft # of the bundle was not bound to its approved body",
+  // Thrown by the fan-out's binding (`materializeEmailFanout`, `loadDefaultEmitEmailFanout`).
+  fanout_no_binder: "the email body of draft # cannot be bound: the fan-out has no binder for approved bodies",
+  fanout_bind_failed: "the email body of draft # could not be bound",
+  fanout_bind_refused: "the email body of draft # was refused",
+  types_unreadable: "the registered object types could not be read, so no message can be bound to its approved body",
+  // The mail of each message.
+  not_bound_stop: "draft # of the bundle has no bound approved body, so it was not sent",
+  refused_at_claim: "draft # was not sent, its body was refused when its mail was claimed",
+  refused_at_send: "draft # was not sent, its body was refused at its send time",
+  mark: "draft # was mailed, but its sent record could not be written",
+  claim: "the mail of draft # could not be claimed, so it was not sent",
+  not_started: "draft # was not sent, no mail provider was reached",
+  release: "draft # was not sent, and its claim could not be given back",
+  act: "the mail provider failed on draft #, which may or may not have gone out",
+  in_doubt_count: "# message(s) are in doubt",
+  in_doubt: "draft # is in doubt",
+  // Any text that is none of these.
+  send_failed: "the send failed for a reason that is not shown",
+} as const;
+export type ReleasedRoadText = keyof typeof RELEASED_ROAD_TEXT;
+
+const RELEASED_LIST_CODES = [
+  "released_list_fields_invalid",
+  "decision_not_released",
+  "released_list_malformed",
+  "released_list_ambiguous",
+  "released_list_not_shown",
+  "released_list_bodies_not_drawn",
+] as const satisfies readonly ReleasedListRefusal[];
+
+/** THE CLOSED SET OF CODES a released-list answer may carry in parentheses (cinatra#3089). */
+export const RELEASED_ROAD_CODES: ReadonlySet<string> = new Set<string>([
+  ...Object.keys(RELEASED_ROAD_TEXT),
+  ...RELEASED_LIST_CODES,
+  ...BODY_REFUSAL_CODES,
+  ...Object.values(SEND_FAILURE_CODE),
+  "already_bound",
+  "bind_refused",
+]);
+export type ReleasedRoadCode = ReleasedRoadText | ReleasedListRefusal | (typeof BODY_REFUSAL_CODES)[number]
+  | (typeof SEND_FAILURE_CODE)[keyof typeof SEND_FAILURE_CODE] | "already_bound" | "bind_refused";
+
+const REFUSED_BEFORE_ANY_MAIL = "The send was refused before any email went out: ";
+
+/** One text of the released-list road: its fixed words, each `#` filled by the next number, and its code. */
+export function releasedRoadText(key: ReleasedRoadText, numbers: readonly number[] = [], code: ReleasedRoadCode = key): string {
+  let i = 0;
+  const filled = RELEASED_ROAD_TEXT[key].replace(/#/g, () => String(Math.trunc(Math.abs(numbers[i++] ?? 0))));
+  return `${filled} (${code})`;
+}
+
+/** A refusal of the released-list road before any mail (thrown; the send answers it through `releasedRoadAnswer`). */
+export function releasedRoadRefusal(key: ReleasedRoadText, numbers: readonly number[] = [], code: ReleasedRoadCode = key): Error {
+  return new Error(`${REFUSED_BEFORE_ANY_MAIL}${releasedRoadText(key, numbers, code)}`);
+}
+
+/** The early answers every send shares (kept as they are, so the old road answers them unchanged). */
+const SHARED_EARLY_ANSWERS = [
+  "approvedDraftBundleRef and confirmedRecipientsRef are required",
+  "Could not fetch approvedDraftBundle or confirmedRecipients.",
+  "Approved draft bundle has no drafts.",
+];
+const ANSWER_FORMS: ReadonlySet<string> = new Set<string>([
+  ...Object.values(RELEASED_ROAD_TEXT),
+  ...SHARED_EARLY_ANSWERS,
+  IN_DOUBT_MANUAL_CHECK,
+]);
+
+/**
+ * THE ONE GUARD OF A RELEASED-LIST ANSWER (cinatra#3089): the send builds the `errorMessage` of every call that entered
+ * the released-list road through this function, whatever produced the text. Each part (the parts are joined by "; ")
+ * passes only when it is one of RELEASED_ROAD_TEXT, the shared early answers, IN_DOUBT_MANUAL_CHECK or one of the
+ * caller's own fixed `ownForms` (texts with no number, for a constant this module does not hold), with numbers
+ * only where the text has a `#`, optionally after the refused-before-any-mail prefix and followed only by codes of
+ * RELEASED_ROAD_CODES in parentheses. Any other part (an error's message, a reader's or a store's text, an id, an
+ * address) is replaced by the fixed `send_failed` text, so no raw text can reach the answer or the persisted status.
+ */
+export function releasedRoadAnswer(text: string, ownForms: readonly string[] = []): string {
+  const passes = (part: string): boolean => {
+    let rest = part.startsWith(REFUSED_BEFORE_ANY_MAIL) ? part.slice(REFUSED_BEFORE_ANY_MAIL.length) : part;
+    for (let m = / \(([a-z_]+)\)$/.exec(rest); m; m = / \(([a-z_]+)\)$/.exec(rest)) {
+      if (!RELEASED_ROAD_CODES.has(m[1]!)) return false;
+      rest = rest.slice(0, m.index);
+    }
+    const form = rest.replace(/\d+/g, "#");
+    return ANSWER_FORMS.has(form) || (form === rest && ownForms.includes(form));
+  };
+  const parts = text.split("; ").map((part) => (passes(part) ? part : releasedRoadText("send_failed")));
+  return [...new Set(parts)].join("; ");
 }

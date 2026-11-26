@@ -251,7 +251,7 @@ describe("cinatra#3089 — the approved send fixes each message at its send time
     expect(unreleased.sent).toEqual([]);
     // Surfaced, but no row of the card showed it: never mailed from.
     const unshown = fixture({ surfaced: { senderEmail: "sender@example.com" } });
-    expect(await unshown.start()).toMatchObject(refusedWith(/refused before any email went out: the publish decision surfaced senderEmail, but no row of its card showed it/));
+    expect(await unshown.start()).toMatchObject(refusedWith(/refused before any email went out: the sender of the released publish card could not be read \(sender_refused\)$/));
     expect(unshown.sent).toEqual([]);
     // No sender shown: the connected default mailbox sends, from no named sender.
     const none = fixture({ fromRow: true });
