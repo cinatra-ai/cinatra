@@ -9,9 +9,10 @@
  * entries leave.
  *
  * What stays (the issue's "What stays"): the registration of the
- * application-owned snapshot type, its retention policy, the
- * `cms_snapshot_targets` table and the produced-event emitter in the closed
- * enumeration and the database constraint. Leg 8 removes the picture road.
+ * application-owned snapshot type, its retention policy and the produced-event
+ * emitter in the closed enumeration and the database constraint. Leg 8 removes
+ * the picture road. The snapshot target table, which only the writer filled,
+ * left core in cinatra#4854 (migration core__0136 drops it).
  *
  * Source text, not behaviour: the invariant is the absence of the module and
  * of every name of it (the technique of `cms-review-seam-family-retired-3862.test.ts`).
@@ -97,6 +98,13 @@ describe("cinatra#3862 leg 7 S4 — the page snapshot writer is gone", () => {
     ]) {
       expect(read(rel)).not.toContain("cms-content-snapshot-capture");
     }
+  });
+
+  it("cinatra#4854: core defines no snapshot target table, and core__0136 drops it", () => {
+    const table = "cms_snapshot_targets";
+    expect(read("packages/agents/src/schema.ts")).not.toContain(table);
+    expect(read("src/lib/artifacts/artifact-review-gate-schema.ts")).not.toContain(table);
+    expect(read("migrations/core/core__0136_drop-cms-snapshot-targets.mjs")).toContain(`DROP TABLE IF EXISTS ${table}`);
   });
 
   it("the application-owned snapshot type stays registered with its retention policy", () => {
