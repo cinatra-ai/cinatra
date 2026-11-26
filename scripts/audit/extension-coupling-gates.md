@@ -592,6 +592,64 @@ finding fails whatever the floor holds. The gate's own writer
 entries that no longer apply and never adds one; it emptied the floor at the
 flip. A test of record pins the checked-in floor as empty.
 
+## A pack's use of another pack's tool needs a declared dependency (cinatra#4874)
+
+A host port takes any tool name: `ctx.mcp.callPrimitive(name, input)`, a
+`cinatra.consumes` entry, a flow step's tool. So a pack can use a tool that
+another pack registers without saying so, and installing the pack does not
+install the tool's owner. The rule is a finding class of
+`scripts/audit/extension-produces-deps-gate.mjs` (CI: job `perpetual-core`,
+step "Produced-artifact dependency gate", with its tests in the next step;
+no own workflow step). It is decided from structure only; the gate's code
+names no pack and no tool, and a test of record checks that no string in it
+is a tool of the inventory or a package name.
+
+| Reading | Where it comes from |
+| --- | --- |
+| A pack USES a tool | `cinatra.consumes[].primitive` in `package.json` and its mirror at `metadata.cinatra.consumes` in `cinatra/oas.json`; every flow `ApiNode`'s `data.tool` (a `data` block written as JSON text is parsed first); every flow node's `metadata.cinatra.tools`; every literal first argument of `callPrimitive` in the pack's shipped code, read with the TypeScript parser (all code files of the pack except dependencies, build output and tests) |
+| The tool's OWNER | the file the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) names for the tool: a file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core |
+| The DECLARED dependency | an entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner |
+
+A use of the pack's own tool or of a core tool is no finding. The classes,
+each listed in `extension-produces-deps-gate.baseline.json` as
+`{ consumer: { key: reason } }`:
+
+- `undeclaredToolOwnerDeps`: the owner is another pack, and it is not in the
+  consumer's `cinatra.dependencies`.
+- `unownedTools`: the owner cannot be decided: the inventory holds no entry
+  for the tool, names a file in no pack of the synced tree, or names two
+  owners. Reported, never skipped.
+- `dynamicToolNames`: a `callPrimitive` call or an `ApiNode` `data.tool` that
+  is not a literal tool name.
+
+A shape the rule cannot read fails the gate and is never listed: a manifest
+or flow that does not parse, a `metadata.cinatra.tools` that is not a list of
+names, a code file the parser cannot read, a missing inventory.
+
+The list holds today's findings, each with its reason. A NEW finding fails,
+a STALE entry (no longer found) fails, an entry without a reason fails, and a
+class is never removed (an empty class is written `{}`). The list may only
+shrink against the base branch: the shared floor base guard compares it with
+the copy on the base (own variable `EXTENSION_PRODUCES_DEPS_BASE`). A class
+absent from the base copy is the one-time seed of the change that introduces
+it. An entry leaves when the consumer's repository declares the owner (or
+stops using the tool) and its pin is bumped, or when the inventory names the
+tool's registering file.
+
+Seeded on 2026-11-26 at the pins of both extension locks: 70 tool uses, 3
+`undeclaredToolOwnerDeps` (`list-curator-agent` uses `crm_account_get`,
+`crm_list_create` and `crm_list_member_add` of the CRM connector), 19
+`unownedTools` (core tools the inventory builder does not see because they
+are not served through `server.registerTool`: `extension_tool`,
+`artifact_content_read`, `artifact_materialize`, `artifact_image_generate`,
+`email_outreach_send_initial_start`, `email_outreach_send_initial_status`),
+0 `dynamicToolNames`.
+
+What it cannot see: a pack outside both extension locks; a tool name built at
+run time from a literal the code does not pass straight to `callPrimitive`
+(it is a `dynamicToolNames` finding, not an owner); a tool reached through a
+host route other than the forms above.
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -615,6 +673,7 @@ for its floor:
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
+| `extension-produces-deps-gate.mjs` (tool-owner classes only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
 
