@@ -613,7 +613,7 @@ describe("cinatra#3089 — the send mails the approved body revisions", () => {
     fx.bindBody.mockResolvedValueOnce({ ok: false, error: "already bound to another revision" } as never);
     const result = await fx.start({ releasedList: approved });
     expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("already bound to another revision");
+    expect(result.errorMessage).toContain("was refused (bind_refused)");
     expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 

@@ -767,7 +767,9 @@ export async function materializeEmailFanout(
           throw new EmailBodyRefusedError(`the email body ${externalId} could not be bound (bind_failed)`);
         }
         if (!bound.ok) {
-          throw new EmailBodyRefusedError(`the email body ${externalId} was refused: ${bound.error}`);
+          // Nor is a refusal's text (the binder's store error lands in it): a fixed code, as above.
+          const code = /\bis already bound to revision\b/.test(String(bound.error)) ? "already_bound" : "bind_refused";
+          throw new EmailBodyRefusedError(`the email body ${externalId} was refused (${code})`);
         }
         bodies.push({
           typeId: EMAIL_BODY_TYPE_ID,

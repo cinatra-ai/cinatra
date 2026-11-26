@@ -407,7 +407,7 @@ describe("cinatra#3089 — an unsent message moves to its newly approved revisio
     revise(1, 2);
     const again = await send([[1, 2]], mails);
     expect(again.status).toBe("failed");
-    expect(again.errorMessage).toContain("already bound to revision rev-1-1");
+    expect(again.errorMessage).toContain("was refused (already_bound)");
     expect(mails).toEqual([{ to: "p1@example.com", text: "Body 1 v1" }]);
     expect(bindings(1)).toEqual(["rev-1-1"]);
     expect(claims(1)).toEqual([["rev-1-1", "finalized"]]);
@@ -423,7 +423,7 @@ describe("cinatra#3089 — an unsent message moves to its newly approved revisio
     revise(1, 2);
     const again = await send([[1, 2]], mails);
     expect(again.status).toBe("failed");
-    expect(again.errorMessage).toContain("already bound to revision rev-1-1");
+    expect(again.errorMessage).toContain("was refused (already_bound)");
     expect(mails).toEqual([]);
     expect(bindings(1)).toEqual(["rev-1-1"]);
     expect(claims(1)).toEqual([["rev-1-1", "claimed"]]);
@@ -449,7 +449,7 @@ describe("cinatra#3089 — an unsent message moves to its newly approved revisio
     const [ra, rb] = await Promise.all([a, b]);
     expect(ra).toMatchObject({ status: "completed", sentCount: 1 });
     expect(rb.status).toBe("failed");
-    expect(rb.errorMessage).toContain("already bound to revision rev-1-1");
+    expect(rb.errorMessage).toContain("was refused (already_bound)");
     expect(mails).toEqual([{ to: "p1@example.com", text: "Body 1 v1" }]);
     expect(bindings(1)).toEqual(["rev-1-1"]);
   });

@@ -21,6 +21,7 @@
  *   B1 a binding refused at the second of three messages: nothing is mailed and
  *      the third is never bound
  *   B2 a fan-out that leaves a message unbound refuses the send before any mail
+ *   B4 a binder refusal that quotes a store error answers a fixed code only
  *   B3 a mail failed at message 2 of 3, then a retry: deliveries per recipient
  *      across both calls are 1, 0, 1 (message 2 stays in doubt)
  *   I1 the same approved call twice mails every recipient once
@@ -256,12 +257,23 @@ function makeFixture(opts?: {
     [RECIPIENTS_REF]: { id: RECIPIENTS_REF, type: "@cinatra-ai/campaigns:recipients", data: { confirmedRecipients: recipients } },
   };
   // A ledger that answers a message's own row on a retry, as the shipped
-  // binder does (find the row, else record it and read it back).
+  // binder does (find the row, else record it and read it back). A message
+  // bound to another revision is refused, as the shipped binder refuses it,
+  // unless it is another revision of the same artifact and the message has no
+  // send record (`moveUnsentBinding`): then the binding moves.
   const ledger: Ledger = opts?.ledger ?? new Map();
   const bindBody = vi.fn(
     async (b: { outputId: string; artifactId: string; representationRevisionId: string }) => {
       const own = ledger.get(b.outputId);
-      if (own) return { ok: true as const, ...own, deduped: true };
+      if (own && own.artifactId === b.artifactId && own.representationRevisionId === b.representationRevisionId) {
+        return { ok: true as const, ...own, deduped: true };
+      }
+      if (own && (own.artifactId !== b.artifactId || sendLedger.rows.has(b.outputId))) {
+        return {
+          ok: false as const,
+          error: `message ${b.outputId} of run ${runId} is already bound to revision ${own.representationRevisionId} of artifact ${own.artifactId}`,
+        };
+      }
       ledger.set(b.outputId, { artifactId: b.artifactId, representationRevisionId: b.representationRevisionId });
       return { ok: true as const, artifactId: b.artifactId, representationRevisionId: b.representationRevisionId, deduped: false };
     },
@@ -440,9 +452,27 @@ describe("cinatra#3089 — the approved send reads as the actor and binds before
     fx.bindBody.mockImplementationOnce(async () => ({ ok: false, error: "the ledger refused the row" }) as never);
     const result = await fx.start({ releasedList: approved });
     expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain("the ledger refused the row");
+    expect(result.errorMessage).toContain("was refused (bind_refused)");
     expect(fx.bindBody).toHaveBeenCalledTimes(2);
     expect(fx.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("B4 a binder refusal that quotes a store error reaches neither the answer nor a log line: a fixed code", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const raw = 'message body binding failed: duplicate key value violates unique constraint "p2@example.com"';
+    const fx = makeFixture();
+    fx.bindBody.mockImplementationOnce(async () => ({ ok: false, error: raw }) as never);
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("failed");
+    expect(result.errorMessage).toContain("was refused (bind_refused)");
+    expect(JSON.stringify(result)).not.toContain("duplicate key");
+    expect(JSON.stringify(result)).not.toContain("p2@example.com");
+    const logged = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+    expect(logged).not.toContain("duplicate key");
+    expect(fx.sendEmail).not.toHaveBeenCalled();
+    warn.mockRestore();
+    error.mockRestore();
   });
 
   it("B2 a fan-out that leaves a message unbound refuses the send before any mail", async () => {

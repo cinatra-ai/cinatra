@@ -56,9 +56,11 @@ describe("the email fan-out of the approved form", () => {
         { runScopeId: "run-1", campaignId: "camp-1", drafts, recipients, approvedBodies },
         { bindBody, registeredTypes: new Set([EMAIL_BODY_TYPE_ID]) } as unknown as Deps,
       );
-    await expect(run(async () => ({ ok: false, error: "already bound to rev-0" }))).rejects.toThrow(
-      "the email body email-body:run-1:art-1 was refused: already bound to rev-0",
-    );
+    // A refusal's text is not passed on either (the binder's store error lands in it): a fixed code.
+    // red-first-expect: to throw error including 'the email body email-body:run-1:art-1
+    const refused = run(async () => ({ ok: false, error: "already bound to rev-0" }));
+    await expect(refused).rejects.toThrow("the email body email-body:run-1:art-1 was refused (bind_refused)");
+    await expect(refused).rejects.not.toThrow("rev-0");
     const thrown = run(async () => {
       throw new Error("stored secret text");
     });
