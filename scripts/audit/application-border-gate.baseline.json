@@ -227,10 +227,6 @@
       "count": 1,
       "owner": "@cinatra-ai/wordpress-assistant-connector and @cinatra-ai/drupal-assistant-connector"
     },
-    "src/lib/blog-idea-artifact-materializer.ts :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-idea-generator-agent"
-    },
     "src/lib/blog-image-materializer.ts :: name :: blog": {
       "count": 1,
       "owner": "@cinatra-ai/blog-image-generator-agent"
@@ -248,10 +244,6 @@
       "owner": "@cinatra-ai/blog-connector"
     },
     "src/lib/blog/application/use-cases.ts :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
-    "src/lib/blog/dashboard-url.ts :: name :: blog": {
       "count": 1,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
@@ -302,10 +294,6 @@
     "src/lib/blog/member-post-draft-projection.ts :: name :: blog": {
       "count": 1,
       "owner": "@cinatra-ai/blog-linkedin-writer-agent"
-    },
-    "src/lib/blog/plugin/definition.ts :: name :: blog": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/ports/blog-content.ts :: name :: blog": {
       "count": 2,
@@ -521,10 +509,6 @@
       "count": 8,
       "owner": "@cinatra-ai/wordpress-assistant-connector and @cinatra-ai/drupal-assistant-connector"
     },
-    "src/lib/blog-idea-artifact-materializer.ts": {
-      "count": 1,
-      "owner": "@cinatra-ai/blog-idea-generator-agent"
-    },
     "src/lib/blog-image-materializer.ts": {
       "count": 3,
       "owner": "@cinatra-ai/blog-image-generator-agent"
@@ -543,10 +527,6 @@
     },
     "src/lib/blog/application/use-cases.ts": {
       "count": 1,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
-    },
-    "src/lib/blog/dashboard-url.ts": {
-      "count": 2,
       "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/generation.ts": {
@@ -596,10 +576,6 @@
     "src/lib/blog/member-post-draft-projection.ts": {
       "count": 2,
       "owner": "@cinatra-ai/blog-linkedin-writer-agent"
-    },
-    "src/lib/blog/plugin/definition.ts": {
-      "count": 2,
-      "owner": "@cinatra-ai/blog-pipeline-agent"
     },
     "src/lib/blog/ports/blog-content.ts": {
       "count": 0,

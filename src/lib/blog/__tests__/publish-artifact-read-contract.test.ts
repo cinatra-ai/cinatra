@@ -91,20 +91,6 @@ describe("host-side reader helpers exist and have the documented `liveOnly: true
     expect(typeof module.materializeBlogPostBodyArtifact).toBe("function");
   });
 
-  it("readBlogIdeaArtifactBytes is exported from the idea-summary materializer", async () => {
-    const module = await import("@/lib/blog-idea-artifact-materializer");
-    expect(typeof module.readBlogIdeaArtifactBytes).toBe("function");
-  });
-
-  // cinatra#3034: the in-core idea WRITER was dormant — a call-site census over
-  // the whole tree found no caller but this assertion, so it is deleted and the
-  // ideas are filed through the binding road. The reader stays: the publish
-  // path still reads an idea's bytes.
-  it("the dormant in-core idea writer is GONE — ideas are filed through the binding road", async () => {
-    const module = await import("@/lib/blog-idea-artifact-materializer");
-    expect("materializeBlogIdeaArtifact" in module).toBe(false);
-  });
-
   it("readBlogImageArtifactBytes is exported; WP image upload still flows through it", async () => {
     const module = await import("@/lib/blog-image-materializer");
     expect(typeof module.readBlogImageArtifactBytes).toBe("function");
