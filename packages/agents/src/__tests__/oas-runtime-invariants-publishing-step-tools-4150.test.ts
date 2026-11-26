@@ -63,6 +63,8 @@ function publishingFlowNode(id: string, subflow: Node, publishes = true): Node {
 
 const UNDECLARED = "declares no tools in metadata.cinatra.tools";
 const REFUSED = "the bridge refuses this step's call";
+const UNREADABLE = "the run cannot read this step's tool declaration";
+const MALFORMED = "the run refuses this step's metadata.cinatra.tools as read by its id";
 const all015 = (doc: Node) => scanOasForRuntimeInvariantFindings(doc).filter((f) => f.code === "OAS-RUNTIME-015");
 
 describe("a publishing model step that reaches the product's tools declares them (cinatra#4150)", () => {
@@ -143,6 +145,31 @@ describe("a publishing model step that reaches the product's tools declares them
     expect(all015(flow({ pub: publishingFlowNode("pub", flow({ s: bridge("s") }, ["s"]), false) }, ["pub"]))).toEqual([]);
   });
 
+  it("refuses a declaring step under a publishing node that the run's declaration reader cannot see", () => {
+    const declaring = bridge("s", { tools: ["objects_save"] });
+    const inline = flow({ pub: publishingFlowNode("pub", { ...flow({}, []), nodes: [declaring] }) }, ["pub"]);
+    const found = all015(inline);
+    expect(found.map((f) => f.message)).toEqual([expect.stringContaining(UNREADABLE)]);
+    expect(found[0]?.location).toBe("$.$referenced_components.pub.subflow.nodes[0]");
+    // The same step where the run's reader reaches it is clean.
+    expect(all015(flow({ pub: publishingFlowNode("pub", flow({ s: declaring }, ["s"])) }, ["pub"]))).toEqual([]);
+  });
+
+  it("refuses a publishing step whose declaration the run's reader rejects, for each rejected form", () => {
+    const forms: unknown[] = ["objects_save", [7], [" "], ["objects save"], ["Objects_save"], ["objects_save", "objects_save"]];
+    for (const tools of forms) {
+      const found = all015(flow({ p: bridge("p", { publishes: true, tools }) }, ["p"]));
+      expect(found.map((f) => f.message)).toContainEqual(expect.stringContaining(MALFORMED));
+    }
+    // The run reads a step's declaration by id: a malformed one on another step
+    // with the same id makes the publishing step's declaration malformed too.
+    const shared = flow({
+      p: bridge("p", { publishes: true, tools: ["objects_save"] }),
+      q: { ...bridge("p", { tools: "objects_save" }), id: "p" },
+    }, ["p", "q"]);
+    expect(all015(shared).map((f) => f.message)).toContainEqual(expect.stringContaining(MALFORMED));
+  });
+
   it("stays linear on 1,000 publishing nodes sharing one subflow of 1,000 steps, with no duplicate finding", () => {
     // red-first-expect: publishingStepScanVisitsForTests is not a function
     const P = 1000;
@@ -163,7 +190,12 @@ describe("a publishing model step that reaches the product's tools declares them
     // components and the S + 3 references to them (its nodes and start_node).
     // Per publishing node: the node, and for the second P its subflow reference.
     // A walk per publishing node would enter P * (S + 3) objects or more.
-    expect(publishingStepScanVisitsForTests()).toBeLessThanOrEqual(3 * P + 2 * (2 * S + 6));
+    // The declaration table pass, before the walk, enters each object of the
+    // run's reader once: the document, its 2P + 3 components, the P subflow
+    // references, and per shared flow the flow and its S + 2 components.
+    const walk = 3 * P + 2 * (2 * S + 6);
+    const table = 1 + (2 * P + 3) + P + 2 * (S + 3);
+    expect(publishingStepScanVisitsForTests()).toBeLessThanOrEqual(walk + table);
     expect(found).toHaveLength(2 * S);
     expect(new Set(found.map((f) => f.message.match(/Model-bridge step "([^"]+)"/)?.[1])).size).toBe(2 * S);
   });

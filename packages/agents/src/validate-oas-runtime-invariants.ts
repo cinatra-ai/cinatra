@@ -447,8 +447,8 @@ function scanForCinatraLlmInSource(
 function walkBridgeApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
-): void {
-  walkApiNodes(parsed, (node, path) => {
+): number {
+  return walkApiNodes(parsed, (node, path) => {
     const url = node.url;
     if (typeof url === "string" && url.includes("/api/llm-bridge")) {
       visit(node, path);
@@ -456,13 +456,20 @@ function walkBridgeApiNodes(
   });
 }
 
-/** Every ApiNode of a flow document, nested subflows included, whatever its target. */
+/**
+ * Every ApiNode of a flow document, nested subflows included, whatever its
+ * target. Each object is entered once: an object reached twice can only come
+ * from a document built in memory (parsed JSON text has no shared objects), so
+ * a parsed document reads the same. Returns the number of objects entered.
+ */
 function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
-): void {
+): number {
+  const entered = new Set<unknown>();
   function go(node: unknown, path: string): void {
-    if (!isPlainObject(node)) return;
+    if (!isPlainObject(node) || entered.has(node)) return;
+    entered.add(node);
     const o = node as Record<string, unknown>;
     if (o.component_type === "ApiNode") {
       visit(o, path);
@@ -487,6 +494,7 @@ function walkApiNodes(
     }
   }
   go(parsed, "$");
+  return entered.size;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,21 +632,40 @@ export function findStepToolDeclaration(
   stepId: string,
 ): StepToolDeclaration {
   if (!isPlainObject(document)) return { kind: "undeclared" };
-  const declared: string[][] = [];
-  let invalid: StepToolDeclaration | null = null;
-  walkBridgeApiNodes(document, (node) => {
-    if (node.id !== stepId) return;
-    const reading = readStepToolDeclaration(node);
-    if (reading.kind === "invalid") invalid = invalid ?? reading;
-    else if (reading.kind === "declared") declared.push(reading.tools);
+  return readStepToolDeclarationTable(document).table.get(stepId) ?? { kind: "undeclared" };
+}
+
+/**
+ * The declaration findStepToolDeclaration reads for every step id of a flow
+ * document, from one walk: an id is in the table when a model-bridge step that
+ * walk reaches carries it (a step it does not reach, such as one in an inline
+ * `nodes` list, has no entry). Several steps with one id combine as above: the
+ * first `invalid` reading in walk order, otherwise the names common to every
+ * declared list, otherwise `undeclared`. `entered`: the objects the walk entered.
+ */
+function readStepToolDeclarationTable(document: Record<string, unknown>): {
+  table: Map<string, StepToolDeclaration>;
+  entered: number;
+} {
+  const readings = new Map<string, StepToolDeclaration[]>();
+  const entered = walkBridgeApiNodes(document, (node) => {
+    if (typeof node.id !== "string") return;
+    const list = readings.get(node.id) ?? [];
+    list.push(readStepToolDeclaration(node));
+    readings.set(node.id, list);
   });
-  if (invalid) return invalid;
-  if (declared.length === 0) return { kind: "undeclared" };
-  const [first, ...rest] = declared;
-  return {
-    kind: "declared",
-    tools: first!.filter((name) => rest.every((list) => list.includes(name))),
-  };
+  const table = new Map<string, StepToolDeclaration>();
+  for (const [id, list] of readings) {
+    const invalid = list.find((reading) => reading.kind === "invalid");
+    const declared = list.flatMap((reading) => (reading.kind === "declared" ? [reading.tools] : []));
+    if (invalid) table.set(id, invalid);
+    else if (declared.length === 0) table.set(id, { kind: "undeclared" });
+    else {
+      const [first, ...rest] = declared;
+      table.set(id, { kind: "declared", tools: first!.filter((name) => rest.every((tools) => tools.includes(name))) });
+    }
+  }
+  return { table, entered };
 }
 
 /**
@@ -842,9 +869,14 @@ function scanForStepToolDeclarations(
 // follows exactly the children the run follows when it finds a step's
 // publishing node (publishingWalkChildren, shared with findPublishingAncestor):
 // a `$component_ref` resolved in the run's scope, inline `nodes` and subflows.
-// The walks share one visited set, so each object is entered once in total and
-// the work is linear in the document; a step under two publishing nodes is
-// judged once. One finding per step id at most.
+// The walks share one visited set, so each object is entered once in total; a
+// step under two publishing nodes is judged once. One finding per step id at most.
+//
+// A step's declaration is never read from the step itself: it is the entry for
+// the step's id in ONE table built before the walk with the run's own reader
+// (readStepToolDeclarationTable, the table findStepToolDeclaration reads). A
+// step without an entry is one the run's reader cannot see; an `invalid` entry
+// is one the run refuses. The table pass and the walk are each linear.
 //
 // Limits: this rule does not judge a step that two publishing nodes share (that
 // ambiguity is itself the run's refusal) or a passthrough publisher; the run
@@ -864,6 +896,7 @@ function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): Revi
   const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
   const seen = new Set<unknown>();
   const judged = new Set<string>();
+  const { table, entered } = readStepToolDeclarationTable(parsed);
   for (const entry of Array.isArray(parsed.nodes) ? parsed.nodes : []) {
     const key = resolveComponentRef(entry);
     if (key === null || !Object.prototype.hasOwnProperty.call(rootRefs, key)) continue;
@@ -880,7 +913,7 @@ function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): Revi
       if (resolveComponentRef(value) === null && isModelBridgeApiNode(value)) judgeStep(value, path, key);
     }
   }
-  publishingStepScanVisits = seen.size;
+  publishingStepScanVisits = entered + seen.size;
   return findings;
 
   function judgeStep(step: Record<string, unknown>, path: string, key: string): void {
@@ -900,13 +933,21 @@ function scanForUndeclaredPublishingSteps(parsed: Record<string, unknown>): Revi
     // Absent: the bridge reads ["cinatra-mcp"] (route.ts:1924). Every id that is
     // not provider-native goes to the MCP toolboxes, the product's tool boundary.
     if (Array.isArray(ids) && ids.every((t) => BRIDGE_PROVIDER_NATIVE_TOOLBOX_IDS.has(t as string))) return;
-    const reading = readStepToolDeclaration(step);
-    if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) return;
+    const reading = typeof step.id === "string" ? table.get(step.id) : undefined;
+    if (reading?.kind === "declared" && reading.tools.length > 0) return;
     judged.add(id);
     findings.push(publishingStepFinding(id, path, key,
-      "reaches the product's tools and declares no tools in metadata.cinatra.tools. After Publish the run " +
-      "refuses every outward call of a step that does not declare the call's tool " +
-      "(action_decision_step_undeclared). Declare the tools the step calls."));
+      reading === undefined
+        ? "reaches the product's tools, and the run cannot read this step's tool declaration: the run reads it by " +
+          "the step's text id, on the model-bridge steps of the flow's referenced components and subflows only " +
+          "(not an inline `nodes` list), and refuses a step it cannot find (step_tool_step_unknown). Give the step " +
+          "an id, place it in $referenced_components and declare its tools in metadata.cinatra.tools."
+        : reading.kind === "invalid"
+          ? `reaches the product's tools, and the run refuses this step's metadata.cinatra.tools as read by its ` +
+            `id: ${reading.reason} (step_tool_declaration_invalid). Give a list of distinct lower-case tool names.`
+          : "reaches the product's tools and declares no tools in metadata.cinatra.tools. After Publish the run " +
+            "refuses every outward call of a step that does not declare the call's tool " +
+            "(action_decision_step_undeclared). Declare the tools the step calls."));
   }
 }
 
