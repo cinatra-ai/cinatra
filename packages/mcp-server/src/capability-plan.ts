@@ -698,13 +698,15 @@ function readDeclarationIsMalformed(config: unknown): boolean {
  *
  * TOTAL, and a declaration can only add a tool to what the host holds. A config
  * that is not an object, or an `outward` that is `undefined` or `null`, reads
- * as `null`. An `outward` that is not an object (`true`, a string, a function)
- * and a plain object whose `subject` is `undefined` or `null` read as outward
- * without a subject. A plain object whose `subject` is a plain object naming two
- * non-empty input fields reads as those two names, copied. Every other present
- * subject (a missing or empty name, a non-plain object), an `outward` object
- * that is not a plain object, and any accessor that throws read as outward with
- * a malformed subject (`MALFORMED_OUTWARD_SUBJECT`), never as no subject.
+ * as `null`. A primitive `outward` (`true`, a string, a number) and a plain
+ * object with no own key but `subject`, whose `subject` is `undefined` or
+ * `null`, read as outward without a subject. A plain object whose `subject` is
+ * a plain object naming two non-empty input fields reads as those two names,
+ * copied. Every other present subject (a missing or empty name, a non-plain
+ * object), a plain object with any other own key (a misspelt `subjects`,
+ * `Subject` or `item`), a function or other non-plain object as `outward`, and
+ * any accessor that throws read as outward with a malformed subject
+ * (`MALFORMED_OUTWARD_SUBJECT`), never as no subject.
  * Each property is read once.
  */
 export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration | null {
@@ -716,9 +718,12 @@ export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration 
     return { subject: MALFORMED_OUTWARD_SUBJECT };
   }
   if (outward === undefined || outward === null) return null;
-  if (typeof outward !== "object") return { subject: null };
+  if (typeof outward !== "object" && typeof outward !== "function") return { subject: null };
   try {
     if (!isPlainObject(outward)) return { subject: MALFORMED_OUTWARD_SUBJECT };
+    if (Reflect.ownKeys(outward as object).some((key) => key !== "subject")) {
+      return { subject: MALFORMED_OUTWARD_SUBJECT };
+    }
     const subject: unknown = (outward as { subject?: unknown }).subject;
     if (subject === undefined || subject === null) return { subject: null };
     if (!isPlainObject(subject)) return { subject: MALFORMED_OUTWARD_SUBJECT };

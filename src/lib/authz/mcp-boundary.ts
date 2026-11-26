@@ -176,14 +176,24 @@ export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * cinatra#3745: the tools of the outward-effect set that answer a person's
- * pending gate. The guarded outward run action consumes a decision the person
- * released for the step's offered tool; these tools declare no subject, so one
- * consumed decision would let them answer any gate with any arguments, a gate
- * the person never saw among them. They therefore never take the guarded
- * action: on a run frame they stay refused exactly as before it.
+ * cinatra#3745: a tool of the outward-effect set belongs here when it decides
+ * for a person, grants access, or runs an organization-wide job; a person's
+ * publish release never covers such a call, which takes arbitrary arguments and
+ * no subject. These tools never take the guarded outward run action: on a run
+ * frame they stay refused exactly as before it.
  */
-const GATE_ANSWERING_TOOL_NAMES: ReadonlySet<string> = new Set(["agent_run_resume", "approvals_decide"]);
+const NEVER_ADMITTED_ON_RUN_FRAME: ReadonlySet<string> = new Set([
+  // Decides for a person: answers a pending gate, decides an approval, or
+  // approves or rejects an agent creation request (approving starts a publish).
+  "agent_run_resume",
+  "approvals_decide",
+  "agent_creation_request_decide",
+  // Grants membership and a role to any address.
+  "permissions_members_invite",
+  // Organization-wide system jobs, not tied to any item.
+  "email_outreach_system_jobs_initial_send_run",
+  "email_outreach_system_process_due_follow_ups",
+]);
 
 /**
  * True when the call is a tool of the outward-effect set, or a tool whose
@@ -316,7 +326,7 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
  * refused.
  */
 export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
-  if (req.outwardOwner === undefined || GATE_ANSWERING_TOOL_NAMES.has(req.primitiveName) ||
+  if (req.outwardOwner === undefined || NEVER_ADMITTED_ON_RUN_FRAME.has(req.primitiveName) ||
       !needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
     return decideMcpBoundary(req, false);
   }

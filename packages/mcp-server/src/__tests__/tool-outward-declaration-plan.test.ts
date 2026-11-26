@@ -55,7 +55,6 @@ const OUTWARD_WITHOUT_SUBJECT: ReadonlyArray<readonly [string, unknown]> = [
   ["false", false],
   ["a string", "yes"],
   ["a number", 1],
-  ["a function", () => undefined],
   ["a declaration with an undefined subject", { subject: undefined }],
   ["a declaration with a null subject", { subject: null }],
 ];
@@ -64,6 +63,10 @@ const OUTWARD_WITHOUT_SUBJECT: ReadonlyArray<readonly [string, unknown]> = [
 // subject, never outward without a subject (cinatra#3745).
 const OUTWARD_WITH_MALFORMED_SUBJECT: ReadonlyArray<readonly [string, unknown]> = [
   ["an array", []],
+  ["a function", () => undefined],
+  ["a declaration with a misspelt subject key", { subjects: { artifactId: "itemId", representationRevisionId: "revisionId" } }],
+  ["a declaration with a capitalised subject key", { Subject: { artifactId: "itemId", representationRevisionId: "revisionId" } }],
+  ["a declaration with another key beside a valid subject", { subject: { artifactId: "itemId", representationRevisionId: "revisionId" }, item: "x" }],
   ["a subject missing one input name", { subject: { artifactId: "itemId" } }],
   ["a subject with an empty input name", { subject: { artifactId: "", representationRevisionId: "revisionId" } }],
   ["a subject with a non-string input name", { subject: { artifactId: 1, representationRevisionId: "revisionId" } }],
