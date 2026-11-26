@@ -8,11 +8,13 @@
  *   npx vitest run src/lib/artifacts/__tests__/materialize-tool-artifact-list-3089.test.ts
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
 const {
   poolQueryMock,
   getAgentPackageMock,
   listArtifactsMock,
+  resolveTypeMock,
   registerAllObjectTypesMock,
   createSemanticArtifactMock,
   claimMaterializationMock,
@@ -25,6 +27,7 @@ const {
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
   listArtifactsMock: vi.fn(),
+  resolveTypeMock: vi.fn((): unknown => null),
   registerAllObjectTypesMock: vi.fn(),
   createSemanticArtifactMock: vi.fn(),
   claimMaterializationMock: vi.fn(),
@@ -62,7 +65,7 @@ vi.mock("@/lib/verdaccio-config", () => ({
   })),
 }));
 vi.mock("@cinatra-ai/objects/registry", () => ({
-  objectTypeRegistry: { listArtifacts: listArtifactsMock },
+  objectTypeRegistry: { listArtifacts: listArtifactsMock, resolve: resolveTypeMock },
 }));
 vi.mock("@/lib/register-all-object-types", () => ({
   registerAllObjectTypes: registerAllObjectTypesMock,
@@ -70,8 +73,11 @@ vi.mock("@/lib/register-all-object-types", () => ({
 vi.mock("../resolve-bound-artifact-type", () => ({
   resolveBoundArtifactTarget: resolveBoundArtifactTargetMock,
 }));
-vi.mock("../artifact-creation", () => ({
+// The schema check is the REAL one the creation boundary runs (cinatra#3089).
+vi.mock("../artifact-creation", async () => ({
   createSemanticArtifact: createSemanticArtifactMock,
+  artifactPayloadSchemaError: (await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation"))
+    .artifactPayloadSchemaError,
 }));
 vi.mock("../materialization-ledger", async () => ({
   // cinatra#4762: the reused revision's restamp, as the module ships it.
@@ -156,6 +162,7 @@ beforeEach(() => {
     payload: null,
   });
   listArtifactsMock.mockReturnValue([artifactDef()]);
+  resolveTypeMock.mockReturnValue(null);
   // Mirror the legacy `${extension}:artifact` lookup off the same fixture.
   resolveBoundArtifactTargetMock.mockImplementation(
     async ({ extension }: { extension: string }) => {
@@ -214,8 +221,8 @@ describe("materializeToolArtifactList (cinatra#3089)", () => {
     }
     const creates = createSemanticArtifactMock.mock.calls.map((c) => c[0]);
     expect(creates.map((c) => [c.title, c.typedData])).toEqual([
-      ["For Ann", { contactId: "c-1", campaignId: "camp-1" }],
-      ["For Bob", { contactId: "c-2", campaignId: "camp-1" }],
+      ["For Ann", { contactId: "c-1", campaignId: "camp-1", runId: "run-1" }],
+      ["For Bob", { contactId: "c-2", campaignId: "camp-1", runId: "run-1" }],
     ]);
     expect(creates.every((c) => c.createdByRunId === "run-1" && c.declaredMime === "text/markdown")).toBe(true);
   });
@@ -244,6 +251,23 @@ describe("materializeToolArtifactList (cinatra#3089)", () => {
       ok: false,
       error: "a list call files at least one member",
     });
+  });
+
+  it("checks every member's typed data against the type's schema before the first write", async () => {
+    resolveTypeMock.mockReturnValue({
+      schema: z.object({ runId: z.string(), visibility: z.enum(["PUBLIC", "CONNECTIONS"]) }).passthrough(),
+    });
+    const outcome = await materializeToolArtifactList({
+      ...BASE_INPUT,
+      members: [
+        { title: "Post 1", content: "One", data: { visibility: "PUBLIC" } },
+        { title: "Post 2", content: "Two", data: { visibility: "EVERYONE" } },
+      ],
+    });
+    expect(claimMaterializationMock).not.toHaveBeenCalled();
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toMatch(/^member 2: object payload does not satisfy the declared schema/);
   });
 
   it("a retried call reuses the members already filed and files only the rest", async () => {

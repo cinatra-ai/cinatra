@@ -336,3 +336,26 @@ describe("the append call grammar", () => {
     expect(result.errors.join("\n")).toMatch(/title/);
   });
 });
+
+describe("the list call grammar (cinatra#3089)", () => {
+  const listInput = (overrides?: Record<string, unknown>) =>
+    validInput({ title: undefined, memberContentField: "body", memberTitleField: "subject", ...overrides });
+
+  it("accepts a list call that names both member fields and carries no top-level title", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(materializeNode({ input: listInput() })),
+      { produces: [EXT] },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.nodes).toHaveLength(1);
+  });
+
+  it("refuses a list call that also carries a top-level title", () => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(materializeNode({ input: listInput({ title: "{{ title }}" }) })),
+      { produces: [EXT] },
+    );
+    expect(result.nodes).toHaveLength(0);
+    expect(result.errors.join("\n")).toMatch(/input\.title: cannot be combined with a list call/);
+  });
+});

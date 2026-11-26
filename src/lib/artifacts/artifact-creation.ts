@@ -324,6 +324,37 @@ function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolea
 }
 
 /**
+ * The type's payload schema check (epic #1785, wave A3) on the caller's typed
+ * data UNDER the envelope (item 0.28): the writer's own facts always win, so the
+ * payload the schema sees carries the type's declared fields and an unforgeable
+ * envelope. Answers the refusal message, or null when the payload passes (or the
+ * type is not registered — the write boundary refuses that itself). Exported so
+ * a list filing (cinatra#3089) checks every member before its first write.
+ */
+export function artifactPayloadSchemaError(
+  objectType: string,
+  typedData: Record<string, unknown> | undefined,
+  facts: { representationRevisionId: string; digest: string; mime: string; size: number; originKind: ArtifactOriginKind; title: string | undefined },
+): string | null {
+  const def = objectTypeRegistry.resolve(objectType);
+  if (!def) return null;
+  const parsed = def.schema.safeParse({
+    ...(typedData ?? {}),
+    artifactType: "file",
+    latestRepresentationRevisionId: facts.representationRevisionId,
+    latestDigest: facts.digest,
+    mime: facts.mime,
+    size: facts.size,
+    originKind: facts.originKind,
+    viewerHint: "mime",
+    title: facts.title,
+  } as ArtifactObjectData);
+  return parsed.success
+    ? null
+    : `object payload does not satisfy the declared schema for "${objectType}": ${parsed.error.message}`;
+}
+
+/**
  * Validate a REQUIRED object type at the write boundary BEFORE any blob IO
  * (epic #1785, wave A3). Refuses via {@link ObjectsTypeNotRegisteredError} when
  * the type is a retired generic literal, has no installed `kind:"artifact"`
@@ -461,27 +492,15 @@ export async function createSemanticArtifact(
         `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
       );
     }
-    // The caller's typed data UNDER the envelope (item 0.28): the writer's own
-    // facts always win, so the payload the schema sees carries the type's
-    // declared fields and an unforgeable envelope.
-    const previewEnvelope = {
-      ...(input.typedData ?? {}),
-      artifactType: "file",
-      latestRepresentationRevisionId: representationRevisionId,
-      latestDigest: newBlob.sha256,
+    const schemaError = artifactPayloadSchemaError(input.objectType, input.typedData, {
+      representationRevisionId,
+      digest: newBlob.sha256,
       mime: newBlob.mimeDetected,
       size: newBlob.sizeBytes,
       originKind,
-      viewerHint: "mime",
       title: input.title,
-    } as ArtifactObjectData;
-    const parsed = preDef.schema.safeParse(previewEnvelope);
-    if (!parsed.success) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `object payload does not satisfy the declared schema for "${input.objectType}": ${parsed.error.message}`,
-      );
-    }
+    });
+    if (schemaError) throw new ObjectsTypeNotRegisteredError(input.objectType, schemaError);
   } catch (err) {
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })

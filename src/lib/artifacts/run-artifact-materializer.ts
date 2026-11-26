@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import {
   ARTIFACT_IMAGE_TOOL,
@@ -25,7 +25,7 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { createSemanticArtifact } from "./artifact-creation";
+import { artifactPayloadSchemaError, createSemanticArtifact } from "./artifact-creation";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
@@ -1740,13 +1740,18 @@ export function materializeListMemberOutputId(nodeId: string, position: number):
   return `${MATERIALIZE_LIST_OUTPUT_ID_PREFIX}${JSON.stringify(nodeId)}/${position}`;
 }
 
+/** A list member's typed data with the host's run id, as the fan-out files a body; the host's value wins (the shaper refuses a caller `runId`). */
+function memberTypedData(data: Record<string, string> | undefined, runId: string): Record<string, unknown> | undefined {
+  return data ? { ...data, runId } : undefined;
+}
+
 /**
  * THE LIST MODE of the `artifact_materialize` tool (cinatra#3089): one artifact
  * per member, in member order, each a `materialize_tool` write of the same node
  * under its own ledger identity (`materializeListMemberOutputId`), with the
- * member's typed data. Every member is authorized before the first write (the
- * produces check, the form, the cap and the declared type), so a refused member
- * files nothing. A write that fails part-way leaves the members written so far;
+ * member's typed data and the host's run id. Every member is authorized before
+ * the first write (the produces check, the form, the cap, the declared type and
+ * its typed data against the type's schema), so a refused member files nothing. A write that fails part-way leaves the members written so far;
  * the same call again reuses them by their ledger rows and files the rest, so a
  * retried call answers the one list. Answers the filed pairs in member order,
  * or the first refusal.
@@ -1790,6 +1795,15 @@ export async function materializeToolArtifactList(input: {
       if (!authorized.ok) return { ok: false, error: `member ${index + 1}: ${authorized.error}` };
       target = authorized.target;
       reviewed = authorized.reviewed;
+      const schemaError = artifactPayloadSchemaError(target.objectTypeId, memberTypedData(member.data, input.runId), {
+        representationRevisionId: randomUUID(),
+        digest: createHash("sha256").update(member.content, "utf8").digest("hex"),
+        mime: input.mime,
+        size: Buffer.byteLength(member.content, "utf8"),
+        originKind: reviewed ? "live_generator" : "agent_generated",
+        title: member.title.trim(),
+      });
+      if (schemaError) return { ok: false, error: `member ${index + 1}: ${schemaError}` };
     }
     const ownership = await resolveRunScopeOwnership({
       templateId: input.templateId,
@@ -1817,7 +1831,7 @@ export async function materializeToolArtifactList(input: {
           resolvedTarget: target!,
           mimeDescription: "the call declared MIME",
           ...(reviewed ? { originKind: "live_generator" as const } : {}),
-          ...(member.data ? { typedData: { ...member.data } } : {}),
+          ...(member.data ? { typedData: memberTypedData(member.data, input.runId) } : {}),
         });
       } catch (err) {
         if (isPublishCallInFlightAbort(err)) throw err;

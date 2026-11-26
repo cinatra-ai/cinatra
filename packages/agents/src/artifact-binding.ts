@@ -947,9 +947,25 @@ export function collectArtifactMaterializeNodesFromOasDocument(
       );
     }
     const isAppend = hasArtifactId && hasBase;
+    // THE LIST CALL (cinatra#3089): the same rule the runtime shaper applies —
+    // both member fields together, and no top-level title, append or
+    // contentJsonField (every member is a new artifact with its own title).
+    const isList = input.memberContentField !== undefined || input.memberTitleField !== undefined;
+    if (isList) {
+      for (const field of ["memberContentField", "memberTitleField"] as const) {
+        if (typeof input[field] !== "string" || (input[field] as string).length === 0) {
+          fieldError(field, "a list call names both memberContentField and memberTitleField (non-empty field names)");
+        }
+      }
+      for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
+        if (input[field] !== undefined) fieldError(field, "cannot be combined with a list call — every member is a new artifact with its own title");
+      }
+    }
     const requiredStrings = isAppend
       ? (["content", "artifactId", "baseRepresentationRevisionId"] as const)
-      : (["content", "title"] as const);
+      : isList
+        ? (["content"] as const)
+        : (["content", "title"] as const);
     for (const field of requiredStrings) {
       const value = input[field];
       if (typeof value !== "string" || value.length === 0) {
