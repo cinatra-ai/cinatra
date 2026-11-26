@@ -24,6 +24,7 @@ import {
   type ResolvedInjectedSkillSet,
 } from "@cinatra-ai/skills/injection";
 import { createDeterministicSkillsClient } from "@cinatra-ai/skills/mcp-client";
+import { isReservedFirstPartyServerLabel } from "../mcp-materializer";
 import type {
   SkillExposureEntry,
   LlmTool,
@@ -910,6 +911,13 @@ export function createMcpServerTool(input: {
   serverLabel: string;
   allowedTools?: string[] | null;
 }): LlmMcpServerTool {
+  // cinatra#4150: the reserved first-party label (any normalized form) is never handed to a
+  // caller-built server; only the product's own builder may present it.
+  if (isReservedFirstPartyServerLabel(input.serverLabel)) {
+    throw new Error(
+      `createMcpServerTool: "${input.serverLabel}" is the reserved first-party MCP server label.`,
+    );
+  }
   return {
     type: "mcp",
     serverLabel: input.serverLabel,

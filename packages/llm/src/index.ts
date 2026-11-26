@@ -2160,6 +2160,7 @@ import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context
 import { SKILL_FILE_READ_TOOL_NAME as SKILL_READ_FACING_NAME } from "./tools/skill-read-tool";
 import { SANDBOX_EXECUTE_TOOL_NAME as SANDBOX_FACING_NAME } from "./execution-plane";
 import { isReservedFirstPartyServerLabel } from "./mcp-materializer";
+import { isFirstPartyMcpServerTool } from "./mcp-access";
 
 /** Provider built-in tool kinds; never a function tool or an MCP server. */
 export type StepBuiltinToolType = "shell" | "container_skills" | "web_search" | "sandbox_execution";
@@ -2280,12 +2281,15 @@ export function restrictStepToolOffers(tools: readonly LlmTool[] | undefined,
     let retained: LlmTool | null = null; let key: string;
     if (tool.type === "mcp") {
       // No trustworthy catalog ceiling => suppress the server, never unrestricted [].
-      // cinatra#4150: except the product's own tool server (the reserved label every external
-      // ingress drops). Without a ceiling its offer is the step's declared names that no other
-      // offered tool carries: never more than the step declared, and the server itself refuses a
-      // name the step does not declare (assertRunStepToolAllowed) or the caller may not use. A
-      // third-party server without a catalog stays dropped.
-      const catalog = tool.allowedTools ?? (isReservedFirstPartyServerLabel(tool.serverLabel)
+      // cinatra#4150: except the product's own tool server, recognised by provenance only (the
+      // object its builder made, never its label). Without a ceiling its offer is the step's
+      // declared names that no other offered tool carries: never more than the step declared, and
+      // the server itself refuses a name the step does not declare (assertRunStepToolAllowed) or the
+      // caller may not use. A third-party server without a catalog stays dropped, and a server that
+      // presents the reserved label without that provenance is dropped whatever its catalog.
+      const genuine = isFirstPartyMcpServerTool(tool);
+      if (!genuine && isReservedFirstPartyServerLabel(tool.serverLabel)) continue;
+      const catalog = tool.allowedTools ?? (genuine
         ? policy.tools.filter((n) => !namesOfOtherTools(tools ?? [], tool).has(n)) : null);
       retained = restrictMcpServerOffer(tool, catalog, policy);
       key = `mcp:${tool.serverUrl}:${tool.serverLabel}`;

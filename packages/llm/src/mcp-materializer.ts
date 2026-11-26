@@ -122,8 +122,9 @@ export function normalizeMcpServerName(label: string): string {
 
 /**
  * The product's own tool server's label (`buildCinatraMcpServerTool` in mcp-access.ts). Reserved:
- * every external MCP ingress drops a server that presents it (`withoutReservedFirstPartyLabelTools`),
- * so a server carrying it is the product's own one.
+ * every external MCP ingress drops a server that presents it (`withoutReservedFirstPartyLabelTools`).
+ * The label is never proof of provenance: the step offer filter recognises the product's own server
+ * by object identity (`isFirstPartyMcpServerTool` in mcp-access.ts) and drops an impostor.
  */
 export const RESERVED_FIRST_PARTY_SERVER_LABEL = "cinatra";
 

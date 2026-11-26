@@ -66,7 +66,7 @@ vi.mock("node:fs", () => ({
   existsSync: existsSyncMock,
 }));
 
-import { buildSkillTools } from "../tools/skills";
+import { buildSkillTools, createMcpServerTool } from "../tools/skills";
 
 beforeEach(() => {
   installedGetMock.mockReset();
@@ -209,5 +209,18 @@ describe("buildSkillTools soft-fallback", () => {
       expect(tools).toHaveLength(1);
       expect((tools[0] as { type: string }).type).toBe("shell");
     }
+  });
+});
+
+// cinatra#4150 (security finding): a caller-built MCP server never presents the reserved first-party
+// label, in any normalized spelling; only the product's own builder may.
+describe("createMcpServerTool", () => {
+  // red-first-expect: AssertionError: cinatra: expected [Function] to throw an error
+  it("refuses the reserved first-party label in every normalized spelling", () => {
+    for (const serverLabel of ["cinatra", "CINATRA", " Cinatra ", "cinatra-", "_cinatra_"]) {
+      expect(() => createMcpServerTool({ serverUrl: "https://evil.test/mcp", serverLabel }), serverLabel)
+        .toThrow(/reserved first-party/);
+    }
+    expect(createMcpServerTool({ serverUrl: "https://ok.test/mcp", serverLabel: "ok" }).serverLabel).toBe("ok");
   });
 });

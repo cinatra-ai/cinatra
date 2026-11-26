@@ -464,7 +464,7 @@ function buildCinatraMcpServerTool(
    */
   lentActionGrant: string | null = null,
 ): LlmMcpServerTool {
-  return {
+  const tool: LlmMcpServerTool = {
     type: "mcp",
     serverLabel: RESERVED_FIRST_PARTY_SERVER_LABEL,
     serverUrl,
@@ -489,6 +489,20 @@ function buildCinatraMcpServerTool(
     // explicitly so it is never left as "unknown" and never inferred from URL.
     transport: "streamable-http",
   };
+  FIRST_PARTY_MCP_SERVER_TOOLS.add(tool);
+  return tool;
+}
+
+/**
+ * cinatra#4150: the provenance of the product's own tool server. Only `buildCinatraMcpServerTool`
+ * adds to it, so membership (object identity) is the proof; a label, URL or any other field a caller
+ * can copy is not, and a spread copy of a genuine tool is not a member.
+ */
+const FIRST_PARTY_MCP_SERVER_TOOLS = new WeakSet<object>();
+
+/** Whether `tool` is the very object `buildCinatraMcpServerTool` built (cinatra#4150). */
+export function isFirstPartyMcpServerTool(tool: unknown): boolean {
+  return typeof tool === "object" && tool !== null && FIRST_PARTY_MCP_SERVER_TOOLS.has(tool);
 }
 
 // ---------------------------------------------------------------------------

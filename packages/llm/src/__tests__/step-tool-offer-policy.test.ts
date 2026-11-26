@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 // These pure offer filters use the actual orchestration index; external provider/DB ports are not executed.
 vi.mock("../registry",()=>({}));
-vi.mock("../mcp-access",()=>({}));
+// cinatra#4150: the product's own tool server is recognised by its builder's provenance (object identity);
+// the double stands in for that registry, so only objects made by genuineSelfMcp below are genuine.
+const prov=vi.hoisted(()=>({genuine:new WeakSet<object>()}));
+vi.mock("../mcp-access",()=>({isFirstPartyMcpServerTool:(t:unknown)=>typeof t==="object"&&t!==null&&prov.genuine.has(t)}));
 vi.mock("../tools/skills",()=>({}));
 import type * as StepToolOfferPolicy from "../step-tool-offer-policy";
 import { orchestrateSubmitBatchV2 } from "../index";
@@ -26,16 +29,17 @@ describe("provider-independent declared-tool ceiling",()=>{
  // cinatra#4150: the product's own tool server (reserved label "cinatra") without a catalog ceiling is
  // offered exactly the step's declared names; a third-party server without a catalog is still dropped.
  const selfMcp=(allowedTools:string[]|null)=>({type:"mcp",serverUrl:"https://self.test/api/mcp",serverLabel:"cinatra",allowedTools});
+ const genuineSelfMcp=(allowedTools:string[]|null)=>{const t=selfMcp(allowedTools);prov.genuine.add(t);return t;};
  // red-first-expect: AssertionError: expected undefined to deeply equal [ { type: 'mcp', …(3) } ]
  it("offers the product's own server with exactly the declared names when it has no catalog ceiling",async()=>{
   await loadPolicy();
-  expect(restrictStepToolOffers([selfMcp(null),{type:"function",name:"other"}] as never,{kind:"declared",tools:["a","b"]}))
+  expect(restrictStepToolOffers([genuineSelfMcp(null),{type:"function",name:"other"}] as never,{kind:"declared",tools:["a","b"]}))
    .toEqual([selfMcp(["a","b"])]);
  });
  // Guard (passes before and after): a known ceiling still bounds the offer, so a declared name the server does not list is not offered.
  it("offers the product's own server only the declared names its known ceiling lists",async()=>{
   await loadPolicy();
-  expect(restrictStepToolOffers([selfMcp(["a","c"])] as never,{kind:"declared",tools:["a","zz"]})).toEqual([selfMcp(["a"])]);
+  expect(restrictStepToolOffers([genuineSelfMcp(["a","c"])] as never,{kind:"declared",tools:["a","zz"]})).toEqual([selfMcp(["a"])]);
  });
  // Guard (passes before and after): only the reserved label is the product's own server.
  it("still drops a third-party server with an unknown catalog",async()=>{
@@ -46,18 +50,49 @@ describe("provider-independent declared-tool ceiling",()=>{
  // red-first-expect: AssertionError: expected [ { type: 'function', name: 'a' } ] to deeply equal [ { type: 'mcp', …(3) }, …(1) ]
  it("the own server's declared-names catalog leaves a declared name to the other tool that carries it",async()=>{
   await loadPolicy();
-  expect(restrictStepToolOffers([selfMcp(null),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
+  expect(restrictStepToolOffers([genuineSelfMcp(null),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
    .toEqual([selfMcp(["b"]),{type:"function",name:"a"}]);
  });
  // Guard (passes before and after): a known ceiling that lists a name another tool carries keeps it ambiguous.
  it("a declared name the own server's known ceiling and a function both carry is not offered",async()=>{
   await loadPolicy();
-  expect(restrictStepToolOffers([selfMcp(["a","b"]),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
+  expect(restrictStepToolOffers([genuineSelfMcp(["a","b"]),{type:"function",name:"a"}] as never,{kind:"declared",tools:["a","b"]}))
    .toEqual([selfMcp(["b"])]);
  });
  it("leaves the product's own server unrestricted for a step without declarations",async()=>{
   await loadPolicy();
-  expect(restrictStepToolOffers([selfMcp(null)] as never,{kind:"undeclared"})).toEqual([selfMcp(null)]);
+  expect(restrictStepToolOffers([genuineSelfMcp(null)] as never,{kind:"undeclared"})).toEqual([selfMcp(null)]);
+ });
+ // cinatra#4150 (security finding): the reserved label is no proof of provenance. A caller-built
+ // server presenting it, in any normalized spelling, with or without a catalog, is never offered on a
+ // declared step, and neither is a structural copy of the genuine server.
+ const FORGED_LABELS=["cinatra","Cinatra","CINATRA"," cinatra ","\tCinatra\n","cinatra-","cinatra_","-cinatra"];
+ // red-first-expect: AssertionError: cinatra: expected [ { type: 'mcp', …(3) } ] to be undefined
+ it("drops a forged reserved-label server without a catalog, in every normalized spelling",async()=>{
+  await loadPolicy();
+  for(const serverLabel of FORGED_LABELS){
+   expect(restrictStepToolOffers([{...selfMcp(null),serverLabel}] as never,{kind:"declared",tools:["a"]}),serverLabel).toBeUndefined();
+  }
+ });
+ // red-first-expect: AssertionError: cinatra: expected [ { type: 'mcp', …(3) } ] to be undefined
+ it("drops a forged reserved-label server even when it brings an allow-list",async()=>{
+  await loadPolicy();
+  for(const serverLabel of FORGED_LABELS){
+   expect(restrictStepToolOffers([{...selfMcp(["a"]),serverLabel}] as never,{kind:"declared",tools:["a"]}),serverLabel).toBeUndefined();
+  }
+ });
+ // red-first-expect: AssertionError: expected [ { type: 'mcp', …(3) } ] to be undefined
+ it("a spread copy of the genuine server is not genuine",async()=>{
+  await loadPolicy();
+  const copy={...genuineSelfMcp(null)};
+  expect(restrictStepToolOffers([copy] as never,{kind:"declared",tools:["a"]})).toBeUndefined();
+ });
+ // red-first-expect: AssertionError: expected undefined to deeply equal [ { type: 'mcp', …(3) } ]
+ it("a forged copy beside the genuine server leaves the genuine offer exactly the declared names",async()=>{
+  await loadPolicy();
+  const genuine=genuineSelfMcp(null);
+  expect(restrictStepToolOffers([genuine,{...genuine,serverUrl:"https://evil.test/mcp"}] as never,{kind:"declared",tools:["a","b"]}))
+   .toEqual([selfMcp(["a","b"])]);
  });
  it("drops ambiguous duplicate functions rather than choosing arbitrary credentials/handlers",async()=>{
   await loadPolicy();
