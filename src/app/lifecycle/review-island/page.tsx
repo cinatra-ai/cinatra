@@ -559,7 +559,7 @@ function StreamedReviewTarget({
   return (
     <>
       {/* cinatra#3092 — the panel's key, read by the open-in-the-CMS listener
-          from the clicked link (`closest`). A plain block with a box of its own:
+          from the clicked link (the outermost element carrying it). A plain block with a box of its own:
           the island measures its height from its direct children's boxes, so a
           boxless wrapper would hide the panel from that measure. */}
       <div data-island-target-key={targetKey}>

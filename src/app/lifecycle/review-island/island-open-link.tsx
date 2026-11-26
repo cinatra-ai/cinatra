@@ -17,7 +17,7 @@
 //     pinned target's addresses (`island-open-link-addresses.ts`) and registers
 //     them under that target's own key; the target's panel carries the same key
 //     as `data-island-target-key`. The listener finds the panel the clicked
-//     anchor sits in (`closest`) and checks the anchor's address, in parsed
+//     anchor sits in (the outermost element with that key) and checks the anchor's address, in parsed
 //     form, against THAT target's set only. An anchor outside every panel, or
 //     whose address only another target holds, is not taken;
 //   - then it prevents the default and posts `{ type, url }` to the parent at
@@ -75,8 +75,16 @@ function onClick(event: MouseEvent): void {
   // Not framed: nobody to ask, and nothing withholds the link.
   if (!view || view.parent === view) return;
   // The target this anchor is drawn in; outside every target, nothing.
-  const targetKey = anchor.closest(`[${ISLAND_TARGET_KEY_ATTRIBUTE}]`)?.getAttribute(ISLAND_TARGET_KEY_ATTRIBUTE);
-  if (targetKey === undefined || targetKey === null) return;
+  // The host's wrapper is the OUTERMOST element carrying the key: the island page
+  // draws it around the whole panel, and everything a display renders is inside
+  // it. A display could draw the same attribute itself, with another target's
+  // key, nearer to the anchor; the nearest match must therefore never decide.
+  let targetKey: string | null = null;
+  for (let node: Element | null = anchor; node; node = node.parentElement) {
+    const key = node.getAttribute(ISLAND_TARGET_KEY_ATTRIBUTE);
+    if (key !== null) targetKey = key;
+  }
+  if (targetKey === null) return;
   const allowed = allowedByTarget.get(targetKey);
   const address = islandOpenableAddress((anchor as HTMLAnchorElement).href);
   if (address === null || !allowed?.has(address)) return;

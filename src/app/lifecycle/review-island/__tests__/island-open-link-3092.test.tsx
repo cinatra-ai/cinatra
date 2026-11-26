@@ -203,6 +203,18 @@ describe("each target allows only its own addresses", () => {
     expect(posted).toEqual([]);
   });
 
+  it("a marker with target B's key drawn inside target A's panel does not lend B's addresses", async () => {
+    // red-first-expect: Cannot find module '/src/app/lifecycle/review-island/island-open-link'
+    const { a } = await twoTargets();
+    const forged = document.createElement("div");
+    forged.setAttribute("data-island-target-key", KEY_B);
+    a.appendChild(forged);
+    expect(click(anchor({ href: CMS_B, target: "_blank", "data-cms-open": "" }, "Open in the CMS", forged))).toBe(true);
+    // A's own address still opens from inside the forged marker: the panel is A's.
+    expect(click(anchor({ href: CMS, target: "_blank", "data-cms-open": "" }, "Open in the CMS", forged))).toBe(false);
+    expect(posted).toEqual([[{ type: MESSAGE_TYPE, url: CMS }, window.location.origin]]);
+  });
+
   it("a control outside every target panel opens nothing, even for an allowed address", async () => {
     // red-first-expect: Cannot find module '/src/app/lifecycle/review-island/island-open-link'
     await twoTargets();
