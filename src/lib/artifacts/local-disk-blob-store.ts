@@ -369,6 +369,13 @@ export function sniffMime(head: Uint8Array, declaredRaw?: string): string {
     : "application/octet-stream";
 }
 
+/** The MIME `put` stores for these bytes: the same head window and the same
+ *  sniff (cinatra#3089: a list filing judges each member as the store will,
+ *  before its first write). */
+export function detectStoredMime(bytes: Uint8Array, declaredMime?: string): string {
+  return sniffMime(bytes.subarray(0, SNIFF_HEAD_WINDOW_BYTES), declaredMime);
+}
+
 /** Injectable seams (unit tests / future backends). All optional; the
  *  defaults are the production DB-backed implementations. */
 export type LocalDiskBlobStoreOptions = {

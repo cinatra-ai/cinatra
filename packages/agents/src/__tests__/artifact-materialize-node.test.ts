@@ -3,6 +3,8 @@ import { describe, it, expect } from "vitest";
 import {
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactMaterializeNodesFromOasDocument,
+  MATERIALIZE_LIST_NODE_ID_PREFIX,
+  MAX_MATERIALIZE_LIST_VALUE_CHARS,
 } from "../artifact-binding";
 
 // ---------------------------------------------------------------------------
@@ -357,5 +359,60 @@ describe("the list call grammar (cinatra#3089)", () => {
     );
     expect(result.nodes).toHaveLength(0);
     expect(result.errors.join("\n")).toMatch(/input\.title: cannot be combined with a list call/);
+  });
+});
+
+describe("the list call refusals the runtime shaper applies, decided at compile time (cinatra#3089)", () => {
+  const listInput = (overrides?: Record<string, unknown>) =>
+    validInput({ title: undefined, memberContentField: "body", memberTitleField: "subject", ...overrides });
+  const compileErrors = (input: Record<string, unknown>, id = "persist_draft") => {
+    const result = collectArtifactMaterializeNodesFromOasDocument(
+      docWithApiNode(materializeNode({ id, input })),
+      { produces: [EXT] },
+    );
+    if (result.errors.length > 0) expect(result.nodes).toHaveLength(0);
+    return result.errors.join("\n");
+  };
+
+  it("refuses a node whose id and node_id are under the reserved list prefix", () => {
+    const id = `${MATERIALIZE_LIST_NODE_ID_PREFIX}persist_draft`;
+    expect(compileErrors(validInput({ node_id: id }), id)).toMatch(/input\.node_id: .*reserved ledger namespace/);
+  });
+
+  it("refuses a member field name that is blank or padded", () => {
+    expect(compileErrors(listInput({ memberTitleField: " subject" }))).toMatch(/input\.memberTitleField: /);
+    expect(compileErrors(listInput({ memberContentField: "  " }))).toMatch(/input\.memberContentField: /);
+  });
+
+  it("refuses memberDataFields that is not an array of field names", () => {
+    expect(compileErrors(listInput({ memberDataFields: "contactId" }))).toMatch(/input\.memberDataFields: must be an array/);
+    expect(compileErrors(listInput({ memberDataFields: ["contactId", "campaignId "] }))).toMatch(/input\.memberDataFields\[1\]: /);
+  });
+
+  it("refuses memberData that is not an object of non-blank string values within the limit", () => {
+    expect(compileErrors(listInput({ memberData: ["x"] }))).toMatch(/input\.memberData: must be an object/);
+    expect(compileErrors(listInput({ memberData: { campaignId: 7 } }))).toMatch(/input\.memberData\.campaignId: /);
+    expect(compileErrors(listInput({ memberData: { campaignId: " " } }))).toMatch(/input\.memberData\.campaignId: /);
+    expect(
+      compileErrors(listInput({ memberData: { campaignId: "x".repeat(MAX_MATERIALIZE_LIST_VALUE_CHARS + 1) } })),
+    ).toMatch(/input\.memberData\.campaignId: /);
+    expect(compileErrors(listInput({ memberData: { " campaignId": "c-1" } }))).toMatch(/input\.memberData: field name/);
+    expect(compileErrors(listInput({ memberData: { campaignId: "{{ campaign_id }}" } }))).toBe("");
+  });
+
+  it("refuses the reserved typed field runId as a member field or a call-wide value", () => {
+    expect(compileErrors(listInput({ memberDataFields: ["runId"] }))).toMatch(/cannot set the typed field "runId"/);
+    expect(compileErrors(listInput({ memberData: { runId: "r-1" } }))).toMatch(/cannot set the typed field "runId"/);
+  });
+
+  it("refuses a typed field that is both a member field and a call-wide value", () => {
+    expect(compileErrors(listInput({ memberDataFields: ["campaignId"], memberData: { campaignId: "c-1" } }))).toMatch(
+      /"campaignId" is both a member field and a call-wide value/,
+    );
+  });
+
+  it("refuses memberDataFields or memberData on a call that is not a list call", () => {
+    expect(compileErrors(validInput({ memberDataFields: ["contactId"] }))).toMatch(/input\.memberDataFields: belongs to a list call/);
+    expect(compileErrors(validInput({ memberData: { campaignId: "c-1" } }))).toMatch(/input\.memberData: belongs to a list call/);
   });
 });

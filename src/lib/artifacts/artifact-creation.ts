@@ -328,10 +328,9 @@ function isArtifactWritableType(def: NonNullable<ResolvedObjectTypeDef>): boolea
  * data UNDER the envelope (item 0.28): the writer's own facts always win, so the
  * payload the schema sees carries the type's declared fields and an unforgeable
  * envelope. Answers the refusal message, or null when the payload passes (or the
- * type is not registered — the write boundary refuses that itself). Exported so
- * a list filing (cinatra#3089) checks every member before its first write.
+ * type is not registered — the write boundary refuses that itself).
  */
-export function artifactPayloadSchemaError(
+function artifactPayloadSchemaError(
   objectType: string,
   typedData: Record<string, unknown> | undefined,
   facts: { representationRevisionId: string; digest: string; mime: string; size: number; originKind: ArtifactOriginKind; title: string | undefined },
@@ -352,6 +351,28 @@ export function artifactPayloadSchemaError(
   return parsed.success
     ? null
     : `object payload does not satisfy the declared schema for "${objectType}": ${parsed.error.message}`;
+}
+
+/**
+ * The post-stream content checks of the write boundary: the DETECTED MIME must
+ * be one the type accepts (its own `isArtifact` accepts, else the caller's
+ * `expectedAcceptMimes`), and the payload must pass the type's schema with that
+ * MIME. Answers the refusal message, or null. Exported so a list filing
+ * (cinatra#3089) judges every member exactly as this boundary will, before its
+ * first write.
+ */
+export function artifactContentRefusal(
+  objectType: string,
+  expectedAcceptMimes: readonly string[] | undefined,
+  typedData: Record<string, unknown> | undefined,
+  facts: { representationRevisionId: string; digest: string; mime: string; size: number; originKind: ArtifactOriginKind; title: string | undefined },
+): string | null {
+  const declaredAccepts =
+    objectTypeRegistry.resolve(objectType)?.isArtifact?.accepts?.file?.mimeTypes ?? expectedAcceptMimes;
+  if (Array.isArray(declaredAccepts) && declaredAccepts.length > 0 && !mimeAcceptedByAccepts(declaredAccepts, facts.mime)) {
+    return `detected MIME "${facts.mime}" is not accepted by "${objectType}" (accepts [${declaredAccepts.join(", ")}])`;
+  }
+  return artifactPayloadSchemaError(objectType, typedData, facts);
 }
 
 /**
@@ -480,19 +501,7 @@ export async function createSemanticArtifact(
         `object type "${input.objectType}" is no longer a writable artifact type (definer uninstalled mid-write)`,
       );
     }
-    const declaredAccepts =
-      preDef.isArtifact?.accepts?.file?.mimeTypes ?? input.expectedAcceptMimes;
-    if (
-      Array.isArray(declaredAccepts) &&
-      declaredAccepts.length > 0 &&
-      !mimeAcceptedByAccepts(declaredAccepts, newBlob.mimeDetected)
-    ) {
-      throw new ObjectsTypeNotRegisteredError(
-        input.objectType,
-        `detected MIME "${newBlob.mimeDetected}" is not accepted by "${input.objectType}" (accepts [${declaredAccepts.join(", ")}])`,
-      );
-    }
-    const schemaError = artifactPayloadSchemaError(input.objectType, input.typedData, {
+    const contentError = artifactContentRefusal(input.objectType, input.expectedAcceptMimes, input.typedData, {
       representationRevisionId,
       digest: newBlob.sha256,
       mime: newBlob.mimeDetected,
@@ -500,7 +509,7 @@ export async function createSemanticArtifact(
       originKind,
       title: input.title,
     });
-    if (schemaError) throw new ObjectsTypeNotRegisteredError(input.objectType, schemaError);
+    if (contentError) throw new ObjectsTypeNotRegisteredError(input.objectType, contentError);
   } catch (err) {
     await blobStore
       .deleteByStorageKey({ orgId: input.orgId, storageKey: newBlob.storageKey })

@@ -707,6 +707,17 @@ export function resolveArtifactBindingObjectType(
 
 export const ARTIFACT_MATERIALIZE_TOOL = "artifact_materialize";
 
+/** THE LIST CALL'S LIMITS (cinatra#3089), one source for the compiler, the
+ *  runtime shaper and the materializer. The ledger output ids of a list call's
+ *  members live under this prefix, so no node id may start with it. */
+export const MATERIALIZE_LIST_NODE_ID_PREFIX = "cinatra:list/";
+/** The most members one list call files. */
+export const MAX_MATERIALIZE_LIST_MEMBERS = 50;
+/** The longest typed-data value a list call files. */
+export const MAX_MATERIALIZE_LIST_VALUE_CHARS = 500;
+/** Typed-data names a list call never sets: the run id is the host's. */
+export const MATERIALIZE_LIST_RESERVED_DATA_FIELDS: ReadonlySet<string> = new Set(["runId"]);
+
 /** The host's image tool on the passthrough route (cinatra#3032): a prompt in, a
  *  picture filed under the extension the call names. */
 export const ARTIFACT_IMAGE_TOOL = "artifact_image_generate";
@@ -951,14 +962,58 @@ export function collectArtifactMaterializeNodesFromOasDocument(
     // both member fields together, and no top-level title, append or
     // contentJsonField (every member is a new artifact with its own title).
     const isList = input.memberContentField !== undefined || input.memberTitleField !== undefined;
+    const isFieldName = (value: unknown): value is string =>
+      typeof value === "string" && value.trim().length > 0 && value === value.trim();
     if (isList) {
       for (const field of ["memberContentField", "memberTitleField"] as const) {
-        if (typeof input[field] !== "string" || (input[field] as string).length === 0) {
-          fieldError(field, "a list call names both memberContentField and memberTitleField (non-empty field names)");
+        if (!isFieldName(input[field])) {
+          fieldError(field, "a list call names both memberContentField and memberTitleField (non-blank field names with no surrounding whitespace)");
         }
       }
       for (const field of ["artifactId", "baseRepresentationRevisionId", "contentJsonField", "title"] as const) {
         if (input[field] !== undefined) fieldError(field, "cannot be combined with a list call — every member is a new artifact with its own title");
+      }
+      // The typed data of every member: the shaper's rules on what the node
+      // declares literally (a placeholder value is checked at run time).
+      const dataFields: string[] = [];
+      if (input.memberDataFields !== undefined) {
+        if (!Array.isArray(input.memberDataFields)) {
+          fieldError("memberDataFields", "must be an array of field names");
+        } else {
+          input.memberDataFields.forEach((name: unknown, i: number) => {
+            if (isFieldName(name)) dataFields.push(name);
+            else fieldError(`memberDataFields[${i}]`, `must be a field name with no surrounding whitespace (got ${JSON.stringify(name)})`);
+          });
+        }
+      }
+      const fixedNames: string[] = [];
+      if (input.memberData !== undefined) {
+        if (!isPlainObject(input.memberData)) {
+          fieldError("memberData", "must be an object of string values");
+        } else {
+          for (const [name, value] of Object.entries(input.memberData)) {
+            if (isFieldName(name)) fixedNames.push(name);
+            else fieldError("memberData", `field name ${JSON.stringify(name)} must be non-blank with no surrounding whitespace`);
+            if (
+              typeof value !== "string" ||
+              (!isTemplated(value) && (value.trim().length === 0 || value.trim().length > MAX_MATERIALIZE_LIST_VALUE_CHARS))
+            ) {
+              fieldError(`memberData.${name}`, `must be a non-blank string of at most ${MAX_MATERIALIZE_LIST_VALUE_CHARS} characters`);
+            }
+          }
+        }
+      }
+      for (const name of [...dataFields, ...fixedNames]) {
+        if (MATERIALIZE_LIST_RESERVED_DATA_FIELDS.has(name)) {
+          fieldError("memberData", `a list call cannot set the typed field "${name}" (it is the host's)`);
+        }
+      }
+      for (const name of fixedNames) {
+        if (dataFields.includes(name)) fieldError("memberData", `the typed field "${name}" is both a member field and a call-wide value`);
+      }
+    } else {
+      for (const field of ["memberDataFields", "memberData"] as const) {
+        if (input[field] !== undefined) fieldError(field, "belongs to a list call (memberContentField + memberTitleField)");
       }
     }
     const requiredStrings = isAppend
@@ -986,6 +1041,12 @@ export function collectArtifactMaterializeNodesFromOasDocument(
         "node_id",
         `must be a literal string equal to this ApiNode's id ("${nodeId}") — ` +
           `it is the idempotency-ledger output identity (got ${JSON.stringify(declaredNodeId)})`,
+      );
+    } else if (declaredNodeId.trim().startsWith(MATERIALIZE_LIST_NODE_ID_PREFIX)) {
+      // The runtime shaper refuses this prefix on every call (cinatra#3089).
+      fieldError(
+        "node_id",
+        `"${declaredNodeId}" must not start with "${MATERIALIZE_LIST_NODE_ID_PREFIX}" (a reserved ledger namespace)`,
       );
     } else if (declaredNodeId !== nodeId) {
       fieldError(

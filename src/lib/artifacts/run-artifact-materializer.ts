@@ -5,6 +5,7 @@ import {
   ARTIFACT_IMAGE_TOOL,
   ARTIFACT_MATERIALIZE_TOOL,
   collectArtifactBindingsFromOasDocument,
+  MATERIALIZE_LIST_NODE_ID_PREFIX,
   parseArtifactBindingDeclaration,
   producesObjectTypeIdForExtension,
   readArtifactReviewTargetsInput,
@@ -25,7 +26,7 @@ import {
   postgresSchema,
 } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
-import { artifactPayloadSchemaError, createSemanticArtifact } from "./artifact-creation";
+import { artifactContentRefusal, createSemanticArtifact } from "./artifact-creation";
 import { isPublishCallInFlightAbort, PUBLISH_CALL_IN_FLIGHT_CODE } from "@/lib/lifecycle/lifecycle-emit";
 import {
   MAX_AUTHORED_CONTENT_BYTES,
@@ -1729,11 +1730,11 @@ export async function materializeToolArtifact(input: {
 
 /**
  * The reserved ledger output-id namespace of a list call's members (cinatra#3089).
- * The passthrough shaper refuses a node id in it, so a member's row never shares
+ * The compiler and the passthrough shaper refuse a node id in it, so a member's row never shares
  * an output id with a node's own row; the node is JSON-quoted, which is
  * self-delimiting, so two (node, position) pairs never give one string.
  */
-export const MATERIALIZE_LIST_OUTPUT_ID_PREFIX = "cinatra:list/";
+export const MATERIALIZE_LIST_OUTPUT_ID_PREFIX = MATERIALIZE_LIST_NODE_ID_PREFIX;
 
 /** The ledger output id of member `position` (0-based) of the list a node files. */
 export function materializeListMemberOutputId(nodeId: string, position: number): string {
@@ -1750,8 +1751,9 @@ function memberTypedData(data: Record<string, string> | undefined, runId: string
  * per member, in member order, each a `materialize_tool` write of the same node
  * under its own ledger identity (`materializeListMemberOutputId`), with the
  * member's typed data and the host's run id. Every member is authorized before
- * the first write (the produces check, the form, the cap, the declared type and
- * its typed data against the type's schema), so a refused member files nothing. A write that fails part-way leaves the members written so far;
+ * the first write (the produces check, the form, the cap, the declared type, and
+ * the creation boundary's content checks on the MIME the store detects for the
+ * member's bytes), so a refused member files nothing. A write that fails part-way leaves the members written so far;
  * the same call again reuses them by their ledger rows and files the rest, so a
  * retried call answers the one list. Answers the filed pairs in member order,
  * or the first refusal.
@@ -1778,6 +1780,7 @@ export async function materializeToolArtifactList(input: {
       input.verifiedStepId !== undefined && input.verifiedStepId === input.nodeId ? { nodeId: input.nodeId } : {};
     let target: ResolvedBoundTarget | null = null;
     let reviewed = false;
+    const { detectStoredMime } = await import("./local-disk-blob-store");
     for (const [index, member] of input.members.entries()) {
       if (member.title.trim().length === 0) {
         return { ok: false, error: `member ${index + 1}: title must be a non-empty string` };
@@ -1795,15 +1798,24 @@ export async function materializeToolArtifactList(input: {
       if (!authorized.ok) return { ok: false, error: `member ${index + 1}: ${authorized.error}` };
       target = authorized.target;
       reviewed = authorized.reviewed;
-      const schemaError = artifactPayloadSchemaError(target.objectTypeId, memberTypedData(member.data, input.runId), {
-        representationRevisionId: randomUUID(),
-        digest: createHash("sha256").update(member.content, "utf8").digest("hex"),
-        mime: input.mime,
-        size: Buffer.byteLength(member.content, "utf8"),
-        originKind: reviewed ? "live_generator" : "agent_generated",
-        title: member.title.trim(),
-      });
-      if (schemaError) return { ok: false, error: `member ${index + 1}: ${schemaError}` };
+      // The creation boundary's own content checks, on the MIME the store will
+      // detect for these bytes (a declared type the bytes contradict is stored
+      // as detected, or refused, exactly as on the single path).
+      const bytes = Buffer.from(member.content, "utf8");
+      const contentError = artifactContentRefusal(
+        target.objectTypeId,
+        target.acceptedFileMimeTypes,
+        memberTypedData(member.data, input.runId),
+        {
+          representationRevisionId: randomUUID(),
+          digest: createHash("sha256").update(bytes).digest("hex"),
+          mime: detectStoredMime(bytes, input.mime),
+          size: bytes.byteLength,
+          originKind: reviewed ? "live_generator" : "agent_generated",
+          title: member.title.trim(),
+        },
+      );
+      if (contentError) return { ok: false, error: `member ${index + 1}: ${contentError}` };
     }
     const ownership = await resolveRunScopeOwnership({
       templateId: input.templateId,

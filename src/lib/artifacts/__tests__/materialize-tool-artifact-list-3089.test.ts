@@ -76,8 +76,8 @@ vi.mock("../resolve-bound-artifact-type", () => ({
 // The schema check is the REAL one the creation boundary runs (cinatra#3089).
 vi.mock("../artifact-creation", async () => ({
   createSemanticArtifact: createSemanticArtifactMock,
-  artifactPayloadSchemaError: (await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation"))
-    .artifactPayloadSchemaError,
+  artifactContentRefusal: (await vi.importActual<typeof import("../artifact-creation")>("../artifact-creation"))
+    .artifactContentRefusal,
 }));
 vi.mock("../materialization-ledger", async () => ({
   // cinatra#4762: the reused revision's restamp, as the module ships it.

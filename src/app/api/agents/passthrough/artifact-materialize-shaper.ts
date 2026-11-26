@@ -1,6 +1,16 @@
 // Generic server-side seam shaper for the deterministic `artifact_materialize`
-// passthrough tool (cinatra#925). Pure module (zero project deps) so it is
-// unit-testable in isolation — same posture as ./test-delivery-seam.
+// passthrough tool (cinatra#925). Pure module (its only project dep is the
+// grammar's list limits, shared with the compiler) so it is unit-testable in
+// isolation — same posture as ./test-delivery-seam.
+
+import {
+  MATERIALIZE_LIST_NODE_ID_PREFIX,
+  MATERIALIZE_LIST_RESERVED_DATA_FIELDS,
+  MAX_MATERIALIZE_LIST_MEMBERS,
+  MAX_MATERIALIZE_LIST_VALUE_CHARS,
+} from "@cinatra-ai/agents/artifact-binding";
+
+export { MATERIALIZE_LIST_NODE_ID_PREFIX, MAX_MATERIALIZE_LIST_MEMBERS, MAX_MATERIALIZE_LIST_VALUE_CHARS };
 //
 // Unlike the per-agent `_shape` opt-ins, the contract is GENERIC: the ApiNode
 // wires flow variables straight to {extension, content, declaredMime, title,
@@ -46,19 +56,6 @@ export type ShapedArtifactMaterializeInput = {
 
 /** One member of a list call: its title, its bytes and the typed data it is filed with. */
 export type ShapedArtifactMaterializeMember = { title: string; content: string; data?: Record<string, string> };
-
-/** The reserved ledger namespace of list members; the materializer's `MATERIALIZE_LIST_OUTPUT_ID_PREFIX`
- *  (restated: this module has zero deps). */
-export const MATERIALIZE_LIST_NODE_ID_PREFIX = "cinatra:list/";
-
-/** The most members one list call files. */
-export const MAX_MATERIALIZE_LIST_MEMBERS = 50;
-
-/** The longest typed-data value a list call files. */
-export const MAX_MATERIALIZE_LIST_VALUE_CHARS = 500;
-
-/** Typed-data names a list call never sets: the run id is the host's (a type keys a run-scoped identity on it). */
-const RESERVED_MEMBER_DATA_FIELDS = new Set(["runId"]);
 
 /** `@scope/package:local-id` — mirrors the binding grammar regex. */
 const OBJECT_TYPE_ID_RE = /^@[\w-]+\/[\w-]+:[\w-]+$/;
@@ -293,7 +290,7 @@ function shapeListMembers(raw: Record<string, unknown>): ShapedArtifactMateriali
     }
   }
   for (const name of [...dataFields, ...Object.keys(fixed)]) {
-    if (RESERVED_MEMBER_DATA_FIELDS.has(name)) {
+    if (MATERIALIZE_LIST_RESERVED_DATA_FIELDS.has(name)) {
       throw new Error(`artifact_materialize a list call cannot set the typed field "${name}" (it is the host's)`);
     }
     if (dataFields.includes(name) && Object.prototype.hasOwnProperty.call(fixed, name)) {
