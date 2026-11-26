@@ -94,6 +94,32 @@ describe("OAS-RUNTIME-013: a review step's targets are ones the run can supply (
     expect(findings[0].message).toContain("not an InputMessageNode listed in the root flow's nodes");
   });
 
+  it("does not read the marker inside an ApiNode's data payload", () => {
+    const api = {
+      component_type: "ApiNode",
+      id: "call",
+      name: "call",
+      url: "https://example.test/api",
+      http_method: "POST",
+      data: { payload: { metadata: { cinatra: MARK } } },
+    };
+    expect(reviewFindings(flow({ call: api }, ["call"]))).toEqual([]);
+  });
+
+  it("does not read the marker inside the payload of a node in a nested flow", () => {
+    const api = {
+      component_type: "ApiNode",
+      id: "call",
+      name: "call",
+      url: "https://example.test/api",
+      http_method: "POST",
+      data: { items: [{ metadata: { cinatra: MARK } }] },
+    };
+    const inner = flow({ call: api }, ["call"]);
+    const doc = flow({ sub: { component_type: "FlowNode", id: "sub", name: "sub", subflow: inner } }, ["sub"]);
+    expect(reviewFindings(doc)).toEqual([]);
+  });
+
   it("does not judge an unmarked step", () => {
     expect(reviewFindings(flow({ review: reviewStep("review", {}) }, ["review"]))).toEqual([]);
   });

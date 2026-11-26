@@ -463,10 +463,25 @@ function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
 ): void {
+  walkFlowComponents(parsed, (node, path) => {
+    if (node.component_type === "ApiNode") visit(node, path);
+  });
+}
+
+/**
+ * Every flow component of a flow document (an object with a string
+ * `component_type`), nested subflows included. The walk follows only the
+ * component links ($referenced_components, subflow, a ParallelFlowNode's
+ * subflows), never a node's payload (data, metadata, inputs, outputs).
+ */
+function walkFlowComponents(
+  parsed: Record<string, unknown>,
+  visit: (node: Record<string, unknown>, path: string) => void,
+): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
-    if (o.component_type === "ApiNode") {
+    if (typeof o.component_type === "string") {
       visit(o, path);
     }
     const refs = o.$referenced_components;
@@ -1191,7 +1206,7 @@ function scanReviewStepTargets(parsed: Record<string, unknown>): ReviewFinding[]
   const startInputs = new Set(
     (root?.startNode?.inputTitles ?? []).filter((t) => root!.flowInputTitles.includes(t)),
   );
-  walkComponentObjects(parsed, (node, path) => {
+  walkFlowComponents(parsed, (node, path) => {
     const target = readArtifactReviewTargetsInput(node);
     if (target === undefined) return;
     let why: string | null = null;
