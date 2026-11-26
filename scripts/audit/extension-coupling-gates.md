@@ -606,21 +606,46 @@ is a tool of the inventory or a package name.
 
 | Reading | Where it comes from |
 | --- | --- |
-| A pack USES a tool | `cinatra.consumes[].primitive` in `package.json` and its mirror at `metadata.cinatra.consumes` in `cinatra/oas.json`; every flow `ApiNode`'s `data.tool` (a `data` block written as JSON text is parsed first); every flow node's `metadata.cinatra.tools`; every literal first argument of `callPrimitive` in the pack's shipped code, read with the TypeScript parser (all code files of the pack except dependencies, build output and tests) |
+| A pack USES a tool | `cinatra.consumes[].primitive` in `package.json` and its mirror at `metadata.cinatra.consumes` in `cinatra/oas.json`; every flow `ApiNode`'s `data.tool` (a `data` block written as JSON text is parsed first); every flow node's `metadata.cinatra.tools`. A consumes entry carries its `requirement`; a flow use is read as required (the step calls the tool whenever it runs). Code is not read for tool names (see the port rule below) |
 | The tool's OWNER | the file the generated authz inventory (`src/lib/authz/__generated__/inventory.json`) names for the tool: a file under `extensions/<scope>/<pack>/` belongs to that pack (its `package.json` name), any other file is core |
-| The DECLARED dependency | an entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner |
+| The DECLARED dependency | the first entry of the consumer's `cinatra.dependencies` whose `packageName` is the owner, judged as the authoritative validator judges it (`validateDependencyDeclarations` in `packages/extensions/src/dependency-declaration-validator.ts`): a REQUIRED use needs an install-blocking edge (required and not peer, `isInstallBlockingEdge` in `packages/extensions/src/dependency-closure.ts`); an OPTIONAL use is backed by any edge. The gate mirrors the rule (a plain `.mjs` cannot load the TypeScript package), and a drift test reads both sources |
 
 A use of the pack's own tool or of a core tool is no finding. The classes,
 each listed in `extension-produces-deps-gate.baseline.json` as
 `{ consumer: { key: reason } }`:
 
 - `undeclaredToolOwnerDeps`: the owner is another pack, and it is not in the
-  consumer's `cinatra.dependencies`.
+  consumer's `cinatra.dependencies`, or it is there as an optional or peer
+  edge while the use is required (the validator's `REQUIREMENT_MISMATCH`).
 - `unownedTools`: the owner cannot be decided: the inventory holds no entry
   for the tool, names a file in no pack of the synced tree, or names two
   owners. Reported, never skipped.
-- `dynamicToolNames`: a `callPrimitive` call or an `ApiNode` `data.tool` that
-  is not a literal tool name.
+- `dynamicToolNames`: an `ApiNode` `data.tool` that is not a literal tool
+  name.
+- `undeclaredPortUses`: a code file of a pack that references the host's
+  primitive-call port (`callPrimitive`) while the pack declares no consumed
+  primitive in `package.json#cinatra.consumes`. Keyed by the file.
+
+The port rule needs no data flow. Which object a `callPrimitive` belongs to
+cannot be read from code without following aliases (`const invoke =
+ctx.mcp.callPrimitive` is safe, because the host's port is an arrow closure),
+so the gate does not read tool names from code at all. A pack whose shipped
+code (every code file except dependencies, build output and tests) names the
+port's method as an identifier, a property name or a string literal, wherever
+and however it is used (read with the TypeScript parser, so a comment does not
+count), must declare the tools it calls in `cinatra.consumes`, which the owner
+rule above reads. A same-named method of another object in a pack counts too:
+the rule errs towards reporting. Core files are not scanned. The limit: the
+rule relies on the manifest for WHICH tools a pack calls. The host does not
+check a call against `cinatra.consumes`: `makeCallPrimitive`
+(`src/lib/extension-host-context.ts`) passes any name to `callHostPrimitive`
+(`src/lib/extension-self-mcp.ts`), which checks only that the primitive exists
+and the caller's authorization. A pack that declares one tool and calls
+another is not seen.
+
+Every map the rule keys by a name from data (a tool, a pack, a file) is a
+`Map` or an object without a prototype, so a tool named `constructor`,
+`__proto__` or `toString` is a finding like any other.
 
 A shape the rule cannot read fails the gate and is never listed: a manifest
 or flow that does not parse, a `metadata.cinatra.tools` that is not a list of
@@ -643,12 +668,13 @@ Seeded on 2026-11-26 at the pins of both extension locks: 70 tool uses, 3
 are not served through `server.registerTool`: `extension_tool`,
 `artifact_content_read`, `artifact_materialize`, `artifact_image_generate`,
 `email_outreach_send_initial_start`, `email_outreach_send_initial_status`),
-0 `dynamicToolNames`.
+0 `dynamicToolNames`, 0 `undeclaredPortUses` (no pinned pack references the
+port).
 
-What it cannot see: a pack outside both extension locks; a tool name built at
-run time from a literal the code does not pass straight to `callPrimitive`
-(it is a `dynamicToolNames` finding, not an owner); a tool reached through a
-host route other than the forms above.
+What it cannot see: a pack outside both extension locks; which tools a pack's
+code calls through the port (only that it references the port; the manifest
+names the tools); a tool reached through a host route other than the forms
+above.
 
 ## Floors compared with the base branch (cinatra#3832)
 

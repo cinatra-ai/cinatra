@@ -391,7 +391,7 @@ function writeJson(path, value) {
 /** The tool-owner classes (cinatra#4874), empty: a fixture baseline that
  *  names none of them gets these, so the produced-artifact tests stay about
  *  their own classes. */
-const EMPTY_TOOL_CLASSES = { undeclaredToolOwnerDeps: {}, unownedTools: {}, dynamicToolNames: {} };
+const EMPTY_TOOL_CLASSES = { undeclaredToolOwnerDeps: {}, unownedTools: {}, dynamicToolNames: {}, undeclaredPortUses: {} };
 
 /** A minimal repo root: extensions/<vendor>/<name> (+ optional code files),
  *  the authz inventory (empty unless given) and the baseline location. */
@@ -920,38 +920,123 @@ test("live: tools named in the flow (ApiNode data.tool, a step's metadata.cinatr
   }
 });
 
-test("live: callPrimitive in shipped code is read by the parser; a non-literal name is a finding; tests are not read", () => {
-  const root = makeFixtureRoot({
-    extensions: {
-      "consumer-agent": {
-        packageJson: consumerPkg([]),
-        files: {
-          "src/register.ts": [
-            "export async function register(ctx: any) {",
-            '  await ctx.mcp.callPrimitive("owner_tool", {});',
-            "  const name = pick();",
-            "  await ctx.mcp.callPrimitive(name, {});",
-            "}",
-          ].join("\n"),
-          // Only a comment names the method here: the parser finds no call.
-          "src/notes.ts": '// ctx.mcp.callPrimitive("comment_only_tool", {})\nexport const x = 1;\n',
-          "src/__tests__/register.test.ts": 'ctx.mcp.callPrimitive("test_only_tool", {});\n',
-        },
-      },
-      "owner-connector": { packageJson: ownerPkg },
-    },
+// red-first-expect: The input did not match the regular expression /\[undeclaredPortUses\] NEW @cinatra-ai\/consumer-agent :: src\/alias\.ts/
+test("live: code that references the primitive-call port in any form needs a cinatra.consumes declaration; comments and tests are not read", () => {
+  const files = {
+    // An alias: no call through the method name at all.
+    "src/alias.ts": "export function make(ctx: any) {\n  const invoke = ctx.mcp.callPrimitive;\n  return invoke;\n}\n",
+    // A destructuring and a bracket access.
+    "src/destructure.ts": 'export const f = ({ callPrimitive }: any) => callPrimitive;\nexport const g = (m: any) => m["callPrimitive"];\n',
+    // A same-named method of another object: counted too (errs towards reporting).
+    "src/other.ts": 'export const h = (client: any) => client.callPrimitive("x");\n',
+    // Only a comment names the method here: the parser finds no reference.
+    "src/notes.ts": "// ctx.mcp.callPrimitive(\"comment_only_tool\", {})\nexport const x = 1;\n",
+    "src/__tests__/register.test.ts": 'ctx.mcp.callPrimitive("test_only_tool", {});\n',
+  };
+  const undeclared = makeFixtureRoot({
+    extensions: { "consumer-agent": { packageJson: consumerPkg([]), files } },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: toolInventory,
+  });
+  const declared = makeFixtureRoot({
+    extensions: { "consumer-agent": { packageJson: consumerPkg([], [consume("core_tool")]), files } },
     baseline: NO_PRODUCES_FINDINGS,
     inventory: toolInventory,
   });
   try {
+    const res = runGate(undeclared);
+    assert.equal(res.status, 1, res.out);
+    for (const f of ["alias", "destructure", "other"]) {
+      assert.match(res.out, new RegExp(`\\[undeclaredPortUses\\] NEW @cinatra-ai\\/consumer-agent :: src\\/${f}\\.ts`));
+    }
+    assert.match(res.out, /declares no consumed primitive in package\.json cinatra\.consumes/);
+    assert.doesNotMatch(res.out, /notes\.ts|register\.test\.ts/);
+    // Code is not read for tool names any more.
+    assert.doesNotMatch(res.out, /dynamicToolNames\] NEW|comment_only_tool|test_only_tool/);
+    const ok = runGate(declared);
+    assert.equal(ok.status, 0, ok.out);
+    assert.match(ok.out, /0 undeclaredPortUses/);
+  } finally {
+    for (const root of [undeclared, declared]) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// red-first-expect: required use + optional edge: [extension-produces-deps] OK — ... tool-owner rule: 1 tool uses, 0 undeclaredToolOwnerDeps, 0 unownedTools, 0 dynamicToolNames listed.
+test("live: a declared owner backs a use exactly as the dependency validator accepts it", () => {
+  const edge = (requirement, edgeType = "runtime") => ({ ...ownerEdge, requirement, edgeType });
+  const cases = [
+    { name: "required use + optional edge", use: "required", dep: edge("optional"), fails: true },
+    { name: "required use + required peer edge", use: "required", dep: edge("required", "peer"), fails: true },
+    { name: "required use + required runtime edge", use: "required", dep: edge("required"), fails: false },
+    { name: "required use + required install-time edge", use: "required", dep: edge("required", "install-time"), fails: false },
+    { name: "optional use + optional edge", use: "optional", dep: edge("optional"), fails: false },
+    { name: "optional use + optional peer edge", use: "optional", dep: edge("optional", "peer"), fails: false },
+  ];
+  for (const c of cases) {
+    const root = makeFixtureRoot({
+      extensions: {
+        "consumer-agent": { packageJson: consumerPkg([c.dep], [{ primitive: "owner_tool", requirement: c.use }]) },
+        "owner-connector": { packageJson: ownerPkg },
+      },
+      baseline: NO_PRODUCES_FINDINGS,
+      inventory: toolInventory,
+    });
+    try {
+      const res = runGate(root);
+      assert.equal(res.status, c.fails ? 1 : 0, `${c.name}: ${res.out}`);
+      if (c.fails) {
+        assert.match(res.out, /\[undeclaredToolOwnerDeps\] NEW @cinatra-ai\/consumer-agent :: owner_tool/, c.name);
+        assert.match(res.out, /which is not install-blocking/, c.name);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+// red-first-expect: [extension-produces-deps] OK — ... tool-owner rule: 3 tool uses, 0 undeclaredToolOwnerDeps, 0 unownedTools, 0 dynamicToolNames listed.
+test("live: tools named like Object.prototype keys are findings like any other", () => {
+  const names = ["constructor", "__proto__", "toString"];
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([], names.map(consume)) },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: {
+      primitives: names.map((n) => ({ primitiveName: n, file: "extensions/example-org/owner-connector/src/mcp/module.ts" })),
+    },
+  });
+  try {
     const res = runGate(root);
     assert.equal(res.status, 1, res.out);
-    assert.match(res.out, /\[undeclaredToolOwnerDeps\] NEW @cinatra-ai\/consumer-agent :: owner_tool/);
-    assert.match(res.out, /\[dynamicToolNames\] NEW @cinatra-ai\/consumer-agent :: src\/register\.ts: callPrimitive\(name\)/);
-    assert.doesNotMatch(res.out, /comment_only_tool|test_only_tool/);
+    for (const n of names) assert.match(res.out, new RegExp(`\\[undeclaredToolOwnerDeps\\] NEW @cinatra-ai\\/consumer-agent :: ${n}\\b`));
+    // Written to the list, each is kept as its own entry and then tolerated.
+    const written = runGate(root, ["--write-baseline"]);
+    assert.equal(written.status, 0, written.out);
+    const baseline = JSON.parse(readFileSync(join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json"), "utf8"));
+    assert.deepEqual(Object.keys(baseline.undeclaredToolOwnerDeps["@cinatra-ai/consumer-agent"]).sort(), [...names].sort());
+    const again = runGate(root);
+    assert.equal(again.status, 0, again.out);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("the install-blocking reading mirrors the dependency closure and the validator (drift guard)", () => {
+  const predicate = 'return dep.requirement === "required" && dep.edgeType !== "peer";';
+  const read = (rel) => readFileSync(join(REPO_ROOT_FOR_TESTS, rel), "utf8");
+  const closure = read("packages/extensions/src/dependency-closure.ts");
+  const validator = read("packages/extensions/src/dependency-declaration-validator.ts");
+  const types = read("packages/extensions/src/canonical-types.ts");
+  assert.ok(closure.includes(`export function isInstallBlockingEdge(dep: ExtensionDependency): boolean {\n  ${predicate}`));
+  assert.ok(validator.includes(`function isInstallBlockingEdge(dep: ExtensionDependency): boolean {\n  ${predicate}`));
+  // The validator's requirement rule the gate mirrors: only a REQUIRED use
+  // needs an install-blocking edge; any declared edge backs an optional one.
+  assert.ok(validator.includes('if (c.requirement === "required" && !isInstallBlockingEdge(declared)) {'));
+  assert.ok(types.includes('export const DEPENDENCY_REQUIREMENTS = ["required", "optional"] as const;'));
+  assert.ok(types.includes('export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;'));
+  assert.ok(readFileSync(GATE_SCRIPT, "utf8").includes(predicate));
 });
 
 test("live: an unreadable manifest, flow, step tool list, code file or inventory is reported, never skipped", () => {
@@ -1062,6 +1147,7 @@ test("live: the shared floor base guard — the introducing change seeds once, g
     undeclaredToolOwnerDeps: { "@cinatra-ai/consumer-agent": { owner_tool: "seeded with the rule" } },
     unownedTools: { "@cinatra-ai/consumer-agent": { unknown_one: "seeded with the rule" } },
     dynamicToolNames: {},
+    undeclaredPortUses: {},
   };
   const env = (ref) => ({ ...NO_BASE_ENV, EXTENSION_PRODUCES_DEPS_BASE: ref });
   try {
