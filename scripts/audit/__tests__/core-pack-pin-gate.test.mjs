@@ -125,6 +125,21 @@ const c = "${SHA.slice(0, 6)}"; const d = "${SHA.slice(0, 8)}aa"; const e = "${S
     expect(Object.keys(scan(files))).toEqual(Object.keys(counted).sort().map((k) => `${T}${k}.test.ts :: ${DEMO}`));
   });
 
+  it("exempts exactly the module specifier of a type load; every other string of the same form counts", () => {
+    const counted = {
+      typeArgument: `type R = import("./neutral").Registry<"${DEMO}">;`,
+      typeofAttribute: `type R = typeof import("./neutral", { with: { "resolution-mode": "${DEMO}" } });`,
+      importAttribute: `import type { X } from "./neutral" with { type: "${DEMO}" };`,
+      exportAttribute: `export type { X } from "./neutral" with { type: "${DEMO}" };`,
+      specifierAndArgument: `type R = import("${DEMO}").Registry<"${DEMO}">;`,
+    };
+    const files = {};
+    for (const [k, v] of Object.entries(counted)) files[`${T}${k}.test.ts`] = v;
+    const found = scan(files);
+    expect(Object.keys(found)).toEqual(Object.keys(counted).sort().map((k) => `${T}${k}.test.ts :: ${DEMO}`));
+    expect(found[`${T}specifierAndArgument.test.ts :: ${DEMO}`]).toBe(1);
+  });
+
   it("does not read comments, made-up packs, or segments joined by code (out of scope: the first limit)", () => {
     const src = `// reads extensions/example-org/demo-agent/cinatra/oas.json
 /* ${DEMO} */

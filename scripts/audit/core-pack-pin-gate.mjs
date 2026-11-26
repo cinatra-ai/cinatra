@@ -13,9 +13,9 @@
 // or more leading hex digits of a pinned commit (`resolvedSha`). The pinned
 // extensions are the rows of the two committed locks.
 //
-// One exemption, by structure: the module specifier of an `import type` /
-// `export type` declaration and of an `import("...")` type. Nothing else is
-// read from the syntax tree. A name or path that code assembles from separate
+// One exemption, by structure: the module specifier string, and only it, of an
+// `import type` / `export type` declaration and of an `import("...")` type; every
+// other string of those forms (a type argument, an import attribute) is read. A name or path that code assembles from separate
 // strings is NOT seen (scripts/audit/extension-coupling-gates.md lists the
 // limits). A tracked symbolic link is a finding by itself (a linked fixture
 // cannot be judged); a file that does not parse fails the check.
@@ -136,19 +136,20 @@ export function stringsOfScript(rel, text) {
     throw new ScannerError(`${TAG} ${rel} does not parse (${ts.flattenDiagnosticMessageText(d.messageText, " ")} at offset ${d.start}); the check fails closed`);
   }
   const out = [];
+  const specifiers = new Set(); // the module-name literal of each type-only load: the one exempt string of it
   const visit = (node) => {
-    const typeOnlyLoad =
-      (ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) ||
-      (ts.isExportDeclaration(node) && node.isTypeOnly) ||
-      (ts.isImportEqualsDeclaration(node) && node.isTypeOnly) ||
-      ts.isImportTypeNode(node);
-    if (typeOnlyLoad) return;
+    // A parent is visited before its children, so the literal is in the set before it is reached.
+    if (ts.isImportDeclaration(node) && node.importClause?.isTypeOnly) specifiers.add(node.moduleSpecifier);
+    else if (ts.isExportDeclaration(node) && node.isTypeOnly && node.moduleSpecifier) specifiers.add(node.moduleSpecifier);
+    else if (ts.isImportEqualsDeclaration(node) && node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)) specifiers.add(node.moduleReference.expression);
+    else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) specifiers.add(node.argument.literal);
     if (
-      ts.isStringLiteral(node) ||
-      ts.isNoSubstitutionTemplateLiteral(node) ||
-      ts.isTemplateHead(node) ||
-      ts.isTemplateMiddle(node) ||
-      ts.isTemplateTail(node)
+      !specifiers.has(node) &&
+      (ts.isStringLiteral(node) ||
+        ts.isNoSubstitutionTemplateLiteral(node) ||
+        ts.isTemplateHead(node) ||
+        ts.isTemplateMiddle(node) ||
+        ts.isTemplateTail(node))
     ) {
       out.push(node.text);
     }
