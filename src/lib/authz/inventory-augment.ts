@@ -328,6 +328,10 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // read-tier deterministic parse of the gate envelope + ledger send-count.
   email_test_delivery_parse_action: { resourceType: "agent_run", action: "read",    status: "enforced" },
   email_test_delivery_run_send:      { resourceType: "agent_run", action: "execute", status: "enforced" },
+  // cinatra#4150: the pinned plan of a campaign test send. Sends nothing; under
+  // the send's own execute-tier run authz, since a refusal it answers is recorded
+  // on the run's test-send ledger exactly as the send records it.
+  campaign_test_send_plan:           { resourceType: "agent_run", action: "execute", status: "enforced" },
 
   // ───── extensions ─────
   extensions_archive:             { resourceType: "extension_registry", action: "uninstall", status: "enforced" },
