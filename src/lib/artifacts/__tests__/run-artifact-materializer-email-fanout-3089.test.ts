@@ -25,6 +25,14 @@
  *   L1 the ledger reads and the reuse row the entry relies on, as SQL
  *   E1 the ledger's path CHECK admits the fan-out's path in the fresh-install
  *      bootstrap and in the operator-upgrade migration, whose down narrows back
+ *   P1 a message bound to an approved revision records the fan-out row under
+ *      the message identity, writes no artifact and no claim, and a retry
+ *      returns the same row
+ *   P2 one binding per message: a second revision (other text, so another
+ *      content hash) is refused, also when two binds run at once
+ *   P3 a run outside the organization, or a type no pack claims, binds nothing
+ *   P4 the stored revision decides: a revision of another artifact or
+ *      organization, and a text that is not the stored text, bind nothing
  */
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -43,6 +51,8 @@ const {
   resolveBoundArtifactTargetMock,
   enqueueArtifactMatchRunMock,
   readArtifactTypeClaimsForOrgMock,
+  connectMock,
+  readRepresentationTextMock,
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
@@ -57,11 +67,16 @@ const {
   resolveBoundArtifactTargetMock: vi.fn(),
   enqueueArtifactMatchRunMock: vi.fn(async (): Promise<void> => {}),
   readArtifactTypeClaimsForOrgMock: vi.fn(),
+  connectMock: vi.fn(),
+  readRepresentationTextMock: vi.fn(),
 }));
 
 vi.mock("@/lib/db/pooled", async () => ({
   ...await vi.importActual<typeof import("@/lib/db/pooled")>("@/lib/db/pooled"),
-  getPooledDb: () => ({ query: poolQueryMock, connect: async () => ({ query: poolQueryMock, release: () => {} }) }),
+  getPooledDb: () => ({
+    query: poolQueryMock,
+    connect: async () => (await connectMock()) ?? { query: poolQueryMock, release: () => {} },
+  }),
 }));
 vi.mock("@/lib/postgres-config", () => ({
   getPostgresConnectionString: () => "postgres://test",
@@ -109,12 +124,20 @@ vi.mock("../matcher-enqueue", () => ({
 vi.mock("@/lib/objects/artifact-claim-store", () => ({
   readArtifactTypeClaimsForOrg: readArtifactTypeClaimsForOrgMock,
 }));
+vi.mock("../local-disk-blob-store", () => ({
+  createLocalDiskBlobStore: () => ({
+    openByStorageKey: async ({ storageKey }: { storageKey: string }) => ({
+      stream: (async function* () { yield Buffer.from(storageKey.replace(/^blob:/, ""), "utf8"); })(),
+    }),
+  }),
+}));
 vi.mock("../artifact-authoring", () => ({
   MAX_AUTHORED_CONTENT_BYTES: 10 * 1024 * 1024,
   TEXT_AUTHORING_COMPATIBLE_MIMES: new Set(["text/markdown", "text/plain"]),
 }));
 
 import {
+  bindFanoutMessageRevision,
   materializeFanoutMessageRevision,
   writeClaimedArtifact,
 } from "../run-artifact-materializer";
@@ -575,5 +598,137 @@ describe("cinatra#3089 — materializeFanoutMessageRevision on the ledgered writ
     );
     expect(downSql.join("\n")).not.toContain("email_fanout'");
     expect(downSql.join("\n")).not.toMatch(/DELETE/i);
+  });
+});
+
+describe("cinatra#3089 — a message bound to its approved revision", () => {
+  type Row = { org_id: string; run_id: string; output_id: string; extension: string; content_hash: string; artifact_id: string; representation_revision_id: string };
+  let rows: Row[];
+  let lockTail: Promise<void>;
+  /** Stored revisions of organization org-a, by artifact and revision. */
+  const STORED: Record<string, string> = {
+    "art-approved:rev-approved": "Approved body one",
+    "art-approved:rev-2": "Approved body two",
+  };
+  /** A client of a fake ledger table: the advisory lock serializes until COMMIT or ROLLBACK. */
+  function client() {
+    let unlock: (() => void) | null = null;
+    return {
+      release: () => {},
+      query: async (text: string, values: unknown[] = []) => {
+        if (text.includes("pg_advisory_xact_lock")) {
+          const before = lockTail;
+          let open!: () => void;
+          lockTail = new Promise<void>((resolve) => { open = resolve; });
+          await before;
+          unlock = open;
+          return { rows: [] };
+        }
+        if (text === "COMMIT" || text === "ROLLBACK") {
+          unlock?.();
+          unlock = null;
+          return { rows: [] };
+        }
+        if (text.includes("SELECT artifact_id, representation_revision_id")) {
+          const [org, run, output] = values as string[];
+          const found = rows.filter((r) => r.org_id === org && r.run_id === run && r.output_id === output);
+          // Yield: a second bind runs here when nothing holds it back.
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return { rows: found.map((r) => ({ artifact_id: r.artifact_id, representation_revision_id: r.representation_revision_id })) };
+        }
+        if (text.includes("INSERT INTO")) {
+          const [, org_id, run_id, output_id, extension, content_hash, artifact_id, representation_revision_id] = values as string[];
+          const clash = rows.some((r) => r.run_id === run_id && r.output_id === output_id && r.extension === extension && r.content_hash === content_hash);
+          if (!clash) rows.push({ org_id, run_id, output_id, extension, content_hash, artifact_id, representation_revision_id });
+          return { rows: [] };
+        }
+        return { rows: [] };
+      },
+    };
+  }
+  beforeEach(() => {
+    rows = [];
+    lockTail = Promise.resolve();
+    connectMock.mockImplementation(async () => client());
+    // The stored revision's bytes: the storage key query answers a key that the blob store mock reads back as the text.
+    const base = poolQueryMock.getMockImplementation();
+    poolQueryMock.mockImplementation(async (text: string, values: unknown[] = []) => {
+      if (text.includes("SELECT b.storage_key")) {
+        readRepresentationTextMock(...values);
+        const [org, artifact, revision] = values as string[];
+        const stored = org === "org-a" ? STORED[`${artifact}:${revision}`] : undefined;
+        return { rows: stored === undefined ? [] : [{ storage_key: `blob:${stored}` }] };
+      }
+      return base!(text, values);
+    });
+  });
+  afterEach(() => {
+    connectMock.mockReset();
+  });
+  const approvedInput = {
+    runId: "run-1",
+    orgId: "org-a",
+    objectTypeId: BODY_TYPE,
+    outputId: "email-body:run-1:art-approved",
+    markdown: "Approved body one",
+    artifactId: "art-approved",
+    representationRevisionId: "rev-approved",
+  };
+
+  it("P1 records the fan-out row under the message identity, writes no artifact, and a retry returns the same row", async () => {
+    // red-first-expect: bindFanoutMessageRevision is not a function
+    const first = await bindFanoutMessageRevision(approvedInput);
+    expect(first).toEqual({ ok: true, artifactId: "art-approved", representationRevisionId: "rev-approved", deduped: false });
+    expect(rows).toEqual([{
+      org_id: "org-a", run_id: "run-1", output_id: "email-body:run-1:art-approved", extension: EXT,
+      content_hash: sha256("Approved body one"), artifact_id: "art-approved", representation_revision_id: "rev-approved",
+    }]);
+    expect(createSemanticArtifactMock).not.toHaveBeenCalled();
+    expect(claimMaterializationMock).not.toHaveBeenCalled();
+    const retry = await bindFanoutMessageRevision(approvedInput);
+    expect(retry).toEqual({ ...first, deduped: true });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("P2 one binding per message: a second revision with other text is refused, also when the two binds run at once", async () => {
+    const second = { ...approvedInput, markdown: "Approved body two", representationRevisionId: "rev-2" };
+    expect((await bindFanoutMessageRevision(approvedInput)).ok).toBe(true);
+    const refused = await bindFanoutMessageRevision(second);
+    expect(!refused.ok && refused.error).toContain("is already bound to revision rev-approved of artifact art-approved");
+    expect(rows).toHaveLength(1);
+    // Two binds of one message at once: the second starts while the first holds its connection, so without the
+    // lock both would read "no binding" before either inserts. Exactly one wins, the other is refused.
+    rows = [];
+    let atConnect!: () => void;
+    const connected = new Promise<void>((resolve) => { atConnect = resolve; });
+    connectMock.mockImplementation(async () => { atConnect(); return client(); });
+    const firstBind = bindFanoutMessageRevision(approvedInput);
+    await connected;
+    const both = await Promise.all([firstBind, bindFanoutMessageRevision(second)]);
+    expect(both.filter((b) => b.ok)).toHaveLength(1);
+    expect(both.filter((b) => !b.ok && b.error.includes("is already bound to revision"))).toHaveLength(1);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("P3 binds nothing for a run outside the organization or a type no pack claims", async () => {
+    poolQueryMock.mockImplementation(async () => ({ rows: [] }));
+    const noRun = await bindFanoutMessageRevision(approvedInput);
+    expect(!noRun.ok && noRun.error).toContain("is not an agent run of organization org-a");
+    poolQueryMock.mockImplementation(async () => ({ rows: [{ template_id: "tpl-1" }] }));
+    readArtifactTypeClaimsForOrgMock.mockReturnValue([]);
+    const noClaim = await bindFanoutMessageRevision(approvedInput);
+    expect(!noClaim.ok && noClaim.error).toContain("no installed pack claims the object type");
+    expect(rows).toEqual([]);
+  });
+
+  it("P4 a revision of another artifact or organization, and a text that is not the stored text, bind nothing", async () => {
+    const otherArtifact = await bindFanoutMessageRevision({ ...approvedInput, artifactId: "art-other" });
+    expect(!otherArtifact.ok && otherArtifact.error).toContain("is not a revision of that artifact in organization org-a");
+    const otherOrg = await bindFanoutMessageRevision({ ...approvedInput, orgId: "org-b" });
+    expect(otherOrg.ok).toBe(false);
+    const otherText = await bindFanoutMessageRevision({ ...approvedInput, markdown: "Approved body one, changed" });
+    expect(!otherText.ok && otherText.error).toContain("is not the stored text of revision rev-approved of artifact art-approved");
+    expect(readRepresentationTextMock).toHaveBeenCalledWith("org-a", "art-approved", "rev-approved");
+    expect(rows).toEqual([]);
   });
 });

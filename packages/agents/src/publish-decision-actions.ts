@@ -901,6 +901,29 @@ async function resolvePublishingStep(
   return { step: stepId, publishing: false };
 }
 
+/**
+ * The decision that governs a call of the verified step `verifiedStepId` in run `runId` (cinatra#3089): the newest
+ * decision of the publishing step that resolvePublishingStep resolves the step to, which is the one resolution
+ * publishCallAllowed fences and claims a call under. A step nested in a publishing node, or signed with the publishing
+ * component's own id, thus reads the decision stored under that node's name. null: the step is unrelated to any
+ * publishing step and holds no decision row of its own. Throws when the run is not found, when the governing step
+ * cannot be told (a step that may lie inside a publishing node, or lies inside two), when the step is a publishing step
+ * (or lies inside one) that holds no decision (so a publishing-step call never reads as one with no decision), or when
+ * a read fails.
+ */
+export async function readGoverningPublishDecision(runId: string, verifiedStepId: string): Promise<PublishDecisionRow | null> {
+  const run = await readAgentRunById(runId);
+  if (!run) throw new Error("the run of the call is not found");
+  const template = await readAgentTemplateById(run.templateId);
+  // A template that is not found cannot prove that the run publishes nothing: refused, as the publish-call guard refuses.
+  if (!template) throw new Error("the template of the call's run is not found");
+  const resolved = await resolvePublishingStep(runId, verifiedStepId, template.publishingSteps ?? []);
+  if (resolved === null) throw new Error("which publishing step governs the call cannot be told");
+  const row = await readDecisionForRunNode(runId, resolved.step);
+  if (!row && resolved.publishing) throw new Error("the publishing step that governs the call holds no decision");
+  return row;
+}
+
 /** The release of a publishing call's claim: it resolves once the release is written, or logged as not written. */
 export type PublishCallRelease = () => Promise<void>;
 

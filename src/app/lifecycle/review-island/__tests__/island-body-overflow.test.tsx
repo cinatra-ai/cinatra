@@ -109,7 +109,6 @@ beforeEach(() => {
           props: null,
           mount: { kind: "floor" as const },
         }),
-        capturePair: Promise.resolve(null),
       },
     ],
     permissions: Promise.resolve({ canDecide: true, canComment: true }),
@@ -152,6 +151,9 @@ async function islandBody(scheme?: "light" | "dark"): Promise<Element> {
 
 const classesOf = (el: Element): string[] => Array.from(el.classList);
 
+// Before the fix the streamed body still unwraps a pinned pair with React's
+// `use`, and the target the loader mock hands it carries none:
+// red-first-expect: An unsupported type was passed to use(): undefined
 describe("the island body is the container a wide representation scrolls inside", () => {
   it("the body wrapper is a horizontal scroll container", async () => {
     // "a wide representation scrolls inside its own container rather than
