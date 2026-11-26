@@ -3209,14 +3209,17 @@ export function AgenticRunPanel({
           {drawSkillPicker ? <HitlSkillChips skills={hitlSkills} /> : null}
           {hitlRendererEntry?.entry || hitlPresentationHint ? (
             <div
-              className={HITL_FIELDS_REGION_CLASS[hitlFieldPresentationFor("run_card")]}
+              className={HITL_FIELDS_REGION_CLASS[stepCard ? "subordinate" : hitlFieldPresentationFor("run_card")]}
               data-conformance-id="hitl-screen-fields"
               // §I: the run page has no chat box for a field to be subordinate
               // to, so this screen's field IS the primary input and keeps the
               // treatment it already has. Declared through the card's own map
               // rather than restated here, so the two surfaces cannot hold a
-              // different opinion about the same host.
-              data-field-presentation={hitlFieldPresentationFor("run_card")}
+              // different opinion about the same host. A DECLARED CARD
+              // (cinatra#3470, V.1) is the exception: the run card places its
+              // fields "in their own detail region without a second outer box",
+              // drawn as in the conversation, so its region takes no box.
+              data-field-presentation={stepCard ? "subordinate" : hitlFieldPresentationFor("run_card")}
             >
               {(() => {
                 // The gate is gone (cinatra#3219). Draw the state the surface

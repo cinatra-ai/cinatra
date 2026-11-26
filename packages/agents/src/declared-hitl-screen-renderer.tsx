@@ -116,8 +116,14 @@ export function makeDeclaredHitlScreenRenderer(card: DeclaredHitlCard): Componen
       );
     });
     closeFacts();
+    // ONE FORM ON EVERY HOST (V.1: "The field's label, the answer and the act
+    // of continuing do not change with the host"). The card carries the
+    // `nf-label` / `nf-input` treatment itself, through the app stylesheet's
+    // one rule for it (`.lifecycle-fields-subordinate`, the rule the chat card's
+    // region applies), so the run page and the step-by-step page draw the same
+    // mono label and dashed line as the conversation does.
     return (
-      <div className="flex min-w-0 flex-col gap-4" data-declared-hitl-screen="">
+      <div className="lifecycle-fields-subordinate flex min-w-0 flex-col gap-4" data-declared-hitl-screen="">
         {blocks}
       </div>
     );

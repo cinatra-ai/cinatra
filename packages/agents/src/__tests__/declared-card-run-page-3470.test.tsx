@@ -8,6 +8,8 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 
 import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
 import { OrchestratorStepperPanel } from "../orchestrator-stepper-panel";
+import { declaredCardEntryOf } from "../declared-hitl-screen-renderer";
+import type { FieldRendererProps } from "../field-renderer-registry";
 
 const stream = vi.hoisted(() => ({ interruptContext: null as unknown }));
 const gateSend = vi.hoisted(() => ({ approveReviewTask: vi.fn(async (..._args: unknown[]) => ({ ok: true })) }));
@@ -160,6 +162,41 @@ describe("the run page draws a declared card and holds its Continue until the fi
     expect(payload).toMatchObject({ ...answer, userResponse: JSON.stringify(answer) });
     const declared = new Set(["topic", "angle", "userResponse", "approved", "approvedAt", "stepNumber"]);
     expect(Object.keys(payload).filter((k) => !declared.has(k))).toEqual([]);
+  });
+});
+
+describe("the run page draws the declared field as the chat card does (V.1)", () => {
+  it("the label and the control carry the chat card's classes under its one field rule, and no bordered box surrounds the fields inside the card", async () => {
+    const schema = { type: "object", "x-renderer": CARD_ID, properties: { angle: { type: "string", title: "Angle" } }, ...STORED };
+    // The chat card's form: the shared renderer it mounts, inside its region's field rule.
+    const Chat = declaredCardEntryOf(CARD_ID, schema)!.renderer;
+    const chat = render(<Chat {...({ value: {}, onChange: () => {}, mode: "edit" } as unknown as FieldRendererProps)} />);
+    const chatLabel = chat.container.querySelector("[data-declared-hitl-screen] label")!.className;
+    const chatField = chat.container.querySelector("[data-declared-hitl-screen] textarea")!.className;
+    chat.unmount();
+
+    stream.interruptContext = {
+      xRenderer: CARD_ID,
+      schema,
+      values: { stepNumber: 1, topic: "Audit trails for agent runs" },
+      reviewTaskId: "gate-card-3470",
+    };
+    render(<OrchestratorStepperPanel {...panelProps(CARD_ID)} />);
+    await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
+    const screen = document.querySelector("[data-declared-hitl-screen]")!;
+    const label = screen.querySelector("label")!;
+    const field = screen.querySelector("textarea")!;
+    expect(label.className).toBe(chatLabel);
+    expect(field.className).toBe(chatField);
+    expect(label.closest(".lifecycle-fields-subordinate")).not.toBeNull();
+    expect(field.closest(".lifecycle-fields-subordinate")).not.toBeNull();
+
+    // The card is the one frame: nothing between it and the fields draws a box.
+    const card = screen.closest<HTMLElement>('[data-slot="card"]')!;
+    expect(card).not.toBeNull();
+    for (let el: HTMLElement | null = screen as HTMLElement; el && el !== card; el = el.parentElement) {
+      expect(el.className).not.toMatch(/(^|\s)(soft-panel|border|rounded-panel|bg-surface-muted)(\s|$)/);
+    }
   });
 });
 

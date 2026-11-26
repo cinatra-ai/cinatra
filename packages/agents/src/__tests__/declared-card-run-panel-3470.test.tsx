@@ -7,6 +7,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 
 import { ensureDefaultFieldRenderersRegistered, registerFieldRendererBindings } from "../register-default-renderers";
+import { declaredCardEntryOf } from "../declared-hitl-screen-renderer";
+import type { FieldRendererProps } from "../field-renderer-registry";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
   LoadingSpinner: () => null,
@@ -150,6 +152,36 @@ describe("the run panel draws a declared card and holds its Continue until the f
     expect(payload).toMatchObject({ ...answer, userResponse: JSON.stringify(answer) });
     const declared = new Set(["topic", "angle", "userResponse", "approved", "approvedAt", "stepNumber"]);
     expect(Object.keys(payload).filter((k) => !declared.has(k))).toEqual([]);
+  });
+});
+
+describe("the run panel draws the declared field as the chat card does (V.1)", () => {
+  it("the label and the control carry the chat card's classes under its one field rule, and no bordered box surrounds the region", async () => {
+    const schema = cardStream().interruptContext.schema;
+    // The chat card's form: the shared renderer it mounts, inside its region's field rule.
+    const Chat = declaredCardEntryOf(CARD_ID, schema)!.renderer;
+    const chat = render(<Chat {...({ value: {}, onChange: () => {}, mode: "edit" } as unknown as FieldRendererProps)} />);
+    const chatLabel = chat.container.querySelector("[data-declared-hitl-screen] label")!.className;
+    const chatInput = chat.container.querySelector("[data-declared-hitl-screen] input")!.className;
+    chat.unmount();
+
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(<AgenticRunPanel runId="run-3470" initialStatus="pending_approval" initialError={null} initialMessages={[]} agUiEnabled={true} />);
+    await waitFor(() => expect(document.querySelector("[data-declared-hitl-screen]")).not.toBeNull());
+    const screen = document.querySelector("[data-declared-hitl-screen]")!;
+    const label = screen.querySelector("label")!;
+    const input = screen.querySelector("input")!;
+    expect(label.className).toBe(chatLabel);
+    expect(input.className).toBe(chatInput);
+    expect(label.closest(".lifecycle-fields-subordinate")).not.toBeNull();
+    expect(input.closest(".lifecycle-fields-subordinate")).not.toBeNull();
+
+    // No second outer box: the fields region and everything between it and the field draw none.
+    const region = screen.closest<HTMLElement>('[data-conformance-id="hitl-screen-fields"]')!;
+    expect(region.dataset.fieldPresentation).toBe("subordinate");
+    for (let el: HTMLElement | null = screen as HTMLElement; el && el !== region.parentElement; el = el.parentElement) {
+      expect(el.className).not.toMatch(/(^|\s)(soft-panel|border|rounded-panel|bg-surface-muted)(\s|$)/);
+    }
   });
 });
 
