@@ -2,7 +2,8 @@
 // Zero-dep (node:test) to match the gate (a .mjs gate can't import .ts deps).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -18,9 +19,13 @@ import {
   isClassBootstrap,
   classGrowth,
   discoverExtensionDirs,
+  collectConsumedTools,
+  CONSUME_REQUIREMENTS,
 } from "../extension-produces-deps-gate.mjs";
 
 const GATE_SCRIPT = fileURLToPath(new URL("../extension-produces-deps-gate.mjs", import.meta.url));
+const REPO_ROOT_FOR_TESTS = fileURLToPath(new URL("../../../", import.meta.url));
+const require = createRequire(import.meta.url);
 
 // ---------------------------------------------------------------------------
 // collectProducesEdges
@@ -385,26 +390,46 @@ function writeJson(path, value) {
   writeFileSync(path, JSON.stringify(value, null, 2) + "\n");
 }
 
-/** A minimal repo root: extensions/<vendor>/<name> + the baseline location. */
-function makeFixtureRoot({ extensions, baseline }) {
+/** The tool-owner class (cinatra#4874), empty: a fixture baseline that does
+ *  not name it gets it, so the produced-artifact tests stay about their own
+ *  classes. */
+const EMPTY_TOOL_CLASSES = { undeclaredToolOwnerDeps: {} };
+
+/** A minimal repo root: extensions/<vendor>/<name>, the authz inventory
+ *  (empty unless given) and the baseline location. */
+function makeFixtureRoot({ extensions, baseline, inventory = { primitives: [] } }) {
   const root = mkdtempSync(join(tmpdir(), "produces-deps-gate-"));
   for (const [name, { packageJson, oasJson }] of Object.entries(extensions)) {
-    const dir = join(root, "extensions", "cinatra-ai", name);
+    const dir = join(root, "extensions", "example-org", name);
     mkdirSync(dir, { recursive: true });
-    writeJson(join(dir, "package.json"), packageJson);
-    if (oasJson) writeJson(join(dir, "cinatra", "oas.json"), oasJson);
+    if (typeof packageJson === "string") writeFileSync(join(dir, "package.json"), packageJson);
+    else writeJson(join(dir, "package.json"), packageJson);
+    if (typeof oasJson === "string") {
+      mkdirSync(join(dir, "cinatra"), { recursive: true });
+      writeFileSync(join(dir, "cinatra", "oas.json"), oasJson);
+    } else if (oasJson) writeJson(join(dir, "cinatra", "oas.json"), oasJson);
   }
+  if (inventory !== null) writeJson(join(root, "src", "lib", "authz", "__generated__", "inventory.json"), inventory);
   mkdirSync(join(root, "scripts", "audit"), { recursive: true });
-  if (baseline) writeJson(join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json"), baseline);
+  if (baseline) {
+    writeJson(join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json"), {
+      ...EMPTY_TOOL_CLASSES,
+      ...baseline,
+    });
+  }
   return root;
 }
 
-function runGate(root, args = []) {
+/** No base for the floor guard unless a test names one (a CI run's own
+ *  GITHUB_BASE_REF must not reach a fixture repository). */
+const NO_BASE_ENV = { EXTENSION_PRODUCES_DEPS_BASE: "", GITHUB_BASE_REF: "", GITHUB_EVENT_NAME: "", FLOOR_BASE_FETCH: "0" };
+
+function runGate(root, args = [], baseEnv = NO_BASE_ENV) {
   try {
     const stdout = execFileSync(process.execPath, [GATE_SCRIPT, ...args], {
       cwd: root,
       encoding: "utf8",
-      env: { ...process.env, EXTENSION_PRODUCES_DEPS_BASE: "" },
+      env: { ...process.env, ...baseEnv },
     });
     return { status: 0, out: stdout };
   } catch (err) {
@@ -712,6 +737,7 @@ test("live: a base ref with NO baseline file reports the gate bootstrap instead 
     writeJson(join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json"), {
       undeclaredProducesDeps: { "@cinatra-ai/producer-agent": ["@cinatra-ai/target-artifact"] },
       unresolvedProducesTargets: {},
+      ...EMPTY_TOOL_CLASSES,
     });
     const out = execFileSync(process.execPath, [GATE_SCRIPT], {
       cwd: root,
@@ -733,12 +759,459 @@ test("discoverExtensionDirs finds vendor/name dirs with a manifest and skips the
     },
   });
   try {
-    mkdirSync(join(root, "extensions", "cinatra-ai", "no-manifest"), { recursive: true });
-    mkdirSync(join(root, "extensions", "cinatra-ai", "node_modules"), { recursive: true });
+    mkdirSync(join(root, "extensions", "example-org", "no-manifest"), { recursive: true });
+    mkdirSync(join(root, "extensions", "example-org", "node_modules"), { recursive: true });
     const dirs = discoverExtensionDirs(join(root, "extensions")).map((d) => d.split("/").pop());
     assert.deepEqual(dirs, ["producer-agent", "target-artifact"]);
     assert.deepEqual(discoverExtensionDirs(join(root, "does-not-exist")), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// The tool-owner rule (cinatra#4874): a pack's DECLARED use (cinatra.consumes)
+// of a tool that ANOTHER pack registers needs that pack in its
+// cinatra.dependencies. Every test below runs the gate on a fixture tree;
+// before the rule the gate passed each of them (exit 0, no tool-owner line), so
+// each fails before by assertion.
+// ---------------------------------------------------------------------------
+
+const ownerPkg = {
+  name: "@cinatra-ai/owner-connector",
+  version: "0.1.0",
+  cinatra: { apiVersion: "cinatra.ai/v1", kind: "connector", dependencies: [] },
+};
+
+const ownerEdge = {
+  packageName: "@cinatra-ai/owner-connector",
+  edgeType: "runtime",
+  versionConstraint: { kind: "semver-range", range: "*" },
+  requirement: "required",
+  kind: "connector",
+};
+
+const consumerPkg = (deps, consumes = []) => ({
+  name: "@cinatra-ai/consumer-agent",
+  version: "0.1.0",
+  cinatra: { apiVersion: "cinatra.ai/v1", kind: "agent", dependencies: deps, consumes },
+});
+
+/** The inventory: one tool of the owner pack, one core tool. */
+const toolInventory = {
+  primitives: [
+    { primitiveName: "owner_tool", file: "extensions/example-org/owner-connector/src/mcp/module.ts", line: 1 },
+    { primitiveName: "core_tool", file: "packages/core-thing/src/mcp/schemas.ts", line: 1 },
+  ],
+};
+
+const consume = (primitive) => ({ primitive, requirement: "required" });
+const NO_PRODUCES_FINDINGS = { undeclaredProducesDeps: {}, unresolvedProducesTargets: {} };
+
+test("live: a pack that declares a use of another pack's tool without declaring that pack fails", () => {
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([], [consume("owner_tool"), consume("core_tool")]) },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: toolInventory,
+  });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[undeclaredToolOwnerDeps\] NEW @cinatra-ai\/consumer-agent :: owner_tool/);
+    assert.match(res.out, /registered by @cinatra-ai\/owner-connector/);
+    // The core tool is no finding: core owns it.
+    assert.doesNotMatch(res.out, /core_tool/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: declaring the owning pack in cinatra.dependencies turns the tool rule green", () => {
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([ownerEdge], [consume("owner_tool")]) },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: toolInventory,
+  });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /tool-owner rule: 1 declared tool uses, 0 undeclaredToolOwnerDeps;/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: a tool with no inventory row is printed as owner not recorded and does not fail (cinatra#4895)", () => {
+  // A self-facade tool such as `extension_tool` resolves against the caller's
+  // own manifest and has no inventory row: a NEW pack using it must pass.
+  const root = makeFixtureRoot({
+    extensions: { "consumer-agent": { packageJson: consumerPkg([], [consume("nobody_registers_this")]) } },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: toolInventory,
+  });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /owner not recorded: @cinatra-ai\/consumer-agent :: nobody_registers_this/);
+    assert.match(res.out, /1 declared uses whose owner is not recorded \(not judged, cinatra#4895\)/);
+    const report = runGate(root, ["--report"]);
+    assert.match(report.out, /owner not recorded: @cinatra-ai\/consumer-agent :: nobody_registers_this/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: an inventory row in no pack of the tree, or with two owners, contradicts itself and fails unlisted", () => {
+  const cases = [
+    {
+      name: "no pack",
+      inventory: { primitives: [{ primitiveName: "gone_tool", file: "extensions/example-org/retired-connector/src/x.ts" }] },
+      expect: /the inventory contradicts itself: the inventory names extensions\/example-org\/retired-connector\/src\/x\.ts, which is in no pack/,
+    },
+    {
+      name: "two owners",
+      inventory: {
+        primitives: [
+          { primitiveName: "gone_tool", file: "extensions/example-org/owner-connector/src/a.ts" },
+          { primitiveName: "gone_tool", file: "packages/core-thing/src/b.ts" },
+        ],
+      },
+      expect: /the inventory contradicts itself: the inventory registers it in more than one owner/,
+    },
+  ];
+  for (const c of cases) {
+    const root = makeFixtureRoot({
+      extensions: {
+        "consumer-agent": { packageJson: consumerPkg([], [consume("gone_tool")]) },
+        "owner-connector": { packageJson: ownerPkg },
+      },
+      baseline: NO_PRODUCES_FINDINGS,
+      inventory: c.inventory,
+    });
+    try {
+      const res = runGate(root);
+      assert.equal(res.status, 1, `${c.name}: ${res.out}`);
+      assert.match(res.out, c.expect, c.name);
+      // A contradiction is never written to the list.
+      const written = runGate(root, ["--write-baseline"]);
+      assert.equal(written.status, 1, `${c.name}: ${written.out}`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("live: only package.json cinatra.consumes is read: a tool named in the OAS mirror, a flow step or code is outside the rule", () => {
+  const oasJson = {
+    component_type: "Flow",
+    metadata: { cinatra: { consumes: [consume("owner_tool")] } },
+    $referenced_components: {
+      call_owner: {
+        component_type: "ApiNode",
+        id: "call_owner",
+        url: "{{CINATRA_BASE_URL}}/api/agents/passthrough",
+        data: { tool: "owner_tool", input: {} },
+      },
+      model_step: {
+        component_type: "ApiNode",
+        id: "model_step",
+        url: "{{CINATRA_BASE_URL}}/api/llm-bridge",
+        metadata: { cinatra: { tools: ["owner_tool"] } },
+      },
+    },
+  };
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([], [consume("core_tool")]), oasJson },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: toolInventory,
+  });
+  try {
+    mkdirSync(join(root, "extensions", "example-org", "consumer-agent", "src"), { recursive: true });
+    writeFileSync(
+      join(root, "extensions", "example-org", "consumer-agent", "src", "call.ts"),
+      'export const f = (ctx: any) => ctx.mcp.callPrimitive("owner_tool", {});\n',
+    );
+    const res = runGate(root);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /tool-owner rule: 1 declared tool uses, 0 undeclaredToolOwnerDeps;/);
+    assert.doesNotMatch(res.out, /owner_tool/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("collectConsumedTools reads consumes entries as the SDK parser defines them", () => {
+  const read = (consumes) => collectConsumedTools({ cinatra: { consumes } });
+  assert.deepEqual(read([{ primitive: "a_tool", requirement: "optional" }, consume("b_tool")]).uses, [
+    { primitive: "a_tool", requirement: "optional", source: "package.json cinatra.consumes[0]" },
+    { primitive: "b_tool", requirement: "required", source: "package.json cinatra.consumes[1]" },
+  ]);
+  assert.deepEqual(collectConsumedTools({ cinatra: {} }), { uses: [], malformed: [] });
+  assert.deepEqual(collectConsumedTools({}), { uses: [], malformed: [] });
+  // An entry that is not a consumed primitive is collectProducesEdges' to read.
+  assert.deepEqual(read([{ extension: "@example-org/x-artifact" }, { primitive: "  " }, "junk"]), { uses: [], malformed: [] });
+  // A missing or unknown requirement, or a duplicate, is refused (the SDK parser throws).
+  assert.match(read([{ primitive: "a_tool" }]).malformed[0], /the requirement of "a_tool" must be one of required\|optional \(got null\)/);
+  assert.match(read([{ primitive: "a_tool", requirement: "maybe" }]).malformed[0], /got "maybe"/);
+  assert.match(read([consume("a_tool"), consume("a_tool")]).malformed[0], /"a_tool" is declared more than once/);
+});
+
+test("live: a declared owner backs a use exactly as the dependency validator accepts it", () => {
+  const edge = (requirement, edgeType = "runtime") => ({ ...ownerEdge, requirement, edgeType });
+  const cases = [
+    { name: "required use + optional edge", use: "required", dep: edge("optional"), fails: true },
+    { name: "required use + required peer edge", use: "required", dep: edge("required", "peer"), fails: true },
+    { name: "required use + required runtime edge", use: "required", dep: edge("required"), fails: false },
+    { name: "required use + required install-time edge", use: "required", dep: edge("required", "install-time"), fails: false },
+    { name: "optional use + optional edge", use: "optional", dep: edge("optional"), fails: false },
+    { name: "optional use + optional peer edge", use: "optional", dep: edge("optional", "peer"), fails: false },
+  ];
+  for (const c of cases) {
+    const root = makeFixtureRoot({
+      extensions: {
+        "consumer-agent": { packageJson: consumerPkg([c.dep], [{ primitive: "owner_tool", requirement: c.use }]) },
+        "owner-connector": { packageJson: ownerPkg },
+      },
+      baseline: NO_PRODUCES_FINDINGS,
+      inventory: toolInventory,
+    });
+    try {
+      const res = runGate(root);
+      assert.equal(res.status, c.fails ? 1 : 0, `${c.name}: ${res.out}`);
+      if (c.fails) {
+        assert.match(res.out, /\[undeclaredToolOwnerDeps\] NEW @cinatra-ai\/consumer-agent :: owner_tool/, c.name);
+        assert.match(res.out, /which is not install-blocking/, c.name);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("live: tools named like Object.prototype keys are findings like any other", () => {
+  const names = ["constructor", "__proto__", "toString"];
+  const root = makeFixtureRoot({
+    extensions: {
+      "consumer-agent": { packageJson: consumerPkg([], names.map(consume)) },
+      "owner-connector": { packageJson: ownerPkg },
+    },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: {
+      primitives: names.map((n) => ({ primitiveName: n, file: "extensions/example-org/owner-connector/src/mcp/module.ts" })),
+    },
+  });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    for (const n of names) assert.match(res.out, new RegExp(`\\[undeclaredToolOwnerDeps\\] NEW @cinatra-ai\\/consumer-agent :: ${n}\\b`));
+    // Written to the list, each is kept as its own entry and then tolerated.
+    const written = runGate(root, ["--write-baseline"]);
+    assert.equal(written.status, 0, written.out);
+    const baseline = JSON.parse(readFileSync(join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json"), "utf8"));
+    assert.deepEqual(Object.keys(baseline.undeclaredToolOwnerDeps["@cinatra-ai/consumer-agent"]).sort(), [...names].sort());
+    const again = runGate(root);
+    assert.equal(again.status, 0, again.out);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the install-blocking reading mirrors the dependency closure and the validator (drift guard)", () => {
+  const predicate = 'return dep.requirement === "required" && dep.edgeType !== "peer";';
+  const read = (rel) => readFileSync(join(REPO_ROOT_FOR_TESTS, rel), "utf8");
+  const closure = read("packages/extensions/src/dependency-closure.ts");
+  const validator = read("packages/extensions/src/dependency-declaration-validator.ts");
+  const types = read("packages/extensions/src/canonical-types.ts");
+  assert.ok(closure.includes(`export function isInstallBlockingEdge(dep: ExtensionDependency): boolean {\n  ${predicate}`));
+  assert.ok(validator.includes(`function isInstallBlockingEdge(dep: ExtensionDependency): boolean {\n  ${predicate}`));
+  // The validator's requirement rule the gate mirrors: only a REQUIRED use
+  // needs an install-blocking edge; any declared edge backs an optional one.
+  assert.ok(validator.includes('if (c.requirement === "required" && !isInstallBlockingEdge(declared)) {'));
+  assert.ok(types.includes('export const DEPENDENCY_REQUIREMENTS = ["required", "optional"] as const;'));
+  assert.ok(types.includes('export const DEPENDENCY_EDGE_TYPES = ["runtime", "install-time", "peer"] as const;'));
+  assert.ok(readFileSync(GATE_SCRIPT, "utf8").includes(predicate));
+  // The requirements a consumes entry may carry (the SDK's DEPENDENCY_REQUIREMENTS).
+  const sdk = read("packages/sdk-extensions/src/dependencies.ts");
+  assert.ok(sdk.includes(`export const DEPENDENCY_REQUIREMENTS = ${JSON.stringify(CONSUME_REQUIREMENTS).replaceAll(",", ", ")} as const;`));
+  const consumes = read("packages/sdk-extensions/src/consumes.ts");
+  assert.ok(consumes.includes("if (!(DEPENDENCY_REQUIREMENTS as readonly string[]).includes(v.requirement as string)) {"));
+  assert.ok(consumes.includes("if (seen.has(c.primitive)) {"));
+});
+
+test("live: an unreadable manifest, flow, consumes entry or inventory is reported, never skipped", () => {
+  const cases = [
+    {
+      name: "manifest",
+      ext: { packageJson: "{ not json" },
+      expect: /unreadable JSON at extensions\/example-org\/consumer-agent\/package\.json/,
+      status: 2,
+    },
+    {
+      name: "flow",
+      ext: { packageJson: consumerPkg([]), oasJson: "{ not json" },
+      expect: /unreadable JSON at extensions\/example-org\/consumer-agent\/cinatra\/oas\.json/,
+      status: 2,
+    },
+    {
+      name: "consumes entry",
+      ext: { packageJson: consumerPkg([], [{ primitive: "owner_tool", requirement: "sometimes" }]) },
+      expect: /consumer-agent: package\.json cinatra\.consumes\[0\]: the requirement of "owner_tool" must be one of required\|optional/,
+      status: 1,
+    },
+  ];
+  for (const c of cases) {
+    const root = makeFixtureRoot({
+      extensions: { "consumer-agent": c.ext },
+      baseline: NO_PRODUCES_FINDINGS,
+      inventory: toolInventory,
+    });
+    try {
+      const res = runGate(root);
+      assert.equal(res.status, c.status, `${c.name}: ${res.out}`);
+      assert.match(res.out, c.expect, c.name);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const noInventory = makeFixtureRoot({
+    extensions: { "consumer-agent": { packageJson: consumerPkg([]) } },
+    baseline: NO_PRODUCES_FINDINGS,
+    inventory: null,
+  });
+  try {
+    const res = runGate(noInventory);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /the authz inventory src\/lib\/authz\/__generated__\/inventory\.json is missing/);
+  } finally {
+    rmSync(noInventory, { recursive: true, force: true });
+  }
+});
+
+test("live: a listed entry is tolerated, a STALE one fails, and an entry without a reason fails", () => {
+  const listed = { "@cinatra-ai/consumer-agent": { owner_tool: "tolerated: fixed in the pack, pin bump pending" } };
+  const extensions = {
+    "consumer-agent": { packageJson: consumerPkg([], [consume("owner_tool")]) },
+    "owner-connector": { packageJson: ownerPkg },
+  };
+  const ok = makeFixtureRoot({ extensions, baseline: { undeclaredToolOwnerDeps: listed }, inventory: toolInventory });
+  const stale = makeFixtureRoot({
+    extensions: { ...extensions, "consumer-agent": { packageJson: consumerPkg([ownerEdge], [consume("owner_tool")]) } },
+    baseline: { undeclaredToolOwnerDeps: listed },
+    inventory: toolInventory,
+  });
+  const noReason = makeFixtureRoot({
+    extensions,
+    baseline: { undeclaredToolOwnerDeps: { "@cinatra-ai/consumer-agent": { owner_tool: "" } } },
+    inventory: toolInventory,
+  });
+  try {
+    const okRun = runGate(ok);
+    assert.equal(okRun.status, 0, okRun.out);
+    assert.match(okRun.out, /tool-owner rule: 1 declared tool uses, 1 undeclaredToolOwnerDeps/);
+    const s = runGate(stale);
+    assert.equal(s.status, 1, s.out);
+    assert.match(s.out, /\[undeclaredToolOwnerDeps\] STALE @cinatra-ai\/consumer-agent :: owner_tool/);
+    const r = runGate(noReason);
+    assert.equal(r.status, 1, r.out);
+    assert.match(r.out, /owner_tool has no reason/);
+  } finally {
+    for (const root of [ok, stale, noReason]) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: the shared floor base guard — the introducing change seeds once, growth is refused, a shrink passes, a removed class fails", () => {
+  const extensions = {
+    "consumer-agent": { packageJson: consumerPkg([], [consume("owner_tool")]) },
+    "owner-connector": { packageJson: ownerPkg },
+  };
+  const inventory = {
+    primitives: [
+      ...toolInventory.primitives,
+      { primitiveName: "owner_tool_two", file: "extensions/example-org/owner-connector/src/mcp/module.ts" },
+    ],
+  };
+  const root = makeFixtureRoot({ extensions, baseline: NO_PRODUCES_FINDINGS, inventory });
+  const baselinePath = join(root, "scripts", "audit", "extension-produces-deps-gate.baseline.json");
+  const consumerPath = join(root, "extensions", "example-org", "consumer-agent", "package.json");
+  // The base holds the produced-artifact classes only: the tool classes are new there.
+  writeJson(baselinePath, NO_PRODUCES_FINDINGS);
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const seeded = {
+    undeclaredToolOwnerDeps: { "@cinatra-ai/consumer-agent": { owner_tool: "seeded with the rule" } },
+  };
+  const env = (ref) => ({ ...NO_BASE_ENV, EXTENSION_PRODUCES_DEPS_BASE: ref });
+  try {
+    git("init", "-q");
+    git("config", "user.email", "t@example.com");
+    git("config", "user.name", "t");
+    git("add", "-A");
+    git("commit", "-qm", "base-without-tool-classes");
+
+    // (a) the introducing change seeds the classes once.
+    writeJson(baselinePath, { ...NO_PRODUCES_FINDINGS, ...seeded });
+    const seed = runGate(root, [], env(git("rev-parse", "HEAD").trim()));
+    assert.equal(seed.status, 0, seed.out);
+    assert.match(seed.out, /undeclaredToolOwnerDeps seed: 1 entries/);
+    git("add", "-A");
+    git("commit", "-qm", "seeded");
+    const seededSha = git("rev-parse", "HEAD").trim();
+
+    // (b) a NEW listed entry against the seeded base is growth: refused, even
+    //     though the scan finds it.
+    writeFileSync(consumerPath, JSON.stringify(consumerPkg([], [consume("owner_tool"), consume("owner_tool_two")])));
+    writeJson(baselinePath, {
+      ...NO_PRODUCES_FINDINGS,
+      ...seeded,
+      undeclaredToolOwnerDeps: {
+        "@cinatra-ai/consumer-agent": { owner_tool: "seeded with the rule", owner_tool_two: "added later" },
+      },
+    });
+    const grew = runGate(root, [], env(seededSha));
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /GREW against the base/);
+    assert.match(grew.out, /\[undeclaredToolOwnerDeps\] @cinatra-ai\/consumer-agent :: owner_tool_two/);
+
+    // (c) the pack declares its owner and the entry goes: a shrink passes.
+    writeFileSync(consumerPath, JSON.stringify(consumerPkg([ownerEdge], [consume("owner_tool"), consume("owner_tool_two")])));
+    writeJson(baselinePath, { ...NO_PRODUCES_FINDINGS, ...seeded, undeclaredToolOwnerDeps: {} });
+    const shrink = runGate(root, [], env(seededSha));
+    assert.equal(shrink.status, 0, shrink.out);
+    assert.match(shrink.out, /does not grow against the base/);
+
+    // (d) removing a class (to seed it again later) fails.
+    writeJson(baselinePath, { ...NO_PRODUCES_FINDINGS });
+    const removed = runGate(root, [], env(seededSha));
+    assert.equal(removed.status, 1, removed.out);
+    assert.match(removed.out, /the baseline has no `undeclaredToolOwnerDeps` map/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the gate decides owners from the inventory and its code names no pack and no tool", () => {
+  const ts = require("typescript");
+  const source = readFileSync(GATE_SCRIPT, "utf8");
+  const sf = ts.createSourceFile("gate.mjs", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const literals = [];
+  const visit = (node) => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push(node.text);
+    else if (ts.isTemplateExpression(node)) literals.push(node.head.text, ...node.templateSpans.map((s) => s.literal.text));
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  // The owner of a tool comes from the generated inventory, read by its path.
+  assert.ok(literals.includes("src/lib/authz/__generated__/inventory.json"), "the gate reads the authz inventory");
+  const inventory = JSON.parse(readFileSync(join(REPO_ROOT_FOR_TESTS, "src/lib/authz/__generated__/inventory.json"), "utf8"));
+  const toolNames = new Set(inventory.primitives.map((p) => p.primitiveName));
+  assert.deepEqual(literals.filter((l) => toolNames.has(l)), []);
+  assert.deepEqual(literals.filter((l) => /^@[\w-]+\/[\w-]+$/.test(l)), []);
 });
