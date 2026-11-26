@@ -46,6 +46,8 @@ import { describe, expect, it } from "vitest";
 
 import { REVIEW_FLOOR_LABELS } from "@/lib/artifacts/review-surface-model";
 
+import { reviewControlWords } from "../../../../../../../../../scripts/extensions/self-rendering-extensions-border-gate.mjs";
+
 const ROUTE = path.resolve(__dirname, "..");
 const REPO_ROOT = path.resolve(ROUTE, "..", "..", "..", "..", "..", "..", "..", "..");
 const read = (rel: string) => readFileSync(path.join(REPO_ROOT, rel), "utf8");
@@ -188,6 +190,12 @@ describe("item 7 — no artifact renderer carries a Regenerate control", () => {
       expect(code).not.toContain("ReviewDecisionBar");
       expect(code).not.toMatch(/regenerat/i);
       for (const action of [...FLOOR_ACTIONS, ...RETIRED]) expect(code).not.toContain(action);
+    });
+
+    // The host's mount is held to the SAME word list that rule (f) holds a
+    // display to, read by the gate's own detector, so the two cannot drift.
+    it(`${name} names none of the words and addresses border gate rule (f) forbids in a display`, () => {
+      expect(reviewControlWords(source)).toEqual([]);
     });
   }
 
