@@ -46,9 +46,6 @@ vi.mock("@/lib/lifecycle/review-island-serving", () => ({
 vi.mock("@/lib/lifecycle/review-island-byte-road", () => ({
   buildIslandArtifactByteMinter: () => (input: unknown) => mintPreview(input),
 }));
-vi.mock("@/lib/lifecycle/widget-capture-egress", () => ({
-  buildBrokerCapturePair: () => null,
-}));
 vi.mock(
   "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor",
   () => ({ resolveReviewActorContext: () => resolveReviewActorContext() }),
@@ -79,7 +76,7 @@ const PRINCIPAL = { orgId: "org-1", widgetUserId: "cwu_1" };
 
 function target(artifactId: string) {
   const prepared = { target: { artifactId, representationRevisionId: `${artifactId}-rev` }, props: null, mount: { kind: "floor" as const } };
-  return { target: prepared.target, prepared: Promise.resolve(prepared), capturePair: Promise.resolve(null) };
+  return { target: prepared.target, prepared: Promise.resolve(prepared) };
 }
 
 async function renderIsland(ref: string, extra: Record<string, string> = {}) {
@@ -166,10 +163,12 @@ describe("the credential branch", () => {
     expect(args).toMatchObject({ runId: "run-1", decisionId: "dec-1", input: "reviewTargets", actorCtx: ACTOR });
     // cinatra#4738 round 2: a widget reader holds no cookie, so the session addresses load nothing there. Red at
     // ffe421ea, which names no road for a publish row.
-    const roads = args.roads as { byteMinter?: unknown; capturePair?: unknown; buildContent?: unknown } | undefined;
+    const roads = args.roads as { byteMinter?: unknown; buildContent?: unknown } | undefined;
     expect(typeof roads?.byteMinter).toBe("function");
-    expect(typeof roads?.capturePair).toBe("function");
     expect(typeof roads?.buildContent).toBe("function");
+    // cinatra#3862 leg 8: the bytes and the content are the whole of it. No surface reads a stored capture pair, so the
+    // publish row's sealed roads carry no picture road beside them.
+    expect(Object.keys(roads ?? {}).sort()).toEqual(["buildContent", "byteMinter"]);
     // The road was probed once with the closure every panel uses, as a gate's is.
     expect(mintPreview).toHaveBeenCalledWith(expect.objectContaining({ artifactId: "unmintable-probe", mime: "image/png" }));
     expect(isEmptyIsland(el)).toBe(false);

@@ -131,6 +131,30 @@ describe("the check of an outward action's owner", () => {
     expect(registry.currentLoadedExtensionIdentity(PKG, "1.2.0")).toBeUndefined();
   });
 
+  it("a pending stamp retires the current identity and is refused until it is promoted", () => {
+    const previous = stamp();
+    const pending = (registry as unknown as {
+      recordLoadedExtensionIdentity: (v: unknown, o: unknown) => registry.LoadedExtensionIdentity;
+    }).recordLoadedExtensionIdentity({ ...INSTALL, digest: "e".repeat(64) }, { pending: true });
+    expect(refusalCode(previous)).toBe("action_loaded_identity_stale");
+    expect(refusalCode(pending)).toBe("action_loaded_identity_stale");
+    registry.promoteLoadedExtensionIdentity(pending);
+    expect(check(pending)).toBe(pending);
+  });
+
+  it.each([
+    ["a failed attempt", (pending: registry.LoadedExtensionIdentity) =>
+      registry.retireLoadedExtensionIdentity(PKG, "1.2.0", pending)],
+    ["a capability teardown", () => registry.invalidateProvidersForPackage(PKG)],
+  ])("never promotes a pending stamp retired by %s", (_label, retire) => {
+    const pending = (registry as unknown as {
+      recordLoadedExtensionIdentity: (v: unknown, o: unknown) => registry.LoadedExtensionIdentity;
+    }).recordLoadedExtensionIdentity(INSTALL, { pending: true });
+    retire(pending);
+    registry.promoteLoadedExtensionIdentity(pending);
+    expect(refusalCode(pending)).toBe("action_loaded_identity_stale");
+  });
+
   it("refuses every identity of a package after its capability teardown, and keeps other packages", () => {
     const identity = stamp();
     const other = stamp({ ...INSTALL, packageName: "@x/other" });

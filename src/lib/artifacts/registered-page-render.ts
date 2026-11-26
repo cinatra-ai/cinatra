@@ -11,7 +11,6 @@ import {
   type RegisteredCaptureSite,
 } from "./cms-preview-capture-policy";
 import { allowsLoopbackHttp } from "../loopback-http-policy";
-import type { CmsPreviewCaptureGeometry } from "./cms-preview-capture-store";
 
 // ---------------------------------------------------------------------------
 // The page-render primitives of the REGISTERED-PAGE CAPTURE (cinatra#4223,
@@ -30,6 +29,24 @@ import type { CmsPreviewCaptureGeometry } from "./cms-preview-capture-store";
 //    and a same-origin-only subresource policy, pinned to the addresses the
 //    guard validated. The app's own server graph never imports a browser.
 // ---------------------------------------------------------------------------
+
+/** One region anchor's box in the rendered page, in CSS pixels relative to the
+ * full-page screenshot, as the isolated renderer reports it. */
+export interface RenderedPageRegionBox {
+  region: string;
+  postId: string | null;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The rendered page's geometry, as the isolated renderer reports it. */
+export interface RenderedPageGeometry {
+  regions: RenderedPageRegionBox[];
+  contentHeight: number;
+  viewport: { width: number; height: number };
+}
 
 /** Cap on the fetched preview page. A site that returns more is degraded, not
  * buffered. */
@@ -125,7 +142,7 @@ export interface PreviewCaptureDeps {
     | {
         ok: true;
         screenshot: Uint8Array;
-        geometry: CmsPreviewCaptureGeometry;
+        geometry: RenderedPageGeometry;
         network: { blockedRequests: number; allowedRequests: number };
       }
     | { ok: false; reason: CaptureDegradeReason }
@@ -240,7 +257,7 @@ export async function renderIsolatedSubprocess(input: {
   | {
       ok: true;
       screenshot: Uint8Array;
-      geometry: CmsPreviewCaptureGeometry;
+      geometry: RenderedPageGeometry;
       network: { blockedRequests: number; allowedRequests: number };
     }
   | { ok: false; reason: CaptureDegradeReason }
@@ -301,7 +318,7 @@ export async function renderIsolatedSubprocess(input: {
     screenshot,
     geometry: {
       regions: Array.isArray(parsed.regions)
-        ? (parsed.regions as CmsPreviewCaptureGeometry["regions"])
+        ? (parsed.regions as RenderedPageGeometry["regions"])
         : [],
       contentHeight: Number(parsed.contentHeight ?? 0),
       viewport,

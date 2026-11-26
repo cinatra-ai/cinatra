@@ -159,6 +159,7 @@ export function __resetCapabilityRegistry(): void {
   signedTrustedRegistry.clear();
   servingRecords.clear();
   loadedIdentities.current.clear();
+  loadedIdentities.latest.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -407,10 +408,14 @@ export function __resetServingRecords(): void {
 // dev or bundled load has no install id or digest, so it has no loaded identity.
 //
 // One identity is current per (package, version). Each stamp mints a new frozen
-// object and replaces the current one; a failed attempt retires only the
-// identity it stamped itself (never a newer one), a successful load without an
-// install id or a digest retires the current one, and the capability teardown
-// above drops every identity of the package. The check accepts only the exact
+// object and replaces the current one. The loader stamps PENDING: the stamp
+// retires the current identity at once, and its own becomes current only when
+// the loader promotes it after the attempt fully activated (registration, and
+// for a default version also bootstrap). Every retirement goes through
+// `retireLoadedExtensionIdentity`: a failed attempt (registration or bootstrap)
+// retires only the identity it stamped itself (never a newer one), a
+// successful load without an install id or a digest retires the current one,
+// and the capability teardown above retires every identity of the package. The check accepts only the exact
 // object the loader minted, never a copy with equal fields. An outward run action checks
 // its owner's identity here (`assertOutwardActionLoadedIdentity` in
 // `@/lib/extension-host-context`). Co-located with the providers, because the
@@ -428,6 +433,8 @@ const LOADED_IDENTITIES_KEY = Symbol.for("@cinatra-ai/host:loaded-extension-iden
 type LoadedIdentityRegistry = {
   next: number;
   current: Map<string, LoadedExtensionIdentity>;
+  /** The newest stamp per (package, version); only this one may be promoted. */
+  latest: Map<string, LoadedExtensionIdentity>;
   minted: WeakSet<LoadedExtensionIdentity>;
 };
 const loadedIdentityHolder = globalThis as unknown as {
@@ -436,8 +443,11 @@ const loadedIdentityHolder = globalThis as unknown as {
 const loadedIdentities: LoadedIdentityRegistry = (loadedIdentityHolder[LOADED_IDENTITIES_KEY] ??= {
   next: 0,
   current: new Map<string, LoadedExtensionIdentity>(),
+  latest: new Map<string, LoadedExtensionIdentity>(),
   minted: new WeakSet<LoadedExtensionIdentity>(),
 });
+// A registry from an older module copy on the same global has no `latest`.
+loadedIdentities.latest ??= new Map<string, LoadedExtensionIdentity>();
 
 function loadedIdentityKey(packageName: string, version: string): string {
   return `${packageName}\u0000${version}`;
@@ -451,14 +461,18 @@ function loadedIdentityFieldValid(value: unknown): value is string {
  * Stamp the loaded identity of one verified install. Host loader only; a
  * provider or a tool never calls it. Throws `action_loaded_identity_invalid`
  * when a field is missing or malformed, so no identity exists without an
- * install id and a digest.
+ * install id and a digest. With `pending`, the stamp retires the current
+ * identity and its own is not current until `promoteLoadedExtensionIdentity`.
  */
-export function recordLoadedExtensionIdentity(input: {
-  packageName: unknown;
-  version: unknown;
-  installId: unknown;
-  digest: unknown;
-}): LoadedExtensionIdentity {
+export function recordLoadedExtensionIdentity(
+  input: {
+    packageName: unknown;
+    version: unknown;
+    installId: unknown;
+    digest: unknown;
+  },
+  opts: { pending?: boolean } = {},
+): LoadedExtensionIdentity {
   const { packageName, version, installId, digest } = input;
   if (
     !loadedIdentityFieldValid(packageName) ||
@@ -476,8 +490,26 @@ export function recordLoadedExtensionIdentity(input: {
     generation: ++loadedIdentities.next,
   });
   loadedIdentities.minted.add(identity);
-  loadedIdentities.current.set(loadedIdentityKey(packageName, version), identity);
+  const key = loadedIdentityKey(packageName, version);
+  if (opts.pending) {
+    retireLoadedExtensionIdentity(packageName, version);
+  } else {
+    loadedIdentities.current.set(key, identity);
+  }
+  loadedIdentities.latest.set(key, identity);
   return identity;
+}
+
+/**
+ * Make a pending stamp current, after its attempt fully activated. A no-op when
+ * a newer stamp exists for the same (package, version) or the stamp was
+ * retired meanwhile (a failure, a teardown), so a retired stamp never returns.
+ */
+export function promoteLoadedExtensionIdentity(identity: LoadedExtensionIdentity): void {
+  if (!isLoadedExtensionIdentityMinted(identity)) return;
+  const key = loadedIdentityKey(identity.packageName, identity.version);
+  if (loadedIdentities.latest.get(key) !== identity) return;
+  loadedIdentities.current.set(key, identity);
 }
 
 /** The current loaded identity of one (package, version), or undefined. */
@@ -506,9 +538,11 @@ export function isLoadedExtensionIdentityCurrent(value: unknown): boolean {
 }
 
 /**
- * Retire the loaded identity of one (package, version). With `expected`, a
- * compare-and-delete: it retires only while the current identity is that very
- * object, so an attempt never retires an identity another attempt stamped.
+ * Retire the loaded identity of one (package, version): the current one and a
+ * pending stamp, which can then never be promoted. With `expected`, a
+ * compare-and-delete: it retires only that very object, so an attempt never
+ * retires an identity another attempt stamped. The one retire path: a failed
+ * registration, a failed bootstrap and the capability teardown all use it.
  */
 export function retireLoadedExtensionIdentity(
   packageName: string,
@@ -517,12 +551,17 @@ export function retireLoadedExtensionIdentity(
 ): void {
   if (!loadedIdentityFieldValid(version)) return;
   const key = loadedIdentityKey(packageName, version);
-  if (expected !== undefined && loadedIdentities.current.get(key) !== expected) return;
-  loadedIdentities.current.delete(key);
+  for (const map of [loadedIdentities.current, loadedIdentities.latest]) {
+    if (expected === undefined || map.get(key) === expected) map.delete(key);
+  }
 }
 
 function retireLoadedExtensionIdentitiesForPackage(packageName: string): void {
-  for (const [key, identity] of loadedIdentities.current) {
-    if (identity.packageName === packageName) loadedIdentities.current.delete(key);
+  const versions = new Set<string>();
+  for (const map of [loadedIdentities.current, loadedIdentities.latest]) {
+    for (const identity of map.values()) {
+      if (identity.packageName === packageName) versions.add(identity.version);
+    }
   }
+  for (const version of versions) retireLoadedExtensionIdentity(packageName, version);
 }

@@ -50,7 +50,7 @@ import { resumeMessageFromInput } from "./resume-message";
 // live in ./test-delivery-handlers (extracted to keep this primitive hub under
 // the file-size ratchet). The send PORT, ledger store, and port types are
 // imported by that module, not here.
-import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
+import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction, handleCampaignTestSendPlan } from "./test-delivery-handlers";
 // The `agent_run` create → decide → dispatch sequence (chat-hitl S9b).
 import { createAgentRunForLaunchFrame } from "../actions";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
@@ -5714,6 +5714,8 @@ export function createAgentBuilderPrimitiveHandlers(): Record<
       handleEmailTestDeliveryRunSend(req as Parameters<typeof handleEmailTestDeliveryRunSend>[0]),
     email_test_delivery_parse_action: (req) =>
       handleEmailTestDeliveryParseAction(req as Parameters<typeof handleEmailTestDeliveryParseAction>[0]),
+    // cinatra#4150: the pinned plan of a test send (what its publish card shows and its send mails).
+    campaign_test_send_plan: (req) => handleCampaignTestSendPlan(req as Parameters<typeof handleCampaignTestSendPlan>[0]),
     // run-scoped drafts-review PERSIST primitive (#1959) — run, declaring
     // package, and actor context-derived; writes the reviewed per-recipient
     // edits onto the run's own draft-bundle object (the drafts _list read's row).

@@ -778,7 +778,7 @@ export function assertRunStepToolAllowed(input: {
 /** Trusted loader selection BEFORE dispatch. Credentials never leave the configured origin. */
 export async function selectWayflowRunStepToolPolicy(input: {
   agentUrl: string; contextId: string;
-}, fetchImpl: typeof fetch = fetch): Promise<RunStepToolPolicy> {
+}, fetchImpl: typeof fetch = fetch): Promise<RunStepToolPolicy & { readonly mountedSource?: string }> {
   const base = process.env.WAYFLOW_BASE_URL;
   const bridgeToken = process.env.CINATRA_BRIDGE_TOKEN;
   if (!base || !bridgeToken) throw new RunStepToolPolicyRefusal("step_tool_loader_unavailable");
@@ -810,13 +810,23 @@ export async function selectWayflowRunStepToolPolicy(input: {
   const { checkExecutedPublishingCallRoutes } = await import("./oas-compiler");
   const routes = checkExecutedPublishingCallRoutes(b.declarationSource as string);
   if (!routes.ok) throw new RunStepToolPolicyRefusal(routes.error);
-  return createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
+  // cinatra#3089: the mounted file's own text (its digest is sourceSha256), from which the dispatch compiles the steps
+  // that classify the run's pauses. A loader that sends none (an older one) leaves them uncompiled.
+  // The loader sends it once: as `mountedSource`, or, when it is the declaration source byte for byte, as that marker.
+  const mountedSource = b.mountedSourceIsDeclarationSource === true ? b.declarationSource : b.mountedSource;
+  if ((b.mountedSourceIsDeclarationSource !== undefined && (b.mountedSourceIsDeclarationSource !== true || b.mountedSource !== undefined)) ||
+      (mountedSource !== undefined && (!text(mountedSource) || sha256(mountedSource) !== b.sourceSha256))) {
+    throw new RunStepToolPolicyRefusal("step_tool_loader_binding_invalid");
+  }
+  const policy = createRunStepToolPolicy({ contextId: input.contextId, rawSource: b.declarationSource,
     selectedRawSourceSha256: b.sourceSha256, selectedExecutedSourceSha256: b.executedSourceSha256 });
+  return text(mountedSource) ? Object.freeze({ ...policy, mountedSource }) : policy;
 }
 
-/** The loader's answer holds the agent's graph about twice (its composed document and the bound source); a larger
- * answer is refused before it is read in full, parsed, hashed or stored (cinatra#3745). */
-export const LOADER_SELECTION_MAX_BYTES = 8 * 1024 * 1024;
+/** The loader's answer holds the agent's graph up to three times (its composed document, the bound source and, when the
+ * loader transformed it, the mounted file's own text, cinatra#3089); a larger answer is refused before it is read in full,
+ * parsed, hashed or stored (cinatra#3745). 8 MiB held the first two; the third copy is at most one more 8 MiB. */
+export const LOADER_SELECTION_MAX_BYTES = 16 * 1024 * 1024;
 async function readLoaderAnswer(response: Response): Promise<unknown> {
   const declared = response.headers.get("content-length");
   if (declared !== null && !(Number(declared) <= LOADER_SELECTION_MAX_BYTES)) {
@@ -860,12 +870,33 @@ export function withRunActionPolicyTransaction<T>(input: {
   return guardedRunWrite(input.authority, { orgId: input.orgId, runId: input.runId,
     capability: "run.execute" }, (tx) => body(tx as unknown as RunActionPolicyTx));
 }
+/** cinatra#3089: the steps that classify the pauses of a run, compiled at dispatch from the source the loader mounted
+ *  and bound with that source, in the same row and write. Never derived from the template row. */
+export const RUN_PAUSE_STEPS_KEY = "pauseSteps";
+export type RunPauseSteps = { approvalPolicy: unknown };
+/** The steps bound with the run's source. Null when the binding carries none (no binding, or one written before they
+ *  were bound: the caller then reads as before). Throws when the record is there but holds no steps (the mounted source
+ *  sent no text or did not compile) or cannot be read: the caller stops the pause. */
+export async function readRunPauseSteps(runId: string, orgId: string): Promise<RunPauseSteps | null> {
+  const [bound] = await db.select({ policy: agentRunOutwardActionPolicies.policy })
+    .from(agentRunOutwardActionPolicies).where(and(eq(agentRunOutwardActionPolicies.runId, runId),
+      eq(agentRunOutwardActionPolicies.orgId, orgId)));
+  if (!bound?.policy || typeof bound.policy !== "object" || !Object.prototype.hasOwnProperty.call(bound.policy, RUN_PAUSE_STEPS_KEY)) return null;
+  const record = Object.getOwnPropertyDescriptor(bound.policy, RUN_PAUSE_STEPS_KEY)?.value as Record<string, unknown> | null;
+  const approvalPolicy = record && typeof record === "object" ? Object.getOwnPropertyDescriptor(record, "approvalPolicy")?.value : undefined;
+  if (record?.version !== 1 || approvalPolicy === null || typeof approvalPolicy !== "object") {
+    throw new Error(`no pause steps were compiled from the source bound to run ${runId}`);
+  }
+  return { approvalPolicy };
+}
 /** First bind, or the SAME graph moved to the run's current attempt. A run that dispatches again under a fresh
  * attempt (the failed-run retry: reset, then run) re-selects; the binding moves to that attempt only when the fresh
  * selection is the bound policy byte for byte. A restart or retry can never replace the selected graph. */
 export async function bindRunStepToolPolicy(input: {
   orgId: string; runId: string; executionAttemptId: string;
   policy: RunStepToolPolicy; authority: OrgWriteAuthority;
+  /** cinatra#3089: the steps compiled from the mounted source of `policy`; null when they could not be. */
+  pauseSteps?: RunPauseSteps | null;
 }): Promise<void> {
   const policy = parseRunStepToolPolicy(input.policy);
   await withRunActionPolicyTransaction(input, async (tx) => {
@@ -875,8 +906,12 @@ export async function bindRunStepToolPolicy(input: {
         run.executionAttemptId !== input.executionAttemptId || run.a2aContextId !== policy.contextId) {
       throw new RunStepToolPolicyRefusal("step_tool_dispatch_binding_mismatch");
     }
+    const pauseSteps = input.pauseSteps === undefined ? undefined
+      : { version: 1, approvalPolicy: input.pauseSteps?.approvalPolicy ?? null };
+    // The first bind's row stays (a retry may only re-bind the same source), and with it the steps bound beside it.
     await tx.insert(agentRunOutwardActionPolicies).values({ runId: input.runId, orgId: input.orgId,
-      executionAttemptId: input.executionAttemptId, policy }).onConflictDoNothing();
+      executionAttemptId: input.executionAttemptId,
+      policy: pauseSteps === undefined ? policy : { ...policy, [RUN_PAUSE_STEPS_KEY]: pauseSteps } }).onConflictDoNothing();
     const [bound] = await tx.select().from(agentRunOutwardActionPolicies)
       .where(eq(agentRunOutwardActionPolicies.runId, input.runId)).for("update");
     if (!bound || bound.orgId !== input.orgId ||

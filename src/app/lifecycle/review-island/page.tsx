@@ -10,10 +10,9 @@ import "server-only";
 // server-renders the pinned targets of ONE review gate: the immutable target
 // header, the renderer-provenance chip, and whichever tier of the ladder
 // resolves — a build-time renderer the defining extension ships, a runtime
-// renderer from an installed extension, or the sanitized metadata floor. Plus
-// the pinned capture pair where the target has one. It is the SAME
-// `ReviewTargetPanel` the review page has always rendered; there is no second
-// implementation of the ladder anywhere.
+// renderer from an installed extension, or the sanitized metadata floor. It is
+// the SAME `ReviewTargetPanel` the review page has always rendered; there is no
+// second implementation of the ladder anywhere.
 //
 // WHY IT EXISTS. §III's ladder is resolved by SERVER components, and two of the
 // three hosts that must show it (the chat thread, the run card) are
@@ -29,8 +28,10 @@ import "server-only";
 // authorized by the host).
 //
 // THE FRAME IS CONTAINMENT, NOT A TRUST BOUNDARY. The embedding card sets
-// `sandbox="allow-scripts allow-same-origin"`, which — with both tokens — does
-// not isolate a same-origin document from its opener. That is deliberate and
+// `sandbox="allow-scripts allow-same-origin allow-downloads"`, which — with the
+// first two tokens — does not isolate a same-origin document from its opener.
+// (`allow-downloads` lets the download links this document draws work; the
+// owner decided that one permission, cinatra#3459.) That is deliberate and
 // harmless BECAUSE the authorization is here: a reader is required, the ref is
 // decoded server-side (it is authenticated-encrypted; a forged one does not
 // decode), and `loadReviewGateSurface` re-runs the reader's run access and reads
@@ -128,6 +129,7 @@ import {
 // the modules it always did.
 import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
 import {
+  ISLAND_SOLE_PDF_FLOOR_CLASSES,
   islandBodyClassName,
   islandDocumentGroundCss,
   islandEmptyClassName,
@@ -152,6 +154,7 @@ import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
+import { PdfShellFrameProvider } from "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell";
 import { IslandHeightReporter } from "./island-height-reporter";
 // cinatra#3092 — the open-in-the-CMS road: see `island-open-link.tsx`.
 import { IslandOpenInCmsAddresses } from "./island-open-link";
@@ -247,9 +250,14 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   // live address reader (cinatra#4311): its reader carries the cookie both are
   // reached with.
   let roads: ReviewSurfaceRoads | null = null;
+  // WHO THE RESOLVER PROVED THIS READER TO BE (cinatra#3459). Set only from a
+  // reader the resolver returned, which is always a widget site's principal:
+  // the page branches on that proven fact below, never on the query value.
+  let widgetReader = false;
   if (credential) {
     const reader = await resolveIslandCredentialReader({ credential, ref });
     if (!reader) return empty;
+    widgetReader = true;
     actorCtx = reader.actorCtx;
     // The GATE COMES FROM THE CREDENTIAL, not from a second decode of the ref.
     // The two were proven equal inside the resolver; reading the ref again here
@@ -418,13 +426,21 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   for (const stream of surface.targets) {
     if (drawn.includes(stream)) continue;
     void stream.prepared.catch(() => undefined);
-    void stream.capturePair.catch(() => undefined);
   }
   if (!selection.ok) return empty;
 
+  // THE PDF FLOOR IS THE WHOLE DOCUMENT (§XI.4's floor drawing). Where this
+  // document draws one target and nothing else, and that target stands on the
+  // shared pdf shell's floor, the body draws no plate of its own around it: no
+  // padding and the panel's own fill, so the floor sits straight under the
+  // card's target header, one surface with its own rule. Every other document
+  // keeps its body exactly as before.
+  const soleFloor = drawn.length === 1 && !surface.agentSummary;
   return (
     <div
-      className={islandBodyClassName(scheme)}
+      className={
+        soleFloor ? `${islandBodyClassName(scheme)} ${ISLAND_SOLE_PDF_FLOOR_CLASSES}` : islandBodyClassName(scheme)
+      }
       data-conformance-id="review-target-island-body"
       // WHICH READING this document is: the gate's own state, named for the
       // conformance check and for nothing else. Both readings draw the same
@@ -461,29 +477,44 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           decision is all-or-nothing across the gate. */}
       {/* Keyed by POSITION as well as by target, so the same target pinned
           twice still draws two panels. */}
-      {drawn.map((stream, index) => (
-        <Suspense
-          key={reviewTargetStreamKey(index, stream.target)}
-          fallback={<ReviewGateLoading />}
-        >
-          <StreamedReviewTarget
-            prepared={stream.prepared}
-            capturePair={stream.capturePair}
-            // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
-            // target is framed by the CARD — that target's header over this
-            // document inside one panel — so a border here too would be the
-            // nested body card §IV does not draw. That is a gate that pins one
-            // target, and each frame of a gate the card draws as pairs, which
-            // names its one target (cinatra#4129). Only a document that still
-            // draws several targets frames each of its panels here, as before.
-            framed={drawn.length > 1}
-            // The TRUSTED organization scope, from the reader this island just
-            // authorized — never from the query string and never from the
-            // display props. The form rung reads the pinned bytes under it.
-            orgId={actorCtx.orgId}
-          />
-        </Suspense>
-      ))}
+      {/* THIS DOCUMENT IS ONLY EVER SERVED INTO THE CARD'S SANDBOXED FRAME, where
+          the browser will not run its PDF viewer. Declaring it lets the shared
+          pdf shell paint its download floor on the server render, so the frame
+          never shows an empty embed before the page hydrates; once it runs, the
+          shell reads the real frame.
+          WHETHER THE FLOOR MAY OFFER A DOWNLOAD is declared here too, because
+          only this page knows which addresses it handed out. The first-party
+          card's session addresses take a download link. A widget frame does
+          not: its sealed byte addresses refuse a link navigation, and the CMS
+          frame around it withholds downloads; so there the floor keeps its
+          words and draws no download control. */}
+      <PdfShellFrameProvider
+        frame="sandboxed"
+        downloads={widgetReader || widgetFrame ? "none" : "link"}
+      >
+        {drawn.map((stream, index) => (
+          <Suspense
+            key={reviewTargetStreamKey(index, stream.target)}
+            fallback={<ReviewGateLoading />}
+          >
+            <StreamedReviewTarget
+              prepared={stream.prepared}
+              // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
+              // target is framed by the CARD — that target's header over this
+              // document inside one panel — so a border here too would be the
+              // nested body card §IV does not draw. That is a gate that pins one
+              // target, and each frame of a gate the card draws as pairs, which
+              // names its one target (cinatra#4129). Only a document that still
+              // draws several targets frames each of its panels here, as before.
+              framed={drawn.length > 1}
+              // The TRUSTED organization scope, from the reader this island just
+              // authorized — never from the query string and never from the
+              // display props. The form rung reads the pinned bytes under it.
+              orgId={actorCtx.orgId}
+            />
+          </Suspense>
+        ))}
+      </PdfShellFrameProvider>
 
       {/* THE HEIGHT THIS DOCUMENT ACTUALLY DREW, named to the frame that holds
           it. Last, and drawing nothing: `hidden` keeps it out of the flex flow,
@@ -505,26 +536,23 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
  * first body can stream.
  *
  * It is the SAME `ReviewTargetPanel` the review page has always rendered, fed
- * the same prepared value and the same pinned pair. Nothing about the ladder,
+ * the same prepared value. Nothing about the ladder,
  * the floor or the trusted organization scope moves.
  */
 function StreamedReviewTarget({
   prepared,
-  capturePair,
   framed,
   orgId,
 }: {
   prepared: ReviewTargetStream["prepared"];
-  capturePair: ReviewTargetStream["capturePair"];
   /** Whether this panel draws its own frame (cinatra#3441) — see the caller. */
   framed: boolean;
   orgId: string;
 }) {
   const target = use(prepared);
-  const pair = use(capturePair);
   return (
     <>
-      <ReviewTargetPanel prepared={target} orgId={orgId} capturePair={pair} framed={framed} />
+      <ReviewTargetPanel prepared={target} orgId={orgId} framed={framed} />
       {/* The card's idle-progress bound restarts on this: a gate that is still
           streaming panels is never painted over with a failure plate. */}
       <IslandPanelMountedSignal />

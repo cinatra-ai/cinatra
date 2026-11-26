@@ -179,6 +179,25 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
         .max(500)
         .optional()
         .describe("Explicit follow-up draft ids. Membership-checked against the campaign; unknown ids dropped. Bounded at 500."),
+      pinnedPlanJson: z
+        .string()
+        .max(20000)
+        .optional()
+        .describe("cinatra#4150: the `planJson` that campaign_test_send_plan answered. When present the call sends exactly that plan (its sender, its recipient, its drafts at their revisions), refuses anything that changed since, and ignores the selection fields."),
+    }),
+  },
+  // cinatra#4150: the pinned plan of a test send. Sends nothing; answers what the
+  // run's publish card shows and the pinned plan the send takes.
+  "campaign_test_send_plan": {
+    description:
+      "Run-scoped plan of a campaign test send. Sends nothing and changes no draft. Resolves the recipient (as typed and validated) and the draft selection ONCE (a random pick is made here and pinned), under the same run checks as email_test_delivery_run_send. Returns { ok:true, sender, recipient, drafts:[{subject, preview, draftId, revision}] (at most 50), draftCount, planJson } for a publish card's rows and the pinned send, or { ok:false, reason, message, lastSendResult, gateCycle } for a refusal the gate shows. The run, campaign and submission come from the run-bound context.",
+    inputSchema: z.object({
+      recipientEmail: z.string().min(1).max(320).describe("Recipient address for the test send."),
+      selectionMode: z
+        .enum(["random_initial", "specific_initial", "all_initial"])
+        .describe("Which campaign drafts to plan: one random initial, an explicit set, or all initials."),
+      specificInitialDraftIds: z.array(z.string().min(1)).max(500).optional().describe("Explicit initial draft ids (specific_initial mode). Bounded at 500."),
+      specificFollowUpDraftIds: z.array(z.string().min(1)).max(500).optional().describe("Explicit follow-up draft ids. Bounded at 500."),
     }),
   },
   "email_test_delivery_parse_action": {
@@ -292,7 +311,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
        * follow-up milestone.)
        */
       agentDependencies: z.record(z.string(), z.string()).optional().describe("[DEPRECATED — use the canonical cinatra.dependencies vocabulary] Child agent dependencies for orchestrator templates. Maps packageName to semver range (e.g. { '@cinatra/stage-1': '^1.0.0' }). Pass {} to clear all dependencies."),
-      approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package."),
+      approvalPolicy: z.record(z.string(), z.unknown()).optional().describe("Replacement approval policy object (e.g. { steps: [...] }). Replaces the entire approvalPolicy field. Use to update HITL step definitions, renderers, gateCount, and hitlOwnedBy without republishing the agent package. For a package whose source the runtime mounts, a run takes its steps from the installed version, so an approvalPolicy edit applies only to agents without a mounted source."),
     }),
   },
   "agent_export": {
