@@ -91,6 +91,9 @@ const ACTOR = {
  * capture, so the page can open a boundary per target the moment the preflight
  * is through instead of waiting for the whole set.
  */
+// The targets carry no capture pair (cinatra#3862 leg 8); a page that still
+// reads one fails on the missing promise.
+// red-first-expect: Cannot read properties of undefined (reading 'catch')
 function target(artifactId: string) {
   const prepared = {
     target: { artifactId, representationRevisionId: `${artifactId}-rev` },
@@ -100,7 +103,6 @@ function target(artifactId: string) {
   return {
     target: prepared.target,
     prepared: Promise.resolve(prepared),
-    capturePair: Promise.resolve(null),
   };
 }
 
@@ -109,7 +111,6 @@ function pendingTarget(artifactId: string) {
   return {
     target: { artifactId, representationRevisionId: `${artifactId}-rev` },
     prepared: new Promise<never>(() => {}),
-    capturePair: Promise.resolve(null),
   };
 }
 
@@ -226,7 +227,6 @@ describe("the island tells the pdf shell it is served into a sandboxed frame (ci
   // The browser runs no PDF viewer in the card's sandboxed frame, so a served
   // embed is a blank plate until the page hydrates. Declared here, the shell's
   // server render already draws its download floor.
-  // red-first-expect: expected undefined to be 'sandboxed'
   it("draws every target panel inside the sandboxed-frame declaration", async () => {
     loadReviewGateSurface.mockResolvedValue({
       kind: "ready",
@@ -249,8 +249,6 @@ describe("the island tells the pdf shell it is served into a sandboxed frame (ci
   // addresses do; the widget's sealed byte addresses refuse a link navigation,
   // and the CMS frame around the widget withholds downloads anyway, so there
   // the shell must draw no download control at all.
-  // red-first-expect: expected undefined to be 'link'
-  // red-first-expect: expected undefined to be 'none'
   function declaredDownloads(el: ReactElement): string | undefined {
     const children = (el.props as { children: unknown[] }).children.flat();
     const provider = children.find(
@@ -298,7 +296,6 @@ describe("a document whose one target stands on the pdf floor draws no plate aro
   const classesOf = (el: ReactElement): string[] =>
     String((el.props as { className?: string }).className ?? "").split(/\s+/).filter(Boolean);
 
-  // red-first-expect: to include 'has-[[data-artifact-renderer=pdf-shel
   it("drops the body's padding and fill in the floor state where it draws one target", async () => {
     loadReviewGateSurface.mockResolvedValue({ kind: "ready", agentSummary: null, targets: [target("a1")] });
     const classes = classesOf(await renderIsland(REF));
@@ -595,7 +592,6 @@ describe("the island's target selector names exactly one pinned target, or draws
     return {
       target: prepared.target,
       prepared: Promise.resolve(prepared),
-      capturePair: Promise.resolve(null),
     };
   }
   function surfaceOf(targets: Array<ReturnType<typeof pinned>>) {
@@ -966,7 +962,6 @@ describe("cinatra#4129 — a frame that names one pinned target draws that targe
       const failing = (artifactId: string) => ({
         target: { artifactId, representationRevisionId: `${artifactId}-rev` },
         prepared: Promise.reject(new Error(`prepare failed: ${artifactId}`)),
-        capturePair: Promise.reject(new Error(`capture failed: ${artifactId}`)),
       });
       loadReviewGateSurface.mockResolvedValue({
         kind: "ready",
