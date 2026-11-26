@@ -178,8 +178,9 @@ export async function passthroughAllowlist(): Promise<{ tools: ReadonlySet<strin
   return { tools, spreads };
 }
 
+// red-first-expect: Cannot read properties of undefined (reading 'test')
 /** The MCP toolboxes the bridge gives a step whose request names none: its default. */
-const DEFAULT_MCP_TOOLBOXES = new Set(resolveBridgeToolboxIds(undefined).mcp);
+const defaultMcpToolboxes = () => new Set(resolveBridgeToolboxIds(undefined).mcp);
 
 /** The publishing tools a pack's manifest consumes (cinatra.consumes[].primitive). */
 export function consumedPublishingTools(pkg: Json, census: ToolCensus): string[] {
@@ -239,8 +240,8 @@ function readComponent(node: Json, consumed: string[], census: ToolCensus): Read
       const toolboxes = mcpToolboxesOf(node);
       if (toolboxes === null) {
         out.unheld.push(`${id} has no tool list and toolbox ids the host cannot read`);
-      } else if (toolboxes.some((t) => !DEFAULT_MCP_TOOLBOXES.has(t))) {
-        const other = toolboxes.filter((t) => !DEFAULT_MCP_TOOLBOXES.has(t));
+      } else if (toolboxes.some((t) => !defaultMcpToolboxes().has(t))) {
+        const other = toolboxes.filter((t) => !defaultMcpToolboxes().has(t));
         out.unheld.push(`${id} has no tool list and is offered the toolbox ${other.join(", ")}, which the MCP boundary does not hold`);
       } else if (toolboxes.length > 0) {
         if (consumed.length > 0) {

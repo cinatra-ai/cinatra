@@ -345,6 +345,7 @@ describe("the runtime server dispatches on the boundary's decision by decisionBl
 
   const plainConfig = { title: TOOL, description: TOOL } satisfies ExtensionMcpToolConfig;
 
+  // red-first-pin: a blocking denial
   it("does not invoke the handler on a run's frame when the decision is a blocking denial", async () => {
     vi.spyOn(boundaryModule, "enforceMcpBoundary").mockResolvedValue({ allowed: false, reason: REASON, shouldBlock: true });
     const built = await buildOneTool(plainConfig);
@@ -354,6 +355,7 @@ describe("the runtime server dispatches on the boundary's decision by decisionBl
     expect(built.handled).toEqual([]);
   });
 
+  // red-first-pin: a denial that does not block
   it("invokes the handler on a run's frame when the decision is a denial that does not block", async () => {
     vi.spyOn(boundaryModule, "enforceMcpBoundary").mockResolvedValue({ allowed: false, reason: REASON, shouldBlock: false });
     const built = await buildOneTool(plainConfig);

@@ -564,6 +564,14 @@ describe("cinatra#4150 — an input fed into a publishing step must be a name th
     );
   });
 
+  it("refuses an input name with a trailing line break, as the loader's whole-string match does", async () => {
+    for (const name of ["post_text\n", "post_text\r\n"]) {
+      expect(await compileError(fed(name, true))).toBe(
+        'PUBLISH_GATE_UNSUPPORTED: an input fed into publishing step "publish" is not a plain identifier, so the stop could not surface it',
+      );
+    }
+  });
+
   it("accepts a plain identifier, and leaves a node that does not publish alone", async () => {
     expect(await publishingStepsOf(fed("post_text", true))).toEqual(["publish"]);
     expect(await publishingStepsOf(fed("post text", false))).toEqual([]);
