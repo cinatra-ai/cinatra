@@ -268,7 +268,7 @@ describe("the walk of a publishing node's components ends on cycles", () => {
 
   for (const [shape, build] of Object.entries(shapes)) {
     it(`ends on ${shape}, and finds its step once`, () => {
-      // red-first-expect: everyApiNodeUnder is not a function
+      // red-first-expect: everyApiNodeUnder) is not a function
       const doc = build();
       const rootRefs = doc.$referenced_components as Record<string, unknown>;
       expect(everyApiNodeUnder(rootRefs.pub, rootRefs).map((n) => n.id)).toEqual(["deep"]);
@@ -277,7 +277,7 @@ describe("the walk of a publishing node's components ends on cycles", () => {
   }
 
   it("ends on a list and a component that contain themselves", () => {
-    // red-first-expect: everyApiNodeUnder is not a function
+    // red-first-expect: everyApiNodeUnder) is not a function
     const list: unknown[] = [bridge("deep")];
     list.push(list);
     expect(everyApiNodeUnder(list, {}).map((n) => n.id)).toEqual(["deep"]);
