@@ -936,25 +936,14 @@ export function AppShell({
             data-testid="app-shell-topbar-row"
             className="flex h-full w-full items-center gap-3 px-5 sm:gap-4 sm:px-8"
           >
-            {/* cinatra#2934 — the drawing names the top-bar's left element and
-                it is this one: "The breadcrumb is the top-bar's left element
-                and moves with the bar — it anchors at that far-left edge."
-                The row carries only the standard edge gutters, so the trail
-                begins at the gutter and nothing is drawn to its left. The
-                sidebar toggle and its divider used to sit here and pushed the
-                trail 92px inside the sidebar's inner edge where 32px is drawn;
-                they now lead the right-hand cluster instead, so the control is
-                still one click away at every viewport while the left edge
-                belongs to the trail alone. Desktop collapse also remains on
-                the sidebar's own rail. */}
-            {/* Below `sm` the trail is not drawn: the right-hand cluster then
-                spans the row (`max-sm:flex-1`) and its first child, the one
-                sidebar toggle, stands at the row's left gutter
-                (`max-sm:mr-auto`), where the primary navigation control has
-                always been. At `sm` and up the same toggle leads the
-                right-hand cluster, so the trail alone sits at the gutter the
-                drawing names. The toggle is mounted ONCE: a second copy hidden
-                by a class would still be in the document at every width. */}
+            {/* The sidebar toggle stands in front of the breadcrumb, with no
+                divider between them, by the owner's decision of 2026-11-26.
+                This supersedes the cinatra#2934 reading that moved it to the
+                right-hand cluster. It is mounted ONCE and is the row's first
+                element at every width: below `sm` the trail is not drawn, so
+                the toggle stays at the left gutter and the right-hand cluster
+                (`ml-auto`) keeps to the right edge. */}
+            <SidebarTrigger variant="outline" className="max-md:scale-125" />
             <Breadcrumb data-testid="app-shell-topbar-left" className="hidden sm:flex">
               <BreadcrumbList>
                 {breadcrumbSegments.map((crumb, i) => (
@@ -979,12 +968,7 @@ export function AppShell({
                 ))}
               </BreadcrumbList>
             </Breadcrumb>
-            <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3 max-sm:flex-1">
-            <SidebarTrigger
-              variant="outline"
-              className="max-md:scale-125 max-sm:mr-auto"
-            />
-            <Separator orientation="vertical" className="h-6 shrink-0 max-sm:hidden" />
+            <div data-testid="app-shell-topbar-right" className="ml-auto flex items-center gap-3">
             {process.env.NODE_ENV === "development" && <Popover open={devToolsOpen} onOpenChange={(open) => {
               setDevToolsOpen(open);
               if (open) {

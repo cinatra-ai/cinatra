@@ -1,31 +1,17 @@
 /**
- * THE TRAIL SITS WHERE THE DRAWING PUTS IT (cinatra#2934, the SEVENTH graded
- * proof set).
+ * THE SIDEBAR TOGGLE STANDS IN FRONT OF THE BREADCRUMB (owner's decision of
+ * 2026-11-26, superseding the cinatra#2934 reading).
  *
- * The previous leg made the words of the trail honest on a refused reading.
- * The seventh capture measured the trail's own box on pixels and found it in
- * the wrong PLACE: 92 CSS px inside the sidebar's inner edge, on the schedule
- * refusal, the run-page refusal and the not-found reading alike, in both
- * themes. The ratified drawing is explicit about that edge. It says the
- * top-bar's control row spans the full available width - the viewport minus
- * the persistent sidebar, the sidebar's inner edge being the left bound when
- * it is shown - carrying ONLY the standard edge gutters (px-5, then sm:px-8).
- * And it names the element that must sit there: "The breadcrumb is the
- * top-bar's left element and moves with the bar - it anchors at that far-left
- * edge; it does not ride the content stage."
- *
- * The built row put the sidebar toggle and its divider ahead of the trail, so
- * the trail began one toggle, one divider and two gaps inside the gutter - the
- * measured 92 rather than the drawn 32. That is not a property of the refusal;
- * the refusal renders inside the ordinary shell and the offending chrome is
- * the shell's. The refused readings are simply where it was finally measured.
+ * #2934 moved the toggle and its divider to the right-hand cluster so the
+ * trail began at the drawing's 32px gutter. The owner has decided otherwise:
+ * the toggle leads the top bar, in front of the breadcrumb, as it was before,
+ * and there is NO divider between them. The row still carries only the
+ * standard edge gutters (px-5, then sm:px-8).
  *
  * WHY THIS IS ASSERTED ON THE SOURCE. The offset is a layout fact, and jsdom
- * has no layout to measure - a render-based assertion here would prove nothing
- * that the picture does not already prove better. What CAN be pinned
- * mechanically, and is what actually regressed, is the ORDER: whether anything
- * at all is drawn between the row's gutter and the trail. The pixels are
- * measured in the capture; this keeps the arrangement from drifting back.
+ * has no layout to measure. What CAN be pinned mechanically is the ORDER:
+ * the one toggle first, the trail directly after it, no divider, and the
+ * right-hand cluster holding neither.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -44,7 +30,7 @@ function topbarRow(): string {
   return source.slice(start, end);
 }
 
-describe("the top-bar's left element is the trail, at the standard gutter", () => {
+describe("the top bar leads with the toggle, then the trail", () => {
   it("the row carries only the standard edge gutters the drawing names", () => {
     const row = topbarRow();
     const className = /className="([^"]*)"/.exec(row)?.[1] ?? "";
@@ -54,19 +40,21 @@ describe("the top-bar's left element is the trail, at the standard gutter", () =
     expect(className).not.toMatch(/\b(pl-|ml-|sm:pl-|sm:ml-)/);
   });
 
-  it("nothing is drawn between the gutter and the trail, where the trail is drawn", () => {
+  it("the toggle is the row's first element, directly followed by the trail, with no divider", () => {
     const row = topbarRow();
+    const toggle = row.indexOf("<SidebarTrigger");
     const trail = row.indexOf("<Breadcrumb");
-    expect(trail).toBeGreaterThan(-1);
+    expect(toggle).toBeGreaterThan(-1);
+    expect(trail).toBeGreaterThan(toggle);
     const ahead = row.slice(0, trail);
-    // No separator, no spacer ahead of the trail.
+    // Nothing between the gutter and the toggle, and no divider anywhere
+    // between the toggle and the trail.
+    const tags = ahead.match(/<[A-Z][A-Za-z]*[^>]*>/g) ?? [];
+    expect(tags).toHaveLength(1);
+    expect(tags[0]?.startsWith("<SidebarTrigger")).toBe(true);
     expect(ahead).not.toContain("<Separator");
-    // The ONLY element permitted ahead of it is one that is not rendered at
-    // the widths where the trail is: the trail is `hidden sm:flex`, so an
-    // `sm:hidden` element cannot ever push it. Anything else would.
-    for (const tag of ahead.match(/<[A-Z][A-Za-z]*[^>]*>/g) ?? []) {
-      expect(tag).toContain("sm:hidden");
-    }
+    // It is not hidden at any width.
+    expect(tags[0] ?? "").not.toMatch(/\bhidden\b|max-sm:hidden|sm:hidden/);
   });
 
   it("the trail is the element the shell names as the top-bar's left one", () => {
@@ -80,37 +68,26 @@ describe("the top-bar's left element is the trail, at the standard gutter", () =
 });
 
 /**
- * THE MOBILE LEFT EDGE, and THE ONE DECISION POINT (convergence of fix leg 8).
+ * THE MOBILE LEFT EDGE, and THE ONE DECISION POINT.
  *
- * Moving the sidebar toggle out of the trail's way is right where the trail is
- * drawn — but the trail is `hidden sm:flex`, so below `sm` there is no trail to
- * make room for. Sending the toggle to the right-hand cluster at THOSE widths
- * would empty the row's left edge and move the primary navigation control to
- * the opposite side of the bar, which the drawing never asks for. So the
- * toggle stays at the left exactly where the trail is not drawn, and leads the
- * right cluster exactly where it is.
+ * The trail is `hidden sm:flex`, so below `sm` the toggle is alone at the
+ * row's left gutter and the right-hand cluster (`ml-auto`) stays right-aligned.
  *
  * And the tab title: the shell must reach the guard through the one function
  * that applies it to BOTH inputs, never by preferring the published label
- * itself — a published label can be the short-id placeholder.
+ * itself - a published label can be the short-id placeholder.
  */
 describe("the left edge below sm, and the single title decision point", () => {
-  it("draws the sidebar toggle once, first in the right-hand cluster", () => {
+  it("draws the sidebar toggle once, outside the right-hand cluster", () => {
     // ONE element carries the sidebar-trigger slot at every width. Two
     // mounts, each hidden by a class at the other's widths, are both in the
     // document, and a strict locator on that slot resolves to two.
     const mounts = source.match(/<SidebarTrigger\b/g) ?? [];
     expect(mounts).toHaveLength(1);
     const row = topbarRow();
-    const trail = row.indexOf("<Breadcrumb");
-    expect(trail).toBeGreaterThan(-1);
-    const ahead = row.slice(0, trail);
-    // Nothing of the row stands ahead of the trail: no toggle, no divider.
-    expect(ahead).not.toContain("<SidebarTrigger");
-    expect(ahead).not.toContain("<Separator");
-    // The right-hand cluster keeps its place at sm and up (ml-auto) and spans
-    // the row below sm (max-sm:flex-1), so its first child stands at the
-    // row's left gutter there, where the trail is not drawn.
+    expect(row).toContain("<SidebarTrigger");
+    // The right-hand cluster keeps to the right edge and holds neither the
+    // toggle nor a vertical divider.
     const marker = source.indexOf('data-testid="app-shell-topbar-right"');
     expect(marker).toBeGreaterThan(-1);
     const open = source.lastIndexOf("<", marker);
@@ -118,16 +95,11 @@ describe("the left edge below sm, and the single title decision point", () => {
     const clusterTag = source.slice(open, openEnd + 1);
     const clusterClasses = (/className="([^"]*)"/.exec(clusterTag)?.[1] ?? "").split(/\s+/);
     expect(clusterClasses).toContain("ml-auto");
-    expect(clusterClasses).toContain("max-sm:flex-1");
-    // The toggle is the cluster's first tag, shown at every width, and below
-    // sm it pushes the rest of the cluster to the right edge.
-    const first = /<[A-Za-z][^>]*>/.exec(source.slice(openEnd + 1))?.[0] ?? "";
-    expect(first.startsWith("<SidebarTrigger")).toBe(true);
-    const toggleClasses = (/className="([^"]*)"/.exec(first)?.[1] ?? "").split(/\s+/);
-    expect(toggleClasses).toContain("max-sm:mr-auto");
-    expect(first).not.toContain("sm:hidden");
-    expect(toggleClasses).not.toContain("max-sm:hidden");
-    // The trail itself is still the sm-and-up left element.
+    expect(clusterClasses).not.toContain("max-sm:flex-1");
+    const cluster = source.slice(openEnd);
+    expect(cluster.indexOf("<SidebarTrigger")).toBe(-1);
+    expect(source).not.toContain('<Separator orientation="vertical"');
+    // The trail itself is still the sm-and-up element named top-bar-left.
     expect(row).toContain('data-testid="app-shell-topbar-left"');
   });
 
