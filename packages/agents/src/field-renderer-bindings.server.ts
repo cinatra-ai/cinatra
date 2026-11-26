@@ -31,6 +31,7 @@ import {
 } from "@/lib/generated/agent-bindings";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import type { FieldRendererBindingInput } from "./register-default-renderers";
+import { DECLARED_SCREEN_KEY, declaredHitlCardOfBinding } from "./hitl-gate-submit";
 import {
   A2UI_MID_RUN_TRANSLATOR_KINDS,
   type MidRunTranslatorResolver,
@@ -44,6 +45,29 @@ let cache: { at: number; entries: CollectedBinding[] } | null = null;
 /** Test hook — drop the TTL cache. */
 export function __clearInstalledFieldRendererBindingsCache(): void {
   cache = null;
+}
+
+/**
+ * A declared HITL screen (cinatra#3470) is drawn only for a BUNDLED package,
+ * whose declaration the build validated into the generated map. A package
+ * installed at runtime keeps its binding, but its `screen` is dropped here,
+ * with one logged line, and the binding is registered as if it declared none.
+ */
+function withoutDeclaredScreens(packageName: string, declared: unknown): unknown {
+  if (!Array.isArray(declared)) return declared;
+  let dropped = false;
+  const kept = declared.map((e: unknown) => {
+    if (e === null || typeof e !== "object" || Array.isArray(e) || !Object.hasOwn(e, "screen")) return e;
+    dropped = true;
+    const { screen: _screen, ...rest } = e as Record<string, unknown>;
+    return rest;
+  });
+  if (dropped) {
+    console.warn(
+      `[field-renderer-bindings] ${packageName} is installed at runtime: its declared screen is not drawn (only a bundled package's is)`,
+    );
+  }
+  return kept;
 }
 
 /**
@@ -94,7 +118,7 @@ export function collectInstalledFieldRendererBindings(): CollectedBinding[] {
       if (!packageName || declared === undefined) continue;
       const { entries, errors } = validateFieldRendererDeclarations(
         packageName,
-        declared,
+        withoutDeclaredScreens(packageName, declared),
       ) as { entries: CollectedBinding[]; errors: string[] };
       for (const err of errors) {
         console.warn(`[field-renderer-bindings] skipped invalid declaration: ${err}`);
@@ -177,4 +201,49 @@ export function buildA2UiMidRunTranslatorResolver(): MidRunTranslatorResolver {
     if (!binding?.a2uiTranslator) return undefined;
     return A2UI_MID_RUN_TRANSLATOR_KINDS[binding.a2uiTranslator];
   };
+}
+
+/**
+ * THE CARD A STEP PAUSES WITH, as this build declares it (cinatra#3470).
+ * Called by the park (human-gate-park.ts) on the built artifact, before
+ * anything is written or emitted. A key under `DECLARED_SCREEN_KEY` the
+ * agent's own schema carried is always dropped: only the host puts one there.
+ *
+ * - A MID-RUN step only (`midRun`): a setup step is never stamped, and is
+ *   drawn and answered as setup.
+ * - The card is the bundled binding's checked declaration for the step's
+ *   renderer, with its digest; a renderer that declares none gets none.
+ *
+ * This is the card the step ASKS to be stored with. What the step is drawn
+ * and answered with is what its gate row stored: the row keeps the first card
+ * of a pause (`writeDurableHitlGateArtifact`), and the park emits the stored
+ * one (`withStoredDeclaredScreen`).
+ */
+export async function withDeclaredScreenOfBuild<
+  T extends { schema: Record<string, unknown>; xRenderer: string },
+>(artifact: T, midRun: boolean): Promise<T> {
+  const { [DECLARED_SCREEN_KEY]: _incoming, ...schema } = artifact.schema ?? {};
+  void _incoming;
+  if (!midRun) return { ...artifact, schema };
+  const binding = GENERATED_FIELD_RENDERER_BINDINGS.find((b) => b.id === artifact.xRenderer);
+  const card = binding?.screen !== undefined ? declaredHitlCardOfBinding(binding) : null;
+  if (card === null) return { ...artifact, schema };
+  const { declaredScreenDigest } = await import("./agent-run-hitl-prompts");
+  return { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: { screen: card, digest: declaredScreenDigest(card) } } };
+}
+
+/**
+ * The artifact as its gate row STORED it (cinatra#3470): the step's card is
+ * exactly the stored one, under `DECLARED_SCREEN_KEY`, or none when the row
+ * stored none. Everything else is the artifact's own.
+ */
+export function withStoredDeclaredScreen<T extends { schema: Record<string, unknown> }>(
+  artifact: T,
+  storedSchema: Record<string, unknown>,
+): T {
+  const { [DECLARED_SCREEN_KEY]: _built, ...schema } = artifact.schema ?? {};
+  void _built;
+  return Object.hasOwn(storedSchema, DECLARED_SCREEN_KEY)
+    ? { ...artifact, schema: { ...schema, [DECLARED_SCREEN_KEY]: storedSchema[DECLARED_SCREEN_KEY] } }
+    : { ...artifact, schema };
 }

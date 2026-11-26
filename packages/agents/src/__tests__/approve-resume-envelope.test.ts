@@ -91,6 +91,8 @@ const storeMock = vi.hoisted(() => ({
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // The step's gate row read finds no row (a failed read refuses, cinatra#3470).
+  readDurableHitlGateForContinue: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input); return "captured-prompt";
   },

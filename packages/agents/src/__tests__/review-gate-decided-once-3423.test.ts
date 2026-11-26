@@ -62,6 +62,8 @@ vi.mock("../run-pause-claim", () => ({
   PauseClaimReleaseError: class extends Error {},
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // The step's gate row read finds no row (a failed read refuses, cinatra#3470).
+  readDurableHitlGateForContinue: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
   },

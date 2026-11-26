@@ -280,7 +280,12 @@ import {
   cleanupForAgent,
 } from "@cinatra-ai/skills";
 import { createDeterministicObjectsClient, validateSemanticArtifactManifestForPublish } from "@cinatra-ai/objects";
-import { approveReviewTaskInternal } from "../review-task-actions";
+import {
+  approveReviewTaskInternal,
+  declaredCardOfStep,
+  DECLARED_CARD_STEP_UNREADABLE_REFUSAL,
+} from "../review-task-actions";
+import { readStepGate } from "../hitl-gate-submit";
 import { enforceRunAccess, actorContextFromMcpRequest, authorizeAgentTemplateRead, agentTemplateWithinOboCeiling, startFailureAnswer } from "../auth-policy";
 import type { ActorRoleHints } from "../auth-policy";
 import { describeStartedRun } from "../run-status";
@@ -2147,6 +2152,17 @@ async function handleAgentBuilderRunResume(
       // retries from the beginning instead of continuing from the checkpoint.
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
+      }
+      // cinatra#3470: a step a declared card draws is answered on its card, whose
+      // answer the approval road checks; this text road sends it nothing. A gate
+      // row whose read failed refuses too: whether the step has a card cannot be told.
+      const stepGate = await readStepGate(async () =>
+        (await import("../agent-run-hitl-prompts")).readDurableHitlGateForContinue(run.id, `wayflow-${run.a2aTaskId}`),
+      );
+      const stepCard = declaredCardOfStep(stepGate);
+      if (stepCard === "unknown") return { error: DECLARED_CARD_STEP_UNREADABLE_REFUSAL };
+      if (stepCard !== null) {
+        return { error: "This step is answered on its card. Open the run and fill the card's fields there." };
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");

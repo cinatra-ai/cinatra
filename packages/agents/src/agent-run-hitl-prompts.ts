@@ -249,6 +249,14 @@ function canonical(value: unknown): unknown {
 export function continueBindingDigest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
+/**
+ * The digest stored with the card a step paused with (cinatra#3470), written
+ * by `withDeclaredScreenOfBuild` and checked by the answer road with this one
+ * function: sha-256 of the checked card's canonical JSON.
+ */
+export function declaredScreenDigest(card: unknown): string {
+  return `sha256:${continueBindingDigest(card)}`;
+}
 export function continueGateDigest(gate: ContinueGateSnapshot): string {
   return continueBindingDigest({runId:gate.runId, reviewTaskId:gate.reviewTaskId,
     xRenderer:gate.xRenderer,inputSchema:gate.inputSchema,materializedAt:gate.materializedAt});

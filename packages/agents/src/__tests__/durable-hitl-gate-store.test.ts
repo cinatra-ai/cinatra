@@ -66,8 +66,18 @@ describe("writeDurableHitlGateArtifact", () => {
 
     await writeDurableHitlGateArtifact(ARTIFACT, { query });
 
-    expect(flat(calls[0]!.text)).toContain(
-      "WHERE agent_run_hitl_gates.materialized_at < EXCLUDED.materialized_at",
+    // Every column of an older write keeps the stored value (cinatra#3470: the
+    // update always returns the stored row, so the guard is per column).
+    const sql = flat(calls[0]!.text);
+    for (const col of ["x_renderer", "gate_values", "field_name", "materialized_at"]) {
+      expect(sql).toContain(
+        `${col} = CASE WHEN agent_run_hitl_gates.materialized_at < EXCLUDED.materialized_at ` +
+          `THEN EXCLUDED.${col} ELSE agent_run_hitl_gates.${col} END`,
+      );
+    }
+    expect(sql).toContain(
+      "input_schema = CASE WHEN NOT (agent_run_hitl_gates.materialized_at < EXCLUDED.materialized_at) " +
+        "THEN agent_run_hitl_gates.input_schema",
     );
   });
 

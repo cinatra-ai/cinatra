@@ -2496,25 +2496,47 @@ const defaultHitlGateQuery: HitlGateQuery = async <T>(
  * so a re-park of the same gate updates its row instead of adding a second one.
  * MONOTONIC on `materialized_at`: the update only lands when the incoming
  * artifact is newer, so a late-landing re-emit of an older artifact can never
- * overwrite a newer one.
+ * overwrite a newer one (an older write leaves every column as it is).
+ *
+ * THE FIRST CARD OF A PAUSE IS KEPT (cinatra#3470). Whether a step paused with
+ * a declared card (`x-declared-screen` in `input_schema`), and which one, is
+ * written once, by the first write of that pause: the same gate identity with
+ * the same renderer. A later write of the same pause keeps the stored card, or
+ * the absence of one, whatever it brings, so no re-emission can change what a
+ * waiting step is answered with.
+ *
+ * RETURNS THE ROW AS STORED (renderer and schema) after this write, from the
+ * same statement: the conflicting row is locked by the upsert and every
+ * column is decided in it, so a concurrent first write of the same pause
+ * cannot slip between the write and this read. `null` only when the database
+ * returned no row.
  */
 export async function writeDurableHitlGateArtifact(
   artifact: DurableHitlGateArtifact,
   deps: HitlGateStoreDeps = {},
-): Promise<void> {
+): Promise<{ xRenderer: string; inputSchema: Record<string, unknown> } | null> {
   const query = deps.query ?? defaultHitlGateQuery;
   const materializedAt = (deps.now ?? (() => new Date()))();
-  await query(
+  const t = AGENT_RUN_HITL_GATES_TABLE;
+  const newer = `${t}.materialized_at < EXCLUDED.materialized_at`;
+  const rows = await query<{ x_renderer: string; input_schema: Record<string, unknown> | null }>(
     `INSERT INTO ${hitlGateTable()}
        (run_id, review_task_id, x_renderer, input_schema, gate_values, field_name, materialized_at)
      VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
      ON CONFLICT (run_id, review_task_id) DO UPDATE SET
-       x_renderer      = EXCLUDED.x_renderer,
-       input_schema    = EXCLUDED.input_schema,
-       gate_values     = EXCLUDED.gate_values,
-       field_name      = EXCLUDED.field_name,
-       materialized_at = EXCLUDED.materialized_at
-     WHERE ${AGENT_RUN_HITL_GATES_TABLE}.materialized_at < EXCLUDED.materialized_at`,
+       x_renderer      = CASE WHEN ${newer} THEN EXCLUDED.x_renderer ELSE ${t}.x_renderer END,
+       input_schema    = CASE
+         WHEN NOT (${newer}) THEN ${t}.input_schema
+         WHEN ${t}.x_renderer = EXCLUDED.x_renderer AND ${t}.input_schema ? 'x-declared-screen'
+         THEN jsonb_set(EXCLUDED.input_schema, '{x-declared-screen}', ${t}.input_schema -> 'x-declared-screen')
+         WHEN ${t}.x_renderer = EXCLUDED.x_renderer
+         THEN EXCLUDED.input_schema - 'x-declared-screen'
+         ELSE EXCLUDED.input_schema
+       END,
+       gate_values     = CASE WHEN ${newer} THEN EXCLUDED.gate_values ELSE ${t}.gate_values END,
+       field_name      = CASE WHEN ${newer} THEN EXCLUDED.field_name ELSE ${t}.field_name END,
+       materialized_at = CASE WHEN ${newer} THEN EXCLUDED.materialized_at ELSE ${t}.materialized_at END
+     RETURNING x_renderer, input_schema`,
     [
       artifact.runId,
       artifact.reviewTaskId,
@@ -2525,6 +2547,8 @@ export async function writeDurableHitlGateArtifact(
       materializedAt,
     ],
   );
+  const row = rows?.[0];
+  return row ? { xRenderer: row.x_renderer, inputSchema: row.input_schema ?? {} } : null;
 }
 
 /**

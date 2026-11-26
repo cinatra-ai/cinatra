@@ -21,6 +21,12 @@ import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
+import {
+  MID_RUN_ONLY_MESSAGE,
+  validateHitlScreen,
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore — dependency-free .mjs validation module (allowJs)
+} from "../../../scripts/extensions/agent-hitl-screen-schema.mjs";
 
 // ---------------------------------------------------------------------------
 // Gate classification
@@ -1192,4 +1198,208 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
   const { userResponse: _u, ...rest } = valuesObj;
   void _u;
   return Object.keys(rest).length > 0 ? rest : null;
+}
+
+// ---------------------------------------------------------------------------
+// A DECLARED HITL CARD'S ANSWER (cinatra#3470)
+// ---------------------------------------------------------------------------
+//
+// A bundled agent declares the screen of a mid-run step as data (the card of
+// scripts/extensions/agent-hitl-screen-schema.mjs); the host draws it with its
+// one generic renderer. The answer is ONE object, written here: the carried run
+// values, every field's text, and `userResponse`, the JSON of exactly those
+// keys. The card stages it, the Continue sends it, and the server rebuilds it
+// from the step's own stored values before it is sent and recorded
+// (`declaredHitlCheckedAnswer`), so the agent, the record and the screen hold
+// one answer.
+
+export type DeclaredHitlSection =
+  | { type: "note"; text: string }
+  | { type: "fact"; label: string; key: string; qualifierKey?: string }
+  | { type: "words"; key: string; label?: string }
+  | { type: "quote"; key: string }
+  | { type: "field"; key: string; label: string; multiline?: boolean; placeholder?: string };
+
+export type DeclaredHitlCard = {
+  layout: "card";
+  sections: DeclaredHitlSection[];
+  carry?: string[];
+};
+
+/**
+ * The card a binding declares, or null. Validated again here, whatever the
+ * build checked: a declaration that is refused, or that sits on a binding that
+ * is not a mid-run step, is no card, and the step is drawn and answered as if
+ * the binding declared none.
+ */
+export function declaredHitlCardOfBinding(binding: {
+  id: string;
+  midRunHitl?: boolean;
+  screen?: unknown;
+}): DeclaredHitlCard | null {
+  if (binding.screen === undefined) return null;
+  const checked = validateHitlScreen(binding.screen, `${binding.id} screen`) as {
+    screen?: DeclaredHitlCard;
+    errors: string[];
+  };
+  if (checked.screen === undefined || binding.midRunHitl !== true) {
+    console.error(
+      "[declared-hitl-screen] declared screen refused, drawn as no screen:",
+      binding.id,
+      checked.errors.join("; ") || MID_RUN_ONLY_MESSAGE,
+    );
+    return null;
+  }
+  return checked.screen;
+}
+
+/**
+ * THE CARD A STEP PAUSED WITH is stored WITH the step, under this key of the
+ * step's own input schema (the gate row's `input_schema` and the pause frame's
+ * `schema`): `{ screen, digest }`, the checked declaration and the sha-256 of
+ * its canonical JSON (`declaredScreenDigest`). It is written once, by the first
+ * write of the pause's gate row (`writeDurableHitlGateArtifact`, before the
+ * pause is shown: human-gate-park.ts), and every
+ * later reader of that step reads it from here, never from the build's
+ * current bindings: a newer build that changes or removes the screen does not
+ * change what the paused step asks for.
+ */
+export const DECLARED_SCREEN_KEY = "x-declared-screen";
+
+/**
+ * A READ OF A STEP'S GATE ROW, as every road that acts on the step's card
+ * takes it (cinatra#3470): three outcomes, never merged. `row`: the read
+ * succeeded and found the row. `none`: the read succeeded and found no row
+ * for this step (the query returned nothing). `failed`: the read did not
+ * succeed, so whether the step has a card cannot be told; a road that would
+ * act on an answer refuses.
+ */
+export type StepGateRead<G> =
+  | { readonly read: "row"; readonly gate: G }
+  | { readonly read: "none" }
+  | { readonly read: "failed" };
+
+/** Run one gate-row read and tag its outcome (`StepGateRead`). */
+export async function readStepGate<G>(read: () => Promise<G | null>): Promise<StepGateRead<G>> {
+  let gate: G | null;
+  try {
+    gate = await read();
+  } catch {
+    return { read: "failed" };
+  }
+  return gate === null ? { read: "none" } : { read: "row", gate };
+}
+
+/**
+ * The card a step paused with, read from its schema: null when the step
+ * stored none (it paused before this was recorded, or its binding declared no
+ * card: the step is drawn and answered as it always was), `"invalid"` when
+ * what is stored is not a card this host draws, else the card and its stored
+ * digest. The digest is checked on the server, which can hash.
+ */
+export function storedDeclaredCardOf(
+  schema: unknown,
+  xRenderer: string,
+): { card: DeclaredHitlCard; digest: string } | "invalid" | null {
+  if (schema === null || typeof schema !== "object" || !Object.hasOwn(schema, DECLARED_SCREEN_KEY)) return null;
+  const stored = (schema as Record<string, unknown>)[DECLARED_SCREEN_KEY] as { screen?: unknown; digest?: unknown } | null;
+  if (stored === null || typeof stored !== "object" || typeof stored.digest !== "string") return "invalid";
+  const card = declaredHitlCardOfBinding({ id: xRenderer, midRunHitl: true, screen: stored.screen });
+  return card === null ? "invalid" : { card, digest: stored.digest };
+}
+
+/** The card's field keys, in declaration order. */
+export function declaredHitlFieldKeys(card: DeclaredHitlCard): string[] {
+  return card.sections.flatMap((s) => (s.type === "field" ? [s.key] : []));
+}
+
+/** The value's OWN text under `key`; anything else reads as blank. */
+function ownText(v: Record<string, unknown>, key: string): string {
+  const x = Object.hasOwn(v, key) ? v[key] : undefined;
+  return typeof x === "string" ? x : "";
+}
+
+/**
+ * THE ONE WRITER of a declared card's answer: the carried keys from `runValue`
+ * (own keys only), every field's text (from `change` where it names the field,
+ * else as `runValue` shows it), and `userResponse`, the JSON of exactly those
+ * keys.
+ */
+export function declaredHitlStage(
+  card: DeclaredHitlCard,
+  runValue: Record<string, unknown>,
+  change: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const whole: Record<string, unknown> = {};
+  for (const k of card.carry ?? []) if (Object.hasOwn(runValue, k)) whole[k] = runValue[k];
+  for (const k of declaredHitlFieldKeys(card)) {
+    whole[k] = Object.hasOwn(change, k) && typeof change[k] === "string" ? change[k] : ownText(runValue, k);
+  }
+  return { ...whole, userResponse: JSON.stringify(whole) };
+}
+
+/** May the Continue send this staged answer? Every field holds non-blank text. */
+export function declaredHitlCardReady(card: DeclaredHitlCard, staged: Record<string, unknown>): boolean {
+  return declaredHitlFieldKeys(card).every((k) => ownText(staged, k).trim() !== "");
+}
+
+/** The keys a host adds beside a declared card's answer on its Continue. */
+const DECLARED_CARD_HOST_KEYS = new Set(["approved", "approvedAt", "stepNumber"]);
+
+/**
+ * WHAT A HOST'S CONTINUE SENDS FOR A DECLARED CARD: the answer the card staged,
+ * with the host's approval and its time, and nothing else (no approval-note
+ * lift, no list or context-selector rule, no declared-schema copy). A card
+ * takes no files (its declaration names every field): a host keeps none for a
+ * card's step, and no files ever ride with this answer; the server refuses an
+ * answer that carries any.
+ */
+export function declaredCardContinuePayload(staged: Record<string, unknown>): Record<string, unknown> {
+  return { ...staged, approved: true, approvedAt: new Date().toISOString() };
+}
+
+/** The refusal of a composer or tool answer to a step a declared card draws. */
+export const DECLARED_CARD_ANSWERED_ON_CARD =
+  "This step is answered on its card. Fill its fields there, then press its Continue.";
+
+export const DECLARED_CARD_ANSWER_REFUSAL =
+  "This step's card asks for an answer this request did not give, so nothing was sent. " +
+  "Fill every field on the card and press its Continue; files cannot be sent with it.";
+
+/**
+ * THE SERVER'S READING of an answer to a step a declared card draws: `{ values }`,
+ * the answer to send and record, or `{ refusal }`. The answer holds exactly the
+ * card's field keys, each with non-blank text, beside the host's own keys; a
+ * carried key the caller sent is ignored and taken from the step's STORED
+ * values instead. Refused: any other key, a missing or blank field, a decline
+ * (`approved` other than true), and files sent with the answer. What is sent
+ * is the answer the one writer rebuilds, never the caller's `userResponse`.
+ */
+export function declaredHitlCheckedAnswer(
+  card: DeclaredHitlCard,
+  storedValues: Record<string, unknown>,
+  values: unknown,
+): { values: Record<string, unknown> } | { refusal: string } {
+  const refusal = { refusal: DECLARED_CARD_ANSWER_REFUSAL };
+  if (values === null || typeof values !== "object" || Array.isArray(values)) return refusal;
+  const sent = values as Record<string, unknown>;
+  const fields = declaredHitlFieldKeys(card);
+  const carried = card.carry ?? [];
+  for (const k of Object.keys(sent)) {
+    if (k === "userResponse" || DECLARED_CARD_HOST_KEYS.has(k) || carried.includes(k)) continue;
+    if (!fields.includes(k)) return refusal;
+  }
+  if (Object.hasOwn(sent, "approved") && sent.approved !== true) return refusal;
+  if (!declaredHitlCardReady(card, sent)) return refusal;
+  if (typeof sent.userResponse === "string") {
+    try {
+      const parsed: unknown = JSON.parse(sent.userResponse);
+      if (parsed && typeof parsed === "object" && Object.hasOwn(parsed, "attachments")) return refusal;
+    } catch {
+      // Not JSON: it is replaced by the rebuilt answer below.
+    }
+  }
+  const host = Object.fromEntries(Object.entries(sent).filter(([k]) => DECLARED_CARD_HOST_KEYS.has(k)));
+  const change = Object.fromEntries(fields.map((k) => [k, sent[k]]));
+  return { values: { ...host, ...declaredHitlStage(card, storedValues, change) } };
 }

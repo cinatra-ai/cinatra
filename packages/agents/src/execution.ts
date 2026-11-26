@@ -3184,6 +3184,20 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
       },
       readBackGate: (id) => readLatestAgUiInterrupt(id),
+      // A MID-RUN step (cinatra#3470): a step that pauses with a declared card
+      // writes its row FIRST; the write returns the row as stored, and the seam
+      // emits that.
+      midRunStep: {
+        recordStep: (artifact) =>
+          writeDurableHitlGateArtifact({
+            runId,
+            reviewTaskId: artifact.reviewTaskId,
+            xRenderer: artifact.xRenderer,
+            inputSchema: artifact.schema,
+            values: artifact.values,
+            ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
+          }),
+      },
       // The durable fallback for this gate (cinatra#2748). The seam calls it only
       // after the read-back verified the frame, so the row mirrors a gate a human
       // really was shown. The event log expires; this row does not.
