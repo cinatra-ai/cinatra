@@ -19,6 +19,7 @@ import { describe, it, expect } from "vitest";
 
 import { checkPublishingCallRoutes } from "../oas-compiler";
 import {
+  everyApiNodeUnder,
   findPublishingAncestor,
   findStepToolDeclaration,
   hasApiNodeStep,
@@ -242,4 +243,100 @@ describe("a model step of a publishing node declares its tools", () => {
       });
     });
   }
+});
+
+// cinatra#4150 round 4, finding 1: the walk of a publishing node's components
+// ends on any input. Each document is run through the whole scan as well, so a
+// walk that does not end fails the test file by its timeout.
+describe("the walk of a publishing node's components ends on cycles", () => {
+  const pubOver = (subflow: unknown, extra: Record<string, unknown>): Node => {
+    const doc = flow({ pub: { component_type: "FlowNode", id: "pub", name: "pub", subflow, metadata: { cinatra: { publishes: true } } } }, ["pub"]);
+    Object.assign(doc.$referenced_components as Record<string, unknown>, extra);
+    return doc;
+  };
+  const shapes: Record<string, () => Node> = {
+    "a list that references itself through a $component_ref": () =>
+      pubOver({ $component_ref: "loop" }, { loop: [bridge("deep"), { $component_ref: "loop" }] }),
+    "a component that references itself": () =>
+      pubOver({ $component_ref: "a" }, { a: { component_type: "Flow", id: "a", name: "a", nodes: [bridge("deep"), { $component_ref: "a" }] } }),
+    "two components that reference each other": () =>
+      pubOver({ $component_ref: "a" }, {
+        a: { component_type: "Flow", id: "a", name: "a", nodes: [bridge("deep"), { $component_ref: "b" }] },
+        b: { component_type: "Flow", id: "b", name: "b", nodes: [{ $component_ref: "a" }] },
+      }),
+  };
+
+  for (const [shape, build] of Object.entries(shapes)) {
+    it(`ends on ${shape}, and finds its step once`, () => {
+      // red-first-expect: everyApiNodeUnder is not a function
+      const doc = build();
+      const rootRefs = doc.$referenced_components as Record<string, unknown>;
+      expect(everyApiNodeUnder(rootRefs.pub, rootRefs).map((n) => n.id)).toEqual(["deep"]);
+      expect(Array.isArray(scanOasForRuntimeInvariantFindings(doc))).toBe(true);
+    });
+  }
+
+  it("ends on a list and a component that contain themselves", () => {
+    // red-first-expect: everyApiNodeUnder is not a function
+    const list: unknown[] = [bridge("deep")];
+    list.push(list);
+    expect(everyApiNodeUnder(list, {}).map((n) => n.id)).toEqual(["deep"]);
+    const holder: Record<string, unknown> = { component_type: "Flow", id: "h", nodes: [bridge("deep")] };
+    holder.self = holder;
+    (holder.nodes as unknown[]).push(holder, { $component_ref: "h" });
+    expect(everyApiNodeUnder(holder, { h: holder }).map((n) => n.id)).toEqual(["deep"]);
+  });
+});
+
+// cinatra#4150 round 4, finding 2: the consumer ties each outward call of a
+// step to the decision of its ONE top-level node (findPublishingAncestor) and
+// refuses the call when there is none, more than one, or a node that does not
+// publish (readDecisionNode, run-action-decision-consumption.ts).
+describe("a publishing model step resolves to one publishing node", () => {
+  const AMBIGUOUS = "action_decision_node_ambiguous";
+  const shared = (keys: string[]): Node => {
+    const nodes = Object.fromEntries(keys.map((k) => [k, {
+      component_type: "FlowNode", id: k, name: k, subflow: { $component_ref: "sub" }, metadata: { cinatra: { publishes: true } },
+    } as Node]));
+    const doc = flow(nodes, keys);
+    (doc.$referenced_components as Record<string, Node>).sub = flow({ s: bridge("s", { tools: ["x_post"] }) }, ["s"]);
+    return doc;
+  };
+
+  it("refuses one model step shared beneath two publishing FlowNodes, naming both", () => {
+    const doc = shared(["pub_a", "pub_b"]);
+    expect(findPublishingAncestor(doc, "s")).toEqual({ kind: "ambiguous", nodeIds: ["pub_a", "pub_b"] });
+    const found = rule015(doc, AMBIGUOUS);
+    expect(found.map((f) => f.message)).toEqual([
+      expect.stringContaining('the top-level nodes "pub_a" and "pub_b" all hold it'),
+    ]);
+    expect(found[0]?.message).toContain('Model-bridge step "s" can run inside the publishing node "pub_a"');
+  });
+
+  it("accepts the same model step beneath one publishing FlowNode", () => {
+    const doc = shared(["pub_a"]);
+    expect(findPublishingAncestor(doc, "s")).toEqual({ kind: "resolved", nodeId: "pub_a" });
+    expect(all015(doc)).toEqual([]);
+  });
+
+  it("refuses a step a publishing node shares with a node that does not publish", () => {
+    const doc = shared(["pub_a", "plain"]);
+    ((doc.$referenced_components as Record<string, Node>).plain as Node).metadata = { cinatra: { publishes: false } };
+    expect(rule015(doc, AMBIGUOUS).map((f) => f.message)).toEqual([
+      expect.stringContaining('the top-level nodes "pub_a" and "plain" all hold it'),
+    ]);
+  });
+
+  it("refuses a step whose one publishing node has a key the run cannot record a decision under", () => {
+    const key = "p".repeat(513);
+    expect(rule015(shared([key]), "is not one the run can record a decision under")).toHaveLength(1);
+  });
+
+  it("leaves a passthrough step and a step offered no tools to the routes that serve them", () => {
+    const doc = shared(["pub_a", "pub_b"]);
+    (doc.$referenced_components as Record<string, Node>).sub = flow({ s: passthrough("s") }, ["s"]);
+    expect(all015(doc)).toEqual([]);
+    (doc.$referenced_components as Record<string, Node>).sub = flow({ s: bridge("s", undefined, { toolbox_ids: [] }) }, ["s"]);
+    expect(all015(doc)).toEqual([]);
+  });
 });

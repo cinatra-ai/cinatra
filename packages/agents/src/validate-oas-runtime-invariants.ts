@@ -656,7 +656,7 @@ export function hasApiNodeStep(document: unknown, stepId: string): boolean {
 export type PublishingAncestorReading =
   | { kind: "resolved"; nodeId: string }
   | { kind: "unresolved" }
-  | { kind: "ambiguous" }
+  | { kind: "ambiguous"; nodeIds: string[] }
   | { kind: "not_publishing"; nodeId: string };
 
 /** The node kinds that can be the publishing action (the compiler's and the loader's set). */
@@ -675,7 +675,7 @@ const PUBLISHING_ACTION_KINDS = new Set(["ApiNode", "AgentNode", "FlowNode", "Pa
  * `$referenced_components`, `subflow`, `subflows`, `nodes` and `start_node`; a
  * `$component_ref` resolves to the innermost enclosing `$referenced_components`
  * that holds its key. `unresolved`: no top-level node holds the step.
- * `ambiguous`: more than one does. `not_publishing`: the one that holds it does
+ * `ambiguous`: more than one does (their keys, in `nodes` order). `not_publishing`: the one that holds it does
  * not declare `publishes: true` (the JSON boolean) on a node of an action kind.
  */
 export function findPublishingAncestor(document: unknown, stepId: string): PublishingAncestorReading {
@@ -717,7 +717,7 @@ export function findPublishingAncestor(document: unknown, stepId: string): Publi
   };
   const holders = topLevel.filter((key) => holdsStep(rootRefs[key]));
   if (holders.length === 0) return { kind: "unresolved" };
-  if (holders.length > 1) return { kind: "ambiguous" };
+  if (holders.length > 1) return { kind: "ambiguous", nodeIds: holders };
   const nodeId = holders[0]!;
   const node = rootRefs[nodeId] as Record<string, unknown>;
   const metadata = isPlainObject(node.metadata) ? node.metadata : null;
@@ -824,6 +824,7 @@ function scanForStepToolDeclarations(
   // every ApiNode the compiler's publishing traversal reaches under the node,
   // and each is read by id with the run's own readers.
   const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  const ancestryRead = new Set<string>();
   for (const key of publishingNodeKeys(parsed)) {
     for (const step of everyApiNodeUnder(rootRefs[key], rootRefs)) {
       const bridge = isModelBridgeApiNode(step);
@@ -846,6 +847,25 @@ function scanForStepToolDeclarations(
       }
       const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
       if (!bridge || (Array.isArray(offered) && offered.length === 0)) continue;
+      // The consumer ties each outward call to the decision of the step's one
+      // top-level node (findPublishingAncestor, readDecisionNode in
+      // run-action-decision-consumption.ts) and refuses the call otherwise. One
+      // finding per step id: the reading is the same from every node.
+      if (!ancestryRead.has(stepId)) {
+        ancestryRead.add(stepId);
+        const refusal = publishingAncestorRefusal(findPublishingAncestor(parsed, stepId));
+        if (refusal !== null) {
+          findings.push({
+            code: "OAS-RUNTIME-015",
+            severity: "blocker",
+            message:
+              `Model-bridge step "${idOf(step)}" can run inside the publishing node "${key}" ` +
+              `(metadata.cinatra.publishes: true), but ${refusal}`,
+            location: `$.$referenced_components.${key}`,
+            source: "deterministic",
+          });
+        }
+      }
       const reading = findStepToolDeclaration(parsed, stepId);
       if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) continue;
       findings.push({
@@ -863,6 +883,43 @@ function scanForStepToolDeclarations(
     }
   }
   return findings;
+}
+
+/**
+ * Why the run refuses an outward call of a step with this publishing-ancestor
+ * reading, or null when it serves it: every outcome readDecisionNode
+ * (run-action-decision-consumption.ts) refuses. The node key test mirrors its
+ * fieldValid (a non-empty text of at most 512 characters with no control
+ * character).
+ */
+function publishingAncestorRefusal(ancestor: PublishingAncestorReading): string | null {
+  switch (ancestor.kind) {
+    case "ambiguous":
+      return (
+        `the top-level nodes ${ancestor.nodeIds.map((k) => `"${k}"`).join(" and ")} all hold it. ` +
+        `The run ties each outward call to the decision of the one top-level node that ` +
+        `holds the step, and refuses it when more than one does (action_decision_node_ambiguous). ` +
+        `Give the step an id of its own in each node, or keep it in one publishing node.`
+      );
+    case "not_publishing":
+      return (
+        `the run reads it as a step of the top-level node "${ancestor.nodeId}", which ` +
+        `declares no publication, and refuses its outward calls (action_decision_node_not_publishing). ` +
+        `Keep the step inside the nodes, subflows and referenced components the run reads.`
+      );
+    case "unresolved":
+      return (
+        `the run finds no top-level node that holds it and refuses its outward calls ` +
+        `(action_decision_node_unresolved). ` +
+        `Keep the step inside the nodes, subflows and referenced components the run reads.`
+      );
+    case "resolved":
+      return ancestor.nodeId.length > 0 && ancestor.nodeId.length <= 512 && !/[\u0000-\u001f\u007f]/.test(ancestor.nodeId)
+        ? null
+        : `the key of its top-level node "${ancestor.nodeId}" is not one the run can record a ` +
+          `decision under, and the run refuses its outward calls (action_decision_node_unresolved). ` +
+          `Give the node a key of at most 512 characters with no control character.`;
+  }
 }
 
 /** The keys of the root flow's nodes that declare `metadata.cinatra.publishes: true` on an action kind. */
@@ -887,24 +944,38 @@ function publishingNodeKeys(document: Record<string, unknown>): string[] {
  * `$referenced_components` that holds its key (the holders the compiler's
  * publishing traversal `checkPublishingCallRoutes` walks). It is not a step
  * reader: the run's readers decide, by id, which of these steps it can serve.
+ *
+ * It ends on any input: every object and every list is entered once (by
+ * identity), and every reference key is followed once per holder of the key, so
+ * no cycle (a list or a component that references itself, components that
+ * reference each other, a value that contains itself) is walked twice.
+ * Exported for its tests only.
  */
-function everyApiNodeUnder(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
+export function everyApiNodeUnder(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
   const found: Array<Record<string, unknown>> = [];
-  const seen = new Set<unknown>();
+  const seen = new Set<object>();
+  const followed = new Map<object, Set<string>>();
   const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
   while (stack.length > 0) {
     const [value, scopes] = stack.pop()!;
+    if (value === null || typeof value !== "object" || seen.has(value)) continue;
+    seen.add(value);
     if (Array.isArray(value)) {
       for (const item of value) stack.push([item, scopes]);
       continue;
     }
-    if (!isPlainObject(value) || seen.has(value)) continue;
-    seen.add(value);
+    if (!isPlainObject(value)) continue;
     const ref = resolveComponentRef(value);
     if (ref !== null) {
       for (let i = scopes.length - 1; i >= 0; i--) {
-        if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
-          stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
+        const holder = scopes[i]!;
+        if (Object.prototype.hasOwnProperty.call(holder, ref)) {
+          const keys = followed.get(holder) ?? new Set<string>();
+          followed.set(holder, keys);
+          if (!keys.has(ref)) {
+            keys.add(ref);
+            stack.push([holder[ref], scopes.slice(0, i + 1)]);
+          }
           break;
         }
       }
