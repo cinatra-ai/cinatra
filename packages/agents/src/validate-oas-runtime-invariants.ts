@@ -811,7 +811,111 @@ function scanForStepToolDeclarations(
       source: "deterministic",
     });
   }
+
+  // (d) the steps of a publishing node (cinatra#4150). Every call of a
+  // source-bound run names its step, and the bridge and the passthrough refuse
+  // the call unless hasApiNodeStep finds that step in the bound graph
+  // (step_tool_step_unknown), whatever the step declares or is offered. An
+  // outward tool call of a model-bridge step is served only when the step's
+  // declaration, read by findStepToolDeclaration, names the tool
+  // (action_decision_step_undeclared, step_tool_not_declared). A passthrough
+  // step declares nothing and needs nothing: the passthrough serves its one
+  // tool directly under the publish decision it claims. The steps checked are
+  // every ApiNode the compiler's publishing traversal reaches under the node,
+  // and each is read by id with the run's own readers.
+  const rootRefs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  for (const key of publishingNodeKeys(parsed)) {
+    for (const step of everyApiNodeUnder(rootRefs[key], rootRefs)) {
+      const bridge = isModelBridgeApiNode(step);
+      if (!bridge && !(typeof step.url === "string" && step.url.includes(AGENTS_PASSTHROUGH_URL_MARKER))) continue;
+      const stepId = typeof step.id === "string" ? step.id : "";
+      if (!hasApiNodeStep(parsed, stepId)) {
+        findings.push({
+          code: "OAS-RUNTIME-015",
+          severity: "blocker",
+          message:
+            `Step "${idOf(step)}" can run inside the publishing node "${key}" ` +
+            `(metadata.cinatra.publishes: true), but it sits in a holder the run does ` +
+            `not read steps from (an agent, its tools or a tool's flow). The run ` +
+            `refuses every call of a step it cannot find (step_tool_step_unknown). ` +
+            `Put the step in the node itself, in its subflow or in a referenced component of it.`,
+          location: `$.$referenced_components.${key}`,
+          source: "deterministic",
+        });
+        continue;
+      }
+      const offered = isPlainObject(step.data) ? step.data.toolbox_ids : undefined;
+      if (!bridge || (Array.isArray(offered) && offered.length === 0)) continue;
+      const reading = findStepToolDeclaration(parsed, stepId);
+      if (reading.kind === "invalid" || (reading.kind === "declared" && reading.tools.length > 0)) continue;
+      findings.push({
+        code: "OAS-RUNTIME-015",
+        severity: "blocker",
+        message:
+          `Model-bridge step "${idOf(step)}" is part of the publishing node "${key}" ` +
+          `(metadata.cinatra.publishes: true) and declares no tools in ` +
+          `metadata.cinatra.tools. The run refuses every outward call of a step ` +
+          `that does not declare the call's tool (action_decision_step_undeclared), ` +
+          `even after the person chose Publish. Declare the tools the step calls.`,
+        location: `$.$referenced_components.${key}`,
+        source: "deterministic",
+      });
+    }
+  }
   return findings;
+}
+
+/** The keys of the root flow's nodes that declare `metadata.cinatra.publishes: true` on an action kind. */
+function publishingNodeKeys(document: Record<string, unknown>): string[] {
+  const rootRefs = isPlainObject(document.$referenced_components) ? document.$referenced_components : {};
+  const keys: string[] = [];
+  for (const entry of Array.isArray(document.nodes) ? document.nodes : []) {
+    const ref = resolveComponentRef(entry);
+    if (ref === null || !Object.prototype.hasOwnProperty.call(rootRefs, ref) || keys.includes(ref)) continue;
+    const node = rootRefs[ref];
+    if (!isPlainObject(node)) continue;
+    const cinatra = isPlainObject(node.metadata) && isPlainObject(node.metadata.cinatra) ? node.metadata.cinatra : null;
+    if (cinatra !== null && cinatra.publishes === true && typeof node.component_type === "string" &&
+        PUBLISHING_ACTION_KINDS.has(node.component_type)) keys.push(ref);
+  }
+  return keys;
+}
+
+/**
+ * Every ApiNode under a component: every child value, lists and single objects
+ * alike, and every reference, resolved in the innermost enclosing
+ * `$referenced_components` that holds its key (the holders the compiler's
+ * publishing traversal `checkPublishingCallRoutes` walks). It is not a step
+ * reader: the run's readers decide, by id, which of these steps it can serve.
+ */
+function everyApiNodeUnder(start: unknown, rootRefs: Record<string, unknown>): Array<Record<string, unknown>> {
+  const found: Array<Record<string, unknown>> = [];
+  const seen = new Set<unknown>();
+  const stack: Array<[unknown, Array<Record<string, unknown>>]> = [[start, [rootRefs]]];
+  while (stack.length > 0) {
+    const [value, scopes] = stack.pop()!;
+    if (Array.isArray(value)) {
+      for (const item of value) stack.push([item, scopes]);
+      continue;
+    }
+    if (!isPlainObject(value) || seen.has(value)) continue;
+    seen.add(value);
+    const ref = resolveComponentRef(value);
+    if (ref !== null) {
+      for (let i = scopes.length - 1; i >= 0; i--) {
+        if (Object.prototype.hasOwnProperty.call(scopes[i], ref)) {
+          stack.push([scopes[i]![ref], scopes.slice(0, i + 1)]);
+          break;
+        }
+      }
+      continue;
+    }
+    if (value.component_type === "ApiNode") found.push(value);
+    const refs = value.$referenced_components;
+    const inner = isPlainObject(refs) ? [...scopes, refs] : scopes;
+    for (const child of Object.values(value)) stack.push([child, inner]);
+  }
+  return found;
 }
 
 // ---------------------------------------------------------------------------
