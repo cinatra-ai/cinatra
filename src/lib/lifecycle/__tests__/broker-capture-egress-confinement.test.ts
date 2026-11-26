@@ -22,8 +22,9 @@ import path from "node:path";
 //                                on the broker capture path may name it, and
 //                                the capture route cannot serve JS at all (it
 //                                admits one MIME).
-//   /api/lifecycle-views/capture — the ONE broker-reachable byte path, confined
-//                                to pinned capture PNGs by the gate binding.
+//   The capture serving ladder — it admits one MIME and names no renderer
+//                                bundle. (Its route and the capture store left
+//                                with cinatra#3862 leg 8.)
 // ---------------------------------------------------------------------------
 
 const ROOT = process.cwd();
@@ -50,8 +51,6 @@ function code(rel: string): string {
 
 const CONTENT_ROUTE = "src/app/api/artifacts/[artifactId]/versions/[versionId]/content/route.ts";
 const PREVIEW_ROUTE = "src/app/api/artifacts/[artifactId]/versions/[versionId]/preview/route.ts";
-const CAPTURE_ROUTE = "src/app/api/lifecycle-views/capture/route.ts";
-const EGRESS_MODULE = "src/lib/lifecycle/widget-capture-egress.ts";
 const SERVING_MODULE = "src/lib/lifecycle/capture-capability-serving.ts";
 
 /** Every module that can turn a broker credential into a principal. A session
@@ -89,7 +88,7 @@ describe("broker-surface confinement (cinatra#2576 AC-2)", () => {
   });
 
   it("nothing on the broker capture path names a renderer bundle or the session byte routes", () => {
-    for (const rel of [CAPTURE_ROUTE, EGRESS_MODULE, SERVING_MODULE]) {
+    for (const rel of [SERVING_MODULE]) {
       const src = code(rel);
       expect(src, rel).not.toContain("artifact-renderer-assets");
       expect(src, rel).not.toContain("runtime-renderer-registry");
@@ -110,24 +109,5 @@ describe("broker-surface confinement (cinatra#2576 AC-2)", () => {
     // a prefix test, not a top-level-type check.
     expect(src).toContain("serve.mime !== CAPTURE_SERVE_MIME");
     expect(src).not.toContain("startsWith(\"image/\")");
-  });
-
-  it("the capture route reads NO identifier from the request except the sealed capability", () => {
-    const src = code(CAPTURE_ROUTE);
-    // One query parameter, and it is the capability. No path params at all —
-    // the file lives at a static route segment, so there is no id in the URL
-    // for a caller to vary.
-    expect(src).toContain("url.searchParams.get(CAPTURE_CAPABILITY_QUERY_PARAM)");
-    expect(src).not.toContain("params");
-    expect(src.match(/searchParams\.get\(/g) ?? []).toHaveLength(1);
-  });
-
-  it("the capture route's answers carry a no-execution CSP on every path", () => {
-    const src = code(CAPTURE_ROUTE);
-    expect(src).toContain("default-src 'none'; sandbox");
-    // ONE header object — declared once, spread into the refusal and into the
-    // served response — so a header can never be present on one answer shape
-    // and absent on the other.
-    expect(src.match(/CAPTURE_RESPONSE_HEADERS/g) ?? []).toHaveLength(3);
   });
 });

@@ -36,9 +36,6 @@ vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({
   readRepairBySuccessorGateId: vi.fn(),
 }));
-vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({
-  readPinnedPreviewCaptures: vi.fn(),
-}));
 
 import type { ResolvedRendererMount } from "@/lib/artifacts/artifact-review-preparation";
 import { artifactReviewGateSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
