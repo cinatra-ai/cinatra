@@ -145,6 +145,7 @@ import {
 } from "./hitl-recovery-state";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { isRetiredHitlStep } from "./retired-hitl-steps";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { getAgentBuilderTask, type TaskSnapshot } from "./a2a-actions";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
@@ -1646,7 +1647,8 @@ export function AgenticRunPanel({
     // path that bypasses the review surface (and could double-resume the gate the
     // worker also resumes). That descriptor is still never published for a marked
     // gate; the branch below publishes a COMMENT-ONLY one instead.
-    if (ctx && ctx.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) {
+    // cinatra#3471: nor is a retired step (`isRetiredHitlStep`).
+    if (ctx && ctx.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && !isRetiredHitlStep(ctx.xRenderer)) {
       cb(
         runId,
         {
@@ -2226,7 +2228,9 @@ export function AgenticRunPanel({
     /** cinatra#3380 — the schema whose declared keys the renderer's buffer
      *  answers: each one it wrote is sent as written, over the host fields. */
     declaredSchema?: Record<string, unknown> | null;
-  }): ReactNode => effectiveHitlContext && (
+  }): ReactNode => effectiveHitlContext &&
+    // cinatra#3471: a retired step (`isRetiredHitlStep`) gets no Continue or Reject.
+    !isRetiredHitlStep(effectiveHitlContext.xRenderer) && (
     <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
       {opts?.withReject ? (
         <Button

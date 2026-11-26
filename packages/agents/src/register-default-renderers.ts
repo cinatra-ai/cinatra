@@ -455,6 +455,8 @@ export function ensureDefaultFieldRenderersRegistered(): void {
   // — presents no Continue button, so it cannot be resumed. Losing that working
   // resume path is an unresumable dead-end explicitly accepted under the owner's
   // backward-compat waiver. NOT a schema floor.
+  // Both ids are listed in `TOMBSTONED_HITL_RENDERER_IDS` (retired-hitl-steps.ts,
+  // cinatra#3471): a step parked under one is refused on every page and road.
 
   // -------------------------------------------------------------------------
   // Manifest-driven entries: the generated build-time bindings (presence-

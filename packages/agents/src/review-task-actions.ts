@@ -31,7 +31,8 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { failPreSendStep, givePauseBackOnHoldFault, parkedStepIsRetired, settleSendOrDescribe } from "./run-resume-under-claim";
+import { RETIRED_HITL_STEP_REFUSAL } from "./retired-hitl-steps";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -930,6 +931,9 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
+    // cinatra#3471: a retired step is answered by nothing, refused before the
+    // pause is claimed, so nothing is recorded or sent.
+    if (await parkedStepIsRetired(run.id, reviewTaskId)) throw new Error(RETIRED_HITL_STEP_REFUSAL);
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts
       // persists task.contextId immediately after the initial sendTask succeeds.

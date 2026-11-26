@@ -14,6 +14,7 @@
  */
 
 import { fieldRendererRegistry } from "./field-renderer-registry";
+import { isRetiredHitlStep } from "./retired-hitl-steps";
 
 /**
  * Manifest-declared strict classification: does a registered binding flag
@@ -38,6 +39,8 @@ export function hasMidRunHitlBinding(xRenderer: string): boolean {
  *     they can be narrowed by a dedicated audit.
  */
 export function classifyMidRunHitl(xRenderer: string): boolean {
+  // cinatra#3471: a retired step is never mid-run, so no Continue is drawn.
+  if (isRetiredHitlStep(xRenderer)) return false;
   if (hasMidRunHitlBinding(xRenderer)) return true;
   return (
     xRenderer.endsWith(":output") ||

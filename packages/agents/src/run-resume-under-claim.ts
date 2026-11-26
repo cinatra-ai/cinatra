@@ -28,7 +28,8 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { captureHitlPromptForContinue } from "./agent-run-hitl-prompts";
+import { captureHitlPromptForContinue, readDurableHitlGateForContinue } from "./agent-run-hitl-prompts";
+import { isRetiredHitlStep, RETIRED_HITL_STEP_REFUSAL } from "./retired-hitl-steps";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
 import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
@@ -36,6 +37,21 @@ import { transitionRunStatus } from "./store";
 
 type ClaimRef = { runId: string; orgId: string; token: string };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * cinatra#3471: is the parked step an answer reaches RETIRED? Its durable row
+ * names its renderer, and `isRetiredHitlStep` (the predicate every page asks)
+ * decides. No row, or a row that cannot be read, is answered as before (the
+ * other readers of this row treat it as best-effort too).
+ */
+export async function parkedStepIsRetired(runId: string, reviewTaskId: string): Promise<boolean> {
+  try {
+    const row = await readDurableHitlGateForContinue(runId, reviewTaskId);
+    return row !== null && isRetiredHitlStep(row.xRenderer);
+  } catch {
+    return false;
+  }
+}
 
 /** A pre-send step failed: give the lease back and throw the step's error, or
  * PauseClaimReleaseError when the release failed too. A `lost` release needs
@@ -132,6 +148,8 @@ export async function resumeWayflowUnderPauseClaim(args: {
   recheckPublishHold?: boolean;
 }): Promise<Record<string, unknown>> {
   const { run, client, resumeText, prompt, authority, readRun } = args;
+  // cinatra#3471: a retired step is answered by nothing; refused before the claim.
+  if (await parkedStepIsRetired(run.id, `wayflow-${run.a2aTaskId}`)) return { error: RETIRED_HITL_STEP_REFUSAL };
   // claimPause refuses a generation that cannot be read.
   const claim = await claimPause({ runId: run.id, orgId: run.orgId, generation: run.pauseGeneration as number }, authority);
   if (claim.kind === "refused") {
