@@ -1,5 +1,5 @@
 {
-  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 099e802b, LinkedIn 11753d6c): the node ids, the control edges and the data edges into the publishing step, with the flag the packs will declare; every value is a string. The third has a publishing step first after start and a second one.",
+  "$comment": "cinatra#4150 PR 4 (A3): ONE fixture both sides read. docker/wayflow/tests (the loader inserts a gate in front of each node declared metadata.cinatra.publishes: true) and packages/agents/src/__tests__/publish-gate-parity.test.ts (the host compiler's publishingSteps) both assert their ids equal publishingSteps below, gate ids = gatePrefix + step. The first two flows were copied by hand from the two publish packs at their lock pins (WordPress 099e802b, LinkedIn 52a1213e): the node ids, the control edges and the data edges into the publishing step, with the flag the packs will declare (the LinkedIn pack declares it itself at its pin, and parks on the host's review of the pinned revision, gather_review_target then post_review_gate, before anything is read for publishing, and the read step takes the revision the review approved from the review step's answer); every value is a string. The third has a publishing step first after start and a second one.",
   "gatePrefix": "cinatra_publish_gate__",
   "flows": [
     {
@@ -562,6 +562,12 @@
             "$component_ref": "start"
           },
           {
+            "$component_ref": "gather_review_target"
+          },
+          {
+            "$component_ref": "post_review_gate"
+          },
+          {
             "$component_ref": "read_post_record"
           },
           {
@@ -580,9 +586,29 @@
         "control_flow_connections": [
           {
             "component_type": "ControlFlowEdge",
-            "name": "start_to_read_post_record",
+            "name": "start_to_gather_review_target",
             "from_node": {
               "$component_ref": "start"
+            },
+            "to_node": {
+              "$component_ref": "gather_review_target"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "gather_review_target_to_post_review_gate",
+            "from_node": {
+              "$component_ref": "gather_review_target"
+            },
+            "to_node": {
+              "$component_ref": "post_review_gate"
+            }
+          },
+          {
+            "component_type": "ControlFlowEdge",
+            "name": "post_review_gate_to_read_post_record",
+            "from_node": {
+              "$component_ref": "post_review_gate"
             },
             "to_node": {
               "$component_ref": "read_post_record"
@@ -632,6 +658,54 @@
         "data_flow_connections": [
           {
             "component_type": "DataFlowEdge",
+            "name": "start_linkedinArtifactId_to_gather_review_target_linkedinArtifactId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinArtifactId",
+            "destination_node": {
+              "$component_ref": "gather_review_target"
+            },
+            "destination_input": "linkedinArtifactId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_linkedinRepresentationRevisionId_to_gather_review_target_linkedinRepresentationRevisionId",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "linkedinRepresentationRevisionId",
+            "destination_node": {
+              "$component_ref": "gather_review_target"
+            },
+            "destination_input": "linkedinRepresentationRevisionId"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "start_cinatra_run_id_to_gather_review_target_cinatra_run_id",
+            "source_node": {
+              "$component_ref": "start"
+            },
+            "source_output": "cinatra_run_id",
+            "destination_node": {
+              "$component_ref": "gather_review_target"
+            },
+            "destination_input": "cinatra_run_id"
+          },
+          {
+            "component_type": "DataFlowEdge",
+            "name": "gather_review_target_reviewTargets_to_post_review_gate_reviewTargets",
+            "source_node": {
+              "$component_ref": "gather_review_target"
+            },
+            "source_output": "reviewTargets",
+            "destination_node": {
+              "$component_ref": "post_review_gate"
+            },
+            "destination_input": "reviewTargets"
+          },
+          {
+            "component_type": "DataFlowEdge",
             "name": "start_linkedinArtifactId_to_read_post_record_linkedinArtifactId",
             "source_node": {
               "$component_ref": "start"
@@ -668,15 +742,15 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_linkedinRepresentationRevisionId_to_read_post_text_linkedinRepresentationRevisionId",
+            "name": "post_review_gate_reviewApproval_to_read_post_text_reviewApproval",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "post_review_gate"
             },
-            "source_output": "linkedinRepresentationRevisionId",
+            "source_output": "reviewApproval",
             "destination_node": {
               "$component_ref": "read_post_text"
             },
-            "destination_input": "linkedinRepresentationRevisionId"
+            "destination_input": "reviewApproval"
           },
           {
             "component_type": "DataFlowEdge",
@@ -692,11 +766,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_linkedinArtifactId_to_publish_linkedinArtifactId",
+            "name": "read_post_text_artifactId_to_publish_linkedinArtifactId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "linkedinArtifactId",
+            "source_output": "artifactId",
             "destination_node": {
               "$component_ref": "publish"
             },
@@ -704,11 +778,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_linkedinRepresentationRevisionId_to_publish_linkedinRepresentationRevisionId",
+            "name": "read_post_text_representationRevisionId_to_publish_linkedinRepresentationRevisionId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "linkedinRepresentationRevisionId",
+            "source_output": "representationRevisionId",
             "destination_node": {
               "$component_ref": "publish"
             },
@@ -824,11 +898,11 @@
           },
           {
             "component_type": "DataFlowEdge",
-            "name": "start_linkedinArtifactId_to_write_address_linkedinArtifactId",
+            "name": "read_post_text_artifactId_to_write_address_linkedinArtifactId",
             "source_node": {
-              "$component_ref": "start"
+              "$component_ref": "read_post_text"
             },
-            "source_output": "linkedinArtifactId",
+            "source_output": "artifactId",
             "destination_node": {
               "$component_ref": "write_address"
             },
@@ -909,6 +983,72 @@
               }
             }
           },
+          "gather_review_target": {
+            "component_type": "ApiNode",
+            "id": "gather_review_target",
+            "name": "gather_review_target",
+            "url": "https://example.invalid/gather_review_target",
+            "http_method": "POST",
+            "data": {
+              "input": {
+                "artifactId": "{{ linkedinArtifactId }}",
+                "reviewTargets": "[{\"artifactId\": \"{{ linkedinArtifactId }}\", \"representationRevisionId\": \"{{ linkedinRepresentationRevisionId }}\"}]",
+                "cinatra_run_id": "{{ cinatra_run_id }}"
+              }
+            },
+            "inputs": [
+              {
+                "title": "linkedinArtifactId",
+                "type": "string"
+              },
+              {
+                "title": "linkedinRepresentationRevisionId",
+                "type": "string"
+              },
+              {
+                "title": "cinatra_run_id",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "reviewTargets",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": false
+              }
+            }
+          },
+          "post_review_gate": {
+            "component_type": "InputMessageNode",
+            "id": "post_review_gate",
+            "name": "post_review_gate",
+            "inputs": [
+              {
+                "title": "reviewTargets",
+                "type": "string"
+              }
+            ],
+            "outputs": [
+              {
+                "title": "reviewApproval",
+                "type": "string"
+              }
+            ],
+            "metadata": {
+              "cinatra": {
+                "riskClass": "read_only",
+                "requiresApproval": true,
+                "artifactReview": {
+                  "targetsInput": "reviewTargets"
+                }
+              }
+            }
+          },
           "read_post_record": {
             "component_type": "ApiNode",
             "id": "read_post_record",
@@ -952,18 +1092,18 @@
             "http_method": "POST",
             "data": {
               "input": {
+                "reviewApproval": "{{ reviewApproval }}",
                 "linkedinArtifactId": "{{ linkedinArtifactId }}",
-                "linkedinRepresentationRevisionId": "{{ linkedinRepresentationRevisionId }}",
                 "cinatra_run_id": "{{ cinatra_run_id }}"
               }
             },
             "inputs": [
               {
-                "title": "linkedinArtifactId",
+                "title": "reviewApproval",
                 "type": "string"
               },
               {
-                "title": "linkedinRepresentationRevisionId",
+                "title": "linkedinArtifactId",
                 "type": "string"
               },
               {
@@ -972,6 +1112,14 @@
               }
             ],
             "outputs": [
+              {
+                "title": "artifactId",
+                "type": "string"
+              },
+              {
+                "title": "representationRevisionId",
+                "type": "string"
+              },
               {
                 "title": "text",
                 "type": "string"

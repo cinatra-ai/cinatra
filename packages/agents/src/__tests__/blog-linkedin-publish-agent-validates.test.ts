@@ -10,6 +10,14 @@
  * facts (a generation poll, the post.linkedinDrafts[] extraction, the
  * update-then-publish pair) are therefore negative-asserted rather than
  * required — they are what this pin removed.
+ *
+ * The pack ships NO screen of its own (cinatra#4150): the run parks on the
+ * host's review of the pinned revision (gather_review_target ->
+ * post_review_gate, marked cinatra.artifactReview) before the words are read,
+ * the words read are those of the revision the review approved, and the
+ * publish node is the declared publishing step (publishes: true +
+ * publishRows), so the host's publish card is the one stop in front of the
+ * outward call.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -74,12 +82,124 @@ describe("blog-linkedin-publish-agent — 7 structural pins", () => {
     expect(llm.capabilityRequired).toBeUndefined();
   });
 
-  it("Pin 4: hitlScreens has exactly one renderer key + toolboxes OMITTED", () => {
+  it("Pin 4: no pack screen (no hitlScreens) + toolboxes OMITTED; the publish node is the publishing step", () => {
+    // red-first-expect: expected [ Array(1) ] to be undefined
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
-    expect(meta.hitlScreens).toEqual([
-      "@cinatra-ai/blog-linkedin-publish-agent:draft-review",
-    ]);
+    expect(meta.hitlScreens).toBeUndefined();
     expect(meta.toolboxes).toBeUndefined();
+    const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const publishMeta = (components.publish.metadata as Record<string, unknown>).cinatra as Record<
+      string,
+      unknown
+    >;
+    expect(publishMeta.publishes).toBe(true);
+    // The card shows the words that go out and where they go.
+    expect(publishMeta.publishRows).toEqual([
+      { label: "Post", input: "postText" },
+      { label: "Destination", input: "destinationName" },
+    ]);
+    // The write-back is NOT a publishing step: one publish card per run.
+    const writeMeta = (components.write_address.metadata as Record<string, unknown>).cinatra as Record<
+      string,
+      unknown
+    >;
+    expect(writeMeta.publishes).toBe(false);
+  });
+
+  it("Pin 4b: the host review of the pinned revision comes before anything is read for publishing", () => {
+    // red-first-expect: Cannot read properties of undefined (reading 'component_type')
+    type Ref = { $component_ref: string };
+    const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const gather = components.gather_review_target;
+    expect(gather.component_type).toBe("ApiNode");
+    const gatherData = gather.data as { tool?: string; input?: Record<string, unknown> };
+    expect(gatherData.tool).toBe("artifacts_get");
+    expect(gatherData.input?.reviewTargets).toBe(
+      '[{"artifactId": "{{ linkedinArtifactId }}", "representationRevisionId": "{{ linkedinRepresentationRevisionId }}"}]',
+    );
+    const gate = components.post_review_gate;
+    expect(gate.component_type).toBe("InputMessageNode");
+    const gateMeta = (gate.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
+    expect(gateMeta.artifactReview).toEqual({ targetsInput: "reviewTargets" });
+    expect(gateMeta.requiresApproval).toBe(true);
+    // artifacts_get answers only `{ artifact }`. The target set reaches the gate
+    // only because the host echoes the call's input back on this flag, so the
+    // gather step's declared output and its edge into the gate's marked input
+    // are what carry it. The real echo is driven with this node in
+    // src/__tests__/passthrough-linkedin-review-gate-gets-its-targets.test.ts.
+    expect((gatherData as { result_input_passthrough?: unknown }).result_input_passthrough).toBe(true);
+    expect((gather.outputs as Array<{ title: string }>).map((o) => o.title)).toContain("reviewTargets");
+    const targetEdges = (
+      oas.data_flow_connections as Array<{
+        source_node: Ref;
+        source_output: string;
+        destination_node: Ref;
+        destination_input: string;
+      }>
+    ).filter((e) => e.destination_node.$component_ref === "post_review_gate");
+    expect(
+      targetEdges.map(
+        (e) => `${e.source_node.$component_ref}.${e.source_output}->${e.destination_input}`,
+      ),
+    ).toEqual(["gather_review_target.reviewTargets->reviewTargets"]);
+    const control = (
+      oas.control_flow_connections as Array<{ from_node: Ref; to_node: Ref }>
+    ).map((e) => `${e.from_node.$component_ref}->${e.to_node.$component_ref}`);
+    expect(control).toEqual([
+      "start->gather_review_target",
+      "gather_review_target->post_review_gate",
+      "post_review_gate->read_post_record",
+      "read_post_record->read_post_text",
+      "read_post_text->publish",
+      "publish->write_address",
+      "write_address->end",
+    ]);
+  });
+
+  it("Pin 4c: the words read for publishing are the revision the review approved, not the one the run started with", () => {
+    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
+    // A person can choose Regenerate on the review and approve the successor.
+    // The review step answers with the approved target, so the read step takes
+    // its revision from that answer (the pack's declared approved_post_text
+    // tool), and the publish step gets the approved artifact and revision from
+    // the read step. The start revision feeds only the review itself.
+    type Ref = { $component_ref: string };
+    const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const readData = components.read_post_text.data as {
+      tool?: string;
+      input?: { name?: string; input?: Record<string, unknown> };
+    };
+    expect(readData.tool).toBe("extension_tool");
+    expect(readData.input?.name).toBe("approved_post_text");
+    expect(readData.input?.input).toEqual({
+      reviewDecision: "{{ reviewApproval }}",
+      artifactId: "{{ linkedinArtifactId }}",
+    });
+    const tools = ((pkg.cinatra ?? {}) as { tools?: unknown }).tools;
+    expect(tools).toContainEqual({
+      name: "approved_post_text",
+      module: "./cinatra/tools/approved-post-text.mjs",
+    });
+    const edges = (
+      oas.data_flow_connections as Array<{
+        source_node: Ref;
+        source_output: string;
+        destination_node: Ref;
+        destination_input: string;
+      }>
+    ).map(
+      (e) =>
+        `${e.source_node.$component_ref}.${e.source_output}->${e.destination_node.$component_ref}.${e.destination_input}`,
+    );
+    expect(edges).toContain("post_review_gate.reviewApproval->read_post_text.reviewApproval");
+    expect(edges).toContain("read_post_text.artifactId->publish.linkedinArtifactId");
+    expect(edges).toContain(
+      "read_post_text.representationRevisionId->publish.linkedinRepresentationRevisionId",
+    );
+    expect(edges).toContain("read_post_text.artifactId->write_address.linkedinArtifactId");
+    expect(edges.filter((e) => e.startsWith("start.linkedinRepresentationRevisionId->"))).toEqual([
+      "start.linkedinRepresentationRevisionId->gather_review_target.linkedinRepresentationRevisionId",
+    ]);
   });
 
   it("Pin 5: single ApiNode targeting templated /api/llm-bridge, agent_id, no skill_source_path", () => {
@@ -142,8 +262,9 @@ describe("blog-linkedin-publish-agent — inline instruction contract", () => {
     expect(skill).not.toContain("linkedinPublishGeneration");
   });
 
-  it("publishes the pinned revision the person continued with, not a draft row", () => {
-    expect(skill).toContain("THE REVISION THE PERSON CONTINUED WITH");
+  it("publishes the revision the review approved, not a draft row", () => {
+    // red-first-expect: to contain 'THE REVISION THE REVIEW APPROVED'
+    expect(skill).toContain("THE REVISION THE REVIEW APPROVED");
     expect(skill).toContain("linkedinRepresentationRevisionId");
     expect(skill).not.toMatch(/post\.linkedinDrafts/);
   });
@@ -157,16 +278,57 @@ describe("blog-linkedin-publish-agent — inline instruction contract", () => {
     expect(skill).not.toMatch(/status === "draft"/);
   });
 
-  it("names the connector's publish primitive, and the review screen does not edit the copy", () => {
+  it("names the connector's publish primitive, and runs only behind the host's publish confirmation", () => {
+    // red-first-expect: to contain 'the run stops in front of it on the h
     expect(skill).toContain("linkedin_post_publish");
-    expect(skill).toContain("The screen shows the copy; it does not edit it.");
+    expect(skill).toContain("the run stops in front of it on the host's publish confirmation");
+    // Copy changes belong to the review, not to this step.
+    expect(skill).toContain("A person who wants different words changes them on the review, not here.");
     // The operator-edit road (update-then-publish on the blog record) is gone.
     expect(skill).not.toContain("blog_post_publish_linkedin_update");
     expect(skill).not.toContain("blog_post_publish_linkedin_publish");
   });
 
-  it("declares the HITL renderer key explicitly", () => {
-    expect(skill).toContain("@cinatra-ai/blog-linkedin-publish-agent:draft-review");
+  it("names no pack renderer key: the host's review and publish cards replace the pack screen", () => {
+    // red-first-expect: not to contain '@cinatra-ai/blog-linkedin-publish-age
+    expect(skill).not.toContain("@cinatra-ai/blog-linkedin-publish-agent:draft-review");
+    expect(skill).not.toContain("x-renderer");
+  });
+
+  it("declares no field renderer: a run never stops on a pack screen", () => {
+    // red-first-expect: expected [ { …(5) } ] to be undefined
+    const cinatra = (pkg.cinatra ?? {}) as Record<string, unknown>;
+    expect(cinatra.fieldRenderers).toBeUndefined();
+  });
+
+  it("the failure and partial envelopes carry exactly the declared output keys, approved, and the empty patch", () => {
+    // red-first-expect: expected -1 to be greater than -1
+    const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
+    const declared = (components.publish.outputs as Array<{ title: string }>).map((o) => o.title).sort();
+    const envelopeAfter = (heading: string) => {
+      const at = skill.indexOf(heading);
+      expect(at, heading).toBeGreaterThan(-1);
+      const block = /```json\n([\s\S]*?)\n```/.exec(skill.slice(at));
+      expect(block, `the recipe spells out: ${heading}`).toBeTruthy();
+      return JSON.parse(block![1]) as Record<string, unknown>;
+    };
+    const failure = envelopeAfter("The failure envelope, with a one-line `summary` that names the cause");
+    expect(Object.keys(failure).sort()).toEqual(declared);
+    expect(failure.approved).toBe(true);
+    expect(failure.addressWritten).toBe(false);
+    expect(failure.linkedinPostUrl).toBe("");
+    expect(failure.linkedinPostExternalId).toBe("");
+    expect(failure.addressPatch).toEqual({
+      linkedinPublishedUrl: "",
+      linkedinPublishedExternalId: "",
+      linkedinPublishedRevisionId: "",
+    });
+    // The partial envelope (LinkedIn returned only an address or only an id)
+    // carries the same empty patch, so its write-back writes nothing either.
+    const partial = envelopeAfter("The partial envelope");
+    expect(Object.keys(partial).sort()).toEqual(declared);
+    expect(partial.addressWritten).toBe(false);
+    expect(partial.addressPatch).toEqual(failure.addressPatch);
   });
 });
 
@@ -202,6 +364,7 @@ describe("blog-linkedin-publish-agent — the published address reaches the arti
   });
 
   it("a write-back node merges that patch onto the SAME artifact through objects_update", () => {
+    // red-first-expect: to contain '(
     const write = components().write_address;
     expect(write, "the flow carries a write_address node").toBeTruthy();
     expect(write.component_type).toBe("ApiNode");
@@ -211,7 +374,16 @@ describe("blog-linkedin-publish-agent — the published address reaches the arti
     expect(data.tool).toBe("objects_update");
     // The artifact written to is the one this run was handed — never a new one.
     expect(data.input?.objectId).toBe("{{ linkedinArtifactId }}");
-    expect(data.input?.data).toBe("{# pyagentspec-input-hint: {{ addressPatch }} #}{{ addressPatch | tojson }}");
+    // The leaf writes the patch only when each of its three members is present
+    // and non-empty. A run that published nothing renders the empty patch {},
+    // and objects_update writes nothing for an empty patch (no new version, no
+    // history or outbox row).
+    const leaf = String(data.input?.data ?? "");
+    expect(leaf.startsWith("{# pyagentspec-input-hint: {{ addressPatch }} #}")).toBe(true);
+    for (const member of MEMBERS) {
+      expect(leaf).toContain(`('${member}' in addressPatch and addressPatch['${member}'])`);
+    }
+    expect(leaf.endsWith("%}{{ addressPatch | tojson }}{% else %}{}{% endif %}")).toBe(true);
   });
 
   it("the write-back runs after the publish step, before the end, on the publish step's patch", () => {

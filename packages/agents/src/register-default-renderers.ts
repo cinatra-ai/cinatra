@@ -185,12 +185,14 @@ const RENDERER_KIND_TABLE: Record<
     makeCondition: makeGmailSenderCondition,
   },
   // MIGRATED (cinatra#1625 S8/M3): the blog-linkedin draft-review component
-  // moved into @cinatra-ai/blog-linkedin-publish-agent. The KIND stays (the
-  // manifest still declares it — kind-vocabulary set-equality; conditionFor()
-  // reads its bare aliases), but the host ships no component: a bundled binding
-  // resolves map-first to the extension wrapper, and a not-in-build binding of
-  // this kind degrades to the SchemaFieldRenderer floor here (AC4 never-blank).
-  // Same shape as final-list-review / scrape-schema-review above.
+  // moved into @cinatra-ai/blog-linkedin-publish-agent. The pinned pack no
+  // longer declares this binding (cinatra#4150: the host's review and publish
+  // cards replace that screen). The KIND stays for a workspace that still has
+  // an older version of the pack installed at runtime: its binding is validated
+  // against this vocabulary, so without the kind it is skipped and a run parked
+  // on that screen has no renderer and no Continue. With the kind, that binding
+  // degrades to the SchemaFieldRenderer floor here (AC4 never-blank). Same
+  // shape as final-list-review / scrape-schema-review above.
   "linkedin-draft-review": { renderer: SchemaOnlyFloorRenderer, credentialSafe: true, drawsOwnSubmit: true },
   "list-picker": { renderer: ListPickerRenderer, bareAliases: ["list-picker"] },
   // See the final-list-review note above — the component migrated; the kind + its
