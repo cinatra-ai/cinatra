@@ -28,19 +28,28 @@
  *     Key: the file's path in the pack (forward slashes).
  *  2. `toolDeclarations` — any pinned pack whose manifest declares
  *     `cinatra.tools` (the code modules core loads and runs in its own server
- *     process). Key: the declared tool name; `cinatra.tools[<i>]` for an entry
- *     without a string name; `cinatra.tools` when the value is not an array.
+ *     process). Every value of the key counts (see `toolDeclarationKeys`).
+ *     Key: the declared tool name, the first time a local-identifier name
+ *     appears; `cinatra.tools[<i>]` for any other entry (a repeated name
+ *     included); `cinatra.tools.<key>` per key of an object map;
+ *     `cinatra.tools` for any other non-null value.
  *  3. `extensionToolSteps` — any pinned pack whose flow (`cinatra/oas.json`,
- *     parsed) has a passthrough ApiNode calling the core tool `extension_tool`.
- *     A node is a passthrough node by `isPassthroughUrl`, the product's own
- *     test (packages/agents/src/artifact-binding.ts and
- *     validate-oas-runtime-invariants.ts: the URL CONTAINS the route path), so
- *     a query, a fragment, a trailing slash or any base form still counts.
- *     Key: the node id.
+ *     parsed) has a step calling the core tool `extension_tool`, read
+ *     LEXICALLY (see `collectToolSteps`): every object of the parsed file, at
+ *     any depth, whose own `data` (an object, or a string that parses to one)
+ *     holds `tool` equal to `extension_tool`. No URL, node kind or namespace is
+ *     read. Each step has its position (JSON path); the list records, per pack
+ *     and flow file, the COUNT of such steps (the ratchet) and the sorted
+ *     `id -> module` lines (information). One more step anywhere fails,
+ *     whatever its id.
+ *     An UNREADABLE step fails always and is never recorded: a string `data`
+ *     that does not parse to an object and names `extension_tool`, or, in an
+ *     ApiNode-shaped object, a `tool` that is not a plain string or holds a
+ *     template.
  *
- * ALSO COUNTED, NEVER FAILED: the fixed (non-model) flow steps of every agent
- * that call any tool through the passthrough, printed per agent so a later
- * change can ratchet them.
+ * ALSO COUNTED, NEVER FAILED: the steps of every agent's flow that name any
+ * tool (the same lexical reading, one per position), printed per agent so a
+ * later change can ratchet them.
  *
  * THE UNIVERSE is the pinned extensions: every `packageName` of
  * cinatra-dev-extensions.lock.json and cinatra-required-extensions.lock.json,
@@ -110,12 +119,14 @@ export const SKILL_FILE = "SKILL.md";
 /** The core tool a fixed flow step calls to run a pack's declared code module. */
 export const EXTENSION_TOOL = "extension_tool";
 
-/**
- * The passthrough route path, the same constant as the product's
- * AGENTS_PASSTHROUGH_URL_MARKER (packages/agents/src/artifact-binding.ts); a
- * test reads the product source and fails when the two part.
- */
-export const PASSTHROUGH_ROUTE_PATH = "/api/agents/passthrough";
+/** The class recorded as a count per pack and flow file (the others as keys). */
+const COUNTED_CLASS = "extensionToolSteps";
+
+/** The flow file of a pack, the one the product loads. */
+const FLOW_FILE = "cinatra/oas.json";
+
+/** A declared tool name in the product's vocabulary (LOCAL_IDENT_RE of packages/sdk-extensions/src/manifest.ts). */
+const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
 
 /** The folder of a pack whose JSON files are manifests too (read at any depth). */
 const MANIFEST_DIR = "cinatra";
@@ -315,91 +326,201 @@ export function agentCodeFiles({ relPaths, packageJson, manifestJson = {} }) {
   return out.sort();
 }
 
-/** The `toolDeclarations` keys of one manifest (empty when it declares none). */
+/**
+ * The `toolDeclarations` keys of one manifest (empty when it declares none).
+ * The product (`parseDeclaredTools`, packages/sdk-extensions/src/manifest.ts)
+ * accepts only an absent or `null` value (no tools) or an array of objects,
+ * each with a `name` in its local-identifier vocabulary, each name once. This
+ * reads EVERY value of the key, accepted or not, so nothing is skipped:
+ *   - an entry whose `name` is a local identifier seen for the first time:
+ *     the name;
+ *   - any other entry (not an object, a bare string, a name missing, not an
+ *     identifier, or a name declared a second time): `cinatra.tools[<i>]`;
+ *   - an object map instead of a list: `cinatra.tools.<key>` per own key
+ *     (`cinatra.tools` when it has none);
+ *   - any other value: `cinatra.tools`.
+ * A name key never holds a `.` or a `[`, so it cannot collide with the others.
+ */
 export function toolDeclarationKeys(packageJson) {
   const block = packageJson?.cinatra;
   if (!block || typeof block !== "object" || !Object.prototype.hasOwnProperty.call(block, "tools")) return [];
   const tools = block.tools;
-  if (!Array.isArray(tools)) return ["cinatra.tools"];
-  const keys = new Set();
+  if (tools === null) return [];
+  if (!Array.isArray(tools)) {
+    if (typeof tools === "object") {
+      const own = Object.keys(tools);
+      return own.length > 0 ? own.map((k) => `cinatra.tools.${k}`).sort() : ["cinatra.tools"];
+    }
+    return ["cinatra.tools"];
+  }
+  const keys = [];
+  const names = new Set();
   tools.forEach((t, i) => {
-    keys.add(t && typeof t === "object" && typeof t.name === "string" && t.name !== "" ? t.name : `cinatra.tools[${i}]`);
+    const name = t && typeof t === "object" && !Array.isArray(t) ? t.name : undefined;
+    if (typeof name === "string" && TOOL_NAME_RE.test(name) && !names.has(name)) {
+      names.add(name);
+      keys.push(name);
+    } else {
+      keys.push(`cinatra.tools[${i}]`);
+    }
   });
-  return [...keys].sort();
+  return keys.sort();
+}
+
+/** A JSON path step: `.key` for a plain key, `["key"]` otherwise, `[i]` for an index. */
+function pathStep(key) {
+  if (typeof key === "number") return `[${key}]`;
+  return /^[A-Za-z_$][A-Za-z0-9_$-]*$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
+}
+
+const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+
+/**
+ * One object of a flow read as a tool step, LEXICALLY: its own `data` member,
+ * as an object or as a string that parses as JSON to an object, holding an own
+ * `tool`. Nothing about URLs, node kinds, namespaces or run-time resolution is
+ * read. Returns null (no step), `{ id, tool, module }`, or `{ id, unreadable }`:
+ *   - a string `data` that does not parse to an object and contains the name
+ *     `extension_tool`: unreadable step data;
+ *   - a `tool` that is not a plain string, or holds a template (`{{`), in an
+ *     object of ApiNode shape (`url`, `http_method` or `component_type`
+ *     ApiNode): unreadable tool name.
+ */
+function readStep(obj) {
+  const id = typeof obj.id === "string" && obj.id !== "" ? obj.id : typeof obj.name === "string" && obj.name !== "" ? obj.name : "(no id)";
+  let data = obj.data;
+  if (typeof data === "string") {
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      parsed = undefined;
+    }
+    if (isPlainObject(parsed)) data = parsed;
+    else if (data.includes(EXTENSION_TOOL)) return { id, unreadable: `unreadable step data: a string that does not parse to an object names ${EXTENSION_TOOL}` };
+    else return null;
+  }
+  if (!isPlainObject(data) || !hasOwn(data, "tool")) return null;
+  const tool = data.tool;
+  if (typeof tool === "string" && !tool.includes("{{")) {
+    const module = isPlainObject(data.input) && typeof data.input.name === "string" ? data.input.name : "(no module name)";
+    return { id, tool, module };
+  }
+  const apiShape = hasOwn(obj, "url") || hasOwn(obj, "http_method") || obj.component_type === "ApiNode";
+  if (!apiShape) return null;
+  return { id, unreadable: `unreadable tool name: data.tool is ${typeof tool === "string" ? `the template ${JSON.stringify(tool)}` : "not a plain string"}` };
 }
 
 /**
- * True when an ApiNode's `url` calls the passthrough route, by the product's
- * own test: the string contains the route path (case as written). So a query,
- * a fragment, a trailing slash, a relative path and a templated or absolute
- * base all count, as they do for the product's compiler and run-time checks.
+ * Every tool step of a parsed flow: one plain walk over the whole JSON value
+ * (every object once, at any depth), each object read by `readStep`. Each step
+ * carries its POSITION (its JSON path from the root, `$` first), never only its
+ * id, so two steps with the same id anywhere are two steps. Document order.
  */
-export function isPassthroughUrl(url) {
-  return typeof url === "string" && url.includes(PASSTHROUGH_ROUTE_PATH);
-}
-
-/**
- * Every passthrough ApiNode of a flow, at any depth: `{ nodeId, tool }`, or,
- * when `data.tool` is missing, not a string or a template,
- * `{ nodeId, tool: null, unreadable }`. One predicate: `isPassthroughUrl`.
- */
-export function collectPassthroughCalls(flow) {
-  const calls = [];
-  const seen = new Set();
-  const walk = (value) => {
+export function collectToolSteps(flow) {
+  const steps = [];
+  const visited = new WeakSet();
+  const walk = (value, path) => {
+    if (!value || typeof value !== "object" || visited.has(value)) return;
+    visited.add(value);
     if (Array.isArray(value)) {
-      for (const v of value) walk(v);
+      value.forEach((v, i) => walk(v, `${path}${pathStep(i)}`));
       return;
     }
-    if (!value || typeof value !== "object") return;
-    if (value.component_type === "ApiNode" && isPassthroughUrl(value.url)) {
-      const nodeId = typeof value.id === "string" && value.id ? value.id : String(value.name ?? "(no id)");
-      const tool = value.data && typeof value.data === "object" ? value.data.tool : undefined;
-      let call;
-      if (typeof tool !== "string" || tool === "") call = { nodeId, tool: null, unreadable: "data.tool is missing or not a string" };
-      else if (tool.includes("{{")) call = { nodeId, tool: null, unreadable: `data.tool is the template ${JSON.stringify(tool)}` };
-      else call = { nodeId, tool };
-      const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        calls.push(call);
-      }
+    if (hasOwn(value, "data")) {
+      const step = readStep(value);
+      if (step) steps.push({ path, ...step });
     }
-    for (const v of Object.values(value)) walk(v);
+    for (const [k, v] of Object.entries(value)) walk(v, `${path}${pathStep(k)}`);
   };
-  walk(flow);
-  return calls;
+  walk(flow, "$");
+  return steps;
 }
 
 /**
- * One parsed flow's fixed tool steps: `{ extensionToolSteps, toolSteps }`.
- * `extensionToolSteps` are the node ids that call `extension_tool`;
- * `toolSteps` every passthrough call (any tool), as `nodeId -> tool` lines.
+ * One parsed flow's tool steps: `{ extensionToolSteps, unreadable, toolSteps }`.
+ *   - `extensionToolSteps`: every step whose tool is `extension_tool`, as
+ *     `{ path, id, module }` (`module` is `data.input.name`);
+ *   - `unreadable`: every unreadable step, as `{ path, id, reason }`;
+ *   - `toolSteps`: every readable step (any tool), as `id -> tool` lines,
+ *     one per position, sorted.
  */
 export function flowToolSteps(flow) {
-  const calls = collectPassthroughCalls(flow);
-  const extensionToolSteps = new Set();
+  const extensionToolSteps = [];
+  const unreadable = [];
   const toolSteps = [];
-  for (const c of calls) {
-    if (c.tool === EXTENSION_TOOL) extensionToolSteps.add(c.nodeId);
-    toolSteps.push(`${c.nodeId} -> ${c.tool ?? `(unreadable: ${c.unreadable})`}`);
+  for (const s of collectToolSteps(flow)) {
+    if (s.unreadable) {
+      unreadable.push({ path: s.path, id: s.id, reason: s.unreadable });
+      continue;
+    }
+    toolSteps.push(`${s.id} -> ${s.tool}`);
+    if (s.tool === EXTENSION_TOOL) extensionToolSteps.push({ path: s.path, id: s.id, module: s.module });
   }
-  return { extensionToolSteps: [...extensionToolSteps].sort(), toolSteps: toolSteps.sort() };
+  return { extensionToolSteps, unreadable, toolSteps: toolSteps.sort() };
 }
 
-/** Pairs `pkg :: key` of a class map (a prototype-free object of arrays). */
-function pairsOf(map) {
+/**
+ * The recorded form of one flow's `extension_tool` steps: the COUNT (what the
+ * ratchet reads) and the sorted `id -> module` lines (for information only).
+ */
+export function stepRecord(extensionToolSteps) {
+  return { count: extensionToolSteps.length, steps: extensionToolSteps.map((s) => `${s.id} -> ${s.module}`).sort() };
+}
+
+/**
+ * The entries of a class map as `pkg :: key` strings, sorted. For
+ * `extensionToolSteps` the key is the flow file (its entry is a count).
+ */
+function keysOf(cls, map) {
   const out = [];
-  for (const pkg of Object.keys(map ?? {})) for (const key of map[pkg] ?? []) out.push(`${pkg} :: ${key}`);
+  for (const pkg of Object.keys(map ?? {})) {
+    const entry = map[pkg] ?? (cls === COUNTED_CLASS ? {} : []);
+    for (const key of cls === COUNTED_CLASS ? Object.keys(entry) : entry) out.push(`${pkg} :: ${key}`);
+  }
   return out.sort();
 }
 
-/** Per class: findings the list does not hold (`fresh`) and list entries no finding matches (`stale`). */
+/** The counts of a counted-class map: `pkg :: file` -> count. */
+function countsOf(map) {
+  const out = new Map();
+  for (const pkg of Object.keys(map ?? {})) for (const [file, rec] of Object.entries(map[pkg] ?? {})) out.set(`${pkg} :: ${file}`, rec.count);
+  return out;
+}
+
+/** The number of findings of a class (a counted class sums its counts). */
+function findingCount(cls, map) {
+  if (cls !== COUNTED_CLASS) return keysOf(cls, map).length;
+  let n = 0;
+  for (const c of countsOf(map).values()) n += c;
+  return n;
+}
+
+/**
+ * Per class: findings the list does not hold (`fresh`) and list entries no
+ * finding matches (`stale`). For the counted class a flow whose count is above
+ * the listed count (absent = 0) is fresh, below it stale.
+ */
 export function diffWithList(findings, list) {
   const result = Object.create(null);
   for (const cls of FINDING_CLASSES) {
-    const found = new Set(pairsOf(findings[cls]));
-    const listed = new Set(pairsOf(list?.[cls]));
+    if (cls === COUNTED_CLASS) {
+      const found = countsOf(findings[cls]);
+      const listed = countsOf(list?.[cls]);
+      const fresh = [];
+      const stale = [];
+      for (const k of new Set([...found.keys(), ...listed.keys()])) {
+        const f = found.get(k) ?? 0;
+        const l = listed.get(k) ?? 0;
+        if (f > l) fresh.push(`${k}: ${f} step(s), the list holds ${l}`);
+        else if (f < l) stale.push(`${k}: ${f} step(s), the list holds ${l}`);
+      }
+      result[cls] = { fresh: fresh.sort(), stale: stale.sort() };
+      continue;
+    }
+    const found = new Set(keysOf(cls, findings[cls]));
+    const listed = new Set(keysOf(cls, list?.[cls]));
     result[cls] = {
       fresh: [...found].filter((p) => !listed.has(p)).sort(),
       stale: [...listed].filter((p) => !found.has(p)).sort(),
@@ -409,9 +530,12 @@ export function diffWithList(findings, list) {
 }
 
 /**
- * Parse a recorded list. Every class must be present as an object whose values
- * are arrays of strings; anything else throws (a list the gate cannot read is a
- * list it cannot compare). Returns a prototype-free copy of the class maps.
+ * Parse a recorded list. Every class must be present as an object; the
+ * entries of `codeFiles` and `toolDeclarations` are arrays of strings, those of
+ * `extensionToolSteps` objects mapping a flow file to `{ count, steps }`
+ * (`count` a whole number >= 0, `steps` an array of strings). Anything else
+ * throws (a list the gate cannot read is a list it cannot compare). Returns a
+ * prototype-free copy of the class maps.
  */
 export function parseList(text) {
   const raw = JSON.parse(text);
@@ -419,22 +543,40 @@ export function parseList(text) {
   const out = Object.create(null);
   for (const cls of FINDING_CLASSES) {
     const map = raw[cls];
-    if (!map || typeof map !== "object" || Array.isArray(map)) throw new Error(`the class ${cls} is missing or not an object`);
+    if (!isPlainObject(map)) throw new Error(`the class ${cls} is missing or not an object`);
     out[cls] = Object.create(null);
     for (const pkg of Object.keys(map)) {
-      const keys = map[pkg];
-      if (!Array.isArray(keys) || keys.some((k) => typeof k !== "string")) {
+      const entry = map[pkg];
+      if (cls === COUNTED_CLASS) {
+        if (!isPlainObject(entry)) throw new Error(`the entry ${cls}.${pkg} is not an object of flow files`);
+        out[cls][pkg] = Object.create(null);
+        for (const [file, rec] of Object.entries(entry)) {
+          if (
+            !isPlainObject(rec) ||
+            !Number.isInteger(rec.count) ||
+            rec.count < 0 ||
+            !Array.isArray(rec.steps) ||
+            rec.steps.some((s) => typeof s !== "string")
+          ) {
+            throw new Error(`the entry ${cls}.${pkg}.${file} is not { count, steps }`);
+          }
+          out[cls][pkg][file] = { count: rec.count, steps: [...rec.steps] };
+        }
+        continue;
+      }
+      if (!Array.isArray(entry) || entry.some((k) => typeof k !== "string")) {
         throw new Error(`the entry ${cls}.${pkg} is not an array of strings`);
       }
-      out[cls][pkg] = [...keys];
+      out[cls][pkg] = [...entry];
     }
   }
   return out;
 }
 
 /**
- * Growth of the list against the base: an entry the base does not hold, or a
- * class the base holds and the head does not. One line each, sorted.
+ * Growth of the list against the base: an entry the base does not hold, a
+ * flow whose count is above the base's (absent = 0), or a class the base holds
+ * and the head does not. One line each, sorted.
  */
 export function listGrowth(baseList, headList) {
   const lines = [];
@@ -443,11 +585,20 @@ export function listGrowth(baseList, headList) {
       lines.push(`[${cls}] the class is removed (a class is never removed)`);
       continue;
     }
-    const base = new Set(pairsOf(baseList?.[cls]));
-    for (const p of pairsOf(headList?.[cls])) if (!base.has(p)) lines.push(`[${cls}] ${p}`);
+    if (cls === COUNTED_CLASS) {
+      const base = countsOf(baseList?.[cls]);
+      for (const [k, n] of countsOf(headList?.[cls])) {
+        const b = base.get(k) ?? 0;
+        if (n > b) lines.push(`[${cls}] ${k}: ${n} step(s), the base holds ${b}`);
+      }
+      continue;
+    }
+    const base = new Set(keysOf(cls, baseList?.[cls]));
+    for (const p of keysOf(cls, headList?.[cls])) if (!base.has(p)) lines.push(`[${cls}] ${p}`);
   }
   return lines.sort();
 }
+
 
 // ---------------------------------------------------------------------------
 // The universe and the tree
@@ -558,6 +709,8 @@ export function scan(repoRoot) {
   const findings = Object.create(null);
   for (const cls of FINDING_CLASSES) findings[cls] = Object.create(null);
   const toolStepCounts = new Map();
+  const stepPositions = [];
+  const unreadableSteps = [];
   const kinds = new Map();
   for (const name of names) {
     const entry = tree.get(name);
@@ -572,11 +725,15 @@ export function scan(repoRoot) {
     const tools = toolDeclarationKeys(packageJson);
     if (tools.length > 0) findings.toolDeclarations[name] = tools;
 
-    const flowPath = join(dir, "cinatra", "oas.json");
+    const flowPath = join(dir, FLOW_FILE);
     if (existsSync(flowPath)) {
-      const flow = readJsonFile(flowPath, `${rel}/cinatra/oas.json`);
-      const { extensionToolSteps, toolSteps } = flowToolSteps(flow);
-      if (extensionToolSteps.length > 0) findings.extensionToolSteps[name] = extensionToolSteps;
+      const flow = readJsonFile(flowPath, `${rel}/${FLOW_FILE}`);
+      const { extensionToolSteps, unreadable, toolSteps } = flowToolSteps(flow);
+      if (extensionToolSteps.length > 0) {
+        findings.extensionToolSteps[name] = { [FLOW_FILE]: stepRecord(extensionToolSteps) };
+        for (const s of extensionToolSteps) stepPositions.push(`${name} :: ${FLOW_FILE} :: ${s.path} (${s.id} -> ${s.module})`);
+      }
+      for (const u of unreadable) unreadableSteps.push(`${name} :: ${FLOW_FILE} :: ${u.path} (${u.id}): ${u.reason}`);
       if (kind === "agent" && toolSteps.length > 0) toolStepCounts.set(name, toolSteps);
     }
 
@@ -593,7 +750,15 @@ export function scan(repoRoot) {
     }
   }
   const dirs = new Map([...tree].map(([n, e]) => [n, e.dir]));
-  return { findings, toolStepCounts, kinds, packCount: names.length, dirs };
+  return {
+    findings,
+    toolStepCounts,
+    stepPositions: stepPositions.sort(),
+    unreadableSteps: unreadableSteps.sort(),
+    kinds,
+    packCount: names.length,
+    dirs,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -649,7 +814,9 @@ const LIST_NOTE =
   "Agent extension code gate (cinatra#4885): today's program code in pinned agent extensions, recorded so it " +
   "can only shrink. `codeFiles` = a program-code file in a kind:agent pack outside a skill folder (unshipped test " +
   "and build files left out); `toolDeclarations` = a manifest declaring `cinatra.tools`; `extensionToolSteps` = a " +
-  "flow step calling the core tool `extension_tool`. An entry leaves when its code leaves (then run " +
+  "flow step calling the core tool `extension_tool`, recorded per pack and flow file as a COUNT (the ratchet; one " +
+  "more such step anywhere fails, whatever its id) plus its `id -> module` lines (information). An entry leaves " +
+  "when its code leaves (then run " +
   "`node scripts/audit/agent-extension-code-gate.mjs --write-baseline`); an entry is never added and a class is " +
   "never removed. `notes` names the road each entry leaves by; it is not diffed.";
 
@@ -672,7 +839,7 @@ function printCounts(toolStepCounts, log) {
 }
 
 function totalsLine(findings) {
-  return FINDING_CLASSES.map((c) => `${pairsOf(findings[c]).length} ${c}`).join(", ");
+  return FINDING_CLASSES.map((c) => `${findingCount(c, findings[c])} ${c}`).join(", ");
 }
 
 export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), env = process.env, log = console.log, err = console.error } = {}) {
@@ -685,7 +852,7 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
     err(`[${GATE}] scanner error: ${e?.message ?? e}`);
     return 2;
   }
-  const { findings, toolStepCounts, packCount, dirs } = result;
+  const { findings, toolStepCounts, stepPositions, unreadableSteps, packCount, dirs } = result;
   const floorPath = join(repoRoot, FLOOR_FILE);
 
   let list = null;
@@ -702,10 +869,17 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
     log(`[${GATE}] ${packCount} pinned extension(s) scanned; ${totalsLine(findings)}.`);
     for (const cls of FINDING_CLASSES) {
       log(`\n${cls}:`);
-      for (const p of pairsOf(findings[cls])) {
+      if (cls === COUNTED_CLASS) {
+        for (const [k, n] of [...countsOf(findings[cls])].sort()) log(`  ${k}: ${n} step(s)`);
+        for (const p of stepPositions) log(`    at ${p}`);
+        continue;
+      }
+      for (const p of keysOf(cls, findings[cls])) {
         log(`  ${p}${cls === "codeFiles" ? ` (${lineCount(dirs, p)} lines)` : ""}`);
       }
     }
+    log(`\nunreadable steps (each fails the check): ${unreadableSteps.length}`);
+    for (const u of unreadableSteps) log(`  ${u}`);
     printCounts(toolStepCounts, log);
     return 0;
   }
@@ -728,11 +902,14 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
         /* unreadable notes are dropped; the list itself was read above */
       }
     }
-    const kept = new Set(FINDING_CLASSES.flatMap((c) => pairsOf(findings[c])));
+    const kept = new Set(FINDING_CLASSES.flatMap((c) => keysOf(c, findings[c])));
     const out = { note: LIST_NOTE };
     for (const cls of FINDING_CLASSES) {
       out[cls] = {};
-      for (const pkg of Object.keys(findings[cls]).sort()) out[cls][pkg] = [...findings[cls][pkg]];
+      for (const pkg of Object.keys(findings[cls]).sort()) {
+        const entry = findings[cls][pkg];
+        out[cls][pkg] = cls === COUNTED_CLASS ? Object.fromEntries(Object.keys(entry).sort().map((f) => [f, entry[f]])) : [...entry];
+      }
     }
     out.notes = Object.create(null);
     for (const k of Object.keys(notes).sort()) {
@@ -754,6 +931,11 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
 
   const diff = diffWithList(findings, list);
   let failed = !guardOk;
+  if (unreadableSteps.length > 0) {
+    failed = true;
+    err(`[${GATE}] FAIL — [${COUNTED_CLASS}] a step the check cannot read (never recorded; make its data an object and its tool a plain name):`);
+    for (const u of unreadableSteps) err(`  ! ${u}`);
+  }
   for (const cls of FINDING_CLASSES) {
     if (diff[cls].fresh.length > 0) {
       failed = true;

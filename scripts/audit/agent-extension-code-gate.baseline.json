@@ -1,5 +1,5 @@
 {
-  "note": "Agent extension code gate (cinatra#4885): today's program code in pinned agent extensions, recorded so it can only shrink. `codeFiles` = a program-code file in a kind:agent pack outside a skill folder (unshipped test and build files left out); `toolDeclarations` = a manifest declaring `cinatra.tools`; `extensionToolSteps` = a flow step calling the core tool `extension_tool`. An entry leaves when its code leaves (then run `node scripts/audit/agent-extension-code-gate.mjs --write-baseline`); an entry is never added and a class is never removed. `notes` names the road each entry leaves by; it is not diffed.",
+  "note": "Agent extension code gate (cinatra#4885): today's program code in pinned agent extensions, recorded so it can only shrink. `codeFiles` = a program-code file in a kind:agent pack outside a skill folder (unshipped test and build files left out); `toolDeclarations` = a manifest declaring `cinatra.tools`; `extensionToolSteps` = a flow step calling the core tool `extension_tool`, recorded per pack and flow file as a COUNT (the ratchet; one more such step anywhere fails, whatever its id) plus its `id -> module` lines (information). An entry leaves when its code leaves (then run `node scripts/audit/agent-extension-code-gate.mjs --write-baseline`); an entry is never added and a class is never removed. `notes` names the road each entry leaves by; it is not diffed.",
   "codeFiles": {
     "@cinatra-ai/apollo-prospecting-agent": [
       "src/index.ts"
@@ -81,41 +81,86 @@
     ]
   },
   "extensionToolSteps": {
-    "@cinatra-ai/blog-draft-writer-agent": [
-      "read_brand_voice"
-    ],
-    "@cinatra-ai/blog-image-generator-agent": [
-      "read_brand_voice"
-    ],
-    "@cinatra-ai/blog-pipeline-agent": [
-      "blog-draft-writer-agent__read_brand_voice",
-      "blog-image-generator-agent__read_brand_voice",
-      "complete_relation",
-      "gather_linkedin_review",
-      "prepare_ideas",
-      "read_brand_voice",
-      "reserve_idea"
-    ],
-    "@cinatra-ai/blog-wordpress-publish-agent": [
-      "read_post_text"
-    ],
-    "@cinatra-ai/drupal-agent": [
-      "gather_page_review",
-      "settle_outcome"
-    ],
-    "@cinatra-ai/email-delivery-agent": [
-      "file_recipients"
-    ],
-    "@cinatra-ai/email-drafting-agent": [
-      "read_drafts"
-    ],
-    "@cinatra-ai/email-outreach-agent": [
-      "drafts-read_drafts",
-      "sender-file_recipients"
-    ],
-    "@cinatra-ai/wordpress-agent": [
-      "gather_page_review"
-    ]
+    "@cinatra-ai/blog-draft-writer-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "read_brand_voice -> brand_voice_text"
+        ]
+      }
+    },
+    "@cinatra-ai/blog-image-generator-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "read_brand_voice -> brand_voice_text"
+        ]
+      }
+    },
+    "@cinatra-ai/blog-pipeline-agent": {
+      "cinatra/oas.json": {
+        "count": 7,
+        "steps": [
+          "blog-draft-writer-agent__read_brand_voice -> brand_voice_text",
+          "blog-image-generator-agent__read_brand_voice -> brand_voice_text",
+          "complete_relation -> stored_ideas",
+          "gather_linkedin_review -> stored_ideas",
+          "prepare_ideas -> stored_ideas",
+          "read_brand_voice -> brand_voice_text",
+          "reserve_idea -> stored_ideas"
+        ]
+      }
+    },
+    "@cinatra-ai/blog-wordpress-publish-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "read_post_text -> approved_post_text"
+        ]
+      }
+    },
+    "@cinatra-ai/drupal-agent": {
+      "cinatra/oas.json": {
+        "count": 2,
+        "steps": [
+          "gather_page_review -> review_targets",
+          "settle_outcome -> settle_outcome"
+        ]
+      }
+    },
+    "@cinatra-ai/email-delivery-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "file_recipients -> recipient_records"
+        ]
+      }
+    },
+    "@cinatra-ai/email-drafting-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "read_drafts -> saved_drafts"
+        ]
+      }
+    },
+    "@cinatra-ai/email-outreach-agent": {
+      "cinatra/oas.json": {
+        "count": 2,
+        "steps": [
+          "drafts-read_drafts -> saved_drafts",
+          "sender-file_recipients -> recipient_records"
+        ]
+      }
+    },
+    "@cinatra-ai/wordpress-agent": {
+      "cinatra/oas.json": {
+        "count": 1,
+        "steps": [
+          "gather_page_review -> review_targets"
+        ]
+      }
+    }
   },
   "notes": {
     "[codeFiles] @cinatra-ai/apollo-prospecting-agent :: src/index.ts": "road: delete (a placeholder entry) — cinatra#4892",
@@ -140,23 +185,15 @@
     "[codeFiles] @cinatra-ai/list-curator-agent :: src/list-curator-final-list-renderer.tsx": "road: not yet decided — a screen renderer or its parts; whether it is presentation or behaviour needs a reading by a person (cinatra#4885)",
     "[codeFiles] @cinatra-ai/list-curator-agent :: src/list-curator-scrape-schema-renderer.tsx": "road: not yet decided — a screen renderer or its parts; whether it is presentation or behaviour needs a reading by a person (cinatra#4885)",
     "[codeFiles] @cinatra-ai/wordpress-agent :: cinatra/tools/review-targets.mjs": "road: delete (core already offers the read) — cinatra#4889",
-    "[extensionToolSteps] @cinatra-ai/blog-draft-writer-agent :: read_brand_voice": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-image-generator-agent :: read_brand_voice": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: blog-draft-writer-agent__read_brand_voice": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: blog-image-generator-agent__read_brand_voice": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: complete_relation": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: gather_linkedin_review": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: prepare_ideas": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: read_brand_voice": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: reserve_idea": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/blog-wordpress-publish-agent :: read_post_text": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/drupal-agent :: gather_page_review": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/drupal-agent :: settle_outcome": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/email-delivery-agent :: file_recipients": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/email-drafting-agent :: read_drafts": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/email-outreach-agent :: drafts-read_drafts": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/email-outreach-agent :: sender-file_recipients": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
-    "[extensionToolSteps] @cinatra-ai/wordpress-agent :: gather_page_review": "leaves with the module it calls (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/blog-draft-writer-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/blog-image-generator-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/blog-pipeline-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/blog-wordpress-publish-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/drupal-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/email-delivery-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/email-drafting-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/email-outreach-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
+    "[extensionToolSteps] @cinatra-ai/wordpress-agent :: cinatra/oas.json": "the steps leave with the modules they call (see the codeFiles note) — cinatra#4885",
     "[toolDeclarations] @cinatra-ai/blog-draft-writer-agent :: brand_voice_text": "leaves with its module (see the codeFiles note); the key, its loader and extension_tool leave core last — cinatra#4885",
     "[toolDeclarations] @cinatra-ai/blog-image-generator-agent :: brand_voice_text": "leaves with its module (see the codeFiles note); the key, its loader and extension_tool leave core last — cinatra#4885",
     "[toolDeclarations] @cinatra-ai/blog-pipeline-agent :: brand_voice_text": "leaves with its module (see the codeFiles note); the key, its loader and extension_tool leave core last — cinatra#4885",

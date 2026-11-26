@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | an extension of kind `agent` that ships program code of its own outside its skills (class `codeFiles`), a pinned manifest declaring `cinatra.tools` (class `toolDeclarations`), a pinned flow step calling the core tool `extension_tool` (class `extensionToolSteps`) | `package :: path` / `package :: tool name` / `package :: node id` | `agent-extension-code-gate.baseline.json` — **shrink-only list**, every entry naming its road in `notes` (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | an extension of kind `agent` that ships program code of its own outside its skills (class `codeFiles`), a pinned manifest declaring `cinatra.tools` (class `toolDeclarations`), a pinned flow step calling the core tool `extension_tool` (class `extensionToolSteps`) | `package :: path` / `package :: tool name` / `package :: flow file` with a step count | `agent-extension-code-gate.baseline.json` — **shrink-only list**, every entry naming its road in `notes` (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -647,29 +647,44 @@ read, a lock, manifest or flow that does not parse, and a pinned pack whose
    Every other code file counts whether it ships or not: the materialized
    tree, not the package, is what a dev build loads.
 2. `toolDeclarations` — a pinned manifest of any kind declaring
-   `cinatra.tools`, one entry per declared tool name.
-3. `extensionToolSteps` — a passthrough ApiNode in a pinned flow
-   (`cinatra/oas.json`, parsed) whose `data.tool` is `extension_tool`; one entry
-   per node id. A node is a passthrough node by the product's own test
-   (`packages/agents/src/artifact-binding.ts` and
-   `validate-oas-runtime-invariants.ts`): its `url` contains the route path
-   `/api/agents/passthrough`, case as written. A query, a fragment, a trailing
-   slash, a relative path and a templated or absolute base all count; an
-   upper-case path does not, as for the product. A test reads the product
-   source and fails when the route path constant or that matching form
-   changes.
+   `cinatra.tools`. Every value of the key counts, whether the product
+   (`parseDeclaredTools` in `packages/sdk-extensions/src/manifest.ts`) accepts
+   it or not; only an absent or `null` value declares nothing. One entry per
+   declared tool name the first time a name in the product's vocabulary
+   (`^[a-z][a-z0-9_]*$`) appears; `cinatra.tools[<i>]` for any other entry (a
+   bare string, an entry without such a name, a name declared a second time);
+   `cinatra.tools.<key>` per key of an object map; `cinatra.tools` for any
+   other value. A name key never holds `.` or `[`, so keys cannot collide.
+3. `extensionToolSteps` — a step of a pinned flow (`cinatra/oas.json`,
+   parsed) calling the core tool `extension_tool`, read **lexically**: one
+   plain walk over the whole parsed file visits every object once, at any
+   depth, with no notion of nodes, nested flows or namespaces. An object is
+   such a step when its own `data` member, as an object or as a string that
+   parses as JSON to an object, holds `tool` equal to `extension_tool`. The
+   URL is never read, so its form (templated, relative, absolute) cannot
+   matter. Each step has its **position**, its JSON path from the root, so
+   two steps with the same id are two steps. Because positions shift when a
+   flow is edited, the list records per pack and flow file the **count** of
+   such steps (the ratchet: it only goes down) plus the sorted
+   `id -> module` lines (`data.input.name`, for information only). **One
+   more such step anywhere in a flow fails, whatever its id.** An
+   **unreadable step** fails always and is never recorded: a string `data`
+   that does not parse to an object and contains `extension_tool`, or, in
+   an object of ApiNode shape (`url`, `http_method` or `component_type`
+   `ApiNode`), a `tool` that is not a plain string or holds a template
+   (`{{`). `--report` prints each step's position.
 
-**Counted, not failed**: the fixed (non-model) flow steps of every agent that
-call any tool through the passthrough, printed per agent on every run, so a
-later change can ratchet them.
+**Counted, not failed**: the flow steps of every agent that name any tool
+(the same lexical reading, one per position), printed per agent on every run,
+so a later change can ratchet them.
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds the
 findings of the day it landed and only shrinks. A finding it does not hold
 fails; an entry whose finding is gone fails as stale until
 `node scripts/audit/agent-extension-code-gate.mjs --write-baseline` shrinks the
-list (that command refuses to add an entry). The list is compared with its copy
-on the base branch through the shared floor base guard: a new entry or a
-removed class fails. The change that introduces the gate has a base that holds
+list (that command refuses to add an entry or raise a count). The list is
+compared with its copy on the base branch through the shared floor base guard:
+a new entry, a raised step count or a removed class fails. The change that introduces the gate has a base that holds
 neither the list nor the script; that one case seeds the list. `notes` names
 the road each entry leaves by (delete it, generic core machinery, or agent
 work as a flow step with a skill: cinatra#4889 to cinatra#4893); it is never
@@ -714,7 +729,7 @@ for its floor:
 | `system-writer-manifest-gate.mjs` | `system-writer-manifest.json` (a register: see the record road below) | a new manifest row (file and reference) or a raised count without its record | `SYSTEM_WRITER_MANIFEST_BASE` |
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
-| `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | a new entry in any class, or a class removed | `AGENT_EXTENSION_CODE_BASE` |
+| `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | a new entry in any class, a raised `extensionToolSteps` count, or a class removed | `AGENT_EXTENSION_CODE_BASE` |
 
 The rules the helper holds for every gate:
 

@@ -3,7 +3,7 @@
 // `example-org` scope folder.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -123,6 +123,8 @@ test("a code file in an agent pack is a finding, wherever it sits", () => {
     packageJson: agent("a"),
   });
   assert.deepEqual(found, ["bin/run.sh", "cinatra/tools/read.mjs", "src/lib/x.ts", "tools/a.py"]);
+  // Paths that differ only in case (one file on a case-insensitive disk) are two keys, never one.
+  assert.deepEqual(agentCodeFiles({ relPaths: ["src/Index.ts", "src/index.ts"], packageJson: agent("a") }), ["src/Index.ts", "src/index.ts"]);
 });
 
 test("the same file inside a skill folder is no finding; SKILL.md at the pack root exempts nothing", () => {
@@ -199,6 +201,7 @@ test("a code file a manifest names counts, shipped or not, whatever the key", ()
 
 test("cinatra.tools is a finding, one key per declared tool", () => {
   assert.deepEqual(toolDeclarationKeys({ cinatra: { kind: "agent" } }), []);
+  assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: null } }), []);
   assert.deepEqual(
     toolDeclarationKeys({ cinatra: { tools: [{ name: "b", module: "./b.mjs" }, { name: "a" }, { module: "./c.mjs" }] } }),
     ["a", "b", "cinatra.tools[2]"],
@@ -207,41 +210,68 @@ test("cinatra.tools is a finding, one key per declared tool", () => {
   assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: [] } }), []);
 });
 
-test("a flow step that calls extension_tool is a finding; every passthrough step is counted", () => {
-  const { extensionToolSteps, toolSteps } = flowToolSteps(extensionToolFlow("read_text"));
-  assert.deepEqual(extensionToolSteps, ["read_text"]);
+test("cinatra.tools: a repeated name, a bare string and an object map are each their own findings", () => {
+  // The second declaration of a name is a second key, so it cannot hide behind a recorded one.
+  assert.deepEqual(
+    toolDeclarationKeys({ cinatra: { tools: [{ name: "a", module: "./a.mjs" }, { name: "a", module: "./b.mjs" }] } }),
+    ["a", "cinatra.tools[1]"],
+  );
+  assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: ["a", { name: "a" }] } }), ["a", "cinatra.tools[0]"]);
+  // A name outside the product's vocabulary never becomes a key that could collide with another.
+  assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: [{ name: "cinatra.tools[1]" }, { name: "b" }] } }), ["b", "cinatra.tools[0]"]);
+  assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: { a: "./a.mjs", b: "./b.mjs" } } }), ["cinatra.tools.a", "cinatra.tools.b"]);
+  assert.deepEqual(toolDeclarationKeys({ cinatra: { tools: "./a.mjs" } }), ["cinatra.tools"]);
+});
+
+test("a flow step that calls extension_tool is a finding; every step naming a tool is counted", () => {
+  const { extensionToolSteps, unreadable, toolSteps } = flowToolSteps(extensionToolFlow("read_text"));
+  assert.deepEqual(extensionToolSteps, [{ path: "$.flow.nodes[0]", id: "read_text", module: "x" }]);
+  assert.deepEqual(unreadable, []);
   assert.deepEqual(toolSteps, ["read_text -> extension_tool", "save -> objects_save"]);
 });
 
-const PRODUCT_BINDING = fileURLToPath(new URL("../../../packages/agents/src/artifact-binding.ts", import.meta.url));
-const PRODUCT_RUNTIME_CHECK = fileURLToPath(new URL("../../../packages/agents/src/validate-oas-runtime-invariants.ts", import.meta.url));
+const step = (id, extra = {}) => ({ component_type: "ApiNode", id, url: "{{host}}/api/agents/passthrough", data: { tool: "extension_tool" }, ...extra });
+const stepIds = (flow) => flowToolSteps(flow).extensionToolSteps.map((s) => s.id);
 
-const oneStep = (url) => ({ nodes: [{ component_type: "ApiNode", id: "s", url, data: { tool: "extension_tool" } }] });
+test("a nested step with the same id as another is a second step, keyed by its position", () => {
+  const flow = { $referenced_components: { read: step("read"), child: { $referenced_components: { read: step("read") } } } };
+  const steps = flowToolSteps(flow).extensionToolSteps;
+  assert.equal(steps.length, 2);
+  assert.deepEqual(steps.map((s) => s.path).sort(), ["$.$referenced_components.child.$referenced_components.read", "$.$referenced_components.read"]);
+});
 
-test("a passthrough step is read by the product's own test: the URL contains the route path", async () => {
-  const binding = readFileSync(PRODUCT_BINDING, "utf8");
-  const marker = binding.match(/export const AGENTS_PASSTHROUGH_URL_MARKER = "([^"]*)";/)?.[1];
-  assert.equal(marker, "/api/agents/passthrough", "the product's route path constant changed");
-  assert.match(binding, /typeof url === "string" && url\.includes\(AGENTS_PASSTHROUGH_URL_MARKER\)/, "the compiler's matching form changed");
-  const runtime = readFileSync(PRODUCT_RUNTIME_CHECK, "utf8");
-  assert.equal(
-    runtime.match(/node\.url\.includes\(AGENTS_PASSTHROUGH_URL_MARKER\)/g)?.length,
-    2,
-    "the run-time check's matching form changed",
-  );
-  const gate = await import("../agent-extension-code-gate.mjs");
-  assert.equal(gate.PASSTHROUGH_ROUTE_PATH, marker);
-  for (const url of [
-    `{{CINATRA_BASE_URL}}${marker}?mode=x`,
-    `{{CINATRA_BASE_URL}}${marker}#frag`,
-    `{{CINATRA_BASE_URL}}${marker}/`,
-    `${marker}?a=1`,
-    `https://host.example.invalid${marker}`,
-  ]) {
-    assert.deepEqual(flowToolSteps(oneStep(url)).extensionToolSteps, ["s"], url);
+test("the URL is never read: a templated route path, any URL or none still counts", () => {
+  for (const url of ["{{host}}/api/agents/{{route}}", "{{host}}{{passthrough_path}}", "https://elsewhere.example.invalid/x", undefined]) {
+    const s = step("s");
+    if (url === undefined) delete s.url;
+    else s.url = url;
+    assert.deepEqual(stepIds({ nodes: [s] }), ["s"], String(url));
   }
-  // The product matches case as written (a Next.js route path is case-sensitive), so an upper-case path is no step.
-  assert.deepEqual(flowToolSteps(oneStep(`{{CINATRA_BASE_URL}}${marker.toUpperCase()}`)).extensionToolSteps, []);
+});
+
+test("a JSON-string data block selecting extension_tool counts as the object it parses to", () => {
+  const s = step("s", { data: JSON.stringify({ tool: "extension_tool", input: { name: "m" } }) });
+  assert.deepEqual(flowToolSteps({ nodes: [s] }).extensionToolSteps, [{ path: "$.nodes[0]", id: "s", module: "m" }]);
+});
+
+test("an unparsable string data block naming extension_tool is an unreadable step", () => {
+  const { extensionToolSteps, unreadable } = flowToolSteps({ nodes: [step("s", { data: '{"tool": "extension_tool", {{ rest }} }' })] });
+  assert.deepEqual(extensionToolSteps, []);
+  assert.equal(unreadable?.length, 1);
+  assert.match(unreadable?.[0]?.reason ?? "", /unreadable step data/);
+  // A string that names no such tool is no step at all.
+  assert.deepEqual(flowToolSteps({ nodes: [step("s", { data: "{{ payload }}" })] }).unreadable ?? null, []);
+});
+
+test("a templated or non-string tool name in an ApiNode-shaped object is an unreadable step", () => {
+  for (const tool of ["{{ which_tool }}", "extension_{{ x }}", ["extension_tool"], { name: "extension_tool" }, 7]) {
+    const { extensionToolSteps, unreadable } = flowToolSteps({ nodes: [step("s", { data: { tool } })] });
+    assert.deepEqual(extensionToolSteps, [], JSON.stringify(tool));
+    assert.equal(unreadable?.length, 1, JSON.stringify(tool));
+    assert.match(unreadable?.[0]?.reason ?? "", /unreadable tool name/);
+  }
+  // Outside an ApiNode shape, a template is not read as a step.
+  assert.deepEqual(flowToolSteps({ meta: { data: { tool: "{{ x }}" } } }).unreadable ?? null, []);
 });
 
 // ---------------------------------------------------------------------------
@@ -258,6 +288,18 @@ test("list growth: a new entry and a removed class are growth; a shrink is not",
   const withoutClass = dropClass(emptyList(), "toolDeclarations");
   assert.deepEqual(listGrowth(base, withoutClass), ["[toolDeclarations] the class is removed (a class is never removed)"]);
   assert.throws(() => parseList(JSON.stringify(withoutClass)), /toolDeclarations/);
+});
+
+test("list growth of extension_tool steps reads the count per pack and flow file, never the ids", () => {
+  const steps = (count, ids) => ({ "@example-org/a": { "cinatra/oas.json": { count, steps: ids } } });
+  // red-first-expect: the entry extensionToolSteps.@example-org/a is not an array of strings
+  const base = parseList(JSON.stringify({ ...emptyList(), extensionToolSteps: steps(1, ["read -> m"]) }));
+  // Same count with another id: no growth. A higher count, whatever the ids: growth.
+  assert.deepEqual(listGrowth(base, parseList(JSON.stringify({ ...emptyList(), extensionToolSteps: steps(1, ["other -> m"]) }))), []);
+  assert.deepEqual(listGrowth(base, parseList(JSON.stringify({ ...emptyList(), extensionToolSteps: steps(2, ["read -> m", "read -> m"]) }))), [
+    "[extensionToolSteps] @example-org/a :: cinatra/oas.json: 2 step(s), the base holds 1",
+  ]);
+  assert.throws(() => parseList(JSON.stringify({ ...emptyList(), extensionToolSteps: { "@example-org/a": ["read"] } })), /extensionToolSteps/);
 });
 
 // ---------------------------------------------------------------------------
@@ -280,11 +322,13 @@ const packsWithCode = () => ({
   },
 });
 
+const readAgentSteps = () => ({ "@example-org/read-agent": { "cinatra/oas.json": { count: 1, steps: ["read_text -> x"] } } });
+
 const recordedList = () => ({
   ...emptyList(),
   codeFiles: { "@example-org/read-agent": ["cinatra/tools/read.mjs"] },
   toolDeclarations: { "@example-org/read-agent": ["read_text"] },
-  extensionToolSteps: { "@example-org/read-agent": ["read_text"] },
+  extensionToolSteps: readAgentSteps(),
 });
 
 test("live: --report names each class and leaves the connector, the skill and the unshipped test out", () => {
@@ -330,7 +374,33 @@ test("live: a new cinatra.tools declaration and a new extension_tool step fail i
     const res = runGate(root);
     assert.equal(res.status, 1);
     assert.match(res.out, /\+ @example-org\/mail-connector :: send/);
-    assert.match(res.out, /\[extensionToolSteps\] not on the recorded list[\s\S]*\+ @example-org\/mail-connector :: send_now/);
+    assert.match(res.out, /\[extensionToolSteps\] not on the recorded list[\s\S]*\+ @example-org\/mail-connector :: cinatra\/oas\.json: 1 step\(s\), the list holds 0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: a nested extension_tool step with the id of a recorded step grows the count and fails", () => {
+  const packs = packsWithCode();
+  packs["read-agent"].flow.flow.child = { $referenced_components: { read_text: step("read_text") } };
+  const root = makeRoot({ packs, list: recordedList() });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\+ @example-org\/read-agent :: cinatra\/oas\.json: 2 step\(s\), the list holds 1/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("live: an unreadable step fails even with the list holding every count", () => {
+  const packs = packsWithCode();
+  packs["read-agent"].flow.flow.nodes.push(step("later", { data: { tool: "{{ which }}" } }));
+  const root = makeRoot({ packs, list: recordedList() });
+  try {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /a step the check cannot read[\s\S]*@example-org\/read-agent :: cinatra\/oas\.json :: \$\.flow\.nodes\[3\] \(later\): unreadable tool name/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -416,7 +486,7 @@ test("live base guard: the list seeds once, a shrink passes, growth and a remove
     writeJson(join(root, LIST_REL), {
       ...emptyList(),
       toolDeclarations: { "@example-org/read-agent": ["read_text"] },
-      extensionToolSteps: { "@example-org/read-agent": ["read_text"] },
+      extensionToolSteps: readAgentSteps(),
     });
     const shrank = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(shrank.status, 0, shrank.out);
@@ -429,7 +499,7 @@ test("live base guard: the list seeds once, a shrink passes, growth and a remove
         {
           ...emptyList(),
           toolDeclarations: { "@example-org/read-agent": ["read_text"] },
-          extensionToolSteps: { "@example-org/read-agent": ["read_text"] },
+          extensionToolSteps: readAgentSteps(),
         },
         "codeFiles",
       ),
