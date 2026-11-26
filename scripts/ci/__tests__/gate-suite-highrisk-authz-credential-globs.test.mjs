@@ -306,6 +306,15 @@ describe("gate-suite highRiskPaths authz/credential/session coverage (2026-08 wi
     },
   );
 
+  it("cinatra#3862: the retired sealed capture capability and its serving ladder are gone from the tree", () => {
+    for (const file of [
+      "src/lib/lifecycle/capture-capability.ts",
+      "src/lib/lifecycle/capture-capability-serving.ts",
+    ]) {
+      expect(fs.existsSync(path.join(REPO_ROOT, file))).toBe(false);
+    }
+  });
+
   it("keeps every widened glob present in highRiskPaths", () => {
     for (const g of WIDENED_GLOBS) {
       expect(globs).toContain(g);

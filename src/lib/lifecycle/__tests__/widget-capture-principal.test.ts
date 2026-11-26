@@ -234,8 +234,8 @@ describe("readLiveWidgetCapturePrincipal", () => {
     const EXEMPT: Record<string, string> = {
       // There is no presented bearer on an <img> request — the capability seals
       // the row's jti instead, so "the string is not a cwu_ token" has no
-      // counterpart. The jti bound + the sealed-binding agreement in the
-      // capability's serving ladder carry the same weight.
+      // counterpart. The jti bound + the sealed-binding agreement in
+      // `capture-capability-serving.ts` carry the same weight.
       not_cwu_token: "no raw token exists on an image request; the probe is jti-keyed",
       // The verifier compares the REQUEST Origin to the bound site origin. This
       // capability is fetched SAME-ORIGIN from cinatra's own iframe, so the

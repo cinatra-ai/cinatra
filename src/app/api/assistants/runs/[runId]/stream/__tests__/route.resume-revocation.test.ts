@@ -7,8 +7,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 // or token revoked BETWEEN a lifecycle DATA_PART's emission and the next
 // consuming action — does it fail closed? Three of the matrix's four cells
 // were proven at their own seam (review-island-serving.test.ts for the card
-// refetch / island paint, the capture GET's own serving test until cinatra#3862
-// removed that route, decide/route.test.ts for the decision). This file is the fourth: the
+// refetch / island paint, capture-capability-serving.test.ts for the capture
+// GET, decide/route.test.ts for the decision). This file is the fourth: the
 // broker widget's AG-UI STREAM RESUME
 // (GET /api/assistants/runs/[runId]/stream, MODE 2 — cinatra#1221 option A).
 //
