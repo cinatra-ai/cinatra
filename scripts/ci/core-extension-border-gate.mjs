@@ -43,7 +43,11 @@
 // shared guard scripts/audit/lib/floor-base-guard.mjs. A new entry, a new
 // recorded file or a raised count fails. The base is CORE_EXTENSION_BORDER_BASE
 // when set, else the pull request's base branch; a base that cannot be read
-// fails closed with a line that names the reason.
+// fails closed with a line that names the reason. The ledger's `rules` list
+// names the rules it ratchets: a rule the base's list lacks is seeded once in
+// the pull request that adds it (cinatra#4852); a listed rule never gains an
+// entry. A base ledger without the list ratchets every rule its base copy of
+// this script knows (zero-entry rules too); that copy unread fails closed.
 //
 // Usage:
 //   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline, a stale entry or a grown ledger)
@@ -55,7 +59,8 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
+import ts from "typescript";
+import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -66,6 +71,8 @@ export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
 export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+/** This script, repo-relative: its base copy names the rules a pre-`rules` base ledger ratchets. */
+export const GATE_FILE = "scripts/ci/core-extension-border-gate.mjs";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -403,6 +410,318 @@ export function scanScopedToolAdmissions({ file, text, packs }) {
   return out;
 }
 
+/** The word runs that name one pack (cinatra#4852), derived from the locks:
+ *  every run of two or more consecutive words of a pack's stem (its package
+ *  name without the scope and the role suffix), and the single word of a
+ *  one-word stem or the first word of a connector (its vendor word) for the
+ *  packs whose name carries the agent or connector role. A one-word artifact
+ *  or skill stem (`text`, `image`) is a type or shape word and is left out.
+ *  `@cinatra-ai/email-follow-up-agent` gives `email-follow`, `follow-up`,
+ *  `email-follow-up`; `@cinatra-ai/gmail-connector` gives `gmail`. */
+const STEP_ROLE_RE = /-(agents?|connectors?|workflows?)$/;
+const CONNECTOR_ROLE_RE = /-connectors?$/;
+
+export function packStepWordRuns(packs) {
+  const runs = new Set();
+  for (const p of packs) {
+    const leaf = String(p).replace(/^@[^/]+\//, "");
+    const words = leaf.replace(ROLE_SUFFIX_RE, "").split("-").filter(Boolean);
+    if (words.length === 0) continue;
+    for (let k = 2; k <= words.length; k += 1) {
+      for (let i = 0; i + k <= words.length; i += 1) runs.add(words.slice(i, i + k).join("-"));
+    }
+    if (STEP_ROLE_RE.test(leaf) && words.length === 1) runs.add(words[0]);
+    if (CONNECTOR_ROLE_RE.test(leaf)) runs.add(words[0]);
+  }
+  return runs;
+}
+
+/** The longest pack word run a step-screen kind's name carries, or null. */
+export function kindCrossesBorder(kind, runs) {
+  const words = String(kind).split(/[-_]/).filter(Boolean);
+  for (let k = words.length; k >= 1; k -= 1) {
+    for (let i = 0; i + k <= words.length; i += 1) {
+      const run = words.slice(i, i + k).join("-");
+      if (runs.has(run)) return run;
+    }
+  }
+  return null;
+}
+
+/** The pinned packages whose word runs a kind's name carries (cinatra#4852),
+ *  sorted: the lock-derived words that make it a finding. Each one is named in
+ *  the finding's detail, so the ledger key carries the package identity the
+ *  way every other rule's key does, and `loadPackUniverse` keeps a pack the
+ *  ledger names in the universe after it leaves the locks. */
+export function kindMatchedPacks(kind, packs) {
+  const words = String(kind).split(/[-_]/).filter(Boolean);
+  const kindRuns = new Set();
+  for (let k = 1; k <= words.length; k += 1) {
+    for (let i = 0; i + k <= words.length; i += 1) kindRuns.add(words.slice(i, i + k).join("-"));
+  }
+  const out = [];
+  for (const p of packs) {
+    for (const run of packStepWordRuns([p])) {
+      if (kindRuns.has(run)) {
+        out.push(String(p));
+        break;
+      }
+    }
+  }
+  return out.sort();
+}
+
+/** A step-screen kind table is recognised by its NAME, as the passthrough rule
+ *  follows `*TOOLS`, never by one module's file name: a `const`, `let` or `var`
+ *  binding (at any depth, in any product file) whose identifier ends in
+ *  `KIND_TABLE` or `KindTable`. Only the declaration is read; what code does
+ *  with the table afterwards is left to tsc through the table's shape. */
+const KIND_TABLE_NAME_RE = /^[A-Za-z0-9_$]*(?:KIND_TABLE|KindTable)$/;
+
+function scriptKindOf(file) {
+  if (/\.tsx$/.test(file)) return ts.ScriptKind.TSX;
+  if (/\.jsx$/.test(file)) return ts.ScriptKind.JSX;
+  if (/\.[mc]?js$/.test(file)) return ts.ScriptKind.JS;
+  return ts.ScriptKind.TS;
+}
+
+const compact = (s) => s.replace(/\s+/g, " ").trim().slice(0, 80);
+
+/** The expression a type wrapper or parentheses hold: `x as const`,
+ *  `x satisfies T`, `(x)`, `<T>x`, `x!`. */
+function unwrap(node) {
+  let n = node;
+  while (
+    n &&
+    (ts.isParenthesizedExpression(n) ||
+      ts.isAsExpression(n) ||
+      ts.isSatisfiesExpression(n) ||
+      ts.isTypeAssertionExpression(n) ||
+      ts.isNonNullExpression(n))
+  ) {
+    n = n.expression;
+  }
+  return n;
+}
+
+function walk(node, visit) {
+  visit(node);
+  ts.forEachChild(node, (c) => walk(c, visit));
+}
+
+/** Every binding of `name` in the file and what it holds: the value when the
+ *  binding is `const NAME = "<string>"` (a string or a plain template, through
+ *  `as const` / `satisfies`), else null (a `let`, `var`, parameter, import,
+ *  function, class, destructured name or a const of any other value). */
+function bindingsOf(sf, name) {
+  const out = [];
+  walk(sf, (n) => {
+    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === name) {
+      const isConst = (ts.getCombinedNodeFlags(n) & ts.NodeFlags.Const) !== 0;
+      const init = n.initializer ? unwrap(n.initializer) : undefined;
+      const literal = init && (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init));
+      out.push(isConst && literal ? init.text : null);
+      return;
+    }
+    if (
+      (ts.isParameter(n) ||
+        ts.isBindingElement(n) ||
+        ts.isFunctionDeclaration(n) ||
+        ts.isClassDeclaration(n) ||
+        ts.isEnumDeclaration(n) ||
+        ts.isImportSpecifier(n) ||
+        ts.isImportClause(n) ||
+        ts.isNamespaceImport(n) ||
+        ts.isImportEqualsDeclaration(n)) &&
+      n.name &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name
+    ) {
+      out.push(null);
+    }
+  });
+  return out;
+}
+
+/** The literal name a computed key `[expr]` stands for: a string literal, a
+ *  template literal with no substitution, or an identifier whose EVERY binding
+ *  in the file is a `const` holding one and the same string. Anything else is
+ *  null. */
+function resolveComputedKey(sf, expr) {
+  const e = unwrap(expr);
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+  if (!ts.isIdentifier(e)) return null;
+  const values = bindingsOf(sf, e.text);
+  if (values.length === 0 || values.includes(null) || new Set(values).size !== 1) return null;
+  return values[0];
+}
+
+/** The entries of one kind table declaration, each with its node: `{ kind,
+ *  node }` for a key read to a literal name, `{ unreadable, node }` for one the
+ *  gate cannot read (an unresolvable computed key, a spread, a method or an
+ *  accessor, a table that is not an object literal, or one declared without an
+ *  initializer). FAIL CLOSED: an entry is read or reported, never skipped. */
+export function kindTableEntries(sf, decl) {
+  if (!decl.initializer) return [{ unreadable: "(no initializer)", node: decl }];
+  const init = unwrap(decl.initializer);
+  if (!ts.isObjectLiteralExpression(init)) {
+    return [{ unreadable: compact(decl.initializer.getText(sf)), node: decl.initializer }];
+  }
+  const entries = [];
+  for (const p of init.properties) {
+    if (ts.isSpreadAssignment(p)) {
+      entries.push({ unreadable: `...${compact(p.expression.getText(sf))}`, node: p });
+      continue;
+    }
+    if (ts.isMethodDeclaration(p) || ts.isGetAccessorDeclaration(p) || ts.isSetAccessorDeclaration(p)) {
+      const how = ts.isGetAccessorDeclaration(p) ? "get " : ts.isSetAccessorDeclaration(p) ? "set " : "method ";
+      entries.push({ unreadable: `${how}${compact(p.name.getText(sf))}`, node: p });
+      continue;
+    }
+    if (ts.isShorthandPropertyAssignment(p)) {
+      entries.push({ kind: p.name.text, node: p });
+      continue;
+    }
+    if (ts.isPropertyAssignment(p)) {
+      const name = p.name;
+      if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNoSubstitutionTemplateLiteral(name)) {
+        entries.push({ kind: name.text, node: p });
+      } else if (ts.isNumericLiteral(name)) {
+        entries.push({ kind: String(Number(name.text)), node: p });
+      } else if (ts.isComputedPropertyName(name)) {
+        const kind = resolveComputedKey(sf, name.expression);
+        entries.push(
+          kind === null ? { unreadable: `[${compact(name.expression.getText(sf))}]`, node: p } : { kind, node: p },
+        );
+      } else {
+        entries.push({ unreadable: compact(name.getText(sf)), node: p });
+      }
+      continue;
+    }
+    entries.push({ unreadable: compact(p.getText(sf)), node: p });
+  }
+  return entries;
+}
+
+/** The kind tables a file declares (cinatra#4852): every variable declaration
+ *  whose identifier has the kind table name shape (a loop variable aside). */
+export function kindTableDeclarations(sf) {
+  const declarations = [];
+  walk(sf, (n) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      KIND_TABLE_NAME_RE.test(n.name.text) &&
+      !(n.parent?.parent && (ts.isForOfStatement(n.parent.parent) || ts.isForInStatement(n.parent.parent)))
+    ) {
+      declarations.push(n);
+    }
+  });
+  return declarations;
+}
+
+/** The shape that makes a later entry a compile error (cinatra#4852): the
+ *  table is declared `const` and typed `Readonly<...>` at its declaration, so
+ *  `TABLE[k] = v`, `TABLE.k = v` and `delete TABLE[k]` fail the repository's
+ *  `tsc`. The gate judges the declaration only; it does not follow the table
+ *  after it. Returns why a declaration is not in that shape, or null. */
+export function kindTableShapeDefect(decl) {
+  const isConst = (ts.getCombinedNodeFlags(decl) & ts.NodeFlags.Const) !== 0;
+  const type = decl.type;
+  const readonlyType =
+    type && ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName) && type.typeName.text === "Readonly";
+  if (isConst && readonlyType) return null;
+  return [!isConst && "not `const`", !readonlyType && "not typed `Readonly<...>`"].filter(Boolean).join(", ");
+}
+
+/** A step-screen kind registered in core under a name that carries one pack's
+ *  word run (cinatra#4852). Core keeps generic machinery under kinds named for
+ *  a screen's shape; the step itself belongs to the agent that declares it.
+ *  The file is read with the TypeScript parser, never by text patterns, and
+ *  only the table's DECLARATION is judged: its entries, and its shape (`const`
+ *  and `Readonly<...>`, so tsc refuses a later entry). Each finding names in
+ *  its detail the pinned package(s) whose words it carries
+ *  (`gmail-sender (@cinatra-ai/gmail-connector)`). Returns the findings and
+ *  the number of kind tables the file declares. */
+export function scanStepScreenKindTables({ file, text, packs }) {
+  if (!/(?:KIND_TABLE|KindTable)/.test(text)) return { findings: [], tables: 0 };
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ true, scriptKindOf(file));
+  const runs = packStepWordRuns(packs);
+  const findings = [];
+  const counts = new Map();
+  const lineAt = (node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+  const refuse = (detail, node, message) =>
+    findings.push(finding("pack-step-kind-in-core", file, lineAt(node), occurrenceDetail(counts, "pack-step-kind-in-core", detail), message));
+  const unreadable = (what, node) =>
+    refuse(
+      `unreadable entry: ${what}`,
+      node,
+      "unreadable kind table entry: the gate cannot read this entry to a literal kind name, so it cannot judge it; " +
+        "write the kind table as an object literal of string keys (a computed key only from a string or a same-file const)",
+    );
+  // A file that does not parse cannot be read whole: fail closed.
+  for (const d of sf.parseDiagnostics ?? []) {
+    unreadable(`(the file does not parse: ${compact(ts.flattenDiagnosticMessageText(d.messageText, " "))})`, sf);
+    break;
+  }
+  const declarations = kindTableDeclarations(sf);
+  for (const decl of declarations) {
+    const shape = kindTableShapeDefect(decl);
+    if (shape) {
+      refuse(
+        `kind table shape: ${decl.name.text} (${shape})`,
+        decl,
+        "a kind table is declared `const` and typed `Readonly<...>` so that tsc refuses an entry added after the declaration; " +
+          "the gate judges only the declaration's entries",
+      );
+    }
+    for (const entry of kindTableEntries(sf, decl)) {
+      if (entry.unreadable !== undefined) {
+        unreadable(entry.unreadable, entry.node);
+        continue;
+      }
+      const run = kindCrossesBorder(entry.kind, runs);
+      if (!run) continue;
+      const matched = kindMatchedPacks(entry.kind, packs);
+      const f = finding(
+        "pack-step-kind-in-core",
+        file,
+        lineAt(entry.node),
+        occurrenceDetail(counts, "pack-step-kind-in-core", `${entry.kind} (${matched.join(", ")})`),
+        `core registers a step-screen kind named after one pack (${run}); the agent declares its step with a generic kind named for the screen's shape`,
+      );
+      f.kind = entry.kind;
+      f.packages = matched;
+      findings.push(f);
+    }
+  }
+  return { findings, tables: declarations.length };
+}
+
+const KIND_KEY_RE = /^(.*?)::(.+?) \((@[^()]+)\)(?: \(occurrence (\d+)\))?$/;
+
+/** A kind finding keeps the detail its ledger entry recorded while every
+ *  package that entry names still matches the kind (they stay in the pack
+ *  universe through the ledger): a pack ADDED to the locks that also matches
+ *  the kind does not re-key a standing entry. The kind, the file and the
+ *  occurrence must be the same. */
+export function keepRecordedKindDetails(findings, baselineEntries) {
+  const recorded = new Map();
+  for (const e of baselineEntries ?? []) {
+    if (e?.rule !== "pack-step-kind-in-core") continue;
+    const m = KIND_KEY_RE.exec(String(e.key ?? ""));
+    if (!m) continue;
+    recorded.set(`${m[1]}::${m[2]}::${m[4] ?? "1"}`, { detail: String(e.key).slice(m[1].length + 2), packages: m[3].split(", ") });
+  }
+  for (const f of findings) {
+    if (f.rule !== "pack-step-kind-in-core" || !f.kind) continue;
+    const occ = /\(occurrence (\d+)\)$/.exec(f.detail)?.[1] ?? "1";
+    const r = recorded.get(`${f.file}::${f.kind}::${occ}`);
+    if (r && r.detail !== f.detail && r.packages.every((p) => f.packages.includes(p))) f.detail = r.detail;
+  }
+  return findings;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -574,7 +893,21 @@ export const KNOWN_RULES = new Set([
   "skill-legacy-exception",
   "materialized-extension-file",
   "pack-shaped-core-domain",
+  "pack-step-kind-in-core",
 ]);
+
+/** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
+ *  is present it names every rule of the gate and no other; the committed
+ *  ledger must carry it (`requireList`), because the base guard reads it. */
+export function rulesListDefects(doc, { requireList = false } = {}) {
+  const rules = doc?.rules;
+  if (rules === undefined) return requireList ? ["the ledger has no `rules` array (the rules it ratchets)"] : [];
+  if (!Array.isArray(rules)) return ["the ledger's `rules` is not an array"];
+  const bad = [];
+  for (const r of rules) if (!KNOWN_RULES.has(r)) bad.push(`unknown rule in \`rules\`: ${r}`);
+  for (const r of KNOWN_RULES) if (!rules.includes(r)) bad.push(`a rule of the gate is not in \`rules\`: ${r}`);
+  return bad;
+}
 
 /** Everything structurally wrong with a ledger, as messages. An unreadable or
  *  absent ledger is fatal: an empty ledger would silently re-admit every
@@ -583,6 +916,7 @@ export function baselineDefects(doc) {
   const bad = [];
   const entries = doc?.entries;
   if (!Array.isArray(entries)) return ["the ledger has no `entries` array"];
+  bad.push(...rulesListDefects(doc));
   const seen = new Set();
   for (const e of entries) {
     const id = `${e?.rule}::${e?.key}`;
@@ -649,14 +983,53 @@ export function wildcardBaselineEntries(doc) {
  *  ledger is shrink-only: a crossing may leave it, none may enter. A domain
  *  entry that recorded a HIGHER line count, or a file it did not record, is
  *  growth too. */
+/** The rules a ledger has ratcheted: its `rules` list, or, in a base ledger
+ *  written before the list existed, EVERY rule the base copy of this script
+ *  knows (attached by `checkFloorAgainstBase` as BASE_SCRIPT_RULES), so a
+ *  zero-entry rule is ratcheted too. Neither present: fail closed. */
+export const BASE_SCRIPT_RULES = Symbol("base-script-rules");
+
+export function ledgerRules(doc) {
+  if (Array.isArray(doc?.rules)) return new Set(doc.rules);
+  if (doc?.[BASE_SCRIPT_RULES] instanceof Set) return doc[BASE_SCRIPT_RULES];
+  throw new Error("[core-extension-border] the base ledger has no `rules` list and the base gate script's rules were not read — failing closed");
+}
+
+/** The rule ids of a copy of this script: its `KNOWN_RULES = new Set([...])`. */
+export function scriptRuleIds(text) {
+  const m = /\bKNOWN_RULES\s*=\s*new Set\(\[([^\]]*)\]\)/.exec(text);
+  const ids = m ? [...m[1].matchAll(/"([^"]+)"|'([^']+)'/g)].map((x) => x[1] ?? x[2]) : [];
+  if (ids.length === 0) throw new Error(`the base copy of ${GATE_FILE} names no rule list (KNOWN_RULES)`);
+  return new Set(ids);
+}
+
+/** The base ledger, and for one written before the `rules` list the rules of
+ *  the base copy of this script, read from the same base. */
+function parseBaseLedger(text, { ref, repoRoot }) {
+  const doc = JSON.parse(text);
+  if (doc?.rules !== undefined) return doc;
+  const script = readFileAtBase(repoRoot, ref, GATE_FILE);
+  if (!script.ok) throw new Error(script.reason);
+  doc[BASE_SCRIPT_RULES] = scriptRuleIds(script.text);
+  return doc;
+}
+
 export function baselineGrowth(previousDoc, currentDoc) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
+  // A rule the base ledger does not list yet is SEEDED in the pull request
+  // that adds it (cinatra#4852): its standing crossings enter the ledger once,
+  // the rule enters `rules`, and from the next base on it only shrinks. A rule
+  // the base lists can never gain an entry, also after its last entry left.
+  // Read only when an entry is new, so a base that grew nothing needs no list.
+  let ratcheted;
   const grown = [];
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
+      ratcheted ??= ledgerRules(previousDoc);
+      if (!ratcheted.has(e.rule)) continue;
       grown.push(`new entry: ${id}`);
       continue;
     }
@@ -678,7 +1051,7 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
-    parse: (text) => JSON.parse(text),
+    parse: parseBaseLedger,
     grown: (base, head) => baselineGrowth(base, head),
     repoRoot,
     env,
@@ -709,6 +1082,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
   const baseline = readBaseline(baselinePath);
   const { packs, workspacePackages } = loadPackUniverse(repoRoot, baseline.entries);
   const findings = [];
+  let kindTables = 0;
 
   for (const root of PRODUCT_ROOTS) {
     for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot)) {
@@ -716,7 +1090,19 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       const text = readFileSync(abs, "utf8");
       findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages }));
       findings.push(...scanScopedToolAdmissions({ file, text, packs }));
+      const kinds = scanStepScreenKindTables({ file, text, packs });
+      findings.push(...kinds.findings);
+      kindTables += kinds.tables;
     }
+  }
+  keepRecordedKindDetails(findings, baseline.entries);
+  // FAIL CLOSED (cinatra#4852): a tree whose product code holds no step-screen
+  // kind table would turn the rule off in silence, so it is refused.
+  if (kindTables === 0) {
+    throw new Error(
+      "[core-extension-border] no step-screen kind table (`const <NAME>KIND_TABLE = { ... }`) in the product code — " +
+        "the gate fails closed rather than passing the pack-step-kind-in-core rule unchecked",
+    );
   }
 
   const legacyPath = join(repoRoot, "config", "skill-packaging-legacy-exceptions.json");
@@ -827,7 +1213,7 @@ function main() {
   const doc = JSON.parse(readFileSync(DEFAULT_BASELINE, "utf8"));
   const unjustified = unjustifiedBaselineEntries(doc);
   const wildcards = wildcardBaselineEntries(doc);
-  const defects = baselineDefects(doc);
+  const defects = [...baselineDefects(doc), ...(doc.rules === undefined ? rulesListDefects(doc, { requireList: true }) : [])];
   if (unjustified.length || wildcards.length || defects.length) {
     console.error("[core-extension-border] FAIL — the baseline is not a named, justified ledger:");
     for (const k of unjustified) console.error(`  + no stated reason: ${k}`);
