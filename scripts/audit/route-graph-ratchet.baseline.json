@@ -12,25 +12,25 @@
       "from": 1345,
       "to": 1348,
       "reason": "Issue 3089 (a released send mails each approved revision at most once per message): the released send in src/lib/trigger-email-send-use-cases.ts now reads the one publish decision its call claimed, through the agents subpaths @cinatra-ai/agents/publish-decision-store and @cinatra-ai/agents/publish-decision-actions, which this change adds to the package exports. That adds exactly three core modules to each of these routes: packages/agents/src/publish-decision-store.ts, packages/agents/src/publish-decision-actions.ts and src/lib/approved-body-send.ts (the approved send's provider sender, failure codes and manual-check text, moved out of src/lib/trigger-email-send-use-cases.ts to hold that module at its application-border ceiling). The reads are the send's own checks and run in the request that serves it, so no import form keeps them off the route; the growth is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +3 over the main ceiling.",
-      "pr": 4832
+      "pr": 4839
     },
     "/api/llm-bridge": {
       "from": 1355,
       "to": 1358,
       "reason": "Issue 3089 (a released send mails each approved revision at most once per message): the released send in src/lib/trigger-email-send-use-cases.ts now reads the one publish decision its call claimed, through the agents subpaths @cinatra-ai/agents/publish-decision-store and @cinatra-ai/agents/publish-decision-actions, which this change adds to the package exports. That adds exactly three core modules to each of these routes: packages/agents/src/publish-decision-store.ts, packages/agents/src/publish-decision-actions.ts and src/lib/approved-body-send.ts (the approved send's provider sender, failure codes and manual-check text, moved out of src/lib/trigger-email-send-use-cases.ts to hold that module at its application-border ceiling). The reads are the send's own checks and run in the request that serves it, so no import form keeps them off the route; the growth is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +3 over the main ceiling.",
-      "pr": 4832
+      "pr": 4839
     },
     "/api/mcp": {
       "from": 1337,
       "to": 1340,
       "reason": "Issue 3089 (a released send mails each approved revision at most once per message): the released send in src/lib/trigger-email-send-use-cases.ts now reads the one publish decision its call claimed, through the agents subpaths @cinatra-ai/agents/publish-decision-store and @cinatra-ai/agents/publish-decision-actions, which this change adds to the package exports. That adds exactly three core modules to each of these routes: packages/agents/src/publish-decision-store.ts, packages/agents/src/publish-decision-actions.ts and src/lib/approved-body-send.ts (the approved send's provider sender, failure codes and manual-check text, moved out of src/lib/trigger-email-send-use-cases.ts to hold that module at its application-border ceiling). The reads are the send's own checks and run in the request that serves it, so no import form keeps them off the route; the growth is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +3 over the main ceiling.",
-      "pr": 4832
+      "pr": 4839
     },
     "/chat": {
       "from": 1442,
       "to": 1445,
       "reason": "Issue 3089 (a released send mails each approved revision at most once per message): the released send in src/lib/trigger-email-send-use-cases.ts now reads the one publish decision its call claimed, through the agents subpaths @cinatra-ai/agents/publish-decision-store and @cinatra-ai/agents/publish-decision-actions, which this change adds to the package exports. That adds exactly three core modules to each of these routes: packages/agents/src/publish-decision-store.ts, packages/agents/src/publish-decision-actions.ts and src/lib/approved-body-send.ts (the approved send's provider sender, failure codes and manual-check text, moved out of src/lib/trigger-email-send-use-cases.ts to hold that module at its application-border ceiling). The reads are the send's own checks and run in the request that serves it, so no import form keeps them off the route; the growth is additive and no module leaves the route. Measured by scripts/audit/route-graph-ratchet.mjs with the extensions cloned on this change against origin/main: +3 over the main ceiling.",
-      "pr": 4832
+      "pr": 4839
     },
     "/sign-in": {
       "from": 164,

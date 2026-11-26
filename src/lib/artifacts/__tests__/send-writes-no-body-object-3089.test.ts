@@ -1,21 +1,32 @@
 /**
- * cinatra#3089 — the approved send writes no object.
+ * cinatra#3089 — the approved send writes no BODY object.
  *
  * The send that mails reviewed bodies binds each message to its approved
  * revision and holds one claim per message, all on the materialization ledger:
- * no statement it reaches touches an objects row, and it calls no write of the
- * objects client. Driven through `createTriggerEmailSendUseCases` with the
- * SHIPPED fan-out (type discovery, `bindFanoutMessageRevision`) and the SHIPPED
- * send records (`performRevisionEffectOnce` over `claimRevisionEffect`); only
- * the pooled database (a small `artifact_materializations` table with its
- * unique key, and the run lookup), the objects client's type list, the claim
- * store and the modules the materializer loads for other paths are stand-ins.
+ * the binding and the send records touch no objects row and call no write of
+ * the objects client, so no body object is written. Driven through
+ * `createTriggerEmailSendUseCases` with the SHIPPED fan-out (type discovery,
+ * `bindFanoutMessageRevision`) and the SHIPPED send records
+ * (`performRevisionEffectOnce` over `claimRevisionEffect`); only the pooled
+ * database (a small `artifact_materializations` table with its unique key, and
+ * the run lookup), the objects client's type list, the claim store and the
+ * modules the materializer loads for other paths are stand-ins.
+ *
+ * What a send DOES write: W1 and W2 replace the mail sender with a stub, so
+ * they see no mail record. W3 sends through the SHIPPED sender
+ * (`createDefaultSendEmail`), the email connector's facade and the host's
+ * sent-email writer (`saveSentEmailObject`); only the mail transport and the
+ * session objects client (it records each save) are stand-ins. Each mailed
+ * message writes its sent-email record, by design, and no body object.
  *
  * Cases:
- *   W1 an approved send runs no statement on an objects row and no objects
- *      client write; each message's claim row shares its binding's output id,
- *      one per approved artifact of the run
+ *   W1 an approved send (stub sender) runs no statement on an objects row and
+ *      no objects client write; each message's claim row shares its binding's
+ *      output id, one per approved artifact of the run
  *   W2 a second send of the same approval writes no new row and mails nobody
+ *   W3 through the shipped sender and facade: each mailed message writes ONE
+ *      sent-email record (with its campaign, contact and run) and no body
+ *      object is written
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -32,11 +43,13 @@ type Row = {
   phase: string;
 };
 
-const { poolQueryMock, table, statements, objectsClientCalls } = vi.hoisted(() => ({
+const { poolQueryMock, table, statements, objectsClientCalls, sessionSaves } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   table: { rows: [] as Row[] },
   statements: [] as string[],
   objectsClientCalls: [] as string[],
+  /** Each save of the session objects client (the host's sent-email writer uses it). */
+  sessionSaves: [] as Array<{ typeHint?: string; rawData?: Record<string, unknown> }>,
 }));
 
 vi.mock("server-only", () => ({}));
@@ -90,8 +103,21 @@ vi.mock("@/lib/objects/artifact-claim-store", () => ({
     },
   ],
 }));
+// The host's connector config: no development redirect.
+vi.mock("@/lib/database", () => ({
+  readConnectorConfigFromDatabase: <T,>(_key: string, fallback: T): T => fallback,
+}));
 // The objects client: only the type list answers; any other call is recorded.
+// The session client (the host's routing reads and its sent-email writer)
+// finds no sender identity and records each save.
 vi.mock("@cinatra-ai/objects", () => ({
+  createSessionObjectsClient: () => ({
+    list: async () => ({ items: [] }),
+    save: async (input: { typeHint?: string; rawData?: Record<string, unknown> }) => {
+      sessionSaves.push(input);
+      return { object: { id: `saved-${sessionSaves.length}` } };
+    },
+  }),
   createDeterministicObjectsClient: () =>
     new Proxy(
       {},
@@ -173,6 +199,20 @@ function runStatement(sql: string, params: unknown[]) {
     row.phase = "finalized";
     return { rows: [{ id: row.id }] };
   }
+  // The send record read before the binding (`readRevisionEffect`).
+  if (/^SELECT phase, representation_revision_id FROM/.test(sql.trim())) {
+    const row = table.rows.find((r) => r.org_id === p(1) && r.run_id === p(2) && r.output_id === p(3) && r.path === p(4) && r.extension === p(5) && r.content_hash === p(5));
+    return { rows: row ? [{ phase: row.phase, representation_revision_id: row.representation_revision_id }] : [] };
+  }
+  // The contact seat of the run (`holdRunSeat`).
+  if (/INSERT INTO "public"\."artifact_materializations"[\s\S]*VALUES \(\$1, \$2, \$3, \$4, NULL, \$5, \$6, \$6, \$7, \$8, 'finalized'\)/.test(sql)) {
+    insert({ id: p(1), org_id: p(2), run_id: p(3), output_id: p(4), path: p(5), extension: p(6), content_hash: p(6), artifact_id: p(7), representation_revision_id: p(8), phase: "finalized" });
+    return { rows: [] };
+  }
+  if (/^SELECT artifact_id FROM/.test(sql.trim())) {
+    const row = table.rows.find((r) => r.org_id === p(1) && r.run_id === p(2) && r.output_id === p(3) && r.path === p(4) && r.extension === p(5) && r.content_hash === p(5) && r.phase === "finalized");
+    return { rows: row ? [{ artifact_id: row.artifact_id }] : [] };
+  }
   throw new Error(`unexpected statement: ${sql}`);
 }
 
@@ -186,7 +226,7 @@ const approved = [1, 2].map((n) => ({
   subject: `Subject ${n}`,
 }));
 
-function send(sent: string[]) {
+function send(sent: string[], extra: Partial<TriggerEmailSendDeps> = {}) {
   const deps = {
     getCampaign: async () => null,
     getDraftsByIds: async () => [],
@@ -233,6 +273,7 @@ function send(sent: string[]) {
         { kind: "artifacts", label: "Emails", input: "emailBodies" },
       ],
     }),
+    ...extra,
   } as unknown as TriggerEmailSendDeps;
   return createTriggerEmailSendUseCases(deps).startInitialSend(
     { serviceId: "s", campaignId: CAMPAIGN_ID, approvedDraftBundleRef: "bundle", confirmedRecipientsRef: "list" } as never,
@@ -244,6 +285,7 @@ beforeEach(() => {
   table.rows = [];
   statements.length = 0;
   objectsClientCalls.length = 0;
+  sessionSaves.length = 0;
   poolQueryMock.mockReset();
   poolQueryMock.mockImplementation(async (sql: string, params: unknown[]) => {
     statements.push(sql);
@@ -251,8 +293,8 @@ beforeEach(() => {
   });
 });
 
-describe("cinatra#3089 — the approved send writes no object", () => {
-  it("W1 no statement touches an objects row; each claim row shares its binding's output id", async () => {
+describe("cinatra#3089 — the approved send writes no body object", () => {
+  it("W1 (stub sender) no statement touches an objects row; each claim row shares its binding's output id", async () => {
     const sent: string[] = [];
     const result = await send(sent);
     expect(result.errorMessage).toBeUndefined();
@@ -282,5 +324,64 @@ describe("cinatra#3089 — the approved send writes no object", () => {
     expect(table.rows).toEqual(rows);
     expect(sent).toEqual(["p1@example.com", "p2@example.com"]);
     expect(statements.filter((sql) => /"objects"/.test(sql))).toEqual([]);
+  });
+
+  it("W3 through the shipped sender and facade: each mailed message writes its sent-email record and no body object", async () => {
+    const [{ registerCapabilityProvider }, { resolveEmailSendProviders, resolveHostEmailRouting }, facade, { createDefaultSendEmail }] =
+      await Promise.all([
+        import("@/lib/extension-capabilities-registry"),
+        import("@/lib/email-send-providers"),
+        import("@cinatra-ai/email-connector"),
+        import("../../approved-body-send"),
+      ]);
+    // The host's boot registers its email routing (the sent-email writer included).
+    await import("@/lib/register-email-providers");
+    const routing = resolveHostEmailRouting()!;
+    expect(routing.saveSentEmailObject).toBeTypeOf("function");
+    // The email connector's facade, wired as its own `register(ctx)` wires it.
+    facade.configureEmailSystem({
+      resolveConnectorId: (opts) => routing.resolveConnectorId(opts),
+      applyDevModeOverride: (msg) => routing.applyDevModeOverride(msg),
+      resolveConnectorProviders: () => resolveEmailSendProviders(),
+      saveSentEmailObject: (input) => routing.saveSentEmailObject!(input),
+    });
+    registerCapabilityProvider("email-system", {
+      packageName: "@cinatra-ai/email-connector",
+      impl: { sendEmail: (m: never, o: never) => facade.sendEmailThroughSystem(m, o) },
+    });
+    // The mail transport: a connected mailbox that accepts every message.
+    const transported: string[] = [];
+    registerCapabilityProvider("email-send", {
+      packageName: "@cinatra-ai/test-mailbox",
+      impl: {
+        definition: { connectorId: "mailbox-a", name: "Mailbox A", slug: "mailbox-a", description: "", settingsHref: "/" },
+        getStatus: async () => ({ status: "connected" }),
+        findReply: async () => null,
+        send: async (m: { to: string[] }) => {
+          transported.push(m.to[0]!);
+          return { providerId: "mailbox-a", providerMessageId: `pm-${transported.length}`, sentAt: "2026-11-26T00:00:00Z" };
+        },
+      },
+    });
+
+    const stubbed: string[] = [];
+    const result = await send(stubbed, { sendApprovedEmail: createDefaultSendEmail() });
+    expect(result.errorMessage).toBeUndefined();
+    expect(result).toMatchObject({ status: "completed", sentCount: 2 });
+    // The stub sender is not used: the shipped sender handed each message to the facade.
+    expect(stubbed).toEqual([]);
+    expect(transported).toEqual(["p1@example.com", "p2@example.com"]);
+    // The facade writes the sent-email record after the send returned (best effort, not awaited).
+    await vi.waitFor(() => expect(sessionSaves).toHaveLength(2));
+    // A send writes its sent-email record, one per mailed message, and nothing else.
+    expect(sessionSaves.map((s) => s.typeHint)).toEqual(["@cinatra-ai/email:sent-email", "@cinatra-ai/email:sent-email"]);
+    expect(sessionSaves.map((s) => [s.rawData?.toEmail, s.rawData?.campaignId, s.rawData?.contactId, s.rawData?.runId])).toEqual([
+      ["p1@example.com", CAMPAIGN_ID, "c1", "run-1"],
+      ["p2@example.com", CAMPAIGN_ID, "c2", "run-1"],
+    ]);
+    // No body object: no save of the body type, no objects client write, no statement on an objects row.
+    expect(sessionSaves.filter((s) => s.typeHint === "@cinatra-ai/email:body")).toEqual([]);
+    expect(objectsClientCalls).toEqual([]);
+    expect(statements.filter((sql) => /"objects"|\bobjects\b\s*(SET|WHERE|\()/i.test(sql))).toEqual([]);
   });
 });

@@ -5,6 +5,8 @@
  * `trigger-email-send-use-cases.ts`.
  */
 import type { ReleasedListRefusal } from "@cinatra-ai/agents/publish-decision-store";
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+import type { RevisionEffectClaimKey } from "./artifacts/materialization-ledger";
 import type { TriggerEmailSendDeps } from "./trigger-email-send-use-cases";
 
 /**
@@ -168,6 +170,8 @@ export const RELEASED_ROAD_TEXT = {
   bind_failed: "the messages could not be bound to their approved bodies",
   body_type_unregistered: "the email body type is not registered, so no message was bound to its approved body",
   draft_not_bound: "draft # of the bundle was not bound to its approved body",
+  // A message with a send record (sent or in doubt) is terminal: it is neither bound nor mailed again.
+  revision_not_mailed: "draft # already has a send record (sent or in doubt), so its newly approved revision was not mailed",
   // Thrown by the fan-out's binding (`materializeEmailFanout`, `loadDefaultEmitEmailFanout`).
   fanout_no_binder: "the email body of draft # cannot be bound: the fan-out has no binder for approved bodies",
   fanout_bind_failed: "the email body of draft # could not be bound",
@@ -177,6 +181,7 @@ export const RELEASED_ROAD_TEXT = {
   not_bound_stop: "draft # of the bundle has no bound approved body, so it was not sent",
   refused_at_claim: "draft # was not sent, its body was refused when its mail was claimed",
   refused_at_send: "draft # was not sent, its body was refused at its send time",
+  contact_other_body: "draft # was not sent, its contact was already claimed for another body of this run",
   mark: "draft # was mailed, but its sent record could not be written",
   claim: "the mail of draft # could not be claimed, so it was not sent",
   not_started: "draft # was not sent, no mail provider was reached",
@@ -257,4 +262,92 @@ export function releasedRoadAnswer(text: string, ownForms: readonly string[] = [
   };
   const parts = text.split("; ").map((part) => (passes(part) ? part : releasedRoadText("send_failed")));
   return [...new Set(parts)].join("; ");
+}
+
+/**
+ * THE SEND RECORDS OF THE RELEASED-LIST ROAD, READ BEFORE ANY BINDING (cinatra#3089). `read` answers the send record of
+ * one message under the key its claim takes (`messageSendKey`), whatever revision it was claimed with; `takeContactSeat`
+ * gives the contact of a message to the message's body artifact for the whole run (the first artifact that takes it
+ * holds it) and answers the artifact that holds it. Both are optional on an injected ledger: one without them reads no
+ * record and holds no seat.
+ */
+export type MessageSendRecords = {
+  read(key: RevisionEffectClaimKey, actor: PrimitiveActorContext): Promise<MessageSendRecord | null>;
+  takeContactSeat(
+    seat: { runId: string; contactId: string; artifactId: string; representationRevisionId: string },
+    actor: PrimitiveActorContext,
+  ): Promise<string>;
+};
+/** A message's send record: marked sent (`done`) or claimed and never marked (`in_doubt`), and the revision claimed. */
+export type MessageSendRecord = { state: "done" | "in_doubt"; representationRevisionId?: string | null };
+
+/** The send-record key of one message: the key its claim takes (`performRevisionEffectOnce`). */
+export function messageSendKey(
+  runId: string,
+  bindingOutputId: string,
+  body: { artifactId: string; representationRevisionId: string },
+): RevisionEffectClaimKey {
+  return {
+    runId,
+    path: "email_fanout",
+    bindingOutputId,
+    effect: "message-send",
+    artifactId: body.artifactId,
+    representationRevisionId: body.representationRevisionId,
+  };
+}
+
+function sendOrgOf(actor: PrimitiveActorContext): string {
+  if (!actor.orgId) throw new Error("the acting actor carries no organization, so no send record can be read");
+  return actor.orgId;
+}
+
+/** The materialization ledger's send records and contact seats (the default when no ledger is injected). */
+export const defaultMessageSendRecords: MessageSendRecords = {
+  async read(key, actor) {
+    const { readRevisionEffect } = await import("./artifacts/materialization-ledger");
+    return readRevisionEffect({
+      orgId: sendOrgOf(actor),
+      runId: key.runId,
+      path: key.path,
+      bindingOutputId: key.bindingOutputId,
+      effect: key.effect,
+    });
+  },
+  async takeContactSeat(seat, actor) {
+    const { holdRunSeat } = await import("./artifacts/materialization-ledger");
+    return holdRunSeat({
+      orgId: sendOrgOf(actor),
+      runId: seat.runId,
+      path: "email_fanout",
+      seatOutputId: `email-contact:${seat.runId}:${seat.contactId}`,
+      seat: "contact-seat",
+      artifactId: seat.artifactId,
+      representationRevisionId: seat.representationRevisionId,
+    });
+  },
+};
+
+/**
+ * The messages of `bodies` (by draft position) that have a send record (cinatra#3089): TERMINAL, so they are not bound
+ * and not mailed. With no `read`, none. A read that fails refuses the send before any mail with a fixed code
+ * (`bind_failed`): its text is never passed on.
+ */
+export async function readSendRecords(
+  bodies: ReadonlyMap<number, { artifactId: string; representationRevisionId: string }>,
+  keyOf: (body: { artifactId: string; representationRevisionId: string }) => RevisionEffectClaimKey,
+  read: ((key: RevisionEffectClaimKey) => Promise<MessageSendRecord | null>) | undefined,
+): Promise<Map<number, MessageSendRecord>> {
+  const found = new Map<number, MessageSendRecord>();
+  if (!read) return found;
+  for (const [index, body] of bodies) {
+    let record: MessageSendRecord | null;
+    try {
+      record = await read(keyOf(body));
+    } catch {
+      throw releasedRoadRefusal("bind_failed");
+    }
+    if (record) found.set(index, record);
+  }
+  return found;
 }

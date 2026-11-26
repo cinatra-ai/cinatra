@@ -59,13 +59,16 @@ import type { RevisionEffectLedger, RevisionEffectVerify } from "./artifacts/mat
 import {
   bodyRefusalCode,
   createDefaultSendEmail,
+  defaultMessageSendRecords,
   IN_DOUBT_MANUAL_CHECK,
+  messageSendKey,
+  readSendRecords,
   releasedRoadAnswer,
   releasedRoadRefusal,
   releasedRoadText,
   SEND_FAILURE_CODE,
 } from "./approved-body-send";
-import type { ReleasedRoadCode, ReleasedRoadText } from "./approved-body-send";
+import type { MessageSendRecord, MessageSendRecords, ReleasedRoadCode, ReleasedRoadText } from "./approved-body-send";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -214,8 +217,9 @@ export type CallingRun = {
 export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
   & Partial<Pick<PublishDecisionRow, "id">>;
 
-/** One message's durable send record (see `performRevisionEffectOnce`). */
-export type MessageSendLedger = RevisionEffectLedger;
+/** One message's durable send record (see `performRevisionEffectOnce`), and
+ *  optionally its read before binding and the contact seat (`MessageSendRecords`). */
+export type MessageSendLedger = RevisionEffectLedger & Partial<MessageSendRecords>;
 
 /** What `readDecidedBody` answers: the revision's whole text and the body's
  *  declared fields (`subject`, `contactId`, …), or a named refusal. */
@@ -1280,39 +1284,67 @@ async function runInitialSend(args: {
     // it is let through to the outer catch, so nothing is sent and the refusal
     // is named. Any other projection failure is warned and the send goes on.
     //
-    // THE APPROVED FORM binds EVERY message to its approved revision on the
-    // ledger here, all before the first mail below: any failure (a refused or
-    // skipped binding, a failed fan-out) refuses the send with nothing mailed.
-    // A retry after a failed mail finds the same bindings (the ledger row of
-    // each message is read back, `bindFanoutMessageRevision`) and mails again.
-    // The bind writes ledger rows only, never an object. The reference-only
-    // form keeps its best-effort projection unchanged.
+    // THE APPROVED FORM first reads the send record of EVERY message, under the
+    // key its claim takes (`messageSendKey`): a message with one (sent, or in
+    // doubt) is TERMINAL. It is not bound (a revision approved after its mail
+    // or its claim is never bound to it, so the binder's refusal of a message
+    // with a send record is not reached) and not mailed: the mail below counts
+    // it (`alreadySentCount`, `inDoubtCount`) and names a newly approved
+    // revision it did not mail (`revision_not_mailed`). Every OTHER message is
+    // bound to its approved revision on the ledger here, all before the first
+    // mail below: any other failure (a refused or skipped binding, a failed
+    // fan-out) refuses the send with nothing mailed. A message that became
+    // terminal between the read and its bind (a concurrent send claimed it, so
+    // the binder refused it) is found by reading the send records again, never
+    // by the refusal's text: it is made terminal and the rest is bound again
+    // (a bound message reads its binding back, `bindFanoutMessageRevision`);
+    // a refusal with no new send record refuses the send. A retry after a
+    // failed mail finds the same bindings and mails again. The bind writes
+    // ledger rows only, never an object. The reference-only form keeps its
+    // best-effort projection unchanged.
     const messageIdByArtifact = new Map<string, string>();
+    const terminal = new Map<number, MessageSendRecord>();
+    const sendRecords: Partial<MessageSendRecords> = messageSendLedger ?? defaultMessageSendRecords;
     const runScopeId = resolveRunScopeId(draftEnv, recipEnv);
     if (approvedByIndex && callRunId) {
-      let fanout: EmailFanoutResult;
-      try {
-        fanout = await emitEmailFanout({
-          runScopeId: callRunId,
-          campaignId: input.campaignId,
-          drafts,
-          recipients,
-          approvedBodies: approvedByIndex,
-          actor,
-        });
-      } catch (fanoutErr) {
-        if (fanoutErr instanceof EmailBodyRefusedError) throw fanoutErr;
-        // The fan-out's thrown text is never passed on (a store error may quote stored data): a fixed code.
-        throw releasedRoadRefusal("bind_failed");
-      }
-      if (fanout.skipped.bodies) {
-        throw releasedRoadRefusal("body_type_unregistered");
-      }
-      for (const b of fanout.bodies) messageIdByArtifact.set(b.objectId, b.externalId);
-      for (const [index, body] of approvedByIndex) {
-        if (!messageIdByArtifact.has(body.artifactId)) {
-          throw releasedRoadRefusal("draft_not_bound", [index + 1]);
+      const keyOf = (body: { artifactId: string; representationRevisionId: string }) =>
+        messageSendKey(callRunId, emailBodyExternalId(callRunId, body.artifactId), body);
+      const read = sendRecords.read && ((key: Parameters<MessageSendRecords["read"]>[0]) => sendRecords.read!(key, actor));
+      for (const [index, record] of await readSendRecords(approvedByIndex, keyOf, read)) terminal.set(index, record);
+      const bindable = new Map([...approvedByIndex].filter(([index]) => !terminal.has(index)));
+      // Each pass either binds every bindable message or makes at least one terminal, so it ends.
+      while (bindable.size > 0) {
+        let fanout: EmailFanoutResult;
+        try {
+          fanout = await emitEmailFanout({
+            runScopeId: callRunId,
+            campaignId: input.campaignId,
+            drafts,
+            recipients,
+            approvedBodies: bindable,
+            actor,
+          });
+        } catch (fanoutErr) {
+          // The fan-out's thrown text is never passed on (a store error may quote stored data): a fixed code.
+          const refusal = fanoutErr instanceof EmailBodyRefusedError ? fanoutErr : releasedRoadRefusal("bind_failed");
+          const since = await readSendRecords(bindable, keyOf, read);
+          if (since.size === 0) throw refusal;
+          for (const [index, record] of since) {
+            terminal.set(index, record);
+            bindable.delete(index);
+          }
+          continue;
         }
+        if (fanout.skipped.bodies) {
+          throw releasedRoadRefusal("body_type_unregistered");
+        }
+        for (const b of fanout.bodies) messageIdByArtifact.set(b.objectId, b.externalId);
+        for (const [index, body] of bindable) {
+          if (!messageIdByArtifact.has(body.artifactId)) {
+            throw releasedRoadRefusal("draft_not_bound", [index + 1]);
+          }
+        }
+        break;
       }
     } else if (runScopeId) {
       try {
@@ -1342,7 +1374,10 @@ async function runInitialSend(args: {
     // bundle order, is mailed through `performRevisionEffectOnce` under its
     // binding (claim, hand-over, done mark). A message an earlier call mailed is
     // skipped and counted in `alreadySentCount`; one another call holds is not
-    // mailed and is counted in `inDoubtCount`. A provider error after a won
+    // mailed and is counted in `inDoubtCount`; a terminal message (a send record
+    // read before the binding) is counted the same way and never mailed. A
+    // message whose contact's seat of the run another body artifact holds is
+    // not mailed (`contact_other_body`). A provider error after a won
     // claim leaves the message in doubt and STOPS the send: the later messages
     // are not attempted by this call, since a provider that just failed may
     // fail (or half-accept) again, and each further attempt could add a message
@@ -1364,19 +1399,60 @@ async function runInitialSend(args: {
       // Refused at its send time: the body was no longer decided (or read
       // another text), so it was not mailed and its claim was given back.
       const refusedAtSend: string[] = [];
+      // Terminal messages whose newly approved revision was not mailed: named, not a failure.
+      const notMailed: string[] = [];
       let stopped: string | undefined;
       const fromEmail = released?.senderEmail;
       const { EffectNotStartedError, performRevisionEffectOnce } = await import("./artifacts/materialization-ledger");
       for (const [index, draft] of drafts.entries()) {
         if (!recipientEmailFor(draft, recipients)) continue;
         const approved = approvedByIndex.get(index);
+        // A message is named by its draft's position only, in the answer and in the log.
+        const draft1 = [index + 1];
+        const record = terminal.get(index);
+        if (approved && record) {
+          // TERMINAL: sent or in doubt before this call's binding; never mailed again.
+          if (record.state === "done") alreadySentCount += 1;
+          else {
+            inDoubt.push(index + 1);
+            console.warn(`[trigger-email-send] ${releasedRoadText("in_doubt", draft1)}: claimed but not recorded as sent, not mailed again`);
+          }
+          if (typeof record.representationRevisionId === "string" && record.representationRevisionId !== approved.representationRevisionId) {
+            notMailed.push(releasedRoadText("revision_not_mailed", draft1));
+          }
+          continue;
+        }
         const outputId = approved ? messageIdByArtifact.get(approved.artifactId) : undefined;
         if (!approved || !outputId) {
           stopped = releasedRoadText("not_bound_stop", [index + 1]);
           break;
         }
-        // A message is named by its draft's position only, in the answer and in the log.
-        const draft1 = [index + 1];
+        // ONE CONTACT, ONE MAIL PER RUN: the message's body artifact takes its
+        // contact's seat for the run before its claim. A contact whose seat
+        // another body artifact of the run holds (it was claimed, so maybe
+        // mailed, under that artifact) is not mailed under this one.
+        if (sendRecords.takeContactSeat) {
+          let holder: string;
+          try {
+            holder = await sendRecords.takeContactSeat(
+              {
+                runId: callRunId,
+                contactId: approved.contactId,
+                artifactId: approved.artifactId,
+                representationRevisionId: approved.representationRevisionId,
+              },
+              actor,
+            );
+          } catch {
+            stopped = releasedRoadText("claim", draft1, SEND_FAILURE_CODE.claim);
+            console.warn(`[trigger-email-send] ${stopped}: it stopped the send`);
+            break;
+          }
+          if (holder !== approved.artifactId) {
+            refusedAtSend.push(releasedRoadText("contact_other_body", draft1));
+            continue;
+          }
+        }
         let notDecidedNow: ReturnType<typeof bodyRefusalCode> | undefined;
         const outcome = await performRevisionEffectOnce({
           claimKey: {
@@ -1483,6 +1559,7 @@ async function runInitialSend(args: {
         ...(inDoubt.length > 0 ? [releasedRoadText("in_doubt_count", [inDoubt.length]), ...inDoubt.map((n) => releasedRoadText("in_doubt", [n]))] : []),
         ...(inDoubt.length + unrecorded.length > 0 ? [IN_DOUBT_MANUAL_CHECK] : []),
       ];
+      const answer = [...problems, ...notMailed];
       return {
         status: problems.length > 0 ? "failed" : "completed",
         startedAt,
@@ -1490,7 +1567,7 @@ async function runInitialSend(args: {
         sentCount,
         alreadySentCount,
         inDoubtCount: inDoubt.length + unrecorded.length,
-        ...(problems.length > 0 ? { errorMessage: problems.join("; ") } : {}),
+        ...(answer.length > 0 ? { errorMessage: answer.join("; ") } : {}),
       };
     }
 

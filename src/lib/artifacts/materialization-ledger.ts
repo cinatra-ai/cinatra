@@ -932,6 +932,89 @@ export async function releaseRevisionEffect(input: {
   );
 }
 
+/**
+ * The record of one effect of an output, read under the key its claim takes
+ * (`claimRevisionEffect`: organisation, run, output id, path, effect), whatever
+ * revision it was claimed with (cinatra#3089): `done` when it was marked done,
+ * `in_doubt` when it was claimed and never marked, null when there is none.
+ * Reads only.
+ */
+export async function readRevisionEffect(input: {
+  orgId: string;
+  runId: string;
+  path: MaterializationPath;
+  bindingOutputId: string;
+  effect: string;
+}): Promise<{ state: "done" | "in_doubt"; representationRevisionId: string | null } | null> {
+  ensurePostgresSchema();
+  const s = schema();
+  const res = await pool().query(
+    `SELECT phase, representation_revision_id FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+    AND extension = $5 AND content_hash = $5
+  LIMIT 1`,
+    [input.orgId, input.runId, input.bindingOutputId, input.path, input.effect],
+  );
+  const row = res.rows[0] as { phase?: string; representation_revision_id?: string | null } | undefined;
+  if (!row) return null;
+  return {
+    state: row.phase === "finalized" ? "done" : "in_doubt",
+    representationRevisionId: typeof row.representation_revision_id === "string" ? row.representation_revision_id : null,
+  };
+}
+
+/**
+ * A SEAT of a run (cinatra#3089): the first artifact that takes it holds it for
+ * the whole run. One conditional insert on the ledger's unique key (`ON CONFLICT
+ * DO NOTHING`, decided atomically by Postgres: of concurrent callers exactly one
+ * inserts), then a read of the holder. Answers the artifact that holds the seat:
+ * the caller's own when it took it now or earlier, else the other one. The row
+ * is never removed. Throws on an infra failure.
+ */
+export async function holdRunSeat(input: {
+  orgId: string;
+  runId: string;
+  path: MaterializationPath;
+  /** The seat's identity: the row's `output_id`. */
+  seatOutputId: string;
+  /** The seat's kind: the row's extension and content hash. */
+  seat: string;
+  artifactId: string;
+  representationRevisionId: string;
+}): Promise<string> {
+  ensurePostgresSchema();
+  const s = schema();
+  await pool().query(
+    `INSERT INTO "${s}"."artifact_materializations"
+  (id, org_id, run_id, output_id, node_id, path, extension, content_hash,
+   artifact_id, representation_revision_id, phase)
+VALUES ($1, $2, $3, $4, NULL, $5, $6, $6, $7, $8, 'finalized')
+ON CONFLICT (run_id, output_id, extension, content_hash) DO NOTHING`,
+    [
+      randomUUID(),
+      input.orgId,
+      input.runId,
+      input.seatOutputId,
+      input.path,
+      input.seat,
+      input.artifactId,
+      input.representationRevisionId,
+    ],
+  );
+  const held = await pool().query(
+    `SELECT artifact_id FROM "${s}"."artifact_materializations"
+  WHERE org_id = $1 AND run_id = $2 AND output_id = $3 AND path = $4
+    AND extension = $5 AND content_hash = $5 AND phase = 'finalized'
+  LIMIT 1`,
+    [input.orgId, input.runId, input.seatOutputId, input.path, input.seat],
+  );
+  const holder = (held.rows[0] as { artifact_id?: string | null } | undefined)?.artifact_id;
+  if (typeof holder !== "string" || holder.length === 0) {
+    throw new Error(`seat ${input.seatOutputId} of run ${input.runId} could not be read`);
+  }
+  return holder;
+}
+
 // ---------------------------------------------------------------------------
 // An outside effect performed with a revision a run bound, AT MOST ONCE per run
 // (cinatra#3089).
