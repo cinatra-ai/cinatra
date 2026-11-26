@@ -100,7 +100,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "099e802b3ecd950cd842515d8c128e7e2f98f52a"
+      "resolvedSha": "ed523da6097c51309b9e883a49ee2b472f85081f"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
