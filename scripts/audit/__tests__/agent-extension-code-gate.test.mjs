@@ -1,9 +1,10 @@
 // Agent extension code gate (cinatra#4885) — unit and live tests.
 // Zero-dep (node:test) to match the gate. Fixture packs live under a neutral
-// `example-org` scope folder.
+// `example-org` scope folder; each is a git repository of its own, and the
+// locks pin each to a commit, as the CI clone makes them.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -24,7 +25,7 @@ import {
 
 const GATE_SCRIPT = fileURLToPath(new URL("../agent-extension-code-gate.mjs", import.meta.url));
 const LIST_REL = join("scripts", "audit", "agent-extension-code-gate.baseline.json");
-const SHA = "0123456789abcdef0123456789abcdef01234567";
+const ABSENT_SHA = "0123456789abcdef0123456789abcdef01234567";
 
 function writeFile(path, text) {
   mkdirSync(dirname(path), { recursive: true });
@@ -34,7 +35,7 @@ const writeJson = (path, value) => writeFile(path, JSON.stringify(value, null, 2
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 const commitAll = (cwd, msg) => {
   git(cwd, "add", "-A");
-  git(cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", msg);
+  git(cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", msg, "--allow-empty");
   return git(cwd, "rev-parse", "HEAD").trim();
 };
 const plain = (...rels) => rels.map((rel) => ({ rel, link: false }));
@@ -42,19 +43,42 @@ const plain = (...rels) => rels.map((rel) => ({ rel, link: false }));
 const step = (id, data) => ({ component_type: "ApiNode", id, url: "{{host}}/api/agents/passthrough", data });
 const callFlow = (id) => ({ flow: { nodes: [step(id, { tool: "extension_tool", input: { name: "read" } }), step("save", { tool: "objects_save" })] } });
 
-/** packs: dir -> { packageJson, files: { rel: text } }; `pinned` defaults to every pack. */
+const LOCKS = ["cinatra-required-extensions.lock.json", "cinatra-dev-extensions.lock.json"];
+const packDir = (root, dir) => join(root, "extensions", "example-org", dir);
+
+/** Point the lock entry of `name` at `sha`. */
+function pin(root, name, sha) {
+  for (const f of LOCKS) {
+    const lock = JSON.parse(readFileSync(join(root, f), "utf8"));
+    for (const p of lock.packages) if (p.packageName === name) p.resolvedSha = sha;
+    writeJson(join(root, f), lock);
+  }
+}
+/** Commit everything in the pack at `dir` and pin `name` to that commit. */
+const repin = (root, dir, name) => pin(root, name, commitAll(packDir(root, dir), "change"));
+
+/**
+ * packs: dir -> { packageJson, files: { rel: text } }, each committed in its own
+ * git repository and pinned to that commit; `pinned` defaults to every pack
+ * (a pinned name with no pack is pinned to a commit nobody has).
+ */
 function makeRoot({ packs, pinned, list }) {
   const root = mkdtempSync(join(tmpdir(), "agent-extension-code-gate-"));
-  const names = pinned ?? Object.values(packs).map((p) => p.packageJson.name);
-  const [first, ...rest] = names;
-  writeJson(join(root, "cinatra-required-extensions.lock.json"), { packages: first ? [{ packageName: first, resolvedSha: SHA }] : [] });
-  writeJson(join(root, "cinatra-dev-extensions.lock.json"), { packages: rest.map((packageName) => ({ packageName, resolvedSha: SHA })) });
-  writeJson(join(root, "package.json"), { name: "fixture-root", cinatra: { devExtensions: Object.fromEntries(names.map((n) => [n, "https://example.invalid/x.git"])) } });
+  const shas = new Map();
   for (const [dir, pack] of Object.entries(packs)) {
-    const base = join(root, "extensions", "example-org", dir);
+    const base = packDir(root, dir);
     writeJson(join(base, "package.json"), pack.packageJson);
     for (const [rel, text] of Object.entries(pack.files ?? {})) writeFile(join(base, rel), text);
+    git(base, "init", "-q");
+    shas.set(pack.packageJson.name, commitAll(base, "pin"));
   }
+  const names = pinned ?? [...shas.keys()];
+  const entry = (packageName) => ({ packageName, resolvedSha: shas.get(packageName) ?? ABSENT_SHA });
+  const [first, ...rest] = names;
+  writeJson(join(root, LOCKS[0]), { packages: first ? [entry(first)] : [] });
+  writeJson(join(root, LOCKS[1]), { packages: rest.map(entry) });
+  writeJson(join(root, "package.json"), { name: "fixture-root", cinatra: { devExtensions: Object.fromEntries(names.map((n) => [n, "https://example.invalid/x.git"])) } });
+  writeFile(join(root, ".gitignore"), "extensions/\n");
   if (list) writeJson(join(root, LIST_REL), list);
   return root;
 }
@@ -67,7 +91,6 @@ const packs = () => ({
       "cinatra/oas.json": JSON.stringify(callFlow("read_text")),
       "cinatra/tools/read.mjs": "export {};\n",
       "skills/pick/SKILL.md": "# pick\n",
-      "skills/pick/scripts/pick.py": "print(1)\n",
       "test/read.test.mjs": "\n",
     },
   },
@@ -115,49 +138,38 @@ test("the content list is exactly the stated closed list", () => {
   assert.deepEqual([...CONTENT.topDirs], [".github"]);
 });
 
-test("a skill is only skills/<entry>/ with skills/<entry>/SKILL.md; everything under it is content", () => {
-  const files = plain(
-    "skills/pick/SKILL.md",
-    "skills/pick/scripts/pick.py",
-    "skills/pick/deep/run",
-    "skills/none/run.mjs",
-    "tools/x/SKILL.md",
-    "tools/x/run.mjs",
-    "SKILL.md",
-    "main.mjs",
-    "skills/top.mjs",
-  );
-  assert.deepEqual(nonContentFiles(files), ["main.mjs", "skills/none/run.mjs", "skills/top.mjs", "tools/x/run.mjs"]);
+test("files under a skills/ folder count like any other file: an agent pack ships no skill", () => {
+  const files = plain("skills/pick/SKILL.md", "skills/pick/scripts/pick.py", "skills/pick/deep/run", "skills/top.mjs", "main.mjs");
+  assert.deepEqual(nonContentFiles(files), ["main.mjs", "skills/pick/deep/run", "skills/pick/scripts/pick.py", "skills/top.mjs"]);
 });
 
 test("every file outside the content rule counts: source of any language, extension-less, config scripts, lock files", () => {
   const files = plain("bin/run", "cli", "a.rb", "vitest.config.ts", "pnpm-lock.yaml", "package-lock.json", ".npmrc", "x.d.ts", "Makefile", "LICENSE", ".github/workflows/ci.yml", ".github/check.mjs", "docs/a.md", "logo.PNG");
   assert.deepEqual(nonContentFiles(files), [".npmrc", "Makefile", "a.rb", "bin/run", "cli", "vitest.config.ts", "x.d.ts"]);
-  assert.equal(isContent("nested/.github/x.mjs", new Set()), false);
+  assert.equal(isContent("nested/.github/x.mjs"), false);
 });
 
-test("a symbolic link always counts, even under a skill or with a content extension", () => {
+test("a symbolic link or a gitlink always counts, even with a content extension", () => {
   assert.deepEqual(nonContentFiles([{ rel: "skills/pick/SKILL.md", link: false }, { rel: "skills/pick/data.json", link: true }, { rel: "a.md", link: true }]), ["a.md", "skills/pick/data.json"]);
-  const dir = mkdtempSync(join(tmpdir(), "agent-extension-code-walk-"));
-  try {
-    writeFile(join(dir, "real", "x.mjs"), "\n");
-    symlinkSync(join(dir, "real"), join(dir, "linked"));
-    writeFile(join(dir, "node_modules", "dep", "index.js"), "\n");
-    assert.deepEqual(packFiles(dir, "walk").sort((a, b) => a.rel.localeCompare(b.rel)), [{ rel: "linked", link: true }, { rel: "real/x.mjs", link: false }]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });
 
-test("in a git checkout the pack's tracked files are listed, symbolic links marked", () => {
+test("the file list is the pinned commit's tree: modes kept, links and gitlinks marked, the working tree and the index never read", () => {
   const dir = mkdtempSync(join(tmpdir(), "agent-extension-code-git-"));
   try {
     git(dir, "init", "-q");
     writeFile(join(dir, "a.mjs"), "\n");
+    writeFile(join(dir, "kept.mjs"), "\n");
     symlinkSync("a.mjs", join(dir, "b.md"));
-    commitAll(dir, "x");
+    git(dir, "add", "-A");
+    git(dir, "update-index", "--add", "--cacheinfo", `160000,${ABSENT_SHA},vendored`);
+    git(dir, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "x");
+    const sha = git(dir, "rev-parse", "HEAD").trim();
     writeFile(join(dir, "untracked.mjs"), "\n");
-    assert.deepEqual(packFiles(dir, "git"), [{ rel: "a.mjs", link: false }, { rel: "b.md", link: true }]);
+    writeFile(join(dir, "staged.mjs"), "\n");
+    git(dir, "add", "staged.mjs");
+    git(dir, "rm", "-q", "--cached", "kept.mjs");
+    const listed = packFiles(dir, sha, "git").map(({ rel, mode, link }) => `${mode} ${link} ${rel}`);
+    assert.deepEqual(listed, ["100644 false a.mjs", "120000 true b.md", "100644 false kept.mjs", "160000 true vendored"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -231,23 +243,95 @@ test("live: --report counts each class; a connector has no file class but its de
     const res = runGate(root, ["--report"]);
     assert.equal(res.status, 0, res.out);
     assert.match(res.out, /2 pinned extension\(s\) scanned; 2 nonContentFiles in 1 key\(s\), 2 toolDeclarations in 2 key\(s\), 2 extensionToolSteps in 2 key\(s\), 0 unreadableSteps/);
-    assert.doesNotMatch(res.out, /src\/index\.ts|pick\.py/);
+    assert.doesNotMatch(res.out, /src\/index\.ts|SKILL\.md/);
   });
 });
 
-test("live: the recorded list passes; one more file fails; a removed file is stale", () => {
+test("live: the recorded list passes; one more committed and pinned file fails; a removed one is stale", () => {
   withRoot({ packs: packs(), list: recorded() }, (root) => {
     assert.equal(runGate(root).status, 0);
-    const pack = join(root, "extensions", "example-org", "read-agent");
+    const pack = packDir(root, "read-agent");
     writeFile(join(pack, "bin", "run"), "#!/bin/sh\n");
+    repin(root, "read-agent", READ);
     const grown = runGate(root);
     assert.equal(grown.status, 1);
     assert.match(grown.out, /\[nonContentFiles\] above the recorded count[\s\S]*\+ @example-org\/read-agent: 3, the list holds 2/);
     rmSync(join(pack, "bin"), { recursive: true });
     rmSync(join(pack, "test"), { recursive: true });
+    repin(root, "read-agent", READ);
     const stale = runGate(root);
     assert.equal(stale.status, 1);
     assert.match(stale.out, /\[nonContentFiles\] below the recorded count/);
+  });
+});
+
+test("live: a file in the working tree or the index but not in the pinned commit is not counted; neither is a changed manifest on disk", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pack = packDir(root, "read-agent");
+    writeFile(join(pack, "src", "untracked.ts"), "export {};\n");
+    writeFile(join(pack, "src", "staged.ts"), "export {};\n");
+    git(pack, "add", "src/staged.ts");
+    writeJson(join(pack, "package.json"), { name: READ, cinatra: { kind: "agent" } });
+    writeFile(join(pack, "cinatra", "oas.json"), "{}");
+    const res = runGate(root);
+    assert.equal(res.status, 0, res.out);
+  });
+});
+
+test("live: a file removed from the index but present at the pinned commit is still counted (no offset of a new file)", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pack = packDir(root, "read-agent");
+    git(pack, "rm", "-q", "--cached", "test/read.test.mjs");
+    writeFile(join(pack, "src", "new.ts"), "export {};\n");
+    git(pack, "add", "src/new.ts");
+    const res = runGate(root, ["--report"]);
+    assert.equal(res.status, 0, res.out);
+    assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    test\/read\.test\.mjs\n/);
+    assert.equal(runGate(root).status, 0);
+  });
+});
+
+test("live: a later commit with one more code file counts only once the lock moves to it", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pack = packDir(root, "read-agent");
+    writeFile(join(pack, "src", "later.ts"), "export {};\n");
+    const later = commitAll(pack, "later");
+    assert.equal(runGate(root).status, 0);
+    pin(root, READ, later);
+    const grown = runGate(root);
+    assert.equal(grown.status, 1);
+    assert.match(grown.out, /\+ @example-org\/read-agent: 3, the list holds 2/);
+  });
+});
+
+test("live: a lock at a commit the checkout lacks, a manifest naming another package at the pin, a pack without its own git checkout and an unpinned dev extension are scanner errors", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    pin(root, READ, ABSENT_SHA);
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /does not contain the pinned commit/);
+  });
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pack = packDir(root, "read-agent");
+    writeJson(join(pack, "package.json"), { ...packs()["read-agent"].packageJson, name: "@example-org/other-agent" });
+    repin(root, "read-agent", READ);
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /names the package "@example-org\/other-agent", not @example-org\/read-agent/);
+  });
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    rmSync(join(packDir(root, "mail-connector"), ".git"), { recursive: true, force: true });
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /is not a git checkout of its own/);
+  });
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    pkg.cinatra.devExtensions["@example-org/unpinned-agent"] = "https://example.invalid/x.git";
+    writeJson(join(root, "package.json"), pkg);
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /which no lock pins to a commit/);
   });
 });
 
@@ -264,7 +348,7 @@ test("live: an unreadable step is a counted finding of its own class", () => {
 
 test("live: scanner errors exit 2 — a missing pinned pack, an unreadable kind, a flow that does not parse, a malformed list", () => {
   withRoot({ packs: packs(), pinned: [READ, "@example-org/mail-connector", "@example-org/missing-agent"], list: recorded() }, (root) => {
-    assert.match(runGate(root).out, /missing-agent is not in the extensions\/ tree/);
+    assert.match(runGate(root).out, /missing-agent is not checked out at extensions\/example-org\/missing-agent/);
     assert.equal(runGate(root).status, 2);
   });
   const p = packs();
@@ -306,8 +390,9 @@ test("live base guard: seeds once, a raised count fails, a lowered count passes,
     assert.match(seed.out, /this change introduces the gate/);
     const seeded = commitAll(root, "seed");
 
-    const pack = join(root, "extensions", "example-org", "read-agent");
+    const pack = packDir(root, "read-agent");
     writeFile(join(pack, "src", "more.ts"), "export {};\n");
+    repin(root, "read-agent", READ);
     writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: [] } } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1);
@@ -315,6 +400,7 @@ test("live base guard: seeds once, a raised count fails, a lowered count passes,
 
     rmSync(join(pack, "src"), { recursive: true });
     rmSync(join(pack, "test"), { recursive: true });
+    repin(root, "read-agent", READ);
     writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 1, items: ["cinatra/tools/read.mjs"] } } });
     const shrank = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(shrank.status, 0, shrank.out);

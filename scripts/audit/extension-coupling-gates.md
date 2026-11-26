@@ -666,51 +666,62 @@ What it cannot see: a tool used but not declared in `cinatra.consumes`
 (cinatra#4894); a tool core registers on behalf of a pack (above); the owner of a tool the inventory has no row for (until
 cinatra#4895); a pack outside both extension locks.
 
-## Agent extensions ship no program code outside their skills (cinatra#4885)
+## Agent extensions ship no program code (cinatra#4885)
 
 **Limits, first.** The check COUNTS; it does not judge what a file does. A
 new file of a content kind (a `.json` or a `.md`) is not counted even if
-something executes it. Code inside a connector and code in core are out of
-its scope.
+something executes it. Code inside a connector, code in a skill extension
+and code in core are out of its scope.
 
 Owner: "functionality that should be done by agents has been built as code,
 which totally goes against the whole purpose of Cinatra." and "Of course,
-skills could also include scripts and here code is ok."
+skills could also include scripts and here code is ok." A skill, with its
+scripts, is its own extension of kind `skill` that the agent depends on: core
+refuses a skill inside a non-skill extension (`validateNonSkillExtensionPackage`
+in `scripts/audit/_lib/skill-packaging-verdict.mjs`, reason
+`skill-md-in-non-skill-package`, in `skill-packaging-gate.mjs`, at store
+install and at publish). So an agent extension ships no program code at all,
+and a file under a `skills/` folder of an agent pack counts like any other.
 
 `scripts/audit/agent-extension-code-gate.mjs` runs in job `perpetual-core`
-of `.github/workflows/build-image.yml`, after the companion repositories are
-cloned, followed by its `node --test` step. It needs no judgement about a
+of `.github/workflows/build-image.yml` directly after the companion
+repositories are cloned and BEFORE `pnpm install`, followed by its
+`node --test` step: an install can run lifecycle scripts of companion
+packages, and the check imports only node built-ins and its own library
+files. It needs no judgement about a
 file: no "test", "build", "shipped" or "bin" reading. It classifies nothing
 beyond one closed content rule, and records counts.
 
 **The universe** is the pinned extensions: every `packageName` of both
-extension locks plus every key of `cinatra.devExtensions`, each found in the
-`extensions/` tree by its manifest name. A pinned pack that is missing or
-unreadable, a lock, manifest or `cinatra/*.json` file that does not parse,
-and a pinned pack whose `cinatra.kind` cannot be read are scanner errors
-(exit 2), never a pass. Class 1 applies to packs of kind `agent`; classes 2
+extension locks plus every key of `cinatra.devExtensions`. **Each pack is
+read from its pinned commit**, never from the working tree or the index: the
+commit is the lock's `resolvedSha` (a `cinatra.devExtensions` key that no lock
+pins is a scanner error); the checkout is `extensions/<scope>/<name>`, a git
+repository of its own (CI materialises it with `clone-extensions`, i.e.
+`sync-dev-extensions.mjs --pinned --shallow`: depth 1, detached at the pin);
+the file list is `git ls-tree -r --full-tree <sha>`; the manifest and the
+flow files are read with `git cat-file blob <sha>:<path>`. Git runs with no
+replace refs, no lazy fetch and no `GIT_*` variable of the caller. A pack
+that is not checked out, a directory that is not its own git checkout, a
+checkout that lacks the pinned commit, a manifest at that commit naming
+another package, a lock, manifest or `cinatra/*.json` file that is not a
+regular file or does not parse, and a pack whose `cinatra.kind` cannot be
+read are scanner errors (exit 2), never a pass. Class 1 applies to packs of kind `agent`; classes 2
 to 4 apply to every pinned pack.
 
 **The four classes**, each a count that may only go down:
 
-1. `nonContentFiles` (per pack) — every file of the pack's tree as the
-   pinned checkout has it (`git ls-files` in the pack's own git checkout,
-   else a walk that follows no symbolic link and skips `node_modules` and
-   `.git`), EXCEPT content by this closed rule (the constant `CONTENT`):
-   - (a) every file under `skills/<entry>/` where `skills/<entry>/SKILL.md`
-     exists: the product's own rule (`upsertSkillsFromDir` in
-     `packages/agents/src/extension-handler.ts` registers exactly
-     `<pack>/skills/<entry>/SKILL.md`); the whole folder is the skill,
-     scripts included. A `SKILL.md` anywhere else makes nothing a skill;
-   - (b) a file whose extension is one of `.json .md .txt .yaml .yml .svg
-     .png .jpg .jpeg .gif .webp .ico .csv`, whose exact name is `LICENSE`,
-     `NOTICE`, `.gitignore`, `.gitattributes`, `.npmignore` or
-     `.editorconfig`, or that lies under the pack's top-level `.github/`
-     (the CI of the pack's own repository).
+1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree,
+   EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
+   extension is one of `.json .md .txt .yaml .yml .svg .png .jpg .jpeg .gif
+   .webp .ico .csv`, whose exact name is `LICENSE`, `NOTICE`, `.gitignore`,
+   `.gitattributes`, `.npmignore` or `.editorconfig`, or that lies under the
+   pack's top-level `.github/` (the CI of the pack's own repository).
 
-   A symbolic link (or a gitlink) always counts. Everything else counts:
-   source of any language, extension-less files, `.npmrc`, config scripts,
-   vendored check scripts, tests.
+   A symbolic link (mode 120000) or a gitlink (160000) always counts.
+   Everything else counts: source of any language, extension-less files,
+   files under a `skills/` folder, `.npmrc`, config scripts, vendored check
+   scripts, tests.
 2. `toolDeclarations` (per pack) — every value of `cinatra.tools`, whether
    the product (`parseDeclaredTools` in
    `packages/sdk-extensions/src/manifest.ts`) accepts it or not; only an
@@ -746,7 +757,9 @@ On the day it landed (pins of main at 12cf13c9f): 254 `nonContentFiles` in
 modules under `cinatra/tools/` and 10 runtime files under `src/` (the 22 of
 the issue), 167 files under test folders (`test/`, `tests/`,
 `src/__tests__/`), 30 vendored `extension-kind-gate.mjs`, 30
-`.npmrc`, 3 `vitest.config.ts` and 2 other check scripts.
+`.npmrc`, 3 `vitest.config.ts` and 2 other check scripts. No agent pack's
+pinned tree has a `skills/` folder, so counting such files changed none of
+these numbers.
 
 ## Floors compared with the base branch (cinatra#3832)
 

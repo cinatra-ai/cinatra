@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 /**
  * Agent extension code gate (cinatra#4885): an extension of kind `agent` ships
- * no program code of its own outside its skills ("skills could also include
- * scripts and here code is ok", the owner).
+ * no program code at all. A skill, with its scripts, is its own extension of
+ * kind `skill` that the agent depends on (core refuses a skill inside a
+ * non-skill extension: `validateNonSkillExtensionPackage` in
+ * scripts/audit/_lib/skill-packaging-verdict.mjs); skills are out of this
+ * check's scope, like connectors.
  *
  * LIMITS. The check COUNTS; it does not judge what a file does. A new file of a
  * content kind (a `.json`, a `.md`) is not counted even if something executes
  * it. Code inside a connector and code in core are out of its scope.
  *
- * Over the pinned extensions (both locks plus `cinatra.devExtensions`, found by
- * manifest name) it counts, per key, four classes that may only go down:
+ * Over the pinned extensions (both locks plus `cinatra.devExtensions`) it reads
+ * each pack from its PINNED COMMIT (the lock's `resolvedSha`) in its git
+ * checkout at `extensions/<scope>/<name>`, never from the working tree or the
+ * index, and counts, per key, four classes that may only go down:
  * `nonContentFiles` (agent packs: files that are not content by `isContent`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
@@ -19,7 +24,7 @@
  * Exit codes: 0 = clean, 1 = findings / stale or grown list, 2 = scanner error.
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
@@ -33,12 +38,9 @@ export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSte
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
- * THE CONTENT RULE, closed. A file is content when (a) it lies under
- * `skills/<entry>/` and `skills/<entry>/SKILL.md` exists (the product's own
- * rule: `upsertSkillsFromDir` in packages/agents/src/extension-handler.ts
- * registers exactly `<pack>/skills/<entry>/SKILL.md`; the whole folder is the
- * skill, scripts included), or (b) its extension, exact name or top folder is
- * listed here. Nothing else is content.
+ * THE CONTENT RULE, closed. A file is content when its extension, exact name
+ * or top folder is listed here. Nothing else is content: a file under a
+ * `skills/` folder of an agent pack counts like any other file.
  */
 export const CONTENT = Object.freeze({
   extensions: new Set([".json", ".md", ".txt", ".yaml", ".yml", ".svg", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".csv"]),
@@ -46,8 +48,10 @@ export const CONTENT = Object.freeze({
   topDirs: new Set([".github"]),
 });
 
-const SKIP_DIRS = new Set(["node_modules", ".git"]);
 const SAFE_SCOPED_PKG_RE = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
+const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const BLOB_MODES = new Set(["100644", "100755"]);
+const FLOW_RE = /^cinatra\/[^/]+\.json$/;
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -64,10 +68,9 @@ const fail = (what) => (e) => {
   throw new ScannerError(`${what}: ${e?.code ?? e?.message ?? e}`);
 };
 
-/** True when `rel` (forward slashes) is content; `skillDirs` holds `skills/<entry>` folders with a SKILL.md. */
-export function isContent(rel, skillDirs) {
+/** True when `rel` (forward slashes) is content. */
+export function isContent(rel) {
   const parts = rel.split("/");
-  if (parts.length >= 3 && parts[0] === "skills" && skillDirs.has(`skills/${parts[1]}`)) return true;
   if (parts.length >= 2 && CONTENT.topDirs.has(parts[0])) return true;
   const name = parts[parts.length - 1];
   if (CONTENT.names.has(name)) return true;
@@ -77,12 +80,7 @@ export function isContent(rel, skillDirs) {
 
 /** The non-content files among `files` (`{ rel, link }`), sorted. */
 export function nonContentFiles(files) {
-  const skillDirs = new Set();
-  for (const { rel, link } of files) {
-    const p = rel.split("/");
-    if (!link && p.length === 3 && p[0] === "skills" && p[2] === "SKILL.md") skillDirs.add(`skills/${p[1]}`);
-  }
-  return files.filter((f) => f.link || !isContent(f.rel, skillDirs)).map((f) => f.rel).sort();
+  return files.filter((f) => f.link || !isContent(f.rel)).map((f) => f.rel).sort();
 }
 
 /**
@@ -191,93 +189,104 @@ const readJson = (path, label) => {
   const text = attempt(() => readFileSync(path, "utf8"), fail(`cannot read ${label}`));
   return attempt(() => JSON.parse(text), fail(`${label} is not JSON`));
 };
-const listDir = (dir, label) => attempt(() => readdirSync(dir, { withFileTypes: true }), fail(`cannot read the directory ${label}`));
 
-/** The pinned package names: both locks plus `cinatra.devExtensions`. */
-export function pinnedNames(root) {
-  const names = new Set();
-  const add = (n, where) => {
+/**
+ * The pinned packs, sorted by name: `{ name, sha }` for every entry of both
+ * locks and every key of `cinatra.devExtensions`. The commit is the lock's
+ * `resolvedSha`; a name without one, or with two different ones, is a scanner
+ * error.
+ */
+export function pinnedPacks(root) {
+  const shas = new Map();
+  const checkName = (n, where) => {
     if (typeof n !== "string" || !SAFE_SCOPED_PKG_RE.test(n)) throw new ScannerError(`${where} names an invalid package ${JSON.stringify(n)}`);
-    names.add(n);
   };
   for (const f of LOCK_FILES) {
     const lock = readJson(join(root, f), f);
     if (!Array.isArray(lock?.packages)) throw new ScannerError(`${f} carries no packages array`);
-    for (const p of lock.packages) add(p?.packageName, f);
+    for (const p of lock.packages) {
+      checkName(p?.packageName, f);
+      if (typeof p.resolvedSha !== "string" || !SHA_RE.test(p.resolvedSha)) throw new ScannerError(`${f} pins ${p.packageName} to no full commit hash (resolvedSha ${JSON.stringify(p.resolvedSha)})`);
+      if (shas.has(p.packageName) && shas.get(p.packageName) !== p.resolvedSha) throw new ScannerError(`${p.packageName} is pinned to two different commits`);
+      shas.set(p.packageName, p.resolvedSha);
+    }
   }
   const dev = readJson(join(root, "package.json"), "package.json")?.cinatra?.devExtensions;
   if (!isPlainObject(dev)) throw new ScannerError("package.json carries no cinatra.devExtensions object");
-  for (const n of Object.keys(dev)) add(n, "cinatra.devExtensions");
-  if (names.size === 0) throw new ScannerError("the pinned universe is empty; refusing to pass vacuously");
-  return [...names].sort();
+  for (const n of Object.keys(dev)) {
+    checkName(n, "cinatra.devExtensions");
+    if (!shas.has(n)) throw new ScannerError(`cinatra.devExtensions names ${n}, which no lock pins to a commit`);
+  }
+  if (shas.size === 0) throw new ScannerError("the pinned universe is empty; refusing to pass vacuously");
+  return [...shas.keys()].sort().map((name) => ({ name, sha: shas.get(name) }));
 }
 
-/** `extensions/<scope>/<dir>` with a package.json, by manifest name. */
-function indexTree(root) {
-  const ext = join(root, "extensions");
-  if (!existsSync(ext)) throw new ScannerError("no extensions/ tree: run `node scripts/ci/sync-dev-extensions.mjs --pinned` first");
-  const byName = new Map();
-  for (const scope of listDir(ext, "extensions")) {
-    if (!scope.isDirectory() || scope.name.startsWith(".") || SKIP_DIRS.has(scope.name)) continue;
-    for (const pack of listDir(join(ext, scope.name), `extensions/${scope.name}`)) {
-      const rel = `extensions/${scope.name}/${pack.name}`;
-      if (!pack.isDirectory() || pack.name.startsWith(".") || !existsSync(join(root, rel, "package.json"))) continue;
-      const pkg = readJson(join(root, rel, "package.json"), `${rel}/package.json`);
-      if (typeof pkg?.name !== "string" || !pkg.name) throw new ScannerError(`${rel}/package.json carries no name`);
-      if (byName.has(pkg.name)) throw new ScannerError(`two directories carry the manifest name ${pkg.name}`);
-      byName.set(pkg.name, { dir: join(root, rel), rel, pkg });
-    }
-  }
-  return byName;
+// Git reads only objects: no GIT_* variable from the caller redirects it, no
+// replace ref swaps an object, no lazy fetch completes a partial clone.
+const GIT_ENV = { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))), GIT_NO_LAZY_FETCH: "1" };
+const gitIn = (dir, args, what) =>
+  attempt(
+    () => execFileSync("git", ["--no-replace-objects", "-C", dir, ...args], { encoding: "utf8", env: GIT_ENV, maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] }),
+    (e) => {
+      throw new ScannerError(`${what}: ${String(e?.stderr ?? "").trim() || e?.code || e?.message || e}`);
+    },
+  );
+
+/** The git checkout of `name` (`extensions/<scope>/<name>`), holding `sha` as a commit. */
+export function packCheckout(root, name, sha) {
+  const rel = `extensions/${name.slice(1)}`;
+  const dir = join(root, rel);
+  if (!existsSync(join(dir, "package.json")) && !existsSync(join(dir, ".git"))) throw new ScannerError(`the pinned pack ${name} is not checked out at ${rel}`);
+  const notCheckout = `${rel} is not a git checkout of its own (CI materialises each pack with clone-extensions, i.e. \`node scripts/ci/sync-dev-extensions.mjs --pinned --shallow\`: a depth-1 git checkout at the pinned commit)`;
+  if (!existsSync(join(dir, ".git"))) throw new ScannerError(notCheckout);
+  const top = gitIn(dir, ["rev-parse", "--show-toplevel"], `${rel}: git rev-parse failed`).trim();
+  if (attempt(() => realpathSync(top), () => top) !== realpathSync(dir)) throw new ScannerError(notCheckout);
+  gitIn(dir, ["cat-file", "-e", `${sha}^{commit}`], `${rel} does not contain the pinned commit ${sha}`);
+  return { dir, rel };
 }
 
-/** Every file of a pack as `{ rel, link }`: `git ls-files` in its own checkout, else a walk following no link. */
-export function packFiles(dir, label) {
-  if (existsSync(join(dir, ".git"))) {
-    const out = attempt(
-      () => execFileSync("git", ["-C", dir, "ls-files", "-s", "-z"], { encoding: "utf8", maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "pipe"] }),
-      fail(`git ls-files failed in ${label}`),
-    );
-    // `<mode> <object> <stage>\t<path>`; mode 100xxx is a regular file, 120000 a link, 160000 a gitlink.
-    return out.split("\0").filter(Boolean).map((line) => ({ rel: line.slice(line.indexOf("\t") + 1), link: !line.startsWith("100") }));
-  }
-  const files = [];
-  const walk = (abs, rel) => {
-    for (const e of listDir(abs, rel ? `${label}/${rel}` : label)) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isSymbolicLink()) files.push({ rel: r, link: true });
-      else if (!e.isDirectory()) files.push({ rel: r, link: false });
-      else if (!SKIP_DIRS.has(e.name)) walk(join(abs, e.name), r);
-    }
-  };
-  walk(dir, "");
-  return files;
+/** Every entry of the pinned commit's tree as `{ rel, mode, link }` (mode 120000 a link, 160000 a gitlink: `link`). */
+export function packFiles(dir, sha, label) {
+  const out = gitIn(dir, ["ls-tree", "-r", "--full-tree", "-z", sha], `git ls-tree of ${sha} failed in ${label}`);
+  // `<mode> <type> <object>\t<path>`
+  return out.split("\0").filter(Boolean).map((line) => {
+    const mode = line.slice(0, line.indexOf(" "));
+    return { rel: line.slice(line.indexOf("\t") + 1), mode, link: !BLOB_MODES.has(mode) };
+  });
+}
+
+/** A regular file of the pinned commit, parsed as JSON. */
+function readPinnedJson(dir, sha, entry, label) {
+  if (!entry || !BLOB_MODES.has(entry.mode)) throw new ScannerError(`${label} is ${entry ? `not a regular file (mode ${entry.mode})` : "missing"} at the pinned commit ${sha}`);
+  const text = gitIn(dir, ["cat-file", "blob", `${sha}:${entry.rel}`], `cannot read ${label} at the pinned commit ${sha}`);
+  return attempt(() => JSON.parse(text), fail(`${label} at the pinned commit is not JSON`));
 }
 
 export function scan(root) {
-  const tree = indexTree(root);
+  if (!existsSync(join(root, "extensions"))) throw new ScannerError("no extensions/ tree: run `node scripts/ci/sync-dev-extensions.mjs --pinned` first");
   const findings = Object.fromEntries(CLASSES.map((c) => [c, Object.create(null)]));
-  const names = pinnedNames(root);
-  for (const name of names) {
-    const { dir, rel, pkg } = tree.get(name) ?? {};
-    if (!dir) throw new ScannerError(`the pinned pack ${name} is not in the extensions/ tree (no manifest carries that name)`);
+  const packs = pinnedPacks(root);
+  for (const { name, sha } of packs) {
+    const { dir, rel } = packCheckout(root, name, sha);
+    const entries = packFiles(dir, sha, rel);
+    const byPath = new Map(entries.map((e) => [e.rel, e]));
+    const pkg = readPinnedJson(dir, sha, byPath.get("package.json"), `${rel}/package.json`);
+    if (pkg?.name !== name) throw new ScannerError(`${rel} at the pinned commit ${sha} names the package ${JSON.stringify(pkg?.name)}, not ${name}`);
     const kind = pkg?.cinatra?.kind;
     if (typeof kind !== "string" || !kind) throw new ScannerError(`the pinned pack ${name} (${rel}) has no readable cinatra.kind`);
     const tools = toolDeclarationKeys(pkg);
     if (tools.length) findings.toolDeclarations[name] = { count: tools.length, items: tools };
-    if (existsSync(join(dir, "cinatra"))) {
-      for (const f of listDir(join(dir, "cinatra"), `${rel}/cinatra`).filter((e) => !e.isDirectory() && e.name.endsWith(".json")).map((e) => e.name).sort()) {
-        const { steps, unreadable } = flowSteps(readJson(join(dir, "cinatra", f), `${rel}/cinatra/${f}`));
-        if (steps.length) findings.extensionToolSteps[`${name} :: cinatra/${f}`] = { count: steps.length, items: steps };
-        if (unreadable.length) findings.unreadableSteps[`${name} :: cinatra/${f}`] = { count: unreadable.length, items: unreadable };
-      }
+    for (const e of entries.filter((x) => FLOW_RE.test(x.rel)).sort((a, b) => (a.rel < b.rel ? -1 : 1))) {
+      const { steps, unreadable } = flowSteps(readPinnedJson(dir, sha, e, `${rel}/${e.rel}`));
+      if (steps.length) findings.extensionToolSteps[`${name} :: ${e.rel}`] = { count: steps.length, items: steps };
+      if (unreadable.length) findings.unreadableSteps[`${name} :: ${e.rel}`] = { count: unreadable.length, items: unreadable };
     }
     if (kind === "agent") {
-      const files = nonContentFiles(packFiles(dir, rel));
+      const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
   }
-  return { findings, packCount: names.length };
+  return { findings, packCount: packs.length };
 }
 
 /** The base guard; a resolving base holding neither the list nor this script is the introducing change. */
@@ -334,13 +343,13 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
   const diff = diffWithList(findings, list);
   for (const cls of CLASSES) {
     const { fresh, stale } = diff[cls];
-    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] above the recorded count (an agent extension ships no program code outside its skills):`);
+    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] above the recorded count (an agent extension ships no program code):`);
     for (const p of fresh) err(`  + ${p}`);
     if (stale.length) err(`[${GATE}] FAIL — [${cls}] below the recorded count (lower the list: --write-baseline):`);
     for (const p of stale) err(`  - ${p}`);
     failed ||= fresh.length + stale.length > 0;
   }
-  if (failed) return stop(1, `[${GATE}] Fix: move the work into a skill (skills/<entry>/ with a SKILL.md), into core's generic machinery or into a connector. See scripts/audit/extension-coupling-gates.md.`);
+  if (failed) return stop(1, `[${GATE}] Fix: move the work into a skill extension (kind skill, declared as a dependency), into core's generic machinery or into a connector. See scripts/audit/extension-coupling-gates.md.`);
   log(`[${GATE}] OK — ${packCount} pinned extensions; recorded: ${totals(findings)}.`);
   return 0;
 }
