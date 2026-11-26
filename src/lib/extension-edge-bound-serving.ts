@@ -105,6 +105,7 @@ import { getActorContext } from "@cinatra-ai/llm/actor-context";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import type { DelegatedChatToolClass, HostMcpToolRegistration } from "@cinatra-ai/sdk-extensions";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import type { LoadedExtensionIdentity } from "@/lib/extension-capabilities-registry";
 import {
   resolveVersionKeyedMcpTool,
   resolveVersionKeyedMcpTools,
@@ -634,7 +635,16 @@ export async function dispatchPlannedExtensionMcpTool(
         expected: "default";
         tool: { packageName: string; name: string; handler: (input: unknown) => unknown | Promise<unknown> };
       }
-    | { expected: "versioned"; packageName: string; name: string; version: string },
+    | {
+        expected: "versioned";
+        packageName: string;
+        name: string;
+        version: string;
+        /** cinatra#3745: given, the retained entry served must be exactly this
+         * object (the one whose declaration and loaded identity were planned);
+         * a same-version re-registration since refuses as drift. */
+        registration?: RetainedVersionKeyedMcpTool | null;
+      },
   input: unknown,
   deps: ResolveEdgeBoundExtensionDeps = {},
 ): Promise<unknown> {
@@ -676,6 +686,14 @@ export async function dispatchPlannedExtensionMcpTool(
       `edge-bound serving refused for MCP tool "${name}" — ${served.message}`,
     );
   }
+  if ("registration" in planned && served.value !== planned.registration) {
+    throw new EdgeBoundMcpServeRefusal(
+      "EDGE_BOUND_PLAN_DRIFT",
+      `edge-bound serving refused — MCP tool "${name}" of ${packageName}@${planned.version} was ` +
+        `re-registered by another load since it was planned; refusing rather than running other bytes ` +
+        `than the ones admitted (retry re-plans against the current registration)`,
+    );
+  }
   const versionedHandler = served.value.handler;
   return versionedHandler(input);
 }
@@ -710,6 +728,8 @@ export type DiscoveryDefaultTool = {
    * that is actually about to serve it.
    */
   resolvedVersion?: string | null;
+  /** cinatra#3745: the loaded identity the registry keeps beside this handler. */
+  loadedIdentity?: LoadedExtensionIdentity | null;
 };
 
 /** One tool a per-request MCP server build must register for the CURRENT caller. */

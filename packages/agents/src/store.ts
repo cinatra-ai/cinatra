@@ -4037,6 +4037,8 @@ export {
 } from "./agent-template-identity";
 
 // #3745 public package subpath remains ./store; no held export-map edit.
-export { bindRunStepToolPolicy, readRunStepToolPolicy, readCurrentRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
+export { bindRunStepToolPolicy, readRunPauseSteps, readRunStepToolPolicy, readCurrentRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
 export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, assertRunStepToolAllowed, RunStepToolPolicyRefusal } from "./agent-run-serde";
+// cinatra#3745: the single-use consumption of a person's decision; its caller is the host's guarded outward run action.
+export { consumeRunActionDecision, type RunActionSubject, type RunActionToolIdentity, type RunActionDecisionConsumption } from "./run-action-decision-consumption";
 export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

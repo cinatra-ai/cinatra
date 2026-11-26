@@ -6,17 +6,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mock = vi.hoisted(() => {
   process.env.BETTER_AUTH_SECRET ??= "dev-media-kinds-placeholder-not-a-credential";
-  return { resolve: vi.fn(), upload: vi.fn(), register: vi.fn(), member: vi.fn() };
+  return { resolve: vi.fn(), upload: vi.fn(), register: vi.fn(), member: vi.fn(), userContext: vi.fn() };
 });
 vi.mock("@/lib/register-all-object-types", () => ({ registerAllObjectTypes: mock.register }));
 vi.mock("@/lib/artifacts/upload-artifact-type-map", () => ({ resolveUploadArtifactType: mock.resolve }));
 vi.mock("@/lib/artifacts/artifact-service", () => ({ createUploadedArtifact: mock.upload }));
 vi.mock("@/lib/better-auth-db", () => ({ readUserIsOrgMember: mock.member }));
+vi.mock("@/lib/auth-session", () => ({ resolveUserContextForUserId: mock.userContext, isPlatformAdmin: () => false }));
 
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { MEDIA_BYTE_ROAD_KINDS, mediaByteRoadKindFor } from "@/lib/lifecycle/review-island-byte-road";
 import { sniffMime } from "@/lib/artifacts/local-disk-blob-store";
 import { crc32, mediaKindSamples } from "../../../scripts/fixtures/lib/media-kind-samples";
-import { fileMediaKindSamples, seedMediaKindReviewRun } from "../../../scripts/fixtures/lib/file-media-kinds";
+import {
+  fileMediaKindSamples, parsePromoteOption, promoteFiledUpload, seedMediaKindReviewRun,
+} from "../../../scripts/fixtures/lib/file-media-kinds";
 
 const sample = (kind: string) => {
   const found = mediaKindSamples().find((s) => s.kind === kind);
@@ -255,5 +260,134 @@ describe("development media kind review run (#3459)", () => {
     const h = gateRows(family(targets));
     await expect(seedMediaKindReviewRun({ orgId: "org", userId: "user", filed: filed.slice(1) }, h)).rejects.toThrow(/six filed/);
     expect(h.seedMarkedReviewGateRun).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#3459 (PR #4786): a slide deck's review card existed only after a
+// person promoted a PDF upload in the type picker, so a capture that cannot
+// click had no deck card to grade. The fixture confirms the picker's own
+// server action for the filed upload, as the person's Confirm does.
+describe("development upload promotion through the type picker (#3459)", () => {
+  const DECK = "@cinatra-ai/slide-deck-artifact";
+  const filed = ["image", "video", "audio", "pdf", "document", "archive"].map((kind, i) => ({
+    kind, mime: `form-${i}`, objectType: `type-${i}`, artifactId: `artifact-${i}`, representationRevisionId: `revision-${i}`,
+  })) as Parameters<typeof promoteFiledUpload>[0]["filed"];
+  const promoted = { promoted: true as const, toType: `${DECK}:deck`, representationRevisionId: "revision-p", revision: 2 };
+  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => vi.stubEnv("CINATRA_RUNTIME_MODE", "development"));
+
+  /** The picker's action, run only inside the fixture user's session. */
+  const picker = (answer: unknown) => {
+    let inside: { orgId: string; userId: string } | null = null;
+    const runAs = vi.fn(async (ids: { orgId: string; userId: string }, fn: () => Promise<unknown>) => {
+      inside = ids;
+      try { return await fn(); } finally { inside = null; }
+    });
+    const confirm = vi.fn(async () => {
+      if (!inside) throw new Error("the picker's action ran outside the user's session");
+      return answer;
+    });
+    return { runAs, confirm } as unknown as NonNullable<Parameters<typeof promoteFiledUpload>[1]> & {
+      runAs: typeof runAs; confirm: typeof confirm;
+    };
+  };
+
+  // red-first-expect: parsePromoteOption is not a function
+  it("reads --promote as one filed kind and the extension the person would confirm", () => {
+    expect(parsePromoteOption(`pdf=${DECK}`)).toEqual({ kind: "pdf", extension: DECK });
+    expect(parsePromoteOption(` image = @cinatra-ai/screenshot-artifact `)).toEqual({ kind: "image", extension: "@cinatra-ai/screenshot-artifact" });
+    for (const bad of ["pdf", `=${DECK}`, "pdf=", "pdf= ", `movie=${DECK}`, `pdf=${DECK}=x`]) {
+      expect(() => parsePromoteOption(bad), bad).toThrow(/--promote/);
+    }
+  });
+
+  // red-first-expect: promoteFiledUpload is not a function
+  it("confirms the filed upload's meaning through the picker's action, in the user's session, and returns the deck", async () => {
+    const deps = picker({ ok: true, promotion: promoted });
+    await expect(promoteFiledUpload({ orgId: " org ", userId: " user ", filed, kind: "pdf", extension: DECK }, deps))
+      .resolves.toEqual({
+        kind: "pdf", artifactId: "artifact-3", extension: DECK, toType: `${DECK}:deck`,
+        representationRevisionId: "revision-p", revision: 2,
+      });
+    expect(deps.runAs).toHaveBeenCalledTimes(1);
+    expect(deps.runAs.mock.calls[0][0]).toEqual({ orgId: "org", userId: "user" });
+    expect(deps.confirm).toHaveBeenCalledWith({ artifactId: "artifact-3", extension: DECK });
+  });
+
+  // red-first-expect: promoteFiledUpload is not a function
+  it("fails when the picker refuses, retypes nothing, or reports a promotion that did not happen", async () => {
+    const input = { orgId: "org", userId: "user", filed, kind: "pdf" as const, extension: DECK };
+    await expect(promoteFiledUpload(input, picker({ ok: false, reason: "invalid-type", message: "Not a choice." })))
+      .rejects.toThrow(/picker refused.*invalid-type.*Not a choice/);
+    await expect(promoteFiledUpload(input, picker({ ok: true })))
+      .rejects.toThrow(/retyped nothing/);
+    await expect(promoteFiledUpload(input, picker({ ok: true, promotion: { promoted: false, reason: "promotion-unavailable" } })))
+      .rejects.toThrow(/not promoted: promotion-unavailable/);
+  });
+
+  // red-first-expect: promoteFiledUpload is not a function
+  it("confirms nothing for a kind that was not filed, or outside the development runtime", async () => {
+    const deps = picker({ ok: true, promotion: promoted });
+    await expect(promoteFiledUpload({ orgId: "org", userId: "user", filed: filed.filter((f) => f.kind !== "pdf"), kind: "pdf", extension: DECK }, deps))
+      .rejects.toThrow(/no filed pdf upload/);
+    vi.stubEnv("CINATRA_RUNTIME_MODE", "production");
+    await expect(promoteFiledUpload({ orgId: "org", userId: "user", filed, kind: "pdf", extension: DECK }, deps))
+      .rejects.toThrow(/CINATRA_RUNTIME_MODE=development/);
+    expect(deps.runAs).not.toHaveBeenCalled();
+    expect(deps.confirm).not.toHaveBeenCalled();
+  });
+});
+
+describe("the picker action's session in the fixture process (#3459)", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mock.userContext.mockImplementation(async (userId: string, opts?: { activeOrganizationId?: string | null }) => ({
+      actorContext: { principalId: `principal:${userId}`, orgId: opts?.activeOrganizationId },
+      platformRole: "member",
+      sessionOrgId: opts?.activeOrganizationId ?? null,
+    }));
+  });
+
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-session'
+  it("answers the action's session reads only inside the fixture user's run, from the product's session-free road", async () => {
+    const s = await import("../../../scripts/fixtures/lib/picker-session");
+    await expect(s.getAuthSession()).rejects.toThrow(/outside the fixture's picker session/);
+    await expect(s.getActorContext()).rejects.toThrow(/outside the fixture's picker session/);
+    const seen = await s.runAsPickerUser({ orgId: "org", userId: "user" }, async () => [await s.getAuthSession(), await s.getActorContext()]);
+    expect(seen).toEqual([
+      { user: { id: "user", role: null }, session: { activeOrganizationId: "org" } },
+      { principalId: "principal:user", orgId: "org" },
+    ]);
+    expect(mock.userContext).toHaveBeenCalledWith("user", { activeOrganizationId: "org" });
+    await expect(s.getAuthSession()).rejects.toThrow(/outside the fixture's picker session/);
+  });
+
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-session'
+  it("refuses a resolved context for another organization", async () => {
+    mock.userContext.mockResolvedValue({ actorContext: {}, platformRole: "member", sessionOrgId: "other" });
+    const s = await import("../../../scripts/fixtures/lib/picker-session");
+    await expect(s.runAsPickerUser({ orgId: "org", userId: "user" }, async () => 1)).rejects.toThrow(/not the organization org/);
+  });
+
+  // red-first-expect: Cannot find module '/scripts/fixtures/lib/picker-action-session.mjs'
+  it("swaps the session and cache modules for the picker's action only", async () => {
+    const { pickerActionSessionPlugin } = await import("../../../scripts/fixtures/lib/picker-action-session.mjs");
+    const root = path.resolve(__dirname, "../../../");
+    const plugin = pickerActionSessionPlugin(root);
+    const action = path.join(root, "src/app/artifacts/upload-typing-actions.ts");
+    const source = readFileSync(action, "utf8");
+    expect(plugin.enforce).toBe("pre");
+    for (const id of [action, `${action}?v=1`]) {
+      const out = plugin.transform(source, id)!.code;
+      expect(out).toContain(`from "/scripts/fixtures/lib/picker-session.ts"`);
+      expect(out).toContain(`from "/scripts/fixtures/lib/picker-cache.ts"`);
+      expect(out).not.toMatch(/from\s*["'](?:@\/lib\/auth-session|next\/cache)["']/);
+      expect(out).toContain(`from "@/lib/artifacts/artifact-service"`);
+    }
+    for (const other of ["src/app/artifacts/promotion-actions.ts", "src/lib/artifacts/artifact-service.ts"]) {
+      expect(plugin.transform(`import { revalidatePath } from "next/cache";`, path.join(root, other))).toBeUndefined();
+    }
+    expect(() => plugin.transform(source.replace(/from "next\/cache"/, `from "next/navigation"`), action))
+      .toThrow(/no longer imports next\/cache/);
   });
 });

@@ -11,12 +11,16 @@
 //     composition that happens to look alike;
 //   · it declares `page_gate_region` as its host, so the fail-closed surface
 //     gate applies to this mount exactly as it does to a turn's;
-//   · the PAGE-ONLY adjunct survives the move: the pinned visual pair;
+//   · the page draws no picture pair beside the core any more (cinatra#3862
+//     leg 8 removed the pinned visual pair; the retirement test pins that);
 //   · the "Back to the review gate" link is GONE (plan §8.3(5), §8.4 — the link
 //     exists only because the reading lived on its own page, so it goes when
 //     the card lands, and this slice is named as what resolves it);
 //   · a page that cannot mint a ref draws no core rather than falling back to
 //     a second composition.
+
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, waitFor } from "@testing-library/react";
@@ -101,7 +105,7 @@ describe("the review page reuses the ONE §VII core", () => {
   it("keeps its PAGE-ONLY adjunct composed around the core, and NO back link", async () => {
     mockResolve({ state: "advisory" });
     const { container } = render(
-      <VerificationView cardRef="ref-verification-1" visualPair={null} />,
+      <VerificationView cardRef="ref-verification-1" />,
     );
     await waitFor(() =>
       expect(container.querySelector('[data-conformance-id="verification-card"]')).not.toBeNull(),
@@ -144,5 +148,18 @@ describe("the review page reuses the ONE §VII core", () => {
     expect(container.querySelector("[data-lifecycle-card]")).toBeNull();
     // …and the retired back link did not come back on this path either.
     expect(container.querySelector("[data-verification-back-to-gate]")).toBeNull();
+  });
+});
+
+describe("the review page draws the ONE core and nothing beside it", () => {
+  // cinatra#3862 leg 8: the page no longer draws the reviewed and applied
+  // pictures under the card, so the view composes the card in its host and no
+  // other component. A render cannot show the absence (the old adjunct drew
+  // nothing without its input), so the view's own source is read.
+  // red-first-expect: expected [ Array(3) ] to deeply equal [ Array(2) ]
+  it("composes only the card's host and the card", () => {
+    const source = readFileSync(path.resolve(__dirname, "..", "verification-view.tsx"), "utf8");
+    const drawn = [...new Set([...source.matchAll(/<([A-Z][A-Za-z0-9]*)\b/g)].map((m) => m[1]))].sort();
+    expect(drawn).toEqual(["LifecycleCardSurfaceProvider", "VerificationSummaryCard"]);
   });
 });

@@ -17,6 +17,7 @@ onto. Slice 3 moves the packages, one package at a time.
 | Contract version | `1.1.0` (major `1`) |
 | Declared in | `packages/sdk-extensions/src/artifact-client-bundle.ts`, next to the React externals allowlist |
 | Typed contract export | `@cinatra-ai/sdk-extensions/design-primitives-contract` |
+| SDK peer declaration | `cinatra.hostServedPeers` in `packages/sdk-extensions/package.json` (`"^1.1.0"`): the range the load-time check requires of a host for a bundle built with this SDK. `packages/sdk-extensions/src/__tests__/design-primitives-host-peer.test.ts` pins it to the contract constants and to the range `checkDesignPrimitivesContract` enforces |
 | Host implementation | `src/lib/artifacts/host-shared-primitives.ts` |
 | Resolved at run time by | `src/lib/artifacts/host-module-registry.ts` |
 
@@ -73,11 +74,15 @@ same module.
 
    | Preamble field | Checked by |
    | --- | --- |
-   | `__cinatraDesignPrimitivesContract` | `assertDesignPrimitivesContractServed` — a bundle built against a contract **major** this host does not serve fails closed with a named error (`Error.name === "DesignPrimitivesContractMajorMismatch"`); a malformed version on either side is refused too, never treated as compatible |
+   | `__cinatraDesignPrimitivesContract` | `assertDesignPrimitivesContractServed` — the bundle requires `^<declared version>` of the host. A bundle built against another **major**, or against a newer **minor or patch** than this host serves (whose exports the host may lack), fails closed with a named error (`Error.name === "DesignPrimitivesContractMajorMismatch"`) that names the module, the required range and the served version; a malformed version on either side is refused too, never treated as compatible |
    | `__cinatraDesignPrimitives` | `assertSingleDesignPrimitivesIdentity` — a SECOND copy throws loudly instead of surfacing as mismatched theming and duplicated portals. A façade NAMESPACE re-export of the host module is accepted: identity is judged per export, not on the wrapper |
 
    A bundle that declares neither field does not use the shared module and passes
-   untouched.
+   untouched. The host cannot tell such a bundle from one that imports the module
+   without declaring the version, so a package that uses the module must declare
+   it; an undeclared user gets no version check and fails at render on a missing
+   export, as before this check existed. Source-compiled parts (the build-time
+   road) need no declaration: the host compiles them against its own module.
 
 ## The frozen export list (contract major 1)
 
@@ -114,9 +119,9 @@ its rendering, props or behavior. Both import roads return the bindings from
 `src/components/ui/alert-dialog.tsx`, including its portal, modal content and
 destructive action. The registry's per-export identity guard uses the expanded
 frozen list, so a vendored AlertDialog copy is rejected just like a vendored
-Button. Existing `1.0.0` bundles remain within the served major; a package that
-uses the new exports needs a host serving `1.1.0` or later. The compatibility
-check still compares majors and does not replace that host rollout dependency.
+Button. Existing `1.0.0` bundles remain within the served range; a package that
+declares `1.1.0` needs a host serving `1.1.0` or later, and an older host
+refuses it at load instead of failing at render.
 
 ### Not in the list
 
@@ -133,10 +138,13 @@ they never enter this contract.
    dependency or a peer. The id is VIRTUAL: the host serves it at run time and no
    package is published under it, so *any* specifier — optional peer included —
    makes the install fail (`pnpm install` resolves peer specifiers and 404s on
-   the id; measured on this branch, which is why the SDK does not declare one
-   either). The package instead declares the contract version it builds against
-   in its bundle preamble (`__cinatraDesignPrimitivesContract`), so the loader's
-   fail-closed major check applies to it, and imports the contract itself from
+   the id; measured on this branch). For the same reason the SDK declares the
+   module as its host peer outside the npm fields, in
+   `cinatra.hostServedPeers` of `packages/sdk-extensions/package.json`: the id
+   and a caret range on the served contract version. The package instead declares the contract version it builds against
+   in its bundle preamble (`__cinatraDesignPrimitivesContract`, set to the SDK's
+   `HOST_DESIGN_PRIMITIVES_CONTRACT_VERSION`), so the loader's fail-closed check
+   requires the SDK's declared range of the host, and imports the contract itself from
    `@cinatra-ai/sdk-extensions/design-primitives-contract` for the id, the
    version and the frozen list.
 2. **the imports** — replace every `from "./ui/<item>"` /

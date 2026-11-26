@@ -14,7 +14,6 @@ import "server-only";
 //     load carries no bearer, so its addresses have to be sealed capabilities.
 //   · the content channel — the three browser fetchers stop fetching and are
 //     handed their substance, read on the server from the pinned revision.
-//   · the capture pair — the same two pictures, addressed by the same two roads.
 //
 // SO THE ROADS ARE BUILT HERE AND HANDED IN, and the shared preparation path
 // takes them as data. That is not only tidiness: `review-gate-ports.ts` and
@@ -26,8 +25,8 @@ import "server-only";
 // shared path names the roads by type alone.
 //
 // A SURFACE THAT NAMES NO ROAD IS UNCHANGED IN EVERY PARTICULAR: no byte
-// reference beyond the session addresses it always had, the channel's own named
-// absence for its content, and the first-party capture pair.
+// reference beyond the session addresses it always had, and the channel's own
+// named absence for its content.
 // ---------------------------------------------------------------------------
 
 import type { ArtifactContentProjection } from "@cinatra-ai/sdk-extensions/artifact-content-channel";
@@ -37,7 +36,6 @@ import {
   type ArtifactRepresentationForm,
 } from "@/lib/artifacts/artifact-content-channel";
 import { createPinnedSubstanceReader } from "@/lib/artifacts/artifact-content-substance-reader";
-import type { PinnedCapturePairView } from "@/lib/artifacts/cms-preview-capture-view";
 import {
   buildIslandArtifactByteMinter,
   type ArtifactByteUrlMinter,
@@ -47,7 +45,6 @@ import {
 // Re-exported so the shared preparation path names BOTH roads from one module,
 // by type alone. It never has to reach the lifecycle tree to do it.
 export type { ArtifactByteUrlMinter };
-import { buildBrokerCapturePair } from "@/lib/lifecycle/widget-capture-egress";
 // THE DATA ROAD is named by the props contract itself, which imports nothing at
 // value level and is already on every graph that reaches this module.
 import {
@@ -132,12 +129,6 @@ export interface ReviewSurfaceRoads {
    *  reading (cinatra#4311). Absent ⇒ no target reads a dashboard gate, and
    *  every target keeps the live address its record carries. */
   dashboardLiveAddress?: DashboardLiveAddressReader;
-  /** How this surface builds a pinned target's capture pair. Absent ⇒ the
-   *  first-party pair the surface loader already builds. */
-  capturePair?: (target: {
-    artifactId: string;
-    representationRevisionId: string;
-  }) => PinnedCapturePairView | null;
 }
 
 /**
@@ -169,7 +160,7 @@ export function hostArtifactContentBuilder(): ArtifactContentBuilder {
  * road and the dashboard live address reader (cinatra#4311).
  *
  * The byte road stays the session routes — they work under a cookie and they
- * are the narrower grant — and the capture pair stays the first-party pair.
+ * are the narrower grant.
  */
 export function firstPartyReviewSurfaceRoads(): ReviewSurfaceRoads {
   // THE DATA ROAD (cinatra#4311): a first-party reader carries a cookie, so the
@@ -194,11 +185,10 @@ export function firstPartyReviewSurfaceRoads(): ReviewSurfaceRoads {
  * the page gate region) frame the island with no credential, so the island's
  * reader there is the first-party reader of a session cookie, and the session
  * road reaches the application's own series route with that cookie. Every
- * other road stays the one this branch always had: the session byte addresses,
- * the content channel's named absence and the first-party capture pair. Only
- * the data road and the dashboard read gate are named here, and both read with
- * the reader's session cookie, so they are the only difference from the call
- * without roads.
+ * other road stays the one this branch always had: the session byte addresses
+ * and the content channel's named absence. Only the data road and the dashboard
+ * read gate are named here, and both read with the reader's session cookie, so
+ * they are the only difference from the call without roads.
  */
 export function cookieIslandReviewSurfaceRoads(): ReviewSurfaceRoads {
   return {
@@ -208,9 +198,8 @@ export function cookieIslandReviewSurfaceRoads(): ReviewSurfaceRoads {
 }
 
 /**
- * The roads for the ISLAND: the same content channel, plus the two capability
- * roads that make a media display and a capture pair paint inside a third-party
- * application at all.
+ * The roads for the ISLAND: the same content channel, plus the capability road
+ * that makes a media display paint inside a third-party application at all.
  *
  * MINTING IS NOT AUTHORIZING. Every binding sealed here is re-proved live by
  * the serving paths before a byte is read; a road built for a gate its reader
@@ -220,20 +209,5 @@ export function islandReviewSurfaceRoads(road: ReviewIslandRoad): ReviewSurfaceR
   return {
     buildContent: hostArtifactContentBuilder(),
     byteMinter: buildIslandArtifactByteMinter(road),
-    // WAVE 3 — "The CMS picture pair's broker minter — built today, with no
-    // caller — is wired here, so the pair loads inside a third-party
-    // application as well." This is that caller. The broker builder reads the
-    // SAME store rows and projects them through the SAME pure pair builder as
-    // the first-party arm; only the address each picture carries differs, so
-    // the two tiers cannot show different comparisons.
-    capturePair: (target) =>
-      buildBrokerCapturePair({
-        principal: road.principal,
-        runId: road.runId,
-        reviewTaskId: road.reviewTaskId,
-        ...(road.subject ? { subject: road.subject } : {}),
-        target,
-        kind: "review",
-      }),
   };
 }

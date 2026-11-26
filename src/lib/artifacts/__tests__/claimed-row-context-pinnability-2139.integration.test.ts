@@ -20,13 +20,9 @@
  * A change to any one alone is a dead end: a pin the resolver drops, a candidate
  * finalization rejects, or a selection whose bytes never serve.
  *
- * RESIDUAL (b) — THE WITNESS INVARIANT COVERS EVERY HOST FILE WRITER.
- * `writePinnedPreviewCapture` minted `form='file'` representations WITHOUT the
- * witness. Its object type registers an `isArtifact` descriptor — which is
- * exactly what puts it under the pack-typed serve arm — so a claim reserved over
- * that type would have stranded the capture on its own review surface. It now
- * emits the witness from the shared builder inside its own capture transaction.
- * (The CMS page snapshot capture had the same cases; it left with cinatra#3862.)
+ * RESIDUAL (b) — THE WITNESS INVARIANT COVERS EVERY HOST FILE WRITER. Its two
+ * CMS writers (the page snapshot capture and the pinned preview-capture store)
+ * left with cinatra#3862, and their cases with them.
  *
  * ISOLATION (the #1868 / #1430 / #2047 integration pattern): a FRESH schema per
  * file from the CANONICAL `buildCreateStoreSchemaQueries` DDL; the blob root is a
@@ -79,10 +75,9 @@ const CLAIM_ID_2 = "claim-pack-2-2139";
  * class cinatra#1430's claimant isolation governs. */
 const DATA_TYPE = "@cinatra-ai/campaigns:campaign";
 const DATA_EXT = "@cinatra-ai/campaigns";
-/** The CMS capture types, both registered isArtifact (residual (b)). */
+/** The CMS page snapshot type, registered isArtifact. */
 const CMS_SNAPSHOT_TYPE = "@cinatra-ai/objects:cms-content-snapshot";
 const CMS_SNAPSHOT_EXT = "@cinatra-ai/cms-snapshot-artifact";
-const CMS_CAPTURE_TYPE = "@cinatra-ai/objects:cms-preview-capture";
 
 let uniq = 0;
 const nextId = (p: string) => `${p}-${Date.now()}-${uniq++}`;
@@ -91,13 +86,6 @@ async function* bytesOf(s: string): AsyncIterable<Uint8Array> {
   yield new TextEncoder().encode(s);
 }
 
-/** A tiny but real PNG (1x1) so the blob store sees genuine image bytes. */
-const PNG = Uint8Array.from(
-  Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
-    "base64",
-  ),
-);
 
 let runPostgresQueriesSync: typeof import("@/lib/postgres-sync").runPostgresQueriesSync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
@@ -108,7 +96,6 @@ let snapshotMod: typeof import("@/lib/artifacts/object-content-snapshot");
 let resolverMod: typeof import("@/lib/artifacts/context-resolver");
 let finalizeMod: typeof import("@/lib/artifacts/context-selection-finalize");
 let readMod: typeof import("@/lib/artifacts/artifact-read");
-let previewStoreMod: typeof import("@/lib/artifacts/cms-preview-capture-store");
 
 const S = () => TEST_SCHEMA;
 
@@ -264,7 +251,6 @@ beforeAll(async () => {
   resolverMod = await import("@/lib/artifacts/context-resolver");
   finalizeMod = await import("@/lib/artifacts/context-selection-finalize");
   readMod = await import("@/lib/artifacts/artifact-read");
-  previewStoreMod = await import("@/lib/artifacts/cms-preview-capture-store");
 
   objectTypeRegistry._clearForTests();
   const artifactType = (type: string, mimes: string[], ext: string) =>
@@ -283,7 +269,6 @@ beforeAll(async () => {
   artifactType(PACK_TYPE, ["text/markdown"], PACK_EXT);
   artifactType(PACK_TYPE_2, ["text/markdown"], PACK_EXT_2);
   artifactType(CMS_SNAPSHOT_TYPE, ["application/vnd.cinatra.cms-fields+json"], CMS_SNAPSHOT_EXT);
-  artifactType(CMS_CAPTURE_TYPE, ["image/png"], CMS_SNAPSHOT_EXT);
   // The typed-DATA type: claim-backed but NOT an artifact descriptor.
   objectTypeRegistry.register(
     {
@@ -782,66 +767,6 @@ describe.skipIf(!HAS_REAL_DB)(
           referrerId: nextId("ref"),
         }),
       ).toThrow(finalizeMod.SelectionCoherenceError);
-    });
-  },
-);
-
-// ---------------------------------------------------------------------------
-// RESIDUAL (b)
-// ---------------------------------------------------------------------------
-describe.skipIf(!HAS_REAL_DB)(
-  "cinatra#2139 residual (b) — every host FILE writer rides the provenance witness (real DB + disk)",
-  () => {
-    it("writePinnedPreviewCapture emits the witness for its PNG — and a DEGRADED capture emits none (no representation to vouch for)", async () => {
-      const captured = await previewStoreMod.writePinnedPreviewCapture({
-        orgId: ORG,
-        createdBy: "user-1",
-        producerRunId: nextId("run"),
-        screenshot: PNG,
-        data: {
-          role: "before",
-          status: "captured",
-          degradedReason: null,
-          boundArtifactId: "bound-art-2139",
-          boundSnapshotRevisionId: "bound-rev-2139",
-          sourceOrigin: "https://blog.example.com",
-          postId: 42,
-          capturedAt: "2026-07-27T10:00:00.000Z",
-          geometry: null,
-          sanitization: null,
-          network: null,
-          captureDigest: null,
-          title: "Hello Post",
-        },
-      });
-      expect(captured.representationRevisionId).not.toBeNull();
-      expect(witnessCount(captured.captureArtifactId, captured.representationRevisionId!)).toBe(1);
-
-      const degraded = await previewStoreMod.writePinnedPreviewCapture({
-        orgId: ORG,
-        data: {
-          role: "applied",
-          status: "degraded",
-          degradedReason: "preview-unreachable",
-          boundArtifactId: "bound-art-2139",
-          boundSnapshotRevisionId: "bound-rev-2139",
-          sourceOrigin: null,
-          postId: null,
-          capturedAt: "2026-07-27T10:05:00.000Z",
-          geometry: null,
-          sanitization: null,
-          network: null,
-          captureDigest: null,
-          title: "Hello Post",
-        },
-      });
-      expect(degraded.representationRevisionId).toBeNull();
-      expect(
-        count("artifact_audit", "org_id=$1 AND artifact_id=$2 AND action='create'", [
-          ORG,
-          degraded.captureArtifactId,
-        ]),
-      ).toBe(0);
     });
   },
 );

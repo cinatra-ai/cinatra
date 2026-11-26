@@ -1274,3 +1274,78 @@ describe("self-rendering-extensions border gate — a package named like an Obje
     expect(stderr).toContain("REFUSED: @cinatra-ai/__proto__ is not a package name this census can map to a directory");
   });
 });
+
+describe("self-rendering-extensions border gate — (f) no review control in a display (cinatra#3080 item 7)", () => {
+  const display = (files) => ({ dir: "demo-artifact", kind: "artifact", files });
+
+  it("FAILS on a display that draws a Regenerate button, naming the package, the file and the word", () => {
+    const tree = makeTree(
+      [display({ "src/renderers/detail.tsx": "export default function D() { return <button>Regenerate</button>; }\n" })],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("(f) REVIEW CONTROL IN A DISPLAY");
+    expect(stderr).toContain("demo-artifact :: src/renderers/detail.tsx names regenerate");
+  });
+
+  it("FAILS on the retired Approve and Reject labels written as strings", () => {
+    const tree = makeTree(
+      [display({ "src/renderers/preview.tsx": 'export const LABELS = ["Approve", \'reject\'];\n' })],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("demo-artifact :: src/renderers/preview.tsx names approve, reject");
+  });
+
+  it("FAILS on a display that posts to the host's review decision route, in any file of the package", () => {
+    const tree = makeTree(
+      [display({ "lib/act.mjs": "export const go = () => fetch(`/api/lifecycle-views/decide`, { method: \"POST\" });\n" })],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).not.toBe(0);
+    expect(stderr).toContain("demo-artifact :: lib/act.mjs names lifecycle-views/decide");
+  });
+
+  it("PASSES on the words in a comment, in the package's own tests, in longer words, and in a connector", () => {
+    const tree = makeTree(
+      [
+        display({
+          "src/renderers/detail.tsx":
+            "// no Regenerate here: Regenerate is the review screen's\n" +
+            "export const regenerateCount = 0; export const status = \"Approved\";\n" +
+            "export default function D() { return null; }\n",
+          "tests/surfaces.test.tsx": 'expect(text).not.toContain("Regenerate");\n',
+          "src/__tests__/labels.tsx": 'const forbidden = ["Approve", "Reject"];\n',
+          "src/renderers/detail.spec.ts": 'it("draws no Regenerate", () => {});\n',
+        }),
+        { dir: "demo-connector", kind: "connector", files: { "src/setup.tsx": "export const label = \"Approve\";\n" } },
+      ],
+      {},
+    );
+    const { status, stdout, stderr } = runGate(tree);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+    expect(stdout).toContain("no review control in a display");
+  });
+
+  it("reads the words from code with comments stripped and string and JSX text kept", () => {
+    expect(gate.reviewControlWords("/* Regenerate */ const a = 1; // Reject\n")).toEqual([]);
+    expect(gate.reviewControlWords("const b = <button>REGENERATE</button>;\n")).toEqual(["regenerate"]);
+    expect(gate.reviewControlWords('const u = "/api/lifecycle-views/decide"; const w = "Reject";\n')).toEqual([
+      "lifecycle-views/decide",
+      "reject",
+    ]);
+  });
+
+  it("counts a file as a test only under a test directory or by a test or spec name", () => {
+    for (const rel of ["tests/a.tsx", "test/a.ts", "src/__tests__/a.ts", "src/a.test.tsx", "src/a.spec.mjs"]) {
+      expect(gate.isPackageTestFile(rel), rel).toBe(true);
+    }
+    for (const rel of ["src/renderers/detail.tsx", "src/testing-helpers.ts", "src/contest/a.ts", "lib/attest.mjs"]) {
+      expect(gate.isPackageTestFile(rel), rel).toBe(false);
+    }
+  });
+});

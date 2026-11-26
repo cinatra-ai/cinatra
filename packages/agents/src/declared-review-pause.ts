@@ -34,6 +34,16 @@ export function isPersonDecider(resolvedBy: unknown): resolvedBy is string {
   return typeof resolvedBy === "string" && resolvedBy.trim().length > 0 && !resolvedBy.startsWith("system:");
 }
 
+/** A review a person approved: settled 'approve' with a decision fingerprint AND a person as its decider of record.
+ *  Every terminal decision carries a fingerprint, also one a non-human carrier submits (it records no decider); the
+ *  optional review's expiry settles 'approve' with a synthetic fingerprint and no decider. Neither is a person's.
+ *  The publish gate's approved-review read and the artifact page's continued reading (cinatra#3092) both ask this. */
+export const personApproved = (g: {
+  status: string; disposition: string | null; fingerprint?: string | null; resolvedBy?: string | null;
+}): boolean =>
+  g.status === "resolved" && g.disposition === "approve" && isHumanDecisionFingerprint(g.fingerprint)
+    && isPersonDecider(g.resolvedBy);
+
 type GateTime = { reviewTaskId: string; createdAt?: Date | null; createdAtMicros?: string | null };
 
 const MICROS = /^\d{1,20}$/;

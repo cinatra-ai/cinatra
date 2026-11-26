@@ -292,12 +292,38 @@ export async function callHostPrimitive(
         input = await mcpRequestContextStorage.run(ctx, () =>
           prepareDeclaredRunToolArguments(primitiveName, input, { inner: true }));
       }
+      // cinatra#3745: an inner outward call of a run takes the same guarded
+      // outward run action as the transport (the boundary decides; its step
+      // tool check and single-use consumption apply to this inner name). The
+      // owner is the planned one: a host primitive as planned; an extension
+      // primitive that declares outward re-pinned to this caller, and its
+      // dispatch pinned to that registration, so what the decision admits is
+      // what runs; any other extension primitive names no owner (refused if
+      // outward). Off a run frame nothing is passed, as before.
+      let outward = {};
+      if (ctx?.runId) {
+        const target = captured.planned.identityFailure === null ? captured.planned.dispatchTarget : null;
+        let outwardOwner: PlannedPrimitive["dispatchTarget"] = null;
+        if (target?.kind === "host") {
+          outwardOwner = target;
+        } else if (target && captured.planned.declaredOutward !== null) {
+          outwardOwner = (await resolveCallerBoundIdentity(captured.planned))?.dispatchTarget ?? null;
+          const pinned = outwardOwner;
+          if (pinned && pinned.kind !== "host") {
+            const { dispatchAuthorizedExtensionPrimitive } = await import("@/lib/extension-authorized-dispatch");
+            handler = (pinnedInput: unknown) => dispatchAuthorizedExtensionPrimitive(pinned, pinnedInput);
+          }
+        }
+        outward = { outwardOwner, outwardSubject: captured.planned.declaredOutward?.subject ?? null,
+          toolArguments: input };
+      }
       decision = await enforceMcpBoundary({
         primitiveName,
         ctx,
         delegatedRestricted: !!ctx?.delegatedRestricted,
         // The outward declaration of the captured primitive's planned entry.
         declaresOutward: captured.planned.declaredOutward !== null,
+        ...outward,
       });
     } catch (err) {
       // cinatra#3745: a refused run call keeps its refusal class and code (its

@@ -399,6 +399,22 @@ export type PrimitiveDispatchTarget = {
   readonly version: string;
   /** The primitive name the dispatch resolves against (normalized). */
   readonly name: string;
+  /**
+   * cinatra#3745: the loaded identity of the very registration the dispatch
+   * invokes (its install id and digest, as the host's loader minted it), taken
+   * from the same registry entry as the handler. Carried by reference and never
+   * read here (the host's outward run action reads it, and accepts only the
+   * minted, current object). Absent for a registration the loader stamped no
+   * identity for.
+   */
+  readonly loadedIdentity?: object;
+  /**
+   * cinatra#3745: the registration object (the registry or retained entry)
+   * whose declaration was planned and whose handler the host's pinned
+   * dispatch invokes, carried by reference so the dispatch never looks the
+   * registration up again by name and version. Never read here.
+   */
+  readonly registration?: object;
 };
 
 /** Why a registration could not be given a trustworthy identity. */
@@ -422,8 +438,21 @@ export type PrimitiveIdentityFailure =
  * carry the stored item the call acts on and its revision, or is `null`.
  */
 export type PlannedOutwardDeclaration = {
-  readonly subject: { readonly artifactId: string; readonly representationRevisionId: string } | null;
+  /**
+   * The two input fields that carry the item the tool acts on and its revision;
+   * `null` when the tool declares no subject (absent or null `outward.subject`);
+   * `MALFORMED_OUTWARD_SUBJECT` when a subject is present but cannot be read as
+   * those two fields (cinatra#3745: such a tool is never bound to a decision
+   * alone, so its outward run call is refused).
+   */
+  readonly subject:
+    | { readonly artifactId: string; readonly representationRevisionId: string }
+    | typeof MALFORMED_OUTWARD_SUBJECT
+    | null;
 };
+
+/** The planned subject of an `outward` declaration whose subject is present but unreadable. */
+export const MALFORMED_OUTWARD_SUBJECT = "malformed" as const;
 
 /**
  * One planned primitive: everything an admission decision needs about ONE
@@ -605,7 +634,9 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
     const pkg = readGuarded(target.value, "packageName");
     const ver = readGuarded(target.value, "version");
     const nm = readGuarded(target.value, "name");
-    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok) {
+    const loaded = readGuarded(target.value, "loadedIdentity");
+    const reg = readGuarded(target.value, "registration");
+    if (!kind.ok || !pkg.ok || !ver.ok || !nm.ok || !loaded.ok || !reg.ok) {
       return { kind: "failed", failure: "provenance_unreadable" };
     }
     if (
@@ -613,7 +644,9 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       !DISPATCH_KINDS.has(kind.value) ||
       !nonEmptyString(pkg.value) ||
       !nonEmptyString(ver.value) ||
-      !nonEmptyString(nm.value)
+      !nonEmptyString(nm.value) ||
+      (loaded.value !== undefined && loaded.value !== null && typeof loaded.value !== "object") ||
+      (reg.value !== undefined && reg.value !== null && typeof reg.value !== "object")
     ) {
       return { kind: "failed", failure: "provenance_malformed" };
     }
@@ -622,6 +655,8 @@ export function readPrimitiveProvenance(config: unknown): PrimitiveProvenanceRea
       packageName: pkg.value,
       version: ver.value,
       name: nm.value.toLowerCase(),
+      ...(typeof loaded.value === "object" && loaded.value !== null ? { loadedIdentity: loaded.value } : {}),
+      ...(typeof reg.value === "object" && reg.value !== null ? { registration: reg.value } : {}),
     };
   }
 
@@ -672,9 +707,15 @@ export function decisionBlocksDispatch(decision: { allowed: boolean; shouldBlock
  *
  * TOTAL, and a declaration can only add a tool to what the host holds. A config
  * that is not an object, or an `outward` that is `undefined` or `null`, reads
- * as `null`. A plain object whose `subject` is a plain object naming two
- * non-empty input fields reads as those two names, copied. Every other present
- * value, and any accessor that throws, reads as outward without a subject.
+ * as `null`. A primitive `outward` (`true`, a string, a number) and a plain
+ * object with no own key but `subject`, whose `subject` is `undefined` or
+ * `null`, read as outward without a subject. A plain object whose `subject` is
+ * a plain object naming two non-empty input fields reads as those two names,
+ * copied. Every other present subject (a missing or empty name, a non-plain
+ * object), a plain object with any other own key (a misspelt `subjects`,
+ * `Subject` or `item`), a function or other non-plain object as `outward`, and
+ * any accessor that throws read as outward with a malformed subject
+ * (`MALFORMED_OUTWARD_SUBJECT`), never as no subject.
  * Each property is read once.
  */
 export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration | null {
@@ -683,22 +724,27 @@ export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration 
   try {
     outward = (config as { outward?: unknown }).outward;
   } catch {
-    return { subject: null };
+    return { subject: MALFORMED_OUTWARD_SUBJECT };
   }
   if (outward === undefined || outward === null) return null;
+  if (typeof outward !== "object" && typeof outward !== "function") return { subject: null };
   try {
-    if (!isPlainObject(outward)) return { subject: null };
+    if (!isPlainObject(outward)) return { subject: MALFORMED_OUTWARD_SUBJECT };
+    if (Reflect.ownKeys(outward as object).some((key) => key !== "subject")) {
+      return { subject: MALFORMED_OUTWARD_SUBJECT };
+    }
     const subject: unknown = (outward as { subject?: unknown }).subject;
-    if (!isPlainObject(subject)) return { subject: null };
+    if (subject === undefined || subject === null) return { subject: null };
+    if (!isPlainObject(subject)) return { subject: MALFORMED_OUTWARD_SUBJECT };
     const artifactId: unknown = (subject as { artifactId?: unknown }).artifactId;
     const representationRevisionId: unknown = (subject as { representationRevisionId?: unknown })
       .representationRevisionId;
     if (!nonEmptyString(artifactId) || !nonEmptyString(representationRevisionId)) {
-      return { subject: null };
+      return { subject: MALFORMED_OUTWARD_SUBJECT };
     }
     return { subject: { artifactId, representationRevisionId } };
   } catch {
-    return { subject: null };
+    return { subject: MALFORMED_OUTWARD_SUBJECT };
   }
 }
 
