@@ -8,6 +8,7 @@
 // binding, live org standing, and the ref↔credential agreement — is in
 // `review-island-serving.test.ts`.
 
+import { existsSync } from "node:fs";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -129,18 +130,8 @@ describe("it is not one of ours unless it is exactly one of ours", () => {
     expect(verifyReviewIslandCredential(encoded, { nowSeconds: now })).toBeTruthy();
   });
 
-  it("KEY SEPARATION: a capture capability does not open as an island credential", async () => {
-    const { mintCaptureCapability } = await import("../capture-capability");
-    const capture = mintCaptureCapability(
-      {
-        ...PAYLOAD,
-        captureArtifactId: "cap-1",
-        representationRevisionId: "rev-1",
-      },
-      { nowSeconds: now },
-    )!;
-    expect(capture).toBeTruthy();
-    expect(verifyReviewIslandCredential(capture, { nowSeconds: now })).toBeNull();
+  it("cinatra#3862: no capture capability module is left to mint a lookalike credential", () => {
+    expect(existsSync(new URL("../capture-capability.ts", import.meta.url))).toBe(false);
   });
 
   it("mints NOTHING when a field is missing, blank or over-long", () => {

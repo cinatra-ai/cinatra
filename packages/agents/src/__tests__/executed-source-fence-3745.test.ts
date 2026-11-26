@@ -34,7 +34,8 @@ describe("the loader's answer is bounded before it is read", () => {
   afterEach(() => { vi.unstubAllEnvs(); });
 
   it("keeps a bound that a loader answer of a real graph fits under", () => {
-    expect(LOADER_SELECTION_MAX_BYTES).toBe(8 * 1024 * 1024);
+    // 8 MiB for the composed document and the bound source, and up to 8 MiB more for the mounted file's text (cinatra#3089).
+    expect(LOADER_SELECTION_MAX_BYTES).toBe(16 * 1024 * 1024);
   });
 
   it("accepts an answer within the bound", async () => {

@@ -106,7 +106,9 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     section: "XI.2",
     factoryOnly: false,
     fields: [{ name: "form", source: "representation.content-form" }],
-    action: null,
+    // design@cbf0faa5 (design#272): the pdf form's download floor is a real
+    // button, the one action this display declares.
+    action: { name: "download-artifact", outcome: "file-downloaded" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
       "each of the seven kind extensions ships a type declaration and no display of its own, so no shell branches on the artifact's content form — the drawing's whole point here is that an own display never falls through to a form provider, which is exactly what a kind without a display does today",
@@ -126,7 +128,9 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     section: "XI.4",
     factoryOnly: false,
     fields: [],
-    action: null,
+    // design@cbf0faa5 (design#272): the exported pdf's download floor is a real
+    // button, the one action this display declares.
+    action: { name: "download-artifact", outcome: "file-downloaded" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
       "the deck extension declares its type and ships no renderer, so the embedded viewer the drawing mounts for the exported pdf is not drawn anywhere",
@@ -187,7 +191,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "@cinatra-ai/website-artifacts:page-diff, the one page display the drawing names, ships in the tree now (the website-artifacts pack is pinned here and the Drupal agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws a Drupal page as the page snapshot",
+      "@cinatra-ai/website-artifacts:page-diff, the one page display the drawing names, ships in the tree now (the website-artifacts pack is pinned here and the Drupal agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws a Drupal page as the page snapshot, its changed excerpts or its Open in the CMS control (since design@cbf0faa5 the display draws no frame of the page)",
   },
   "cms-page-display": {
     surface: "cms-page-display",
@@ -197,7 +201,7 @@ export const ARTIFACT_KIND_DISPLAYS: Readonly<
     action: { name: "open-in-cms", outcome: "cms-opened" },
     states: ["error", "kind:artifact", "loading"],
     readiness:
-      "@cinatra-ai/website-artifacts:page-diff, the one renderer both CMS extensions draw through, ships in the tree now (the website-artifacts pack is pinned here and the WordPress agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws the page embedded in its frame, the diff of the changed excerpts or the Open in the CMS link",
+      "@cinatra-ai/website-artifacts:page-diff, the one renderer both CMS extensions draw through, ships in the tree now (the website-artifacts pack is pinned here and the WordPress agent files its pages as @cinatra-ai/website-artifacts:page-snapshot), but it is an extension renderer the conformance harness may not mount, which the core/extension instance-coupling ban exists to stop, so no harness mount draws the diff of the changed excerpts or the Open in the CMS link (since design@cbf0faa5 the display draws no frame of the page)",
   },
   "markdown-display-tabs": {
     surface: "markdown-display-tabs",

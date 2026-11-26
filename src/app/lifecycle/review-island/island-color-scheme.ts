@@ -94,6 +94,17 @@ export function islandBodyClassName(scheme: IslandColorScheme | null): string {
 }
 
 /**
+ * THE BODY IN THE PDF FLOOR STATE (cinatra#3459; specs/app-artifact-review.html
+ * §XI.4, the floor drawing). Added by the page only where its document draws ONE
+ * target and nothing beside it: when that target stands on the shared pdf
+ * shell's floor, the body draws no plate around it - no padding, no gap and the
+ * panel's own fill - so the floor sits straight under the card's target header.
+ * Written out whole so the stylesheet carries every class.
+ */
+export const ISLAND_SOLE_PDF_FLOOR_CLASSES =
+  "has-[[data-artifact-renderer=pdf-shell][data-floor]]:gap-0 has-[[data-artifact-renderer=pdf-shell][data-floor]]:bg-surface-strong has-[[data-artifact-renderer=pdf-shell][data-floor]]:p-0";
+
+/**
  * The one declaration pair the wrapper cannot make for itself, or `null` when no
  * palette was named.
  *

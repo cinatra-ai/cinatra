@@ -49,6 +49,8 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(),
+  // cinatra#3089: a pause reads the steps its dispatch compiled from the mounted source; none until the test binds them.
+  readRunPauseSteps: vi.fn(async (): Promise<unknown> => { throw new Error("no pause steps were compiled from the source bound to the run"); }),
   readAgentTemplates: vi.fn(async () => []),
   readAgentTemplateVersionBySemver: vi.fn(async () => null),
   readAgentTemplateVersionById: vi.fn(async () => null),
@@ -65,6 +67,14 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#3089: the steps the dispatch compiled from the mounted source and bound with it: here the template's policy as
+// it was when the test bound it (a copy), never a later template read; with no policy, none compiled (the reader refuses).
+function bindTemplate(t: unknown): void {
+  storeMock.readAgentTemplateById.mockResolvedValue(t as never);
+  const read = t as { approvalPolicy?: unknown } | null | undefined;
+  if (read?.approvalPolicy === undefined || read.approvalPolicy === null) storeMock.readRunPauseSteps.mockRejectedValue(new Error("no pause steps were compiled from the source bound to the run"));
+  else storeMock.readRunPauseSteps.mockResolvedValue({ approvalPolicy: structuredClone(read.approvalPolicy) });
+}
 vi.mock("../run-produced-review-hold", () => ({
   holdRunForProducedReview: vi.fn(async () => ({ held: false, reason: "no-produced-output" })),
   releaseHeldRun: vi.fn(async () => ({ released: false, reason: "not-parked" })),
@@ -209,7 +219,7 @@ function sendInterruptTask(taskId: string) {
 describe("cinatra#4245 — the durable pause task id", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    storeMock.readAgentTemplateById.mockResolvedValue(makeSoleGateTemplate());
+    bindTemplate(makeSoleGateTemplate());
     storeMock.updateAgentRunA2ATaskId.mockResolvedValue({ written: true } as never);
   });
 

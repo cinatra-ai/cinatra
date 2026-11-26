@@ -77,16 +77,6 @@ const WRITER_ALLOWLIST = new Set([
   // like the artifact stores above, its migration to the canonical writer is a
   // follow-up.
   "src/lib/artifacts/artifact-revision-append.ts",
-  // cinatra#2044 (epic #2037 S6) PINNED preview-capture writer — the same class
-  // as the artifact stores above: one CTE-atomic transaction that inserts the
-  // capture artifact's own objects identity row alongside its resource /
-  // artifact_blobs / representation. It is APPEND-ONLY BY CONSTRUCTION — the
-  // objects id is derived (sha256 of the pinned target + role), so the only
-  // possible second write is a PK collision that rolls the transaction back;
-  // there is no UPDATE and no DELETE path, hence no application state change a
-  // history event could describe. Migration to the canonical writer is a
-  // follow-up with the artifact stores.
-  "src/lib/artifacts/cms-preview-capture-store.ts",
   // cinatra#1432 uninstall-operation store — does NOT write the objects table;
   // it writes semantic_assertion (archive UPDATE / replay INSERT) and only
   // READS objects in the replay existence guard (INSERT INTO semantic_assertion

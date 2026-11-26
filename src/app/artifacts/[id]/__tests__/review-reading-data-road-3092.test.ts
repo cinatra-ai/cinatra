@@ -38,9 +38,6 @@ vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
 vi.mock("@cinatra-ai/agents/lifecycle-repair-store", () => ({
   readRepairBySuccessorGateId: vi.fn(),
 }));
-vi.mock("@/lib/artifacts/cms-preview-capture-store", () => ({
-  readPinnedPreviewCaptures: vi.fn(() => []),
-}));
 vi.mock("@/lib/authz/build-actor-context", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/authz/build-actor-context")>()),
   buildActorContextFromPrimitive: vi.fn(() => ({})),
@@ -191,7 +188,6 @@ afterEach(() => {
 afterAll(() => {
   vi.doUnmock("@cinatra-ai/agents/artifact-review-gate-store");
   vi.doUnmock("@cinatra-ai/agents/lifecycle-repair-store");
-  vi.doUnmock("@/lib/artifacts/cms-preview-capture-store");
   vi.doUnmock("@/lib/authz/build-actor-context");
   vi.doUnmock("@/lib/artifacts/artifact-service");
   vi.doUnmock("@/lib/artifacts/artifact-read");
@@ -392,6 +388,26 @@ describe("(e) the surface loader sets the reading from the gate", () => {
     expect(text.review).toEqual({ reading: "continued", openLive: LIVE });
     expect(image.artifact.sourceUrl).toBe("/teams/t-1/dashboards/d-1");
     expect(image.review).toEqual({ reading: "continued", openLive: "/teams/t-1/dashboards/d-1" });
+  });
+
+  // cinatra#3862 leg 8: a pinned capture is not drawn on any surface, so the
+  // loader hands each target its identity and its display, and starts no other
+  // read beside them.
+  // red-first-expect: to deeply equal [ 'prepared', 'target' ]
+  it("hands each target its identity and its display, and nothing beside them", async () => {
+    wireGate("pending", null);
+    const surface = await loadReviewGateSurface({
+      runId: RUN,
+      reviewTaskId: TASK,
+      actorCtx: { actor: { actorType: "human", userId: "u" } as never, orgId: ORG },
+      roads: { buildContent: stubContent, dataRoad: SESSION_ROAD } as never,
+    });
+    expect(surface.kind).toBe("ready");
+    const targets = (surface as { targets: object[] }).targets;
+    expect(targets).toHaveLength(2);
+    for (const stream of targets) {
+      expect(Object.keys(stream).sort()).toEqual(["prepared", "target"]);
+    }
   });
 
   // No reading means no review stands, and a display then offers the live link.

@@ -59,6 +59,34 @@ export function shapeTestDeliverySendInput(
 }
 
 /**
+ * INPUT of the send, both shapes (cinatra#4150). A body that carries `planJson`
+ * (the `planJson` answer of `campaign_test_send_plan`, forwarded verbatim by a
+ * publishing step) is the PINNED shape: only `pinnedPlanJson` is projected (a
+ * string, else empty, which the handler refuses as no valid plan), so no
+ * selection field can ride along. Any other body is the envelope shape,
+ * projected by `shapeTestDeliverySendInput` exactly as before.
+ */
+export function shapeTestDeliveryRunSendInput(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  if (Object.prototype.hasOwnProperty.call(raw, "planJson")) {
+    return { pinnedPlanJson: typeof raw.planJson === "string" ? raw.planJson : "" };
+  }
+  return shapeTestDeliverySendInput(raw);
+}
+
+/** The recipient of a pinned plan, for the form's sticky echo; empty when the plan cannot be read. */
+function pinnedRecipient(input: Record<string, unknown>): string {
+  if (typeof input.pinnedPlanJson !== "string") return "";
+  try {
+    const plan = JSON.parse(input.pinnedPlanJson) as { recipientEmail?: unknown } | null;
+    return plan && typeof plan.recipientEmail === "string" ? plan.recipientEmail : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * OUTPUT: the perform_test_send ApiNode declares the outputs its gate renderer
  * (`@cinatra-ai/email-test-delivery-agent:input`) reads back on re-entry —
  * `lastSendResult` (OBJECT `{ok, message, sentTo?}` driving the result banner)
@@ -96,7 +124,7 @@ export function shapeTestDeliverySendResult(
   return {
     lastSendResult,
     gateCycle: r.seq,
-    recipientEmail: typeof input.recipientEmail === "string" ? input.recipientEmail : "",
+    recipientEmail: typeof input.recipientEmail === "string" ? input.recipientEmail : pinnedRecipient(input),
     selectionMode:
       typeof input.selectionMode === "string" ? input.selectionMode : "random_initial",
     specificInitialDraftIds: Array.isArray(input.specificInitialDraftIds)

@@ -58,7 +58,6 @@ const mocks = vi.hoisted(() => ({
   signInRedirectTarget: vi.fn(async () => "/sign-in"),
   resolveReviewActorContext: vi.fn(),
   loadReviewGateSurface: vi.fn(),
-  loadPinnedCapturePair: vi.fn(() => null),
   readAgentRunById: vi.fn(async (): Promise<unknown> => null),
   readAgentTemplateById: vi.fn(async () => null),
   buildRunStepperSteps: vi.fn(() => []),
@@ -111,7 +110,6 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: mocks.loadReviewGateSurface,
-  loadPinnedCapturePair: mocks.loadPinnedCapturePair,
 }));
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: mocks.readAgentRunById,
@@ -454,5 +452,34 @@ describe("A3: the scoped skills sub-route resolves (cinatra#3693)", () => {
     );
     expect(message).toBe("NEXT_NOT_FOUND");
     expect(skillsPageSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("A4: a scoped audit reading the run cannot redirect is drawn under the scope, as the one core (cinatra#3862 leg 8)", () => {
+  // Through the scoped shell's delegation, the review page draws the audit
+  // reading of a run the store cannot read under the scope it was read in. It
+  // reads the gate and its record and no other review port: no picture pair is
+  // drawn under the core any more (the ports are stubbed with the gate surface
+  // loader alone).
+  // red-first-expect: export is defined on the "@/app/artifacts/[id]/review-gate-ports" mock
+  it("draws the verification view at /review/<task>?view=verification from the gate's record alone", async () => {
+    mocks.readReviewGate.mockResolvedValue({ id: "gate-3693" });
+    mocks.readVerificationRecordForGate.mockResolvedValue({
+      reviewedTarget: { artifactId: "art-1", representationRevisionId: "rev-1" },
+      fieldDiff: [{ field: "subject", before: "a", after: "b", inScope: true }],
+      scopeManifest: { paths: [] },
+    });
+    try {
+      const out = await ScopedAgentsRoute({
+        scope: ORG_SCOPE,
+        segments: [VENDOR, PACKAGE, RUN_ID, "review", TASK_ID],
+        searchParams: Promise.resolve({ view: "verification" }),
+      });
+      expect(reviewPageSpy).toHaveBeenCalledTimes(1);
+      expect(renderToStaticMarkup(out as React.ReactElement)).toContain('data-testid="verification-view"');
+    } finally {
+      mocks.readReviewGate.mockResolvedValue(null);
+      mocks.readVerificationRecordForGate.mockResolvedValue(null);
+    }
   });
 });
