@@ -107,8 +107,6 @@ export const NOT_TARGET_RULES = [
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "const url = new URL(request.url);", "parses the request's own address to read the capability"],
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "searchParams.get(REVIEW_ISLAND_BYTE_CAPABILITY_QUERY_PARAM)", "reads the sealed byte capability, not a target id"],
   ["src/app/api/lifecycle-views/artifact-bytes/route.ts", "const filename = `artifact-${decision.capability.artifactId}`;", "the download filename handed to the disposition helper, from the capability's sealed server-minted id"],
-  ["src/app/api/lifecycle-views/capture/route.ts", "const url = new URL(request.url);", "parses the request's own address to read the capability"],
-  ["src/app/api/lifecycle-views/capture/route.ts", "searchParams.get(CAPTURE_CAPABILITY_QUERY_PARAM)", "reads the sealed capture capability, not a target id"],
   // --- the artifact page: its own head revision, which no gate pins
   ["src/app/artifacts/[id]/page.tsx", "/versions/${revisionId}/", "the artifact page's own head revision under the page's route id; no review gate pins it"],
   // --- internal keys and hash material: never an address, a drawn key or a header
@@ -120,7 +118,6 @@ export const NOT_TARGET_RULES = [
   ["src/lib/artifacts/artifact-refs-store.ts", "`${r.artifactId}::${r.representationRevisionId}`", "a reference row's membership key inside one store call; never an address, a drawn key or a header"],
   ["src/lib/artifacts/artifact-refs-store.ts", "`${a.artifactId}::${a.representationRevisionId}`", "a reference row's membership key inside one store call; never an address, a drawn key or a header"],
   ["src/lib/artifacts/artifact-revision-append.ts", "#append:", "the append ledger's output id; never an address, a drawn key or a header"],
-  ["src/lib/artifacts/cms-preview-capture-store.ts", ".update(`${boundArtifactId}", "hash material for a capture's digest; never an address, a drawn key or a header"],
   ["src/lib/lifecycle/lifecycle-produced-event.ts", "const material = `${artifactId}", "hash material for an event id; never an address, a drawn key or a header"],
   ["src/lib/lifecycle/lifecycle-suggestion-producer.ts", "idScope: `${entry.target.artifactId}", "the scope a suggestion id is hashed under; never an address, a drawn key or a header"],
   ["src/lib/lifecycle/lifecycle-suggestion-producer.ts", "const key = `${t.target.artifactId}", "a length-prefixed set key for dedupe; never an address, a key a surface draws by, or a header"],
