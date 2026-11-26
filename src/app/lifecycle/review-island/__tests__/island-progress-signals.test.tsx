@@ -112,16 +112,17 @@ describe("the island reports its items drawn", () => {
     const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
     window.name = reviewIslandFrameName(2);
     render(<Ready panels={2} />);
-    render(<Panel />);
+    // An empty panel is never drawn (cinatra#3089), so each panel here shows an item.
+    render(<Panel><p>An item</p></Panel>);
     await held();
     expect(drawnPosts()).toEqual([]);
-    render(<Panel />);
+    render(<Panel><p>An item</p></Panel>);
     expect(drawnPosts()).toEqual([]);
     await held();
     expect(drawnPosts()).toEqual([
       [{ channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type: "island-drawn", attempt: 2, count: 2 }, "*"],
     ]);
-    render(<Panel />);
+    render(<Panel><p>An item</p></Panel>);
     await held();
     expect(drawnPosts()).toHaveLength(1);
   });
@@ -364,5 +365,63 @@ describe("a dashboard portlet that has not drawn does not read drawn", () => {
     rerender(view("chart"));
     await held();
     expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+  });
+});
+
+// cinatra#3089: THE UNMARKED DISPLAY. The renderer ABI carries no completion signal, so a display may first commit an
+// empty placeholder and draw its snapshot later, marking nothing. An empty panel is never drawn, and content that
+// changes after the drawn report is reported busy at once and drawn again only once the new content has held.
+describe("an unmarked display is drawn only once it shows content that held", () => {
+  const types = () => posted.map(([message]) => (message as { type?: string }).type);
+  const wait = async (ms: number) => {
+    for (let waited = 0; waited < ms; waited += 10) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+  };
+  let draw: (content: string | null) => void = () => {};
+  /** A client display that marks nothing: an empty placeholder, then the item it is told to draw. */
+  function UnmarkedDisplay() {
+    const [content, setContent] = useState<string | null>(null);
+    draw = setContent;
+    return content === null ? <div data-placeholder="" /> : <p>{content}</p>;
+  }
+  const mount = async (attempt: number) => {
+    vi.resetModules();
+    const { IslandReadySignal: Ready, IslandPanelMountedSignal: Panel } = await import("../island-height-reporter");
+    window.name = reviewIslandFrameName(attempt);
+    render(
+      <>
+        <Ready panels={1} />
+        <Panel><UnmarkedDisplay /></Panel>
+      </>,
+    );
+  };
+
+  it("an empty placeholder at 250 ms that draws its item at 500 ms is not reported drawn before the item shows", async () => {
+    await mount(12);
+    await wait(500);
+    // red-first-expect: expected [ 'island-ready', …(2) ] to deeply equal [ 'island-ready', 'panel-mounted' ]
+    expect(types()).toEqual(["island-ready", "panel-mounted"]);
+    await act(async () => draw("The snapshot"));
+    await wait(100);
+    expect(types()).not.toContain("island-drawn");
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+  });
+
+  it("content replaced after the drawn report posts island-busy at once, then drawn again once the new content held", async () => {
+    await mount(13);
+    await act(async () => draw("The first snapshot"));
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn"]);
+    await act(async () => draw("The second snapshot"));
+    await wait(20);
+    // red-first-expect: expected [ 'island-ready', …(2) ] to deeply equal [ 'island-ready', …(3) ]
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn", "island-busy"]);
+    expect(posted.at(-1)![0]).toEqual({ channel: REVIEW_ISLAND_PROGRESS_CHANNEL, type: "island-busy", attempt: 13 });
+    await held();
+    expect(types()).toEqual(["island-ready", "panel-mounted", "island-drawn", "island-busy", "island-drawn"]);
   });
 });

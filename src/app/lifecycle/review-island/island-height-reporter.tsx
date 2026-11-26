@@ -129,8 +129,8 @@ const drawnState: {
 } = { expected: null, panels: new Map(), told: "waiting", settle: null };
 
 /**
- * THE SETTLE BOUND: the document reports drawn only once every panel has read drawn, without a change, for this
- * long. A display that commits an unmarked placeholder and marks itself busy on the next tick, or that toggles
+ * THE SETTLE BOUND: the document reports drawn only once every panel has read drawn, with no change to its content
+ * (a node added, removed or its text changed) and no change of its reading, for this long. A display that commits an unmarked placeholder and marks itself busy on the next tick, or that toggles
  * busy quickly, therefore never makes Allow live in between. Busy and failed are reported at once: the safe side.
  */
 export const ISLAND_DRAWN_SETTLE_MS = 250;
@@ -154,6 +154,19 @@ function documentReading(): PanelReading {
 function clearSettle(): void {
   if (drawnState.settle !== null) clearTimeout(drawnState.settle);
   drawnState.settle = null;
+}
+
+/**
+ * A PANEL'S CONTENT CHANGED (cinatra#3089): a node was added, removed or its text changed. The renderer ABI carries
+ * no completion signal, so a change is the only word the host gets that a display is still drawing: the quiet period
+ * starts again, and content replaced after the drawn report is reported busy at once (Allow waits) until the new
+ * content has held for the quiet period and is reported drawn again.
+ */
+function contentChanged(): void {
+  clearSettle();
+  if (drawnState.told !== "drawn") return;
+  drawnState.told = "waiting";
+  postProgress("island-busy");
 }
 
 /** Tell the card what the document reads now (see `ISLAND_DRAWN_SETTLE_MS`). */
@@ -240,8 +253,9 @@ type MediaReading = "loading" | "loaded" | "failed";
  *     the dashboard composition's chart spinner), and removes the mark once its content is drawn; a display that
  *     cannot draw shows its failure state. `role="status"` therefore means "still loading" inside a panel: a
  *     display keeps a settled message out of it (a live region with `aria-live="polite"` instead). This is the only
- *     way a display can hold Allow: the host cannot see inside a display, so a display that draws asynchronously and
- *     marks nothing reads drawn as soon as its unmarked first commit has held for the settle bound;
+ *     way a display can say it is not finished. Without a mark the host reads what it sees: an empty panel never reads
+ *     drawn (`panelHasContent`), and content that is still changing restarts the settle bound (`contentChanged`), so
+ *     an unmarked display reads drawn once it shows content that has held for the settle bound;
  *   - an image (an image representation's preview, a pinned capture, an image a display draws): its own decode
  *     promise answers, `img.decode()`, which settles once the bytes loaded and decoded, and rejects on a failed
  *     request; a failed image is failed; an image whose `src` changes is read again;
@@ -251,13 +265,27 @@ type MediaReading = "loading" | "loaded" | "failed";
  */
 function readPanelContent(root: Element, media: Map<Element, MediaReading>): PanelReading {
   if (root.querySelector(PANEL_FLOOR_SELECTOR)) return "failed";
-  let loading = root.querySelector(PANEL_BUSY_SELECTOR) !== null;
+  let loading = root.querySelector(PANEL_BUSY_SELECTOR) !== null || !panelHasContent(root);
   for (const element of root.querySelectorAll("img, video")) {
     const reading = media.get(element) ?? "loading";
     if (reading === "failed") return "failed";
     if (reading === "loading") loading = true;
   }
   return loading ? "loading" : "drawn";
+}
+
+/** What a panel can draw as content: a picture, a video, a vector or bitmap drawing, an embedded document. */
+const PANEL_CONTENT_SELECTOR = "img,video,svg,canvas,picture,object,embed,iframe";
+
+/**
+ * AN EMPTY PANEL IS NEVER DRAWN (cinatra#3089). A display may first commit an empty placeholder and draw its snapshot
+ * later, and the renderer ABI gives it no word for "finished". So the host reads drawn only what it can see: the
+ * representation slot (the whole panel where there is no slot) holds text or a drawn element. An empty slot reads
+ * loading, and the card's idle bound turns one that stays empty into the failed reading.
+ */
+function panelHasContent(root: Element): boolean {
+  const slot = root.querySelector("[data-review-representation-slot]") ?? root;
+  return (slot.textContent ?? "").trim() !== "" || slot.querySelector(PANEL_CONTENT_SELECTOR) !== null;
 }
 
 /** Start reading each image and video under `root` that has no reading yet, recording its settled reading in
@@ -319,15 +347,19 @@ export function IslandPanelMountedSignal({ children }: { children?: ReactNode } 
     const observer =
       typeof MutationObserver === "function"
         ? new MutationObserver((records) => {
+            let content = false;
             for (const record of records) {
               if (record.type === "attributes" && record.attributeName === "src") media.delete(record.target as Element);
+              if (record.type === "childList" || record.type === "characterData") content = true;
             }
+            if (content) contentChanged();
             check();
           })
         : null;
     observer?.observe(root, {
       childList: true,
       subtree: true,
+      characterData: true,
       attributes: true,
       attributeFilter: ["aria-busy", "role", "class", "src", "data-review-target-floor", "data-dynamic-renderer-floor", "data-render-failure-class"],
     });

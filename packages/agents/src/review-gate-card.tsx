@@ -2359,6 +2359,8 @@ function ReviewTargetIsland({
   const waits = awaiting || heldByAnotherIsland;
   const [load, setLoad] = useState({
     identity,
+    /** The address the frame was last pointed at (cinatra#3089): a palette change navigates it under the same identity. */
+    src,
     attempt: 0,
     loaded: false,
     timedOut: false,
@@ -2374,12 +2376,22 @@ function ReviewTargetIsland({
   // island as loaded only on the island's own drawn report (cinatra#3089); every
   // other host keeps the frame's `load` as before.
   const strict = onLoadState !== undefined;
-  if (load.identity !== identity) {
-    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
-  }
-
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const protocolClock = useRef({ navigation: 0, progress: 0 });
+  if (load.identity !== identity) {
+    setLoad({ identity, src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
+  } else if (load.src !== src) {
+    // ANY NAVIGATION OF THE FRAME (cinatra#3089), a palette change included: the document that drew the items is
+    // replaced, so a strict host reads the island as not loaded again (Allow waits) until the replacement document
+    // reports its own drawn reading. The attempt stays: the frame and its name are the same. Every other host keeps
+    // the work on screen across a repaint, as before.
+    if (strict) {
+      protocolClock.current.navigation = Date.now();
+      setLoad({ ...load, src, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
+    } else {
+      setLoad({ ...load, src });
+    }
+  }
   // The callback runs when React assigns this mounted frame and its src,
   // including a lazy frame. An effect may run later; it must not grant another
   // twelve seconds after navigation has already begun.

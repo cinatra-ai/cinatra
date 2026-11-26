@@ -1405,6 +1405,39 @@ describe("XV.1: Allow waits for the items", () => {
     expect(allowOf(root).disabled).toBe(false);
   });
 
+  it("a palette change navigates the frame: Allow waits again until the replacement document reports drawn", async () => {
+    const paint = (scheme: "light" | "dark" | "none") => {
+      document.documentElement.className = scheme === "none" ? "" : scheme === "dark" ? "dark" : "cinatra";
+    };
+    const schemeOf = (frame: HTMLIFrameElement) => new URL(frame.src, window.location.href).searchParams.get("scheme");
+    try {
+      paint("light");
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("chat_thread", okDoor()));
+      await settle();
+      const frame = await frameOf(root);
+      expect(schemeOf(frame)).toBe("light");
+      await drawn(frame, 1);
+      expect(allowOf(root).disabled).toBe(false);
+      await act(async () => {
+        paint("dark");
+      });
+      await settle();
+      // The same frame, navigated to the replacement document in the new palette.
+      expect(root.querySelector("iframe")).toBe(frame);
+      expect(schemeOf(frame)).toBe("dark");
+      // red-first-expect: expected false to be true
+      expect(allowOf(root).disabled).toBe(true);
+      // The replacement's load alone does not draw the items; its own drawn report does.
+      await loadOnly(frame);
+      expect(allowOf(root).disabled).toBe(true);
+      await postDrawn(frame, 1);
+      expect(allowOf(root).disabled).toBe(false);
+    } finally {
+      paint("none");
+    }
+  });
+
   it("an island that reports a failure after its drawn report reads failed: Allow unavailable, Try again shown", async () => {
     stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
     const root = await rootOf(mountOn("chat_thread", okDoor()));
