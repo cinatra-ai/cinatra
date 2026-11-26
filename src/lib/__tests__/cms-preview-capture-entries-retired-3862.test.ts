@@ -136,4 +136,10 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
       expect(existsSync(path.join(REPO_ROOT, rel))).toBe(true);
     }
   });
+
+  it("the pinned-capture store and its view are gone", () => {
+    for (const rel of ["src/lib/artifacts/cms-preview-capture-store.ts", "src/lib/artifacts/cms-preview-capture-view.ts"]) {
+      expect(existsSync(path.join(REPO_ROOT, rel)), rel).toBe(false);
+    }
+  });
 });

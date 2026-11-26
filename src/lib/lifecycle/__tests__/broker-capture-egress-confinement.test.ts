@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 // ---------------------------------------------------------------------------
@@ -109,5 +109,11 @@ describe("broker-surface confinement (cinatra#2576 AC-2)", () => {
     // a prefix test, not a top-level-type check.
     expect(src).toContain("serve.mime !== CAPTURE_SERVE_MIME");
     expect(src).not.toContain("startsWith(\"image/\")");
+  });
+
+  it("the capture route and the broker minter's module are gone", () => {
+    for (const rel of ["src/app/api/lifecycle-views/capture/route.ts", "src/lib/lifecycle/widget-capture-egress.ts"]) {
+      expect(existsSync(path.join(ROOT, rel)), rel).toBe(false);
+    }
   });
 });

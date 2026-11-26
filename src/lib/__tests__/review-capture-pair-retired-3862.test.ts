@@ -31,6 +31,16 @@ const REVIEW_DIR = "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[r
 const PAIR_COMPONENT = `${REVIEW_DIR}/review-pinned-capture.tsx`;
 const SURFACE_MODEL = "src/lib/artifacts/review-surface-model.ts";
 
+// Two suites that were on main before this change replace the store with a
+// `vi.mock` factory, to keep a database read out of the review road the loaders
+// used to call. The store is gone, so the mock is inert (it is not a use). They
+// are main's files, left as they are (an edit that adds no test cannot pass the
+// red-first check). Exactly these two paths, exactly this one module.
+const INERT_STORE_MOCKS = new Set([
+  "src/app/artifacts/[id]/__tests__/review-gate-ports-provenance.test.ts",
+  "src/app/artifacts/[id]/__tests__/review-markdown-draft-recorded-as-rendered-2926.test.ts",
+]);
+
 const RETIRED_NAMES = [
   "ReviewPinnedCapture",
   "loadPinnedCapturePair",
@@ -99,6 +109,7 @@ describe("cinatra#3862 leg 8 l8b: the review surfaces draw no stored capture pai
         if (new RegExp(`\\b${name}\\b`).test(text)) hits.push(`${rel} :: ${name}`);
       }
       for (const mod of RETIRED_MODULES) {
+        if (INERT_STORE_MOCKS.has(rel) && mod === "cms-preview-capture-store") continue;
         if (text.includes(mod)) hits.push(`${rel} :: ${mod}`);
       }
     }
