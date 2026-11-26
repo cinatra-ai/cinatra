@@ -33,17 +33,25 @@
  * governed by a publish decision is checked against the ONE decision its road
  * claimed for it, and a run that filed email bodies for review never sends the
  * bundle's text. Every gap refuses the whole send before any mail, with a named
- * code. A call that passes every check is matched to the released body
- * revisions (each draft with an address to ITS approved revision, by contact,
- * address, subject and text) and each message is bound to its revision on the
- * ledger; then it is refused too (`approved_send_unavailable`) until the
- * per-message mail of the released revisions is in place: a governed call
- * never falls back to the bundle.
+ * code. A call that passes every check mails, for each draft with an address,
+ * the text of ITS released body revision, never the bundle's body.
+ *
+ * THE INVARIANT OF THE APPROVED SEND (cinatra#3089): an approved body is handed
+ * to a recipient at most once across all calls and all decisions. Each message
+ * is claimed durably before the provider call and marked done after it; a
+ * message already done is skipped (counted in `alreadySentCount`); a message
+ * whose provider call failed, or whose done mark could not be written, stays in
+ * doubt and is mailed by no later call (counted in `inDoubtCount` and named in
+ * the answer, by draft, message and contact, never by address). A call that did
+ * not complete answers `status: "failed"` with a truthful `sentCount`; it stops
+ * at the first provider failure. Finishing the rest takes a new approval, whose
+ * send mails only the recipients not yet sent and not in doubt.
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
 import type { PublishDecisionRow } from "@cinatra-ai/agents/publish-decision-store";
+import type { RevisionEffectLedger, RevisionEffectVerify } from "./artifacts/materialization-ledger";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -103,8 +111,14 @@ export type TriggerEmailSendDeps = {
   getDraftsByIds: (draftIds: string[]) => Promise<Draft[]>;
   sendEmail: (
     message: EmailMessage,
-    options?: { userId?: string; orgId?: string; correlation?: SendCorrelation },
+    options?: { userId?: string; orgId?: string; connectorId?: string; correlation?: SendCorrelation },
   ) => Promise<EmailSendReceipt>;
+  // The sender of the approved form only (cinatra#3089): it refuses before the
+  // hand-over (`EffectNotStartedError`) and pins the connector it checked. The
+  // default deps set it to `createDefaultSendEmail()`; absent, the approved
+  // form uses `sendEmail`. The reference-only form and the test send keep
+  // `sendEmail`, the facade sender as before.
+  sendApprovedEmail?: TriggerEmailSendDeps["sendEmail"];
   // Fetch a bundle envelope by ref. Defaults to the deterministic objects
   // client (`fetchObjectsByRef`). Injectable so the initial-send fan-out is
   // unit-testable without loading `@cinatra-ai/objects`.
@@ -129,6 +143,12 @@ export type TriggerEmailSendDeps = {
     ref: { artifactId: string; representationRevisionId: string; runId: string },
     actor: PrimitiveActorContext,
   ) => Promise<DecidedBodyRead>;
+  // The durable send record of each message the approved form mails
+  // (cinatra#3089): claimed before the hand-over to the mail provider, marked
+  // done after it, so a repeated or concurrent send never mails a message
+  // twice. Absent, `performRevisionEffectOnce` uses the materialization
+  // ledger's claim rows. The reference-only form does not use it.
+  messageSendLedger?: MessageSendLedger;
   // Whether the steps of a run filed email bodies for review (cinatra#3089). A
   // send of such a run whose calling step released no reviewed list is refused
   // before any mail, so the bundle's text never bypasses the reviewed bodies.
@@ -165,6 +185,17 @@ export type TriggerEmailSendDeps = {
    * Defaults to `listObjectWriterRunIds`.
    */
   readObjectRuns?: (objectId: string, actor: PrimitiveActorContext) => Promise<string[]>;
+  /**
+   * The decision state of an approved body revision, read through `query` (the
+   * claim's own connection, inside the transaction that holds the artifact's
+   * revision lock): null while the revision is still the current, decided,
+   * person-approved revision filed in `runId`, else the reason. Defaults to
+   * `readRevisionDecisionState`.
+   */
+  readRevisionStateUnderLock?: (
+    query: Parameters<RevisionEffectVerify>[0],
+    ref: { orgId: string; artifactId: string; representationRevisionId: string; runId: string },
+  ) => Promise<string | null>;
 };
 
 /** The run of a call, the verified step that made it, the publish decision the
@@ -181,6 +212,9 @@ export type CallingRun = {
 /** A step's publish decision, as the send reads it (see `readPublishDecision`). */
 export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
   & Partial<Pick<PublishDecisionRow, "id">>;
+
+/** One message's durable send record (see `performRevisionEffectOnce`). */
+export type MessageSendLedger = RevisionEffectLedger;
 
 /** What `readDecidedBody` answers: the revision's whole text and the body's
  *  declared fields (`subject`, `contactId`, …), or a named refusal. */
@@ -238,13 +272,70 @@ async function loadDefaultGetDraftsByIds(): Promise<TriggerEmailSendDeps["getDra
   };
 }
 
+/**
+ * The shipped mail sender, in two parts split at the hand-over to the provider's
+ * transport (cinatra#3089).
+ *
+ * BEFORE the hand-over, every step that can refuse runs here, and any failure
+ * throws `EffectNotStartedError` (nothing reached a provider, so a retry may
+ * mail the message): the provider-neutral facade must be installed (it resolves
+ * through the `email-system` capability the email connector registers); the
+ * host routing resolves the connector (the sender identity's, else the first
+ * installed one, as the facade does) and that connector must be installed and
+ * report its mailbox connected; the development redirect is checked once, so a
+ * redirect switched on with no address refuses here.
+ *
+ * THE HAND-OVER is the facade's send, pinned to the connector resolved above.
+ * Any failure from there on may follow the provider's acceptance (a timeout, a
+ * reset connection, an error answer: the connectors throw a plain error for
+ * every provider answer, a rejected recipient included, so nothing shows the
+ * provider took nothing), and it is thrown as it is: the caller keeps the
+ * message in doubt. The facade repeats its routing and the redirect inside
+ * that call; a failure there is read as in doubt too, which never mails twice.
+ */
+export function createDefaultSendEmail(): TriggerEmailSendDeps["sendEmail"] {
+  return async (message, options) => {
+    let send: TriggerEmailSendDeps["sendEmail"];
+    let connectorId: string;
+    try {
+      const [{ requireEmailSystemFacade }, { resolveEmailSendProviders, resolveHostEmailRouting }] =
+        await Promise.all([import("@/lib/email-transport-provider"), import("@/lib/email-send-providers")]);
+      const facade = requireEmailSystemFacade();
+      const routing = resolveHostEmailRouting();
+      if (!routing) throw new Error("The host email routing is not registered.");
+      const providers = resolveEmailSendProviders();
+      const routed = await routing.resolveConnectorId({ userId: options?.userId, orgId: options?.orgId });
+      const provider = routed ? providers.find((p) => p.definition.connectorId === routed) : providers[0];
+      if (!provider) {
+        throw new Error(
+          routed ? `The email connector ${routed} is not installed.` : "No connected email connector is available.",
+        );
+      }
+      const status = await provider.getStatus({ userId: options?.userId });
+      if (status.status !== "connected") {
+        throw new Error(
+          `The mailbox of ${provider.definition.name} is not connected${status.detail ? `: ${status.detail}` : "."}`,
+        );
+      }
+      routing.applyDevModeOverride(message);
+      connectorId = provider.definition.connectorId;
+      send = facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
+    } catch (err) {
+      const { EffectNotStartedError } = await import("./artifacts/materialization-ledger");
+      throw new EffectNotStartedError(err instanceof Error ? err.message : String(err));
+    }
+    return send(message, { ...options, connectorId });
+  };
+}
+
 async function loadDefaultSendEmail(): Promise<TriggerEmailSendDeps["sendEmail"]> {
   // The provider-neutral facade (dev-mode recipient override + provider
   // routing stay centralized in the email connector layer) resolves through
   // the `email-system` capability the email-connector registers at activation
   // (lazy/guarded host-access cutover). Connector absent → the send fails
   // with a descriptive error (same failure class as "No connected email
-  // connector is available.").
+  // connector is available."). The reference-only form and the test send use
+  // it unchanged; the approved form uses `createDefaultSendEmail` (cinatra#3089).
   const { requireEmailSystemFacade } = await import("@/lib/email-transport-provider");
   const facade = requireEmailSystemFacade();
   return facade.sendEmail.bind(facade) as unknown as TriggerEmailSendDeps["sendEmail"];
@@ -254,6 +345,7 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
   let cachedGetCampaign: TriggerEmailSendDeps["getCampaign"] | null = null;
   let cachedGetDrafts: TriggerEmailSendDeps["getDraftsByIds"] | null = null;
   let cachedSend: TriggerEmailSendDeps["sendEmail"] | null = null;
+  const approvedSend = createDefaultSendEmail();
   return {
     async getCampaign(campaignId) {
       if (!cachedGetCampaign) cachedGetCampaign = await loadDefaultGetCampaign();
@@ -266,6 +358,9 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
     async sendEmail(message, options) {
       if (!cachedSend) cachedSend = await loadDefaultSendEmail();
       return cachedSend(message, options);
+    },
+    sendApprovedEmail(message, options) {
+      return approvedSend(message, options);
     },
     getObjectByRef(ref, actor) {
       return fetchObjectsByRef(ref, actor);
@@ -343,6 +438,11 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       ]);
       return listObjectWriterRunIds({ actor: kernelActorForRead(actor, orgId), orgId, objectId });
     },
+    async readRevisionStateUnderLock(query, ref) {
+      const { readRevisionDecisionState } = await import("./artifacts/current-decided-revision-read");
+      const state = await readRevisionDecisionState(query, ref);
+      return state.ok ? null : state.error;
+    },
     async readPublishDecision(runId, stepId) {
       const { readGoverningPublishDecision } = await import("@cinatra-ai/agents/publish-decision-actions");
       return readGoverningPublishDecision(runId, stepId);
@@ -406,8 +506,38 @@ type InitialSendStateRow = {
   completedAt: string;
   sentCount: number;
   errorMessage?: string;
+  /** The approved form only (cinatra#3089): messages an earlier call already
+   *  handed over, which this call skipped. */
+  alreadySentCount?: number;
+  /** The approved form only: messages claimed but never recorded as sent, which
+   *  this call did not mail (they may or may not have gone out). */
+  inDoubtCount?: number;
 };
 const sendStateByCampaign = new Map<string, InitialSendStateRow>();
+
+/**
+ * THE FIXED REASONS OF THE APPROVED SEND (cinatra#3089). No text from the mail connector, the provider or the send
+ * record's store reaches the answer or the log: a provider's error can quote the recipient's address (a rejected
+ * recipient) and a mailbox status can name the mailbox, so each failure stage answers one of these codes, and the
+ * raw text is dropped (it is kept nowhere). The one reason passed on is a refusal under the revision's lock
+ * (`refused`), whose text is the host's own decision-state reading of the body.
+ */
+const SEND_FAILURE_CODE = {
+  claim: "send_record_claim_failed",
+  refused: "body_refused",
+  not_started: "provider_not_reached",
+  act: "provider_error",
+  release: "send_record_release_failed",
+  mark: "send_record_write_failed",
+} as const;
+
+/** What the answer of an approved send tells a person about a message in doubt (cinatra#3089). No tool or route clears
+ *  an in-doubt mark: it is a manual check. */
+const IN_DOUBT_MANUAL_CHECK =
+  "A message in doubt is never mailed again by this or any later send, also not under a new approval: the mail " +
+  "provider may have accepted it. Check the sent mail of the connected mailbox for each message named (by its contact, " +
+  "in this campaign) to learn whether it went out. Nothing in the app clears an in-doubt mark; this is a manual check, " +
+  "and a message that did not go out must be sent by hand";
 
 type ObjectsEnvelope = {
   id?: string;
@@ -892,7 +1022,10 @@ async function runInitialSend(args: {
   };
   actor: PrimitiveActorContext;
   sendEmail: TriggerEmailSendDeps["sendEmail"];
+  sendApprovedEmail: TriggerEmailSendDeps["sendEmail"];
   readDecidedBody: NonNullable<TriggerEmailSendDeps["readDecidedBody"]>;
+  messageSendLedger: MessageSendLedger | undefined;
+  readRevisionStateUnderLock: NonNullable<TriggerEmailSendDeps["readRevisionStateUnderLock"]>;
   readRunReviewedBodies: NonNullable<TriggerEmailSendDeps["readRunReviewedBodies"]>;
   readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
   readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
@@ -908,6 +1041,7 @@ async function runInitialSend(args: {
     input,
     actor,
     sendEmail,
+    sendApprovedEmail,
     getObjectByRef,
     emitEmailFanout,
     readRunReviewedBodies,
@@ -916,6 +1050,8 @@ async function runInitialSend(args: {
     readClaimedPublishDecision,
     readObjectRuns,
     readDecidedBody,
+    messageSendLedger,
+    readRevisionStateUnderLock,
   } = args;
   const startedAt = new Date().toISOString();
   sendStateByCampaign.set(input.campaignId, {
@@ -1294,11 +1430,13 @@ async function runInitialSend(args: {
     // is named. Any other projection failure is warned and the send goes on.
     //
     // THE APPROVED FORM binds EVERY message to its approved revision on the
-    // ledger here, before any mail: any failure (a refused or skipped binding,
-    // a failed fan-out) refuses the send with nothing mailed. A retry finds the
-    // same bindings (the ledger row of each message is read back,
-    // `bindFanoutMessageRevision`). The bind writes ledger rows only, never an
-    // object. The reference-only form keeps its best-effort projection.
+    // ledger here, all before the first mail below: any failure (a refused or
+    // skipped binding, a failed fan-out) refuses the send with nothing mailed.
+    // A retry after a failed mail finds the same bindings (the ledger row of
+    // each message is read back, `bindFanoutMessageRevision`) and mails again.
+    // The bind writes ledger rows only, never an object. The reference-only
+    // form keeps its best-effort projection unchanged.
+    const messageIdByArtifact = new Map<string, string>();
     // The reference-only form keys its projection and its correlation on the
     // run of the call, and on a call that carries no run, as before, on the
     // first run the bundles name: a key of the projection, never a check.
@@ -1325,19 +1463,14 @@ async function runInitialSend(args: {
           `The send was refused before any email went out: the body type ${EMAIL_BODY_TYPE_ID} is not registered, so no message was bound to its approved body`,
         );
       }
-      const boundArtifacts = new Set(fanout.bodies.map((b) => b.objectId));
+      for (const b of fanout.bodies) messageIdByArtifact.set(b.objectId, b.externalId);
       for (const [index, body] of approvedByIndex) {
-        if (!boundArtifacts.has(body.artifactId)) {
+        if (!messageIdByArtifact.has(body.artifactId)) {
           throw new EmailBodyRefusedError(
             `The send was refused before any email went out: draft ${index + 1} of the bundle was not bound to its approved body`,
           );
         }
       }
-      // A RELEASED LIST IS NEVER SENT AS THE BUNDLE: every message is matched
-      // and bound, but the mail of each approved revision, at most once per
-      // message, is not in place yet, so the call is refused before any mail.
-      // It never falls through to the reference-only form below.
-      refuse("the approved bodies were matched and bound, but this server does not yet mail approved bodies (approved_send_unavailable)");
     } else if (referenceRunId) {
       try {
         await emitEmailFanout({
@@ -1362,6 +1495,174 @@ async function runInitialSend(args: {
       );
     }
 
+    // THE MAIL OF THE APPROVED FORM, AT MOST ONCE PER MESSAGE: each message, in
+    // bundle order, is mailed through `performRevisionEffectOnce` under its
+    // binding (claim, hand-over, done mark). A message an earlier call mailed is
+    // skipped and counted in `alreadySentCount`; one another call holds is not
+    // mailed and is counted in `inDoubtCount`. A provider error after a won
+    // claim leaves the message in doubt and STOPS the send: the later messages
+    // are not attempted by this call, since a provider that just failed may
+    // fail (or half-accept) again, and each further attempt could add a message
+    // in doubt; a new approval sends them. The claim is given back only for an
+    // error raised before the hand-over to the transport
+    // (`EffectNotStartedError`). A mail handed over whose done mark cannot be
+    // written is counted in `sentCount` AND in `inDoubtCount`. A message in doubt
+    // is mailed by no later call, under any decision: nothing clears the mark
+    // (IN_DOUBT_MANUAL_CHECK). The answer names it by draft, message and
+    // contact; the log names it by draft and message, never by address. A
+    // failure answers a fixed code (SEND_FAILURE_CODE): no provider, connector
+    // or store text reaches the answer or the log.
+    if (approvedByIndex && callRunId) {
+      let sentCount = 0;
+      let alreadySentCount = 0;
+      const inDoubt: string[] = [];
+      // Mailed (handed over), but no sent record could be written.
+      const unrecorded: string[] = [];
+      // Refused at its send time: the body was no longer decided (or read
+      // another text), so it was not mailed and its claim was given back.
+      const refusedAtSend: string[] = [];
+      let stopped: string | undefined;
+      const fromEmail = released?.senderEmail;
+      const { EffectNotStartedError, performRevisionEffectOnce } = await import("./artifacts/materialization-ledger");
+      for (const [index, draft] of drafts.entries()) {
+        if (!recipientEmailFor(draft, recipients)) continue;
+        const approved = approvedByIndex.get(index);
+        const outputId = approved ? messageIdByArtifact.get(approved.artifactId) : undefined;
+        if (!approved || !outputId) {
+          stopped = `draft ${index + 1} of the bundle has no bound approved body, so it was not sent`;
+          break;
+        }
+        const name = `draft ${index + 1} (${outputId})`;
+        let notDecidedNow: string | undefined;
+        const outcome = await performRevisionEffectOnce({
+          claimKey: {
+            runId: callRunId,
+            path: "email_fanout",
+            bindingOutputId: outputId,
+            effect: "message-send",
+            artifactId: approved.artifactId,
+            representationRevisionId: approved.representationRevisionId,
+          },
+          actor,
+          ...(messageSendLedger ? { ledger: messageSendLedger } : {}),
+          // THE START IS VERIFIED UNDER THE REVISION'S LOCK: the claim's own
+          // transaction holds the lock every revision writer takes and reads
+          // the revision's decision state again; the claim commits (the mail
+          // is started) only while the revision is still current and decided.
+          verifyUnderLock: (query) =>
+            readRevisionStateUnderLock(query, {
+              orgId: actor.orgId ?? "",
+              artifactId: approved.artifactId,
+              representationRevisionId: approved.representationRevisionId,
+              runId: callRunId,
+            }),
+          // THE CHECK AND THE MAIL ARE BOUND PER MESSAGE: with the claim won,
+          // the decided-revision read runs again right before the hand-over,
+          // and the text mailed is the one it reads then. A revision no longer
+          // current and decided (superseded, reopened, sent back or repaired
+          // since the check), a read that fails, or another text, stops this
+          // message before anything started, so its claim is given back.
+          act: async () => {
+            let now: DecidedBodyRead;
+            try {
+              now = await readDecidedBody(
+                {
+                  artifactId: approved.artifactId,
+                  representationRevisionId: approved.representationRevisionId,
+                  runId: callRunId,
+                },
+                actor,
+              );
+            } catch {
+              // The reader's thrown text is never passed on (it may quote stored data): a fixed reason.
+              now = { ok: false, error: "its body could not be read at its send time (body_read_failed)" };
+            }
+            if (!now.ok || now.text !== approved.text) {
+              notDecidedNow = now.ok ? "its revision read another text at its send time than the one checked" : now.error;
+              throw new EffectNotStartedError(notDecidedNow);
+            }
+            return sendApprovedEmail(
+              {
+                to: [approved.recipientEmail],
+                subject: approved.subject,
+                textBody: now.text,
+                ...(fromEmail ? { fromEmail } : {}),
+              },
+              {
+                userId: actor.userId,
+                orgId: actor.orgId ?? undefined,
+                correlation: {
+                  campaignId: input.campaignId,
+                  runId: callRunId,
+                  contactId: approved.contactId,
+                },
+              },
+            );
+          },
+        });
+        if (outcome.alreadyDone) {
+          alreadySentCount += 1;
+          continue;
+        }
+        if (outcome.done) sentCount += 1;
+        const failure = outcome.failure;
+        if (!failure) {
+          if (outcome.inDoubt) {
+            inDoubt.push(`${name} for contact ${approved.contactId}`);
+            console.warn(
+              `[trigger-email-send] ${name} of run ${callRunId} is claimed but not recorded as sent; it was not mailed again`,
+            );
+          }
+          continue;
+        }
+        if (failure.stage === "refused") {
+          refusedAtSend.push(`${name} was not sent, its body was refused when its mail was claimed: ${failure.reason}`);
+          continue;
+        }
+        if (failure.stage === "not_started" && notDecidedNow !== undefined) {
+          refusedAtSend.push(`${name} was not sent, its body was refused at its send time: ${notDecidedNow}`);
+          continue;
+        }
+        if (failure.stage === "mark") {
+          unrecorded.push(`${name} was mailed, but its sent record could not be written (${SEND_FAILURE_CODE.mark}) (contact ${approved.contactId})`);
+          console.warn(
+            `[trigger-email-send] ${name} of run ${callRunId} was mailed but could not be recorded as sent; it is in doubt (${SEND_FAILURE_CODE.mark})`,
+          );
+          continue;
+        }
+        if (outcome.inDoubt) inDoubt.push(`${name} for contact ${approved.contactId}`);
+        stopped =
+          failure.stage === "claim"
+            ? `the mail of ${name} could not be claimed, so it was not sent (${SEND_FAILURE_CODE.claim})`
+            : failure.stage === "not_started"
+              ? `${name} was not sent, no mail provider was reached (${SEND_FAILURE_CODE.not_started})`
+              : failure.stage === "release"
+                ? `${name} was not sent, and its claim could not be given back (${SEND_FAILURE_CODE.release})`
+                : `the mail provider failed on ${name}, which may or may not have gone out (${SEND_FAILURE_CODE.act})`;
+        console.warn(`[trigger-email-send] ${name} of run ${callRunId} stopped the send (${SEND_FAILURE_CODE[failure.stage]})`);
+        break;
+      }
+      const problems = [
+        ...refusedAtSend,
+        ...(stopped ? [stopped] : []),
+        ...unrecorded,
+        ...(inDoubt.length > 0 ? [`${inDoubt.length} message(s) are in doubt: ${inDoubt.join(", ")}`] : []),
+        ...(inDoubt.length + unrecorded.length > 0 ? [IN_DOUBT_MANUAL_CHECK] : []),
+      ];
+      return {
+        status: problems.length > 0 ? "failed" : "completed",
+        startedAt,
+        completedAt: new Date().toISOString(),
+        sentCount,
+        alreadySentCount,
+        inDoubtCount: inDoubt.length + unrecorded.length,
+        ...(problems.length > 0 ? { errorMessage: problems.join("; ") } : {}),
+      };
+    }
+
+    // THE REFERENCE-ONLY FORM mails every draft of the bundle on each call,
+    // exactly as before cinatra#3089 (other callers rely on it): it keeps no
+    // per-message send record, and a failure reports `sentCount: 0`.
     let sentCount = 0;
     for (const draft of drafts) {
       const recipientEmail = recipientEmailFor(draft, recipients);
@@ -1680,7 +1981,11 @@ export function createTriggerEmailSendUseCases(
     //   1. Fetch the approved-email-draft-bundle by ref via objects_get.
     //   2. Fetch the confirmedRecipients by ref via objects_get.
     //   3. For each draft, look up the recipient (by contactId match, or
-    //      fall back to recipientEmail embedded on the draft).
+    //      fall back to recipientEmail embedded on the draft). When the
+    //      calling step's released publish decision holds the approved list
+    //      (cinatra#3089), each mailed draft's text is the approved body
+    //      revision joined to it by contact, read and checked before any mail;
+    //      the bundle's body is not mailed.
     //   4. sendGmailMessage for each pair — dev recipient override
     //      (packages/connector-gmail/src/index.ts:312) routes the
     //      outbound to the configured override address.
@@ -1697,6 +2002,7 @@ export function createTriggerEmailSendUseCases(
         input,
         actor,
         sendEmail: deps.sendEmail,
+        sendApprovedEmail: deps.sendApprovedEmail ?? deps.sendEmail,
         // Fall back to the production defaults when an injected deps object
         // (e.g. a unit test) omits the optional fan-out seams.
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
@@ -1707,6 +2013,8 @@ export function createTriggerEmailSendUseCases(
         readClaimedPublishDecision: deps.readClaimedPublishDecision ?? fallback().readClaimedPublishDecision!,
         readObjectRuns: deps.readObjectRuns ?? fallback().readObjectRuns!,
         readDecidedBody: deps.readDecidedBody ?? fallback().readDecidedBody!,
+        messageSendLedger: deps.messageSendLedger,
+        readRevisionStateUnderLock: deps.readRevisionStateUnderLock ?? fallback().readRevisionStateUnderLock!,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {
@@ -1717,6 +2025,8 @@ export function createTriggerEmailSendUseCases(
         completedAt: result.completedAt,
         sentCount: result.sentCount,
         errorMessage: result.errorMessage,
+        ...(result.alreadySentCount !== undefined ? { alreadySentCount: result.alreadySentCount } : {}),
+        ...(result.inDoubtCount !== undefined ? { inDoubtCount: result.inDoubtCount } : {}),
       } as unknown as ReturnType<TriggerEmailSendUseCases["startInitialSend"]> extends Promise<infer R>
         ? R
         : never;
@@ -1739,6 +2049,8 @@ export function createTriggerEmailSendUseCases(
         completedAt: state.completedAt,
         sentCount: state.sentCount,
         errorMessage: state.errorMessage,
+        ...(state.alreadySentCount !== undefined ? { alreadySentCount: state.alreadySentCount } : {}),
+        ...(state.inDoubtCount !== undefined ? { inDoubtCount: state.inDoubtCount } : {}),
       } as unknown as ReturnType<TriggerEmailSendUseCases["getInitialSendStatus"]> extends Promise<infer R>
         ? R
         : never;

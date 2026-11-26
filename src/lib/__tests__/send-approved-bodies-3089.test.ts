@@ -6,15 +6,11 @@
  * the calling step (here a stubbed decision: `releasedList` in a case is the
  * list that decision surfaced; the request carries no list): each entry an
  * `email:body` artifact revision plus the contact of the draft it is the body
- * of. Given, the send matches each draft with an address to ITS approved
- * revision (never the bundle's body), refuses the whole send before any mail on
- * every gap, and the fan-out binds each message to the approved revision
- * (its text, never the bundle's) instead of filing a new body. A call that
- * passes every check and binds every message is then refused
- * (`approved_send_unavailable`): the per-message mail of the bound revisions
- * follows in the next change, and a governed call never falls back to mailing
- * the bundle. Without a released list the send reads the bundle exactly as
- * before, unless a run filed bodies for review.
+ * of. Given, the send mails, for each draft with an address, the text of ITS
+ * approved revision (never the bundle's body), refuses the whole send before
+ * any mail on every gap, and the fan-out binds each message to the approved
+ * revision instead of filing a new body. Without a released list the send
+ * reads the bundle exactly as before, unless a run filed bodies for review.
  *
  * NO RUN REACHES THIS SEND YET: the MCP boundary refuses every call of
  * `email_outreach_send_initial_start` made on a run's frame (the outward-effect
@@ -22,12 +18,12 @@
  * directly, through `createTriggerEmailSendHandlers` and
  * `createTriggerEmailSendUseCases` with injected seams: the objects reads, the
  * transport, the approved-body reader (a fake artifact store that answers only
- * an artifact's current revision) and a fan-out built from the real
- * `materializeEmailFanout`.
+ * an artifact's current revision), an in-memory send record and a fan-out
+ * built from the real `materializeEmailFanout`.
  *
  * Cases:
- *   S1 a call that passes every check binds each message to its approved
- *      revision's text, never the bundle's, and mails nothing yet
+ *   S1 the approved form mails the approved revision's text and the subject the
+ *      card showed, never the bundle's text
  *   R1-R8 a draft with an address and no approved body, a revision that cannot
  *      be read, is not current, is of another organization or type, a body
  *      named twice, a body for no draft, two bodies for one contact, a body
@@ -36,20 +32,20 @@
  *      with bodies filed for review (or whose filings cannot be read, or a call
  *      with no run on a bundle such a run wrote) is refused
  *   P1-P4 bodies swapped between drafts, or a draft changed after its body was
- *      filed, are refused; equal texts are bound each to its own draft
+ *      filed, are refused; equal texts are sent each to its own draft
  *   F1, F1b the fan-out binds each message to its approved revision and files
  *      no new body; a refused binding fails the send before any mail
- *   Z1 a request carrying `approvedBodies` cannot change what is bound
- *   A1-A9 each message's address and subject must be the ones the card showed;
- *      a change in the bundle refuses the send and names no address
+ *   Z1 a request carrying `approvedBodies` cannot change what is mailed
+ *   A1-A9 each message goes only to the address and with the subject the card
+ *      showed; a change in the bundle refuses the send and names no address
  *   G1-G5 the decision that governs the call is read through the one resolution
  *      the publishing call guard claims under; a call signed for a decision is
  *      served by that one only; a publishing step with no decision is refused
  *   L1 a released decision with no list of approved bodies is refused
- *   B1-B6 what is checked is byte for byte what the card showed; an id, address,
+ *   B1-B6 what is sent is byte for byte what the card showed; an id, address,
  *      sender or campaign carried with white space around it is refused
  *   C1-C7 the send reads the decision its call claimed, by id: the normal case
- *      binds its list; each claim refusal code refuses before any mail
+ *      mails its list; each claim refusal code refuses before any mail
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -94,6 +90,7 @@ import {
   type DecidedBodyRead,
   type EmailFanoutArgs,
   type CallingRun,
+  type MessageSendLedger,
   type StepPublishDecision,
   type TriggerEmailSendDeps,
 } from "../trigger-email-send-use-cases";
@@ -105,6 +102,37 @@ const withClaim = <T extends { runId: string; publishDecisionId?: string; claim?
 const withDecisionId = <T extends object | null | undefined>(decision: T): T =>
   decision ? ({ id: "d-1", ...decision } as T) : decision;
 
+
+/** A stand-in for the message send records with the claim's semantics: the
+ *  first claim of a message wins (checked and set with no await between, so
+ *  concurrent calls cannot both win), a sent message reads "sent", and a
+ *  claimed one that was never marked reads "in_doubt". */
+function memorySendLedger() {
+  const rows = new Map<string, { id: string; phase: "claimed" | "finalized" }>();
+  let next = 0;
+  const ledger: MessageSendLedger = {
+    async claim(m) {
+      const row = rows.get(m.bindingOutputId);
+      if (row) return { kind: row.phase === "finalized" ? "done" : "in_doubt" };
+      next += 1;
+      rows.set(m.bindingOutputId, { id: `send-${next}`, phase: "claimed" });
+      return { kind: "won", ledgerId: `send-${next}` };
+    },
+    async markDone(id) {
+      for (const row of rows.values()) {
+        if (row.id === id && row.phase === "claimed") {
+          row.phase = "finalized";
+          return true;
+        }
+      }
+      return false;
+    },
+    async release(id) {
+      for (const [key, row] of rows) if (row.id === id && row.phase === "claimed") rows.delete(key);
+    },
+  };
+  return { rows, ledger };
+}
 
 /** The publish decision a person released for the calling step, surfacing the
  *  list a case names (cinatra#3089): the campaign, the card's Recipients list
@@ -221,6 +249,7 @@ function makeFixture(opts?: {
   decisions?: { current: StepPublishDecision[]; earlier?: StepPublishDecision[] };
 }) {
   const store = opts?.store ?? makeStore();
+  const sendLedger = memorySendLedger();
   const sent: Array<{ to: string[]; subject: string; textBody: string }> = [];
   const sendEmail = vi.fn(async (message: { to: string[]; subject: string; textBody: string }) => {
     sent.push(message);
@@ -242,7 +271,7 @@ function makeFixture(opts?: {
   // type in the actor's organization is read; anything else is refused.
   const readDecidedBody = vi.fn(
     async (
-      ref: { artifactId: string; representationRevisionId: string; runId: string },
+      ref: { artifactId: string; representationRevisionId: string },
       a: PrimitiveActorContext,
     ): Promise<DecidedBodyRead> => {
       const row = store.get(ref.artifactId);
@@ -298,6 +327,7 @@ function makeFixture(opts?: {
     getObjectByRef: async (ref) => envelopes[ref] ?? null,
     emitEmailFanout,
     readDecidedBody,
+    messageSendLedger: sendLedger.ledger,
     readRunReviewedBodies,
     // The runs the host recorded as writers of each object: here the run the
     // object's data names, as a host records the run that saved it.
@@ -356,6 +386,7 @@ function makeFixture(opts?: {
     writeBody,
     bindBody,
     emitEmailFanout,
+    sendLedger,
     start,
     deps,
   };
@@ -377,38 +408,18 @@ async function expectRefused(
   return result;
 }
 
-const UNAVAILABLE = "(approved_send_unavailable)";
-const BOUND = [
-  ["art-1", "Approved body one"],
-  ["art-2", "Approved body two"],
-];
-
-/** Every check passed and every message was bound to its approved revision's
- *  text (`bound`, in bundle order); nothing is mailed yet and no body is filed. */
-async function expectBoundNotMailed(
-  fx: ReturnType<typeof makeFixture>,
-  input: Record<string, unknown>,
-  bound: string[][] = BOUND,
-) {
-  const result = await fx.start(input);
-  expect(result.status).toBe("failed");
-  expect(result.sentCount).toBe(0);
-  expect(result.errorMessage).toContain(UNAVAILABLE);
-  expect(fx.sendEmail).not.toHaveBeenCalled();
-  expect(fx.writeBody).not.toHaveBeenCalled();
-  expect(fx.bindBody.mock.calls.map(([b]) => [b.artifactId, b.markdown])).toEqual(bound);
-  return result;
-}
-
-describe("cinatra#3089 — the send binds the approved body revisions", () => {
-  it("S1 a call that passes every check binds each message to its approved revision's text and mails nothing yet", async () => {
+describe("cinatra#3089 — the send mails the approved body revisions", () => {
+  it("S1 the approved form mails the approved revision's text and the card's subject", async () => {
     const fx = makeFixture();
-    // The revision's text, not the draft's (which ends in blank lines).
-    await expectBoundNotMailed(fx, { releasedList: approved });
-    expect(fx.readDecidedBody.mock.calls.map(([ref]) => [ref.artifactId, ref.representationRevisionId, ref.runId])).toEqual([
-      ["art-1", "rev-1", "run-1"],
-      ["art-2", "rev-2", "run-1"],
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(result.sentCount).toBe(2);
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
     ]);
+    // The revision's text, not the draft's (which ends in blank lines).
+    expect(fx.sent.some((m) => m.textBody.endsWith("\n"))).toBe(false);
   });
 
   it("R1 a draft with an address and no approved body refuses the whole send", async () => {
@@ -531,15 +542,19 @@ describe("cinatra#3089 — the send binds the approved body revisions", () => {
     ];
     const fx = makeFixture({ store });
     await expectRefused(fx, { releasedList: swapped }, "approved body 1 is not the body of draft 2 of the bundle (contact c2)");
+    expect(fx.sendLedger.rows.size).toBe(0);
   });
 
-  it("P2 the same two bodies without a contact of their own, not swapped, are bound", async () => {
+  it("P2 the same two bodies without a contact of their own, not swapped, are sent", async () => {
     const store = makeStore();
     store.get("art-1")!.data = { campaignId: CAMPAIGN_ID };
-    await expectBoundNotMailed(makeFixture({ store }), { releasedList: approved });
+    const fx = makeFixture({ store });
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
   });
 
-  it("P3 two swapped bodies with the same text are bound: each message to the text its own draft holds", async () => {
+  it("P3 two swapped bodies with the same text are sent: each recipient receives the text its own draft holds", async () => {
     const store = makeStore();
     store.get("art-1")!.data = { campaignId: CAMPAIGN_ID };
     store.get("art-1")!.revisions["rev-1"] = "The same body";
@@ -550,11 +565,14 @@ describe("cinatra#3089 — the send binds the approved body revisions", () => {
       { ...approved[1]!, contactId: "c1", recipientEmail: "one@example.com", subject: "Bundle subject one" },
     ];
     const fx = makeFixture({ store, drafts });
-    // Draft 1's message is bound to art-2, whose text is draft 1's own text.
-    await expectBoundNotMailed(fx, { releasedList: swapped }, [
-      ["art-2", "The same body"],
-      ["art-1", "The same body"],
+    const result = await fx.start({ releasedList: swapped });
+    expect(result.status).toBe("completed");
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "The same body" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "The same body" }),
     ]);
+    // Draft 1's message is bound to art-2, whose text is draft 1's own text.
+    expect(fx.bindBody.mock.calls.map(([b]) => b.artifactId)).toEqual(["art-2", "art-1"]);
   });
 
   it("P4 a draft whose body was changed in the bundle after its body was filed refuses the whole send", async () => {
@@ -599,7 +617,7 @@ describe("cinatra#3089 — the send binds the approved body revisions", () => {
     expect(fx.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("Z1 a request carrying approvedBodies cannot change what is bound", async () => {
+  it("Z1 a request carrying approvedBodies cannot change what is mailed", async () => {
     // The tool's schema drops the key, so the handler never hands it on.
     const parsed = serviceAndCampaignIdSchema.parse({ campaignId: CAMPAIGN_ID, approvedBodies: approved });
     expect(parsed).not.toHaveProperty("approvedBodies");
@@ -607,9 +625,14 @@ describe("cinatra#3089 — the send binds the approved body revisions", () => {
     // body for c2 (and the use case is also handed the key directly).
     const fx = makeFixture();
     const forged = [approved[0], { ...approved[1]!, artifactId: "art-9", representationRevisionId: "rev-9", recipientEmail: "x@example.org" }];
-    await expectBoundNotMailed(fx, { releasedList: approved, approvedBodies: forged });
-    // Each released body is read once at the check; art-9 never.
-    expect(fx.readDecidedBody.mock.calls.map(([ref]) => ref.artifactId)).toEqual(["art-1", "art-2"]);
+    const result = await fx.start({ releasedList: approved, approvedBodies: forged });
+    expect(result.status).toBe("completed");
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], textBody: "Approved body two" }),
+    ]);
+    // Each body is read at the check and again at its send time; art-9 never.
+    expect(fx.readDecidedBody.mock.calls.map(([ref]) => ref.artifactId)).toEqual(["art-1", "art-2", "art-1", "art-2"]);
     const direct = makeFixture();
     const uc = createTriggerEmailSendUseCases(direct.deps);
     const answer = await uc.startInitialSend(
@@ -626,15 +649,17 @@ describe("cinatra#3089 — the send binds the approved body revisions", () => {
 const ADDRESS_CHANGED = "the recipient's address changed after the card was shown";
 const SUBJECT_CHANGED = "the subject changed after the card was shown";
 
-/** A refusal of the card's address or subject: nothing is bound or mailed,
- *  and no address appears in the answer. */
+/** A refusal of the card's address or subject: nothing is claimed, bound or
+ *  mailed, and no address appears in the answer. */
 async function expectCardRefused(
   fx: ReturnType<typeof makeFixture>,
   input: Record<string, unknown>,
   reason: string,
   addresses: string[] = [],
 ) {
-  const result = await expectRefused(fx, input, reason);
+  await expectRefused(fx, input, reason);
+  const result = await fx.start(input);
+  expect(fx.sendLedger.rows.size).toBe(0);
   for (const address of addresses) {
     expect(result.errorMessage?.toLowerCase()).not.toContain(address.toLowerCase());
   }
@@ -677,16 +702,25 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(makeFixture({ drafts }), { releasedList: approved }, `draft 2 of the bundle (contact c2): ${SUBJECT_CHANGED}`);
   });
 
-  it("A4 a body artifact's own subject that differs from the card's subject does not block the send: nobody was shown it", async () => {
+  it("A4 a body artifact's own subject that differs from the card's subject neither blocks the send nor is mailed: nobody was shown it", async () => {
     const store = makeStore();
     store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: "Subject of the artifact alone" };
-    await expectBoundNotMailed(makeFixture({ store }), { releasedList: approved });
+    const fx = makeFixture({ store });
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(result.sentCount).toBe(2);
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
+    ]);
   });
 
-  it("A4b a body artifact whose own subject equals its draft's passes every check", async () => {
+  it("A4b a body artifact whose own subject equals its draft's is sent with it", async () => {
     const fx = makeFixture();
     expect(fx.store.get("art-1")!.data.subject).toBe("Bundle subject one");
-    await expectBoundNotMailed(fx, { releasedList: approved });
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.sent[0]?.subject).toBe("Bundle subject one");
   });
 
   it("A5 the subject is compared exactly with the draft's: a different letter case refuses the send", async () => {
@@ -698,25 +732,30 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     await expectCardRefused(makeFixture({ store }), { releasedList: entries }, `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`);
   });
 
-  it("A5b the entry's subject is compared byte for byte, not trimmed", async () => {
+  it("A5b the mailed subject is the entry's subject byte for byte, not trimmed", async () => {
     const padded = "  Padded  subject ";
     const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject: padded } : d));
     const store = makeStore();
     store.get("art-1")!.data = { ...store.get("art-1")!.data, subject: padded.trim() };
-    await expectBoundNotMailed(makeFixture({ drafts, store }), { releasedList: [{ ...approved[0]!, subject: padded }, approved[1]] });
-    // The same subject trimmed is another subject than the draft's: refused.
-    await expectCardRefused(
-      makeFixture({ drafts, store }),
-      { releasedList: [{ ...approved[0]!, subject: padded.trim() }, approved[1]], shownList: [{ ...approved[0]!, subject: padded.trim() }, approved[1]] },
-      `draft 1 of the bundle (contact c1): ${SUBJECT_CHANGED}`,
-    );
+    const fx = makeFixture({ drafts, store });
+    const result = await fx.start({ releasedList: [{ ...approved[0]!, subject: padded }, approved[1]] });
+    expect(result.status).toBe("completed");
+    expect(fx.sent[0]?.subject).toBe(padded);
+    expect(fx.sent[0]?.textBody).toBe("Approved body one");
   });
 
-  it("A6 equal values pass every check, the address compared byte for byte", async () => {
-    // The bundle's equal address is only checked against the address the
-    // released card showed (an address shown with white space around it is
-    // refused, see B5).
-    await expectBoundNotMailed(makeFixture(), { releasedList: approved });
+  it("A6 equal values are sent as before, the address compared byte for byte", async () => {
+    const fx = makeFixture();
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(result.sentCount).toBe(2);
+    // The mail goes to the address the released card showed, as it showed
+    // it; the bundle's equal address is only checked against it (an address
+    // shown with white space around it is refused, see B5).
+    expect(fx.sent).toEqual([
+      expect.objectContaining({ to: ["one@example.com"], subject: "Bundle subject one", textBody: "Approved body one" }),
+      expect.objectContaining({ to: ["two@example.com"], subject: "Bundle subject two", textBody: "Approved body two" }),
+    ]);
     // Another letter case is another address than the bundle's: refused.
     await expectCardRefused(
       makeFixture(),
@@ -726,11 +765,15 @@ describe("cinatra#3089 — each message is sent to the address and with the subj
     );
   });
 
-  it("A7 an equal address resolved from the recipients list passes every check", async () => {
+  it("A7 an equal address resolved from the recipients list is sent as before", async () => {
     const drafts = bundleDrafts.map((d) =>
       d.recipientId === "c2" ? { contactId: "c2", recipientEmail: "", subject: d.subject, body: d.body } : d,
     );
-    await expectBoundNotMailed(makeFixture({ drafts }), { releasedList: approved });
+    const fx = makeFixture({ drafts });
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
+    expect(fx.sent.map((m) => m.to)).toEqual([["one@example.com"], ["two@example.com"]]);
+    expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
   });
 
   it("A8 an entry for a draft without an address refuses the whole send", async () => {
@@ -798,7 +841,8 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
 
   it("G1 the send asks for the decision of its call's verified step, and of that step only", async () => {
     const fx = makeFixture();
-    await expectBoundNotMailed(fx, { releasedList: approved });
+    const result = await fx.start({ releasedList: approved });
+    expect(result.status).toBe("completed");
     expect(fx.readPublishDecision).toHaveBeenCalledTimes(1);
     expect(fx.readPublishDecision).toHaveBeenCalledWith("run-1", "send");
     // Another verified step asks for its own.
@@ -808,7 +852,7 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
   });
 
   for (const [name, graph] of [["nested in a released publishing FlowNode", NESTED_GRAPH], ["signed with the publishing component's own id", ALIASED_GRAPH]] as const) {
-    it(`G2 a send step ${name} reads the decision stored under the publishing node, and binds the approved bodies`, async () => {
+    it(`G2 a send step ${name} reads the decision stored under the publishing node, and sends the approved bodies`, async () => {
       governing.readRunBoundGraph.mockResolvedValue(JSON.stringify(graph));
       governing.readDecisionForRunNode.mockImplementation(async (_runId: unknown, nodeId: unknown) =>
         nodeId === "publish" ? { id: "d-publish", ...releasedCardFor(approved) } : null);
@@ -817,10 +861,11 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
         reviewedBodies: true,
         callingRun: { runId: "run-1", stepId: "send", claim: { runId: "run-1", decisionId: "d-publish" } },
       });
-      // Every check passed on the node's decision: bound, not REVIEWED_ARTIFACTS_REQUIRED.
-      await expectBoundNotMailed(fx, {});
+      const result = await fx.start({});
+      expect(result.status).toBe("completed");
       expect(governing.readDecisionForRunNode).toHaveBeenCalledWith("run-1", "publish");
       expect(governing.readDecisionForRunNode).not.toHaveBeenCalledWith("run-1", "send");
+      expect(fx.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
     });
   }
 
@@ -861,7 +906,9 @@ describe("cinatra#3089 — the send reads the decision that governs its call, as
     );
     await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: card(undefined) }), {}, "signed for another publish decision");
     await expectRefused(makeFixture({ callingRun: signed, readPublishDecision: async () => null }), {}, "signed for another publish decision");
-    await expectBoundNotMailed(makeFixture({ callingRun: signed, readPublishDecision: card("d-signed") }), {});
+    const served = makeFixture({ callingRun: signed, readPublishDecision: card("d-signed") });
+    expect((await served.start({})).status).toBe("completed");
+    expect(served.sent.map((m) => m.textBody)).toEqual(["Approved body one", "Approved body two"]);
   });
 });
 
@@ -907,12 +954,15 @@ describe("cinatra#3089 — what is sent is byte for byte what the card showed", 
     );
   });
 
-  it("B3 a subject shown with spaces, a non-breaking space or a decomposed accent passes exactly as shown", async () => {
+  it("B3 a subject shown with spaces, a non-breaking space or a decomposed accent is sent exactly as shown", async () => {
     for (const subject of [" Padded  subject ", "Bundle subject one", "Résumé".normalize("NFD")]) {
       const drafts = bundleDrafts.map((d) => (d.recipientId === "c1" ? { ...d, subject } : d));
       const store = makeStore();
       store.get("art-1")!.data = { ...store.get("art-1")!.data, subject };
-      await expectBoundNotMailed(makeFixture({ drafts, store }), { releasedList: [{ ...approved[0]!, subject }, approved[1]] });
+      const fx = makeFixture({ drafts, store });
+      const result = await fx.start({ releasedList: [{ ...approved[0]!, subject }, approved[1]] });
+      expect(result.status).toBe("completed");
+      expect(fx.sent[0]?.subject).toBe(subject);
     }
   });
 
@@ -941,7 +991,7 @@ describe("cinatra#3089 — what is sent is byte for byte what the card showed", 
     );
   });
 
-  it("B6 the campaign and the sender are compared exactly as the decision froze and the card showed them", async () => {
+  it("B6 the campaign and the sender are compared and used exactly as the decision froze and the card showed them", async () => {
     const withSender = (sender: unknown) => async () => {
       const card = releasedCardFor(approved);
       return {
@@ -961,10 +1011,9 @@ describe("cinatra#3089 — what is sent is byte for byte what the card showed", 
       { senderEmail: "TEAM@example.com" },
       "the call names another sender than the released publish card showed",
     );
-    await expectBoundNotMailed(
-      makeFixture({ readPublishDecision: withSender("team@example.com") as TriggerEmailSendDeps["readPublishDecision"] }),
-      { senderEmail: "team@example.com" },
-    );
+    const fx = makeFixture({ readPublishDecision: withSender("team@example.com") as TriggerEmailSendDeps["readPublishDecision"] });
+    expect((await fx.start({ senderEmail: "team@example.com" })).status).toBe("completed");
+    expect(fx.sendEmail.mock.calls.map((c) => (c[0] as { fromEmail?: string }).fromEmail)).toEqual(["team@example.com", "team@example.com"]);
     await expectRefused(makeFixture(), { releasedList: approved, senderEmail: "team@example.com" }, "the call names a sender the released publish card did not show");
     // A campaign frozen with white space around it is refused, not trimmed.
     await expectRefused(
@@ -991,13 +1040,11 @@ describe("cinatra#3089 — the approved send reads the decision its call claimed
   };
   const claimOf = (decisionId: string, runId = "run-1") => ({ publishCallClaim: { runId, decisionId } });
 
-  it("C1 the normal case binds the list of the claimed decision", async () => {
+  it("C1 the normal case mails the list of the claimed decision", async () => {
     const fx = makeFixture({ decisions: { current: [decisionA] } });
     const result = await inFrame(claimOf("d-A"), () => fx.start({}));
-    expect(result.status).toBe("failed");
-    expect(result.errorMessage).toContain(UNAVAILABLE);
-    expect(fx.sendEmail).not.toHaveBeenCalled();
-    expect(fx.bindBody.mock.calls.map(([b]) => [b.artifactId, b.markdown])).toEqual(BOUND);
+    expect(result.status).toBe("completed");
+    expect(fx.sent.map((m) => m.to[0])).toEqual(["one@example.com", "two@example.com"]);
   });
 
   it("C2 a call that claimed A, after B was released for the step in the same attempt, is refused: never B's list", async () => {
