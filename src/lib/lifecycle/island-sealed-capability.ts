@@ -4,8 +4,8 @@ import "server-only";
 // `PLAN: Agents Lifecycle (C)`, cinatra#3027 / epic #3023).
 //
 // WHY A SHARED SEAL AND NOT TWO COPIES. The island credential
-// (`review-island-credential.ts`) and the capture capability
-// (`capture-capability.ts`) are already the same construction written twice, and
+// (`review-island-credential.ts`) and the former capture capability (removed
+// by cinatra#3862) were already the same construction written twice, and
 // this slice adds two more bearers of exactly that shape: the byte capability
 // (0.6) and the data capability (0.12). A fifth and sixth hand-rolled AES-GCM
 // codec is how one of them eventually forgets an expiry ceiling or a field

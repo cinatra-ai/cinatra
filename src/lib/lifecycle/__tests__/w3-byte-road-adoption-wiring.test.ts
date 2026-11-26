@@ -248,12 +248,10 @@ function filesNamingSymbol(files: Readonly<Record<string, string>>, symbol: stri
   return [...naming].sort();
 }
 
-/** The only files that may name the broker minter, apart from the module that
- *  defines it and tests (which are not scanned). Empty: the review surface no
- *  longer draws a capture pair, so the minter has no caller (cinatra#3862 l8b);
- *  the next unit of leg 8 deletes the minter with its module. */
+/** The module that defined the broker minter. The review surface stopped
+ *  drawing a capture pair (cinatra#3862 l8b), and the second part of leg 8
+ *  deleted the minter with its module and the capture store. */
 const MINTER_DEFINITION = "src/lib/lifecycle/widget-capture-egress.ts";
-const MINTER_ALLOWED_NAMERS: Readonly<Record<string, string>> = {};
 
 describe("wave 3 — the byte capability finally has a caller", () => {
   it("mints island byte capabilities from the product tree, not only from a test", () => {
@@ -287,21 +285,21 @@ describe("wave 3 — the byte capability finally has a caller", () => {
 });
 
 describe("wave 3 — the CMS picture pair's broker minter has no caller", () => {
-  // red-first-expect: expected [ Array(1) ] to deeply equal []
   it("is called nowhere in the product tree", () => {
     expect(callersOf("buildBrokerCapturePair")).toEqual([]);
   });
 
-  // red-first-expect: expected [ Array(1) ] to deeply equal []
+  // red-first-expect: to not include 'src/lib/lifecycle/widget-capture-egre
   it("is named by no file of any runtime product root, however it is imported or re-exported", () => {
     const files: Record<string, string> = {};
     for (const root of productRoots()) {
       for (const abs of walkSources(root)) files[path.relative(ROOT, abs).split(path.sep).join("/")] = readFileSync(abs, "utf8");
     }
-    // The scan must reach the defining module and the roads that once called it.
-    expect(Object.keys(files)).toContain(MINTER_DEFINITION);
+    // The scan must reach the roads that once called it; the defining module is gone.
     expect(Object.keys(files)).toContain("src/app/artifacts/[id]/review-surface-roads.ts");
-    expect(filesNamingSymbol(files, "buildBrokerCapturePair", MINTER_DEFINITION).filter((f) => !(f in MINTER_ALLOWED_NAMERS))).toEqual([]);
+    expect(Object.keys(files)).not.toContain(MINTER_DEFINITION);
+    expect(filesNamingSymbol(files, "buildBrokerCapturePair", MINTER_DEFINITION)).toEqual([]);
+    expect(Object.keys(files).filter((f) => files[f].includes("buildBrokerCapturePair"))).toEqual([]);
   });
 
   describe("the resolver's controls (in-memory fixtures, no product file)", () => {
@@ -344,7 +342,6 @@ describe("wave 3 — the CMS picture pair's broker minter has no caller", () => 
     });
   });
 
-  // red-first-expect: not to contain 'buildBrokerCapturePair'
   it("is not reached from the review surface loader", () => {
     const roads = readFileSync(
       path.join(ROOT, "src/app/artifacts/[id]/review-surface-roads.ts"),
