@@ -592,6 +592,80 @@ finding fails whatever the floor holds. The gate's own writer
 entries that no longer apply and never adds one; it emptied the floor at the
 flip. A test of record pins the checked-in floor as empty.
 
+## Core tests and fixtures that pin one pack (cinatra#4853)
+
+`core-test-pack-pin-gate.mjs` holds the test side of the border. **The rule:**
+a core TypeScript/JavaScript test or JSON fixture (under `src/`, `packages/`
+or `docker/`, in a test or fixture directory or a `*.test.*` / `*.spec.*` /
+`*.fixture.*` file) does not pin one pinned pack: it reads, imports or
+resolves no path inside the materialized `extensions/` tree that names a
+package the two extension locks pin, and no fixture that parses as an agent
+flow (an object with `component_type: "Flow"`) carries a pinned-pack marker (a
+locked package name, or 7 or more leading hex digits of a lock's
+`resolvedSha`). The gate decides this from structure only: test files are
+read with the TypeScript parser (the literal segments of a path expression:
+`path.join`, `resolve`, `+`, template text; import specifiers), JSON fixtures
+are read parsed (every string value and every key goes through the same path
+rule as a code string, flow-shaped or not; a flow's markers are read from the
+parsed value too, so `\/` and `\uNNNN` escapes do not hide a name or pin),
+and the two locks; it names no pack and no file. **One path normalizer**
+(`normalizePath`) judges every path: `/` and `\` both separate, repeated
+separators collapse, `.` segments drop, `..` resolves, and an ASCII `%XX`
+escape decodes (a `file:` URL read decodes it), so
+`extensions/./<scope>/<name>`, `extensions/x/../<scope>/<name>`,
+`extensions//<scope>` and `extensions\<scope>\<name>` are the same path.
+**Every comparison is made without case**: package names and path segments
+(an import or a path resolves without case on a case-insensitive disk) and
+sha prefixes (git resolves an abbreviated sha without case). **There is no
+temporary-root exemption:** a path that spells `extensions/<scope>/<name>` of
+a pinned pack is a finding wherever it is rooted (the repository, a `mkdtemp`
+directory, an absolute stand-in such as `/repo/extensions/...`, a core
+directory). A test that rebuilds a pinned pack's tree in a temporary folder
+still names that pack in core; a test that needs a made-up pack uses a made-up
+name, which matches no lock and is no finding. The gate never infers where a
+variable points, so it cannot be misled about it. Comments are not read (the
+parser drops them). A fixture that does not parse but shows a flow's signal
+is reported as `(unparsed flow fixture)`; any other unparsable file is
+skipped. A load that loads no value is exempt from both rules, by structure:
+`import type`, `export type`, every named specifier marked `type` with no
+default or namespace binding, `import type X = require(...)`, and a
+`typeof import("...")` type; `import x = require(...)` and
+`requireActual(...)` count. **Iteration is not a pin:** a fleet test that
+walks the lock or the tree builds the name from a variable, so its path stops
+at the tree with a hole and no pack is found; a file whose path reaches the
+tree that way (rooted in a variable or a relative `.`/`..`) is found for every
+pack whose name it also spells as a whole literal (`"demo-agent"`,
+`"@scope/demo-agent"`). An absolute or prefixed `extensions/<word>` with the
+name in a variable does not trigger this widening, because it is as often a
+URL route (`/extensions/upload`) or a core directory. The pins that stood on
+main when the gate landed are held by the shrink-only floor
+`core-test-pack-pin-gate.baseline.json`, one entry per rule, file and pack; a
+new pin fails, an entry whose pin is gone is stale and fails until
+`--write-baseline` shrinks the floor, and the floor is compared with the base
+branch through `lib/floor-base-guard.mjs` (`CORE_TEST_PACK_PIN_BASE`, else
+`GITHUB_BASE_REF`). It runs as the test of record in
+`__tests__/core-test-pack-pin-gate.test.mjs`, inside the root suite of the job
+"Perpetual core invariants".
+
+**Not covered yet: Python tests.** The Python tests under
+`docker/wayflow/tests` (and every other `*.py` file) are not scanned; reading
+them soundly needs a real Python parser, not hand-written scanning. Their
+check is the remaining part of cinatra#4853, which stays open until it lands.
+
+**What it cannot see:** a flow copied by hand that keeps no package name and
+no pin sha (catching that needs the positive rule of cinatra#4853: every
+flow-shaped fixture carries a synthetic marker); a flow embedded as an object
+literal in a test file instead of a JSON fixture; a name split across two
+JSON strings that a loader concatenates; YAML fixtures; an encoded separator
+(`%2F`, `%5C`) is not read as a separator (neither a plain path nor
+`fileURLToPath`, which refuses it, treats it as one); a `%XX` escape is
+decoded in a plain string path too, where the file system would not decode
+it (it can only add a finding); an absolute or prefixed path that takes the
+pack's name from a variable (`"/repo/extensions/" + name`); a pack name
+computed from parts (`"demo" + "-agent"`) or read from another file; a
+pack's source reached through a module that is not a test (a helper under
+`src/` that the test calls).
+
 ## Floors compared with the base branch (cinatra#3832)
 
 A ratchet gate compares a live count or list with a committed floor and fails
@@ -856,6 +930,7 @@ EXTENSION_FS_IMPORT_BAN_BASE=origin/main node scripts/audit/extension-fs-import-
 CI_PINNED_TESTS_BASE=origin/main node scripts/audit/ci-pinned-tests-exist.mjs
 ORG_ARCHIVE_BYPASS_BASE=origin/main node scripts/audit/org-archive-bypass-scan.mjs
 ROUTE_GRAPH_RATCHET_BASE=origin/main node scripts/audit/route-graph-ratchet.mjs
+CORE_TEST_PACK_PIN_BASE=origin/main node scripts/audit/core-test-pack-pin-gate.mjs
 
 # regenerating a pinned-empty baseline REFUSES non-empty output
 node scripts/audit/core-extension-instance-coupling-ban.mjs --write-baseline
