@@ -791,6 +791,25 @@ def test_mount_malformed_declaration_raises(monkeypatch, tmp_path: Path) -> None
         _mount(monkeypatch, tmp_path, doc)
 
 
+def test_3089_an_uncomposed_mount_sends_its_source_once(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """cinatra#3089: a mount that composes nothing hands the loader the file's
+    own text as the declaration source; the binding then says so instead of
+    carrying the same text a second time."""
+    import agent_loader as al
+
+    # This leaf's work node would get a derived bridge output schema, which
+    # rewrites the text; with no derivation the mount composes nothing.
+    monkeypatch.setattr(al, "_derive_bridge_output_schemas", lambda doc, label: [])
+    doc = _slim_spec([])
+    raw, _fake_loader, mounted = _mount(monkeypatch, tmp_path, doc)
+    binding = mounted.selected_source_binding
+    assert binding["declarationSource"] == raw
+    assert binding["mountedSourceIsDeclarationSource"] is True
+    assert "mountedSource" not in binding
+
+
 def test_mount_records_the_selected_source_binding(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -814,8 +833,12 @@ def test_mount_records_the_selected_source_binding(
         "executedSourceSha256",
         "declarationSourceSha256",
         "declarationSource",
+        "mountedSource",
     }
     assert binding["sourceSha256"] == mounted.fingerprint
+    # cinatra#3089: the mounted file's own bytes, before any composition (the
+    # composed declaration source differs from them, so both are sent).
+    assert binding["mountedSource"] == raw
     assert binding["sourceSha256"] == hashlib.sha256(raw.encode()).hexdigest()
     executed = fake_loader.loaded[0]
     assert binding["executedSourceSha256"] == hashlib.sha256(
