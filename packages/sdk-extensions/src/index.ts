@@ -734,6 +734,7 @@ export type {
   InstanceToolPolicyMode,
   InstanceToolPolicyRecord,
   SiteToolCallInput,
+  GuardedSiteToolCallInput,
   SiteToolsListInput,
   SiteToolDerivedClass,
   SiteToolPolicyStatus,

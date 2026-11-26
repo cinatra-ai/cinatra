@@ -228,7 +228,8 @@ export type ToolResolution =
  * Resolve `toolName` (optionally narrowed by `serverId`) across an instance's
  * enrolled server snapshots (§3.6). `serverId` is REQUIRED only when the name is
  * non-unique across servers; ambiguous → `ambiguous_tool` with the candidate
- * STABLE OPAQUE server ids (§10-A1, never normalized names); unique → resolved
+ * STABLE OPAQUE server ids (§10-A1, never normalized names; a server with two
+ * rows of the name is ambiguous too and appears once per row); unique → resolved
  * deterministically. Uniqueness runs over the EXPANDED namespace (abilities on
  * triad servers + native tools on first-class servers). Absent → `tool_not_found`
  * (distinct from an absent-stack transport error, §1.4).
@@ -241,8 +242,12 @@ export function resolveToolAcrossServers(
   const matches: Array<{ snapshot: CatalogServerSnapshot; entry: CatalogToolEntry }> = [];
   for (const snapshot of snapshots) {
     if (serverId && snapshot.serverId !== serverId) continue;
-    const entry = snapshot.tools.find((t) => t.name === toolName);
-    if (entry) matches.push({ snapshot, entry });
+    // Every row of the name counts (cinatra#3745): two rows of one name on one
+    // server are as ambiguous as two servers, since the wire name cannot say
+    // which implementation runs. `.find()` would silently take the first.
+    for (const entry of snapshot.tools) {
+      if (entry.name === toolName) matches.push({ snapshot, entry });
+    }
   }
   if (matches.length === 0) return { ok: false, reason: "tool_not_found" };
   if (matches.length > 1) {

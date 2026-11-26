@@ -105,6 +105,7 @@ import {
   type HostWordPressMcpService,
   type HostInstanceWriteAuthorityService,
   type HostConnectorInstanceInvokerService,
+  type SiteToolCallInput,
   type HostExternalMcpRegistryService,
   type HostYouTubeConnectionService,
   type HostInstanceConnectionGateService,
@@ -170,8 +171,10 @@ import {
   listConnectorInstanceTools,
   type ConnectorInstanceInvokerDeps,
   type InvokerTrustedActor,
+  type InvokeConnectorInstanceToolInput,
   type ResolvedInstanceEndpoint,
   acquireSnapshots as acquireConnectorInstanceCatalogSnapshots,
+  isPlainAnnotationsRecord,
 } from "@/lib/connector-instance-invoker";
 import {
   callConnectorInstanceMcpTool,
@@ -1558,28 +1561,77 @@ export function registerHostConnectorServices(): void {
   // (`dispatch`) and `wordpress_site_tools_list` (`discovery`) carry core
   // declarations in `capability-plan.ts` (cinatra#2817), and the
   // decision is `evaluateDelegatedChatAdmission`, not a name allowlist.
+  // cinatra#3745 — one call road for both invoke methods. `guards` carries
+  // only fields the invoker enforces; each can only add a refusal.
+  const invokeSiteToolWith = async (
+    input: Pick<SiteToolCallInput, "toolName" | "args" | "instanceId" | "serverId">,
+    guards: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
+  ) => {
+    const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
+      { explicitInstanceId: input.instanceId },
+    );
+    return invokeConnectorInstanceTool(
+      {
+        connectorKey: boundConnectorKey,
+        toolName: input.toolName,
+        args: input.args,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+        ...(input.serverId ? { serverId: input.serverId } : {}),
+        ...guards,
+        actor,
+        primitiveName: `${boundConnectorKey}_site_tool_call`,
+        // cinatra#2020 D6 — host-derived surface as `sourceType` (also makes
+        // the existing widget platform-admin suppression at the USE gate
+        // apply to widget-surface invoker calls) + frame runId as advisory
+        // causation for the audit/park correlation trail.
+        sourceType: surface,
+        ...(frameRunId ? { causation: frameRunId } : {}),
+      },
+      buildConnectorInstanceInvokerDeps(boundConnectorKey),
+    );
+  };
   register(svc.connectorInstanceInvoker, {
+    // cinatra#3745 — the unguarded call never honours and never drops a guard
+    // field: a call that carries one is refused, so a connector written for
+    // the guarded call cannot fall back to this one unnoticed on this host.
     invokeSiteTool: async (input) => {
-      const { actor, boundConnectorKey, surface, frameRunId } = await resolveConnectorInstanceInvokerContext(
-        { explicitInstanceId: input.instanceId },
-      );
-      return invokeConnectorInstanceTool(
+      const carried = input as { expectedRawAnnotations?: unknown; expectedClass?: unknown };
+      if (carried.expectedRawAnnotations !== undefined || carried.expectedClass !== undefined) {
+        throw new InvokerError(
+          "guarded_call_required",
+          "a site tool call that carries expectedRawAnnotations or expectedClass must use invokeSiteToolGuarded",
+        );
+      }
+      return invokeSiteToolWith(input, {});
+    },
+    // cinatra#3745 — the GUARDED call; its presence tells a connector that this
+    // host enforces the guards (an older host has no such method, so a
+    // connector relying on a guard refuses there instead of calling unguarded).
+    invokeSiteToolGuarded: async (input) => {
+      // Both checks run before anything resolves: the guarded call is bound to
+      // the server of the row it listed, and its annotations must be a plain
+      // object (the invoker's own predicate).
+      const serverId: unknown = input.serverId;
+      if (typeof serverId !== "string" || serverId.length === 0) {
+        throw new InvokerError(
+          "guarded_server_id_required",
+          "a guarded site tool call must name the serverId of the row it listed",
+        );
+      }
+      const annotations: unknown = input.expectedRawAnnotations;
+      if (!isPlainAnnotationsRecord(annotations)) {
+        throw new InvokerError(
+          "catalog_entry_changed",
+          "a guarded site tool call must carry the annotations of the row it listed; list the tools again",
+        );
+      }
+      return invokeSiteToolWith(
+        { toolName: input.toolName, args: input.args, instanceId: input.instanceId, serverId },
         {
-          connectorKey: boundConnectorKey,
-          toolName: input.toolName,
-          args: input.args,
-          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
-          ...(input.serverId ? { serverId: input.serverId } : {}),
-          actor,
-          primitiveName: `${boundConnectorKey}_site_tool_call`,
-          // cinatra#2020 D6 — host-derived surface as `sourceType` (also makes
-          // the existing widget platform-admin suppression at the USE gate
-          // apply to widget-surface invoker calls) + frame runId as advisory
-          // causation for the audit/park correlation trail.
-          sourceType: surface,
-          ...(frameRunId ? { causation: frameRunId } : {}),
+          expectedRawAnnotations: annotations,
+          expectedServerId: serverId,
+          ...(input.expectedClass !== undefined ? { expectedClass: input.expectedClass } : {}),
         },
-        buildConnectorInstanceInvokerDeps(boundConnectorKey),
       );
     },
     listSiteTools: async (input) => {

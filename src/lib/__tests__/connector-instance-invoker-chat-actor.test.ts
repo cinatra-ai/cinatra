@@ -190,11 +190,19 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
     callConnectorInstanceMcpTool: vi.fn(
       async (input: { endpoint: string; authHeader: string; name: string; arguments: Record<string, unknown> }) => {
         wireCalls.push({ name: input.name, arguments: input.arguments });
+        // cinatra#3745 — the "wp-write" instance (site w.example) serves ONE
+        // write-class ability instead, so the adapter tests can prove that
+        // the guarded call enforces `expectedClass`.
+        const writeSite = new URL(input.endpoint).hostname === "w.example";
+        // The "wp-bare" instance (site n.example) serves its ability with NO
+        // annotations, so the catalog stores and lists the row as `{}`.
+        const bareSite = new URL(input.endpoint).hostname === "n.example";
         if (input.name === actual.TRIAD_DISCOVER_ABILITIES) {
-          return { abilities: [{ name: "core/get-site-info" }] };
+          return { abilities: [{ name: writeSite ? "core/update-option" : "core/get-site-info" }] };
         }
         if (input.name === actual.TRIAD_GET_ABILITY_INFO) {
-          return { input_schema: {}, meta: { annotations: { readOnlyHint: true } } };
+          if (bareSite) return { input_schema: {} };
+          return { input_schema: {}, meta: { annotations: { readOnlyHint: !writeSite } } };
         }
         // TRIAD_EXECUTE_ABILITY — the final, real tool-call result.
         return { structuredContent: { ok: true } };
@@ -206,7 +214,7 @@ vi.mock("@/lib/connector-instance-mcp-transport", async (importOriginal) => {
 
 import { registerCapabilityProvider, resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { HOST_CONNECTOR_SERVICE_CAPABILITIES } from "@cinatra-ai/sdk-extensions/internal";
-import type { HostConnectorInstanceInvokerService } from "@cinatra-ai/sdk-extensions";
+import type { GuardedSiteToolCallInput, HostConnectorInstanceInvokerService } from "@cinatra-ai/sdk-extensions";
 import { InvokerError } from "@/lib/connector-instance-mcp-transport";
 import { InstanceWriteAuthorityError } from "@/lib/connector-instance-write-authority";
 import { mcpRequestContextStorage, type McpRequestContext } from "@cinatra-ai/mcp-server";
@@ -226,6 +234,20 @@ const WP_ROWS: Record<string, { id: string; orgId: string; siteUrl: string; user
     id: "wp-other-tenant",
     orgId: "org-b",
     siteUrl: "https://b.example",
+    username: "u",
+    applicationPassword: "p",
+  },
+  "wp-write": {
+    id: "wp-write",
+    orgId: "org-a",
+    siteUrl: "https://w.example",
+    username: "u",
+    applicationPassword: "p",
+  },
+  "wp-bare": {
+    id: "wp-bare",
+    orgId: "org-a",
+    siteUrl: "https://n.example",
     username: "u",
     applicationPassword: "p",
   },
@@ -457,5 +479,230 @@ describe("chat actor connector-instance-invoker resolver (cinatra#2024 S9 G1)", 
     await expect(call).rejects.toBeInstanceOf(InvokerError);
     await expect(call).rejects.toMatchObject({ code: "connector_key_underivable" });
     expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
+  });
+});
+
+describe("invokeSiteTool never honours or drops a guard field (cinatra#3745)", () => {
+  beforeAll(() => {
+    resolveOrgRoleForUser.mockImplementation(async (orgId) => (orgId ? "member" : undefined));
+  });
+
+  const isExecute = (c: { name: string }) => c.name === "mcp-adapter-execute-ability";
+  const asMember = <T>(fn: () => Promise<T>) => runAsChatActor({ userId: "user-1", orgId: "org-a" }, fn);
+  // A connector written for the guarded call that falls back to the unguarded
+  // one; the SDK type forbids the fields, a plain JS caller can still send them.
+  const unguarded = (input: Record<string, unknown>) =>
+    asMember(() => invoker.invokeSiteTool(input as unknown as Parameters<typeof invoker.invokeSiteTool>[0]));
+
+  it("refuses a call that carries expectedRawAnnotations, expectedClass or both, before execution", async () => {
+    wireCalls.length = 0;
+    const base = { toolName: "core/update-option", args: {}, instanceId: "wp-write" };
+    for (const guards of [
+      { expectedRawAnnotations: { readOnlyHint: true } },
+      { expectedRawAnnotations: { readOnlyHint: false } },
+      { expectedClass: "read" },
+      { expectedRawAnnotations: {}, expectedClass: "read" },
+      { expectedRawAnnotations: null },
+    ]) {
+      // red-first-expect: promise resolved "{ structuredContent: { ok: true } }" instead of rejecting
+      await expect(unguarded({ ...base, ...guards })).rejects.toMatchObject({ code: "guarded_call_required" });
+    }
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("a call without either field behaves as before: a write-class row executes", async () => {
+    wireCalls.length = 0;
+    const ok = await asMember(() =>
+      invoker.invokeSiteTool({ toolName: "core/update-option", args: {}, instanceId: "wp-write" }),
+    );
+    expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+  });
+});
+
+describe("invokeSiteToolGuarded — the host enforces the guards it declares (cinatra#3745)", () => {
+  beforeAll(() => {
+    resolveOrgRoleForUser.mockImplementation(async (orgId) => (orgId ? "member" : undefined));
+  });
+
+  const isExecute = (c: { name: string }) => c.name === "mcp-adapter-execute-ability";
+  const asMember = <T>(fn: () => Promise<T>) => runAsChatActor({ userId: "user-1", orgId: "org-a" }, fn);
+  const guarded = (input: GuardedSiteToolCallInput) => asMember(() => invoker.invokeSiteToolGuarded!(input));
+
+  it("this host declares the guarded call", () => {
+    expect(typeof invoker.invokeSiteToolGuarded).toBe("function");
+  });
+
+  it("the listed row executes; a row whose annotations differ is refused before execution", async () => {
+    const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-valid" }));
+    const row = page.tools.find((t) => t.name === "core/get-site-info");
+    expect(row?.rawAnnotations).toEqual({ readOnlyHint: true });
+    expect(row?.serverId).toBe(CATALOG_DEFAULT_SERVER_ID);
+
+    wireCalls.length = 0;
+    const ok = await guarded({
+      toolName: "core/get-site-info",
+      args: {},
+      instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
+      expectedRawAnnotations: row!.rawAnnotations,
+    });
+    expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+
+    wireCalls.length = 0;
+    await expect(
+      guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID, expectedRawAnnotations: { readOnlyHint: false } }),
+    ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("expectedClass \"read\": a write-class row is refused before execution, a read-class row executes", async () => {
+    wireCalls.length = 0;
+    await expect(
+      guarded({
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write", serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: { readOnlyHint: false },
+        expectedClass: "read",
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+
+    const ok = await guarded({
+      toolName: "core/get-site-info",
+      args: {},
+      instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
+      expectedRawAnnotations: { readOnlyHint: true },
+      expectedClass: "read",
+    });
+    expect(ok).toEqual({ structuredContent: { ok: true } });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+  });
+
+  it("refuses a guarded call without the listed row's annotations, or with an unknown class, before execution", async () => {
+    wireCalls.length = 0;
+    for (const bad of [undefined, null, [], "x"]) {
+      await expect(
+        guarded({ toolName: "core/get-site-info", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID, expectedRawAnnotations: bad as never }),
+      ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    }
+    await expect(
+      guarded({
+        toolName: "core/get-site-info",
+        args: {},
+        instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: { readOnlyHint: true },
+        expectedClass: "write" as never,
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_not_read" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("refuses a guarded call without a non-empty serverId before anything resolves", async () => {
+    wireCalls.length = 0;
+    for (const serverId of [undefined, "", 7]) {
+      await expect(
+        guarded({
+          toolName: "core/get-site-info",
+          args: {},
+          instanceId: "wp-valid",
+          serverId: serverId as never,
+          expectedRawAnnotations: { readOnlyHint: true },
+        }),
+      ).rejects.toMatchObject({ code: "guarded_server_id_required" });
+    }
+    expect(wireCalls).toHaveLength(0);
+  });
+
+  it("refuses annotations that are not a plain object, for an unannotated row too", async () => {
+    class Annotations {}
+    const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-bare" }));
+    expect(page.tools.find((t) => t.name === "core/get-site-info")?.rawAnnotations).toEqual({});
+    wireCalls.length = 0;
+    for (const bad of [new Map(), new Date(0), new Annotations(), { inner: new Map() }, { at: new Date(0) }]) {
+      await expect(
+        guarded({
+          toolName: "core/get-site-info",
+          args: {},
+          instanceId: "wp-bare",
+          serverId: CATALOG_DEFAULT_SERVER_ID,
+          expectedRawAnnotations: bad as never,
+        }),
+      ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    }
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+    // The same unannotated row, sent back as listed (`{}`), executes.
+    await guarded({
+      toolName: "core/get-site-info",
+      args: {},
+      instanceId: "wp-bare",
+      serverId: CATALOG_DEFAULT_SERVER_ID,
+      expectedRawAnnotations: {},
+    });
+    expect(wireCalls.filter(isExecute)).toHaveLength(1);
+  });
+
+  it("a guarded call for a tool gone from the listed server answers catalog_entry_changed; an unguarded one tool_not_found", async () => {
+    wireCalls.length = 0;
+    await expect(
+      guarded({
+        toolName: "core/no-such-ability",
+        args: {},
+        instanceId: "wp-valid",
+        serverId: CATALOG_DEFAULT_SERVER_ID,
+        expectedRawAnnotations: { readOnlyHint: true },
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    await expect(
+      asMember(() =>
+        invoker.invokeSiteTool({ toolName: "core/no-such-ability", args: {}, instanceId: "wp-valid", serverId: CATALOG_DEFAULT_SERVER_ID }),
+      ),
+    ).rejects.toMatchObject({ code: "tool_not_found" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+  });
+
+  it("annotations of a listed row mutated to read-only cannot pass the guards; a new listing serves the original", async () => {
+    const page = await asMember(() => invoker.listSiteTools({ instanceId: "wp-write" }));
+    const row = page.tools.find((t) => t.name === "core/update-option")!;
+    expect(row.rawAnnotations).toEqual({ readOnlyHint: false });
+    row.rawAnnotations.readOnlyHint = true;
+    wireCalls.length = 0;
+    await expect(
+      guarded({
+        toolName: "core/update-option",
+        args: {},
+        instanceId: "wp-write",
+        serverId: row.serverId,
+        expectedRawAnnotations: row.rawAnnotations,
+        expectedClass: "read",
+      }),
+    ).rejects.toMatchObject({ code: "catalog_entry_changed" });
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
+    const again = await asMember(() => invoker.listSiteTools({ instanceId: "wp-write" }));
+    expect(again.tools.find((t) => t.name === "core/update-option")!.rawAnnotations).toEqual({ readOnlyHint: false });
+  });
+
+  it("on a host without the guarded call, calling it throws before anything is sent", async () => {
+    // The service of a host from before the guards: exactly its two methods.
+    const olderHost: HostConnectorInstanceInvokerService = {
+      invokeSiteTool: vi.fn(invoker.invokeSiteTool),
+      listSiteTools: invoker.listSiteTools,
+    };
+    expect(olderHost.invokeSiteToolGuarded).toBeUndefined();
+    wireCalls.length = 0;
+    await expect(
+      asMember(async () =>
+        (olderHost as Required<HostConnectorInstanceInvokerService>).invokeSiteToolGuarded({
+          toolName: "core/update-option",
+          args: {},
+          instanceId: "wp-write", serverId: CATALOG_DEFAULT_SERVER_ID,
+          expectedRawAnnotations: { readOnlyHint: true },
+          expectedClass: "read",
+        }),
+      ),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(olderHost.invokeSiteTool).not.toHaveBeenCalled();
+    expect(wireCalls.filter(isExecute)).toHaveLength(0);
   });
 });
