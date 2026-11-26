@@ -74,7 +74,8 @@ vi.mock("@cinatra-ai/agents/review-gate-states", () => ({ ReviewGateLoading: () 
 vi.mock("../island-height-reporter", () => ({
   IslandHeightReporter: () => null,
   IslandReadySignal: () => null,
-  IslandPanelMountedSignal: () => null,
+  // It wraps each target's panel (cinatra#3089): the stand-in draws what it wraps.
+  IslandPanelMountedSignal: ({ children }: { children?: unknown }) => children ?? null,
 }));
 
 import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";

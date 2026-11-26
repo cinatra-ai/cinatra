@@ -90,6 +90,23 @@ async function rootOf(mounted: ReturnType<typeof render>): Promise<HTMLElement> 
 
 const okDoor = (): PublishDecisionDecide => vi.fn(async () => "decided" as const);
 
+// cinatra#3089: the island's drawn report, as its document posts it (island-height-reporter.tsx): the progress channel,
+// the attempt the card stamped on the frame, and how many panels it drew. `from` and `origin` default to the frame's own
+// window and the island's origin; a test passes others to prove the card ignores them.
+async function postDrawn(frame: HTMLIFrameElement, count: number, opts: { from?: Window | null; origin?: string; attempt?: number } = {}) {
+  const attempt = opts.attempt ?? Number(frame.name.split(":")[1] ?? 0);
+  await act(async () => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { channel: "cinatra-review-island-progress", type: "island-drawn", attempt, count },
+        origin: opts.origin ?? window.location.origin,
+        source: opts.from === undefined ? frame.contentWindow : opts.from,
+      }),
+    );
+  });
+  await settle();
+}
+
 describe("the drawn card", () => {
   it("the root carries its identity, host and state, and draws the question, the rows and both controls", async () => {
     for (const host of HOSTS) {
@@ -1136,6 +1153,7 @@ describe("the XV.1 empty items panel", () => {
       frame.dispatchEvent(new Event("load"));
     });
     await settle();
+    await postDrawn(frame, 1);
     expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
     expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
     expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
@@ -1213,6 +1231,7 @@ describe("an empty widget items frame and a fresh broker address", () => {
     const second = root.querySelector("iframe")!;
     expect(credentialOf(second)).toBe("credential-2");
     await load(second, false);
+    await postDrawn(second, 2);
     expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).toBeNull();
     expect(root.querySelector('[data-conformance-id="publish-row-items"]')).not.toBeNull();
     expect(root.querySelector('[data-conformance-id="review-target-island"]')?.getAttribute("data-island-load-state")).toBe("loaded");
@@ -1250,5 +1269,307 @@ describe("an empty widget items frame and a fresh broker address", () => {
     await focus();
     expect(root.querySelector("iframe")).toBe(frame);
     expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+  });
+});
+
+// cinatra#3089, design spec XV.1 "Allow waits for the items" (app-lifecycle-cards.html 0.33.0, design 69868e8f): the
+// items of an items row are the pinned revisions the person reviewed, and "Until every item is drawn, Allow is shown but
+// disabled, so nothing is released that was not on screen; Do not allow and the note field stay live". Before this the
+// card drew Allow live beside a loading, failed, empty or refused items row, and the failed panel told the reader that
+// it did not block the decision.
+describe("XV.1: Allow waits for the items", () => {
+  const REF = "Abc_123-xyz";
+  const ITEMS = { kind: "artifacts", label: "Proposed page", ref: REF, islandSrc: null };
+  const WAITS = "Allow waits until the items are shown.";
+  const allowOf = (root: HTMLElement) => root.querySelector<HTMLButtonElement>(APPROVE)!;
+  const declineOf = (root: HTMLElement) => root.querySelector<HTMLButtonElement>(DECLINE)!;
+  const description = (root: HTMLElement) => {
+    const id = allowOf(root).getAttribute("aria-describedby");
+    return id ? (root.ownerDocument.getElementById(id)?.textContent ?? null) : null;
+  };
+  const waitLine = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>(
+      '[data-conformance-id="publish-allow-waits-failed"], [data-conformance-id="publish-allow-waits-refused"], [data-conformance-id="publish-allow-waits-empty"]',
+    );
+  const frameOf = async (root: HTMLElement) => {
+    await waitFor(() => expect(root.querySelector("iframe")).not.toBeNull());
+    return root.querySelector("iframe") as HTMLIFrameElement;
+  };
+  const loadOnly = async (frame: HTMLIFrameElement) => {
+    await act(async () => {
+      frame.dispatchEvent(new Event("load"));
+    });
+    await settle();
+  };
+  const drawn = async (frame: HTMLIFrameElement, count = 1) => {
+    await loadOnly(frame);
+    await postDrawn(frame, count);
+  };
+
+  it("a frame that loads but never reports its items drawn keeps Allow disabled, and reads failed after the bound", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("chat_thread", okDoor()));
+      await settle();
+      const frame = await frameOf(root);
+      await loadOnly(frame);
+      expect(allowOf(root).disabled).toBe(true);
+      expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+      expect(allowOf(root).disabled).toBe(true);
+      expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+      expect(root.querySelector('[data-conformance-id="publish-card-items-failed"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a readable document that is not the island (an error or sign-in page) reads failed at once, without the bound", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    Object.defineProperty(frame, "contentDocument", {
+      configurable: true,
+      get: () => ({ URL: "http://localhost:3000/sign-in", querySelector: () => null }),
+    });
+    await loadOnly(frame);
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    expect(allowOf(root).disabled).toBe(true);
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+  });
+
+  it("an island that reports an item failed to load reads failed at once: Allow unavailable, Try again shown", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    // Before any load: the report alone decides (jsdom's own blank document would read as foreign on load).
+    const frame = await frameOf(root);
+    const failed = async (opts: { from?: Window | null; attempt?: number } = {}) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: { channel: "cinatra-review-island-progress", type: "island-failed", attempt: opts.attempt ?? Number(frame.name.split(":")[1] ?? 0) },
+          origin: window.location.origin,
+          source: opts.from === undefined ? frame.contentWindow : opts.from,
+        }));
+      });
+      await settle();
+    };
+    // From another window or attempt: ignored.
+    await failed({ from: window });
+    await failed({ attempt: 9 });
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+    await failed();
+    // red-first-expect: expected null not to be null
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    expect(allowOf(root).disabled).toBe(true);
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+    expect(root.querySelector('[data-conformance-id="publish-card-items-failed"]')).not.toBeNull();
+    expect(root.querySelector("button")?.ownerDocument.body.textContent).toMatch(/Try again/);
+  });
+
+  it("an island that reports busy after its drawn report makes Allow unavailable again until the next drawn report", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await drawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+    const busy = async (opts: { from?: Window | null; origin?: string; attempt?: number } = {}) => {
+      await act(async () => {
+        window.dispatchEvent(new MessageEvent("message", {
+          data: { channel: "cinatra-review-island-progress", type: "island-busy", attempt: opts.attempt ?? Number(frame.name.split(":")[1] ?? 0) },
+          origin: opts.origin ?? window.location.origin,
+          source: opts.from === undefined ? frame.contentWindow : opts.from,
+        }));
+      });
+      await settle();
+    };
+    // From another window, origin or attempt: ignored.
+    await busy({ from: window });
+    await busy({ origin: "https://elsewhere.example" });
+    await busy({ attempt: 9 });
+    expect(allowOf(root).disabled).toBe(false);
+    await busy();
+    // red-first-expect: expected false to be true
+    expect(allowOf(root).disabled).toBe(true);
+    // The waiting reading, not the failed one: no plate, no failed line.
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).toBeNull();
+    expect(waitLine(root)).toBeNull();
+    await postDrawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("an island that reports a failure after its drawn report reads failed: Allow unavailable, Try again shown", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await drawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+    await act(async () => {
+      window.dispatchEvent(new MessageEvent("message", {
+        data: { channel: "cinatra-review-island-progress", type: "island-failed", attempt: Number(frame.name.split(":")[1] ?? 0) },
+        origin: window.location.origin,
+        source: frame.contentWindow,
+      }));
+    });
+    await settle();
+    // red-first-expect: expected false to be true
+    expect(allowOf(root).disabled).toBe(true);
+    expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+  });
+
+  it("a drawn report from another window, another origin or another attempt is ignored", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    await loadOnly(frame);
+    await postDrawn(frame, 1, { from: window });
+    await postDrawn(frame, 1, { origin: "https://elsewhere.example" });
+    await postDrawn(frame, 1, { attempt: 7 });
+    expect(allowOf(root).disabled).toBe(true);
+    await postDrawn(frame, 1);
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("a report of the panels drawn makes Allow live under the items-shown anchor; a report of zero is the empty reading", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    await drawn(await frameOf(root), 2);
+    expect(allowOf(root).disabled).toBe(false);
+    expect(root.querySelector('[data-conformance-id="publish-card-items-shown"]')).not.toBeNull();
+    expect(root.querySelector('[data-conformance-id="publish-card-rows"]')).toBeNull();
+    cleanup();
+    const again = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    await drawn(await frameOf(again), 0);
+    expect(again.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+    expect(allowOf(again).disabled).toBe(true);
+    expect(waitLine(again)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-empty");
+  });
+
+  it("Allow is disabled until the panel has drawn its items, and live once it has; Do not allow and the note stay live", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ROWS[0], ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    expect(allowOf(root).disabled).toBe(true);
+    expect(declineOf(root).disabled).toBe(false);
+    expect(root.querySelector("textarea")?.disabled).toBe(false);
+    // While the panel loads the line is not drawn; the same sentence is the button's description.
+    expect(waitLine(root)).toBeNull();
+    expect(description(root)).toBe(WAITS);
+    await drawn(frame);
+    expect(allowOf(root).disabled).toBe(false);
+    expect(allowOf(root).hasAttribute("aria-describedby")).toBe(false);
+    expect(root.textContent).not.toContain(WAITS);
+  });
+
+  it("a panel that did not load keeps Allow disabled with the line under the controls, and its Try again brings Allow back once drawn", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+      const root = await rootOf(mountOn("run_card", okDoor()));
+      await settle();
+      await frameOf(root);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(13_000);
+      });
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).not.toBeNull();
+      expect(root.textContent).toContain("The preview did not load");
+      expect(root.textContent).not.toContain("does not block your decision");
+      expect(allowOf(root).disabled).toBe(true);
+      expect(declineOf(root).disabled).toBe(false);
+      const line = waitLine(root);
+      expect(line?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-failed");
+      expect(line?.textContent).toBe(WAITS);
+      expect(allowOf(root).getAttribute("aria-describedby")).toBe(line?.id);
+      // The panel's own Try again: the card adds no control of its own.
+      const retry = root.querySelector<HTMLButtonElement>('[data-action="retry-review-target-island -> reload"]')!;
+      await act(async () => {
+        fireEvent.click(retry);
+      });
+      await settle();
+      expect(allowOf(root).disabled).toBe(true);
+      await drawn(await frameOf(root));
+      expect(root.querySelector('[data-conformance-id="review-target-island-timeout"]')).toBeNull();
+      expect(allowOf(root).disabled).toBe(false);
+      expect(waitLine(root)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a row whose items could not be shown keeps Allow disabled with the refused line, and Do not allow is the answer left", async () => {
+    const decide = okDoor();
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [{ ...ITEMS, ref: null }] }));
+    const root = await rootOf(mountOn("run_card", decide));
+    await settle();
+    expect(allowOf(root).disabled).toBe(true);
+    const line = waitLine(root);
+    expect(line?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-refused");
+    expect(allowOf(root).getAttribute("aria-describedby")).toBe(line?.id);
+    expect(declineOf(root).disabled).toBe(false);
+    await act(async () => {
+      fireEvent.click(declineOf(root));
+    });
+    await settle();
+    expect(decide).toHaveBeenCalledWith(expect.objectContaining({ answer: "decline", decisionId: "d1" }));
+  });
+
+  it("a panel that stays empty keeps Allow disabled with the empty line", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS] }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    Object.defineProperty(frame, "contentDocument", {
+      configurable: true,
+      get: () => ({
+        querySelector: (selector: string) => (selector.includes(REVIEW_ISLAND_EMPTY_MARKER) ? ({} as Element) : null),
+      }),
+    });
+    await drawn(frame);
+    expect(root.querySelector('[data-conformance-id="publish-row-items-empty"]')).not.toBeNull();
+    expect(allowOf(root).disabled).toBe(true);
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-empty");
+    expect(declineOf(root).disabled).toBe(false);
+  });
+
+  it("a widget panel with no address it may frame draws nothing, so Allow waits there too", async () => {
+    const islandSrc = "/lifecycle/review-island?ref=OtherRef&ic=sealed-credential";
+    brokerAnswer = { status: 200, body: { ...PENDING, rows: [{ ...ITEMS, islandSrc }] } };
+    const root = await rootOf(mountOn("site_widget", okDoor()));
+    await settle();
+    expect(root.querySelector("iframe")).toBeNull();
+    expect(allowOf(root).disabled).toBe(true);
+    expect(waitLine(root)?.getAttribute("data-conformance-id")).toBe("publish-allow-waits-empty");
+  });
+
+  it("Allow again waits for the items as well", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: [ITEMS], resumeOnly: true }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    const frame = await frameOf(root);
+    expect(allowOf(root).disabled).toBe(true);
+    await drawn(frame);
+    expect(allowOf(root).disabled).toBe(false);
+  });
+
+  it("a card without an items row is unchanged: Allow is live at once and no line is drawn", async () => {
+    stateMock.mockImplementation(async () => ({ ...PENDING, rows: ROWS }));
+    const root = await rootOf(mountOn("chat_thread", okDoor()));
+    await settle();
+    expect(allowOf(root).disabled).toBe(false);
+    expect(allowOf(root).hasAttribute("aria-describedby")).toBe(false);
+    expect(root.textContent).not.toContain(WAITS);
   });
 });
