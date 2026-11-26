@@ -535,7 +535,7 @@ function islandCredentialsOf(
 // this fixes.
 // ---------------------------------------------------------------------------
 
-type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
+export type IslandLoadState = "loading" | "loaded" | "timed-out" | "empty";
 
 /**
  * Bounded wait for the iframe's `load` event before treating a hang as a
@@ -2295,6 +2295,7 @@ function ReviewTargetIsland({
   onRetryResolve,
   inPanel = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   src: string;
   /** True when this `src` carries a server-minted, expiring credential. */
@@ -2315,6 +2316,8 @@ function ReviewTargetIsland({
   /** See `ReviewTargetFrame`: the host draws the island's empty document as
    *  an empty panel, and is told when the island settles that way. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** See `ReviewTargetFrame`: told the island's load state each time it changes. */
+  onLoadState?: (state: IslandLoadState) => void;
 }): ReactElement {
   // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
   // the same shape `useLifecycleCardState` uses above for the identical
@@ -2344,6 +2347,8 @@ function ReviewTargetIsland({
   const waits = awaiting || heldByAnotherIsland;
   const [load, setLoad] = useState({
     identity,
+    /** The address the frame was last pointed at: a palette change navigates it under the same identity. */
+    src,
     attempt: 0,
     loaded: false,
     timedOut: false,
@@ -2355,12 +2360,21 @@ function ReviewTargetIsland({
      *  that reading as an empty panel (`onSettledEmpty`). */
     empty: false,
   });
-  if (load.identity !== identity) {
-    setLoad({ identity, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
-  }
-
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const protocolClock = useRef({ navigation: 0, progress: 0 });
+  if (load.identity !== identity) {
+    setLoad({ identity, src, attempt: 0, loaded: false, timedOut: false, ready: false, progress: 0, empty: false });
+  } else if (load.src !== src) {
+    // A HOST THAT ASKS FOR THE LOAD STATE (the publish card, cinatra#3089): any navigation of the frame, a palette
+    // change included, replaces the document it read as loaded. It is a new attempt: the frame remounts under the next
+    // attempt's key and name, so a load or progress event of the outgoing document never counts for the replacement,
+    // and the load bound starts again. Every other host keeps the work on screen across a repaint, as before.
+    setLoad(
+      onLoadState
+        ? { ...load, src, attempt: load.attempt + 1, loaded: false, timedOut: false, ready: false, progress: 0, empty: false }
+        : { ...load, src },
+    );
+  }
   // The callback runs when React assigns this mounted frame and its src,
   // including a lazy frame. An effect may run later; it must not grant another
   // twelve seconds after navigation has already begun.
@@ -2547,7 +2561,16 @@ function ReviewTargetIsland({
   // Read after every hook of this component, so the hook order is the same
   // on every render.
   const cookieSession = useCookieSessionSurface();
-  if (!credentialed && !cookieSession && !refused && !awaiting) {
+  const unframedRegion = !credentialed && !cookieSession && !refused && !awaiting;
+  // THE HOST IS TOLD THE STATE IT DRAWS (cinatra#3089), in a LAYOUT effect: the host's own update lands in the same
+  // commit as this drawing, so no click can reach the host between a navigation and its reading. The region above
+  // draws nothing, so it reads empty. "loaded" means the frame's document loaded, nothing more: it does not prove that
+  // every renderer inside the island finished drawing.
+  const toldState: IslandLoadState = unframedRegion ? "empty" : state;
+  useLayoutEffect(() => {
+    onLoadState?.(toldState);
+  }, [onLoadState, toldState]);
+  if (unframedRegion) {
     return (
       <div
         data-conformance-id="review-target-island"
@@ -2609,6 +2632,8 @@ function ReviewTargetIsland({
           style={{ height }}
           onLoad={(event) => {
             announcePalette();
+            // The attempt this frame element was mounted for: a load of an outgoing frame never counts for a later one.
+            const attempt = load.attempt;
             // READ THE FRAME NOW, inside the handler (cinatra#4188). React sets
             // `event.currentTarget` only while it dispatches the event and nulls
             // it afterwards, but a state updater runs whenever React next
@@ -2619,7 +2644,7 @@ function ReviewTargetIsland({
             const servedTheDenial = islandFrameServedTheDenial(event.currentTarget);
             const emptyIsSettled = onSettledEmpty !== undefined;
             setLoad((current) =>
-              current.identity === identity
+              current.identity === identity && current.attempt === attempt
                 ? // LOADED IS NOT THE SAME AS DREW (cinatra#2853, the picture
                   // leg). Every denial this island serves is an EMPTY painted
                   // rectangle — that is the shape §IV requires, so that a reader
@@ -2663,6 +2688,7 @@ function ReviewTargetIsland({
             <IslandLoadingSkeleton />
           ) : (
             <IslandLoadTimedOut
+              blocksDecision={onLoadState !== undefined}
               onRetry={() => {
                 // A RETRY RE-RESOLVES FIRST (cinatra#2754). A credentialed src
                 // that failed has very likely expired, and remounting the frame
@@ -2789,7 +2815,7 @@ function IslandLoadingSkeleton(): ReactElement {
  * floor below is untouched and still live — a preview that did not load is
  * never drawn as a reason the reviewer cannot decide.
  */
-function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement {
+function IslandLoadTimedOut({ onRetry, blocksDecision = false }: { onRetry: () => void; blocksDecision?: boolean }): ReactElement {
   return (
     <div
       data-conformance-id="review-target-island-timeout"
@@ -2800,9 +2826,12 @@ function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement 
           <CircleX aria-hidden="true" className="size-[18px]" />
         </div>
         <p className="font-sans text-sm font-semibold text-foreground">The preview did not load</p>
-        <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
-          This does not block your decision below — try again, or continue without it.
-        </p>
+        {/* On the publish card (cinatra#3089) Allow waits for this panel, so the line would be false there. */}
+        {blocksDecision ? null : (
+          <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
+            This does not block your decision below — try again, or continue without it.
+          </p>
+        )}
         <Button
           type="button"
           variant="link"
@@ -2982,6 +3011,7 @@ export function ReviewTargetFrame({
   awaiting = false,
   paired = false,
   onSettledEmpty,
+  onLoadState,
 }: {
   headers: readonly LifecycleTargetHeader[] | null;
   islandSrc: string;
@@ -2993,6 +3023,10 @@ export function ReviewTargetFrame({
    *  island currently stands settled empty. Absent (the review gate), that
    *  document stays a preview that did not arrive, as it always was. */
   onSettledEmpty?: (empty: boolean) => void;
+  /** Told the island's load state each time it changes (cinatra#3089): the publish card keeps Allow disabled until
+   *  every items panel reads `loaded` (design XV.1). A host that passes it also reads a navigation of the frame (a
+   *  palette change) as a new load. */
+  onLoadState?: (state: IslandLoadState) => void;
   /** This pair's own address is missing, failed or bound to another target
    *  (cinatra#4129): its island draws the failed state and frames nothing. */
   refused?: boolean;
@@ -3036,6 +3070,7 @@ export function ReviewTargetFrame({
         onRetryResolve={onRetryResolve}
         inPanel={Boolean(only)}
         onSettledEmpty={onSettledEmpty}
+        onLoadState={onLoadState}
       />
     </div>
   );

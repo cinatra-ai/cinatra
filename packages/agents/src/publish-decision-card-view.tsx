@@ -14,7 +14,7 @@
 // server host passes the session action itself. A card given no door draws them disabled.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { reviewIslandAddressCredential } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -48,7 +48,7 @@ import {
   type PublishDecisionDecideOutcome,
 } from "./publish-decision-card";
 import { decidePublishDecisionCardAction, getPublishDecisionCardStateAction } from "./publish-decision-card-actions";
-import { ReviewTargetFrame, reviewTargetIslandSrc } from "./review-gate-card";
+import { ReviewTargetFrame, reviewTargetIslandSrc, type IslandLoadState } from "./review-gate-card";
 import { runStatusIsTerminal } from "./run-surface-status";
 
 /** The re-read cadence while the host's run has not finished: the run surfaces' own tick (5 s). */
@@ -293,7 +293,7 @@ const MARKERS = {
  * shown carries publish-row-items-refused), so a capture can count what the page drew. The value is a text row's value, a
  * list row's compact table with a line that says how many records it does not draw (every cell is plain text), or an
  * artifacts row's review-target island (C1b). */
-function PublishRow({ row, onRetry }: { row: PublishDecisionCardRow; onRetry: () => void }): ReactElement | null {
+function PublishRow({ row, onRetry, items }: { row: PublishDecisionCardRow; onRetry: () => void; items: ItemsReporter }): ReactElement | null {
   // Dispatch on the row's OWN kind, every value named: the parse admits only text, list and artifacts, and any other kind draws
   // nothing here (never the text drawing). A kind added to publishRowKind fails the typecheck below until it is drawn.
   const kind = publishRowKind(row);
@@ -313,7 +313,7 @@ function PublishRow({ row, onRetry }: { row: PublishDecisionCardRow; onRetry: ()
         </div>
       );
     case "artifacts":
-      return <ArtifactsRow row={row as PublishDecisionCardArtifactsRow} onRetry={onRetry} />;
+      return <ArtifactsRow row={row as PublishDecisionCardArtifactsRow} onRetry={onRetry} items={items} />;
     case null:
       return null;
     default: {
@@ -351,6 +351,17 @@ function listRowValue(row: PublishDecisionCardListRow): ReactElement {
     </dd>
   );
 }
+
+/** What an items row shows (design XV.1 "Allow waits for the items"). Only `shown` lets Allow go live. "Shown" means the
+ * row's island FRAME DOCUMENT HAS LOADED (the review card's own load state); it does not prove that every renderer
+ * inside the island finished drawing, which the card does not detect. */
+type ItemsReading = "loading" | "shown" | "failed" | "empty" | "refused";
+/** A row's reporter: its reading under its key; `null` takes the reading away (the row unmounted). */
+type ItemsReporter = { key: string; report: (key: string, reading: ItemsReading | null) => void };
+const ITEMS_READING: Record<IslandLoadState, ItemsReading> = { loading: "loading", loaded: "shown", "timed-out": "failed", empty: "empty" };
+const ALLOW_WAITS = "Allow waits until the items are shown.";
+/** The reason line's anchor, as design XV.1 names them in the conformance manifest. */
+const ALLOW_WAITS_ANCHOR = { failed: "publish-allow-waits-failed", refused: "publish-allow-waits-refused", empty: "publish-allow-waits-empty" } as const;
 
 type HeldArtifactsAddress = {
   /** The row identity the address was taken for: the ref names the run, the decision and the input, and is minted
@@ -455,11 +466,20 @@ function useHeldArtifactsAddress(
  * the panel's frame with nothing in it, under the empty anchor on this page; it never learns why the island is empty.
  * A frame that never answers still draws the review card's failed state with its retry.
  */
-function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void }): ReactElement {
+function ArtifactsRow({ row, onRetry, items }: { row: PublishDecisionCardArtifactsRow; onRetry: () => void; items: ItemsReporter }): ReactElement {
   const frame = useLifecycleCardFrame();
   const colorScheme = useLifecycleCardColorScheme();
   const held = useHeldArtifactsAddress(row, colorScheme, onRetry);
   const src = row.ref === null ? null : reviewTargetIslandSrc(row.ref, frame, held.islandSrc, held.scheme);
+  // THE ROW TELLS THE CARD WHAT IT SHOWS (cinatra#3089, XV.1): refused here, else the island's own load state. A row
+  // that unmounts takes its reading with it.
+  const { key: itemsKey, report } = items;
+  const refusedRow = row.ref === null || src === null;
+  useLayoutEffect(() => {
+    if (refusedRow) report(itemsKey, "refused");
+    return () => report(itemsKey, null);
+  }, [refusedRow, itemsKey, report]);
+  const onLoadState = useCallback((state: IslandLoadState) => report(itemsKey, ITEMS_READING[state]), [itemsKey, report]);
   const { askFresh, settledEmpty } = held;
   const [empty, setEmpty] = useState(false);
   const onSettledEmpty = useCallback(
@@ -493,6 +513,7 @@ function ArtifactsRow({ row, onRetry }: { row: PublishDecisionCardArtifactsRow; 
           islandCredentialed={reviewIslandAddressCredential(held.islandSrc, row.ref) !== null}
           onRetryResolve={retry}
           onSettledEmpty={onSettledEmpty}
+          onLoadState={onLoadState}
         />
       </dd>
     </div>
@@ -578,12 +599,31 @@ export function PublishDecisionCard({
   const { note, sending } = local;
   const failed = local.failed && ownsLocal;
   const noLongerOpen = local.noLongerOpen && ownsLocal;
+  // WHAT EACH ITEMS ROW SHOWS (XV.1), keyed by the decision and the row's place. The rows report in layout effects, and
+  // the ref is written in the same call, so the send guard below reads the live reading, never one a tick behind.
+  const [itemReadings, setItemReadings] = useState<Record<string, ItemsReading>>({});
+  const liveReadings = useRef<Record<string, ItemsReading>>({});
+  const reportItems = useCallback((key: string, reading: ItemsReading | null) => {
+    if ((liveReadings.current[key] ?? null) === reading) return;
+    const next = { ...liveReadings.current };
+    if (reading === null) delete next[key];
+    else next[key] = reading;
+    liveReadings.current = next;
+    setItemReadings(next);
+  }, []);
+  const waitsId = useId();
 
   // No host declaration, no authorized answer yet, or no open decision: NO DOM at all.
   if (host === null || state === null || state.state === "none") return null;
 
+  const itemsKeyOf = (i: number, row: PublishDecisionCardRow) => `${shownId ?? ""}\u0000${i}\u0000${row.label}`;
+  const readingsOf = (by: Record<string, ItemsReading>) =>
+    state.state === "pending"
+      ? state.rows.flatMap((row, i) => (publishRowKind(row) === "artifacts" ? [by[itemsKeyOf(i, row)] ?? "loading"] : []))
+      : [];
   const send = async (answer: "approve" | "decline") => {
     if (!decide || sending || state.state !== "pending") return;
+    if (answer === "approve" && readingsOf(liveReadings.current).some((reading) => reading !== "shown")) return;
     const decisionId = state.decisionId;
     const phase = shownResumeOnly;
     onDecision(decisionId, { sending: true, failed: false }, phase);
@@ -605,6 +645,15 @@ export function PublishDecisionCard({
   const restricted = pending && !state.mayDecide;
   const resumeOnly = pending && state.resumeOnly === true;
   const disabled = restricted || !decide || sending;
+  // XV.1: until every items row shows its items, Allow (Allow again too) is disabled; Do not allow and the note stay
+  // live. The reason line names a failed panel first, then a row that could not be shown, then an empty panel; while a
+  // panel loads the sentence is only the button's description. A card without an items row is unchanged.
+  const readings = readingsOf(itemReadings);
+  const itemsWait = readings.some((reading) => reading !== "shown");
+  const waitReason = (["failed", "refused", "empty"] as const).find((reading) => readings.includes(reading)) ?? null;
+  const describeWait = itemsWait && !restricted;
+  const rowsAnchor =
+    readings.length > 0 && !itemsWait ? "publish-card-items-shown" : readings.includes("failed") ? "publish-card-items-failed" : "publish-card-rows";
   const cardState = refreshing ? "loading" : noLongerOpen ? "no_longer_open" : restricted ? "restricted" : state.state;
 
   let body: ReactElement;
@@ -647,7 +696,7 @@ export function PublishDecisionCard({
         {state.rows.length > 0 ? (
           <dl className="grid grid-cols-[minmax(0,1fr)] gap-2 px-3.5 py-3">
             {state.rows.map((row, i) => (
-              <PublishRow key={`${i}-${row.label}`} row={row} onRetry={reload} />
+              <PublishRow key={`${i}-${row.label}`} row={row} onRetry={reload} items={{ key: itemsKeyOf(i, row), report: reportItems }} />
             ))}
           </dl>
         ) : null}
@@ -675,10 +724,18 @@ export function PublishDecisionCard({
                 </Button>
               )}
               <Button type="button" size="sm" data-action="approve-publish -> released"
-                disabled={disabled} onClick={() => void send("approve")}>
+                disabled={disabled || itemsWait} aria-describedby={describeWait ? waitsId : undefined}
+                onClick={() => void send("approve")}>
                 Allow
               </Button>
             </div>
+            {describeWait && waitReason !== null ? (
+              <p id={waitsId} data-conformance-id={ALLOW_WAITS_ANCHOR[waitReason]} className="mt-2.5 text-right text-xs text-muted-foreground">
+                {ALLOW_WAITS}
+              </p>
+            ) : describeWait ? (
+              <span id={waitsId} className="sr-only">{ALLOW_WAITS}</span>
+            ) : null}
             {resumeOnly && !restricted ? (
               <p className="mt-2.5 text-xs text-muted-foreground">
                 This change was allowed, but the run did not go on. Allow again to let it go on.
@@ -703,8 +760,8 @@ export function PublishDecisionCard({
     const frameAnchor = restricted ? "publish-state-restricted" : resumeOnly ? "publish-card-allow-again" : undefined;
     body = (
       <>
-        <div className={FRAME} data-conformance-id={frameAnchor ?? (state.rows.length > 0 ? "publish-card-rows" : undefined)}>
-          {frameAnchor !== undefined && state.rows.length > 0 ? <div data-conformance-id="publish-card-rows">{card}</div> : card}
+        <div className={FRAME} data-conformance-id={frameAnchor ?? (state.rows.length > 0 ? rowsAnchor : undefined)}>
+          {frameAnchor !== undefined && state.rows.length > 0 ? <div data-conformance-id={rowsAnchor}>{card}</div> : card}
         </div>
         {settledMarker(state)}
       </>
