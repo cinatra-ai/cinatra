@@ -3,7 +3,7 @@
 // `example-org` scope folder.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -158,6 +158,45 @@ test("a files list that cannot be read ships everything, so test files count", (
   assert.equal(shippedBy(readFilesList(agent("a", { files: ["cinatra"] })), "cinatrax/x.mjs"), false);
 });
 
+test("a code file a manifest names counts, shipped or not, whatever the key", () => {
+  const relPaths = ["register.mjs", "check.mjs", "cinatra/oas.json"];
+  // A runtime entry at the root, outside `files`, named by cinatra.serverEntry.
+  assert.deepEqual(
+    agentCodeFiles({ relPaths, packageJson: agent("a", { cinatra: { kind: "agent", serverEntry: "./register.mjs" } }) }),
+    ["register.mjs"],
+  );
+  // Named by npm `main` (npm also always packs it), without the extension, and with a query.
+  assert.deepEqual(agentCodeFiles({ relPaths, packageJson: agent("a", { main: "register.mjs" }) }), ["register.mjs"]);
+  assert.deepEqual(agentCodeFiles({ relPaths, packageJson: agent("a", { main: "./register" }) }), ["register.mjs"]);
+  assert.deepEqual(agentCodeFiles({ relPaths, packageJson: agent("a", { bin: { run: "register.mjs?x=1#y" } }) }), ["register.mjs"]);
+  // Named by a key no reader knows yet, deep under cinatra.
+  assert.deepEqual(
+    agentCodeFiles({
+      relPaths,
+      packageJson: agent("a", { cinatra: { kind: "agent", future: { entries: [{ at: "register.mjs" }] } } }),
+    }),
+    ["register.mjs"],
+  );
+  // Named by a cinatra/ JSON file, relative to that file or to the pack root.
+  assert.deepEqual(
+    agentCodeFiles({ relPaths, packageJson: agent("a"), manifestJson: { "cinatra/screens.json": { entry: "../check.mjs" } } }),
+    ["check.mjs"],
+  );
+  assert.deepEqual(
+    agentCodeFiles({ relPaths, packageJson: agent("a"), manifestJson: { "cinatra/screens.json": { entry: "/check.mjs" } } }),
+    ["check.mjs"],
+  );
+  // Unshipped and unnamed, a root check script is a build file and stays out.
+  assert.deepEqual(agentCodeFiles({ relPaths, packageJson: agent("a") }), []);
+  // A skill script stays out until a manifest names it.
+  const skill = ["skills/pick/SKILL.md", "skills/pick/run.mjs"];
+  assert.deepEqual(agentCodeFiles({ relPaths: skill, packageJson: agent("a") }), []);
+  assert.deepEqual(
+    agentCodeFiles({ relPaths: skill, packageJson: agent("a", { cinatra: { kind: "agent", serverEntry: "skills/pick/run.mjs" } }) }),
+    ["skills/pick/run.mjs"],
+  );
+});
+
 test("cinatra.tools is a finding, one key per declared tool", () => {
   assert.deepEqual(toolDeclarationKeys({ cinatra: { kind: "agent" } }), []);
   assert.deepEqual(
@@ -172,6 +211,37 @@ test("a flow step that calls extension_tool is a finding; every passthrough step
   const { extensionToolSteps, toolSteps } = flowToolSteps(extensionToolFlow("read_text"));
   assert.deepEqual(extensionToolSteps, ["read_text"]);
   assert.deepEqual(toolSteps, ["read_text -> extension_tool", "save -> objects_save"]);
+});
+
+const PRODUCT_BINDING = fileURLToPath(new URL("../../../packages/agents/src/artifact-binding.ts", import.meta.url));
+const PRODUCT_RUNTIME_CHECK = fileURLToPath(new URL("../../../packages/agents/src/validate-oas-runtime-invariants.ts", import.meta.url));
+
+const oneStep = (url) => ({ nodes: [{ component_type: "ApiNode", id: "s", url, data: { tool: "extension_tool" } }] });
+
+test("a passthrough step is read by the product's own test: the URL contains the route path", async () => {
+  const binding = readFileSync(PRODUCT_BINDING, "utf8");
+  const marker = binding.match(/export const AGENTS_PASSTHROUGH_URL_MARKER = "([^"]*)";/)?.[1];
+  assert.equal(marker, "/api/agents/passthrough", "the product's route path constant changed");
+  assert.match(binding, /typeof url === "string" && url\.includes\(AGENTS_PASSTHROUGH_URL_MARKER\)/, "the compiler's matching form changed");
+  const runtime = readFileSync(PRODUCT_RUNTIME_CHECK, "utf8");
+  assert.equal(
+    runtime.match(/node\.url\.includes\(AGENTS_PASSTHROUGH_URL_MARKER\)/g)?.length,
+    2,
+    "the run-time check's matching form changed",
+  );
+  const gate = await import("../agent-extension-code-gate.mjs");
+  assert.equal(gate.PASSTHROUGH_ROUTE_PATH, marker);
+  for (const url of [
+    `{{CINATRA_BASE_URL}}${marker}?mode=x`,
+    `{{CINATRA_BASE_URL}}${marker}#frag`,
+    `{{CINATRA_BASE_URL}}${marker}/`,
+    `${marker}?a=1`,
+    `https://host.example.invalid${marker}`,
+  ]) {
+    assert.deepEqual(flowToolSteps(oneStep(url)).extensionToolSteps, ["s"], url);
+  }
+  // The product matches case as written (a Next.js route path is case-sensitive), so an upper-case path is no step.
+  assert.deepEqual(flowToolSteps(oneStep(`{{CINATRA_BASE_URL}}${marker.toUpperCase()}`)).extensionToolSteps, []);
 });
 
 // ---------------------------------------------------------------------------

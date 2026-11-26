@@ -9,27 +9,33 @@
  * code (it wraps an outside system); a generic guarantee belongs in core.
  *
  * THE RULE decides from STRUCTURE only: the manifest's `cinatra.kind`, the
- * files that exist in the pack, the manifest's `files` list, and the parsed
- * flow. It never reads what code does. It names no pack, no tool and no file of
+ * files that exist in the pack, the string values of its manifests (what they
+ * name, never what for), npm's packing rules, and the parsed flow. It never reads what code does. It names no pack, no tool and no file of
  * a pack. Three finding classes, each its own section of the recorded list:
  *
  *  1. `codeFiles` — in a pack of kind `agent`, a file whose extension is in
  *     PROGRAM_CODE_EXTENSIONS, anywhere in the pack, EXCEPT
- *       - a file inside a SKILL FOLDER: a folder of the pack (never the pack
- *         root itself) that holds a file named `SKILL.md`, at any depth below
- *         that folder;
- *       - a TEST or BUILD file of the pack (see `isTestOrBuildFile`) that the
- *         manifest's `files` list does NOT ship (see `shippedBy`). When the
- *         `files` list is absent or cannot be read, everything ships, so such
- *         a file counts.
+ *       - a file inside a SKILL FOLDER (a folder of the pack, never the pack
+ *         root itself, that holds a file named `SKILL.md`, at any depth below
+ *         that folder) that NO MANIFEST NAMES;
+ *       - a file for which all three hold: npm does NOT SHIP it (see
+ *         `npmShips`: the `files` list plus npm's always-included `main` and
+ *         `bin` targets; no readable `files` list ships everything), NO
+ *         MANIFEST NAMES it (see `namedPaths`: any string value anywhere in
+ *         `package.json` or in a `cinatra/` JSON file that resolves to its
+ *         path, whatever the key), and it is a TEST or BUILD file by its place
+ *         or name (see `isTestOrBuildFile`).
  *     Key: the file's path in the pack (forward slashes).
  *  2. `toolDeclarations` — any pinned pack whose manifest declares
  *     `cinatra.tools` (the code modules core loads and runs in its own server
  *     process). Key: the declared tool name; `cinatra.tools[<i>]` for an entry
  *     without a string name; `cinatra.tools` when the value is not an array.
  *  3. `extensionToolSteps` — any pinned pack whose flow (`cinatra/oas.json`,
- *     parsed) has a passthrough ApiNode calling the core tool `extension_tool`,
- *     read with the passthrough reader of scripts/ci/pin-advance-host-tools.mjs.
+ *     parsed) has a passthrough ApiNode calling the core tool `extension_tool`.
+ *     A node is a passthrough node by `isPassthroughUrl`, the product's own
+ *     test (packages/agents/src/artifact-binding.ts and
+ *     validate-oas-runtime-invariants.ts: the URL CONTAINS the route path), so
+ *     a query, a fragment, a trailing slash or any base form still counts.
  *     Key: the node id.
  *
  * ALSO COUNTED, NEVER FAILED: the fixed (non-model) flow steps of every agent
@@ -72,7 +78,6 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
-import { collectPassthroughHostTools } from "../ci/pin-advance-host-tools.mjs";
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const GATE = "agent-extension-code";
@@ -104,6 +109,16 @@ export const SKILL_FILE = "SKILL.md";
 
 /** The core tool a fixed flow step calls to run a pack's declared code module. */
 export const EXTENSION_TOOL = "extension_tool";
+
+/**
+ * The passthrough route path, the same constant as the product's
+ * AGENTS_PASSTHROUGH_URL_MARKER (packages/agents/src/artifact-binding.ts); a
+ * test reads the product source and fails when the two part.
+ */
+export const PASSTHROUGH_ROUTE_PATH = "/api/agents/passthrough";
+
+/** The folder of a pack whose JSON files are manifests too (read at any depth). */
+const MANIFEST_DIR = "cinatra";
 
 /** Directories never walked: installed dependencies and git data. */
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
@@ -184,6 +199,78 @@ export function shippedBy(filesList, relPath) {
 }
 
 /**
+ * True when npm packs `relPath` for this manifest. npm's packing rules: with no
+ * readable `files` list everything ships; otherwise the list ships its entries,
+ * and npm ALWAYS adds (whatever `files` says) package.json, README, LICENSE /
+ * LICENCE, the file in `main` and the file(s) in `bin`. Only `main` and `bin`
+ * can name code. `exports`, `module`, `types` and `browser` targets ship only
+ * through `files` (each is a manifest name anyway, see `namedPaths`).
+ */
+export function npmShips(packageJson, filesList, relPath) {
+  if (shippedBy(filesList, relPath)) return true;
+  const always = [];
+  if (typeof packageJson?.main === "string") always.push(packageJson.main);
+  const bin = packageJson?.bin;
+  if (typeof bin === "string") always.push(bin);
+  else if (bin && typeof bin === "object" && !Array.isArray(bin)) {
+    for (const v of Object.values(bin)) if (typeof v === "string") always.push(v);
+  }
+  return always.some((v) => normaliseRef(v) === relPath);
+}
+
+/**
+ * A manifest string value as a pack path: the part before any `?` or `#`,
+ * back slashes as forward slashes, normalised, without a leading `./` or `/`.
+ * Returns null for a value that is empty or leaves the pack.
+ */
+function normaliseRef(value, baseDir = ".") {
+  const pathPart = value.split(/[?#]/, 1)[0].trim().replace(/\\/g, "/");
+  if (pathPart === "") return null;
+  const joined = posix.normalize(posix.join(baseDir, pathPart.replace(/^\/+/, "")));
+  const rel = joined.replace(/^(\.\/)+/, "");
+  if (rel === "" || rel === "." || rel === ".." || rel.startsWith("../")) return null;
+  return rel;
+}
+
+/** Every string value in a parsed JSON value, at any depth (object keys are not values). */
+function stringValues(value, out = []) {
+  if (typeof value === "string") out.push(value);
+  else if (Array.isArray(value)) for (const v of value) stringValues(v, out);
+  else if (value && typeof value === "object") for (const v of Object.values(value)) stringValues(v, out);
+  return out;
+}
+
+/**
+ * The pack paths a manifest names: every string value of `package.json` (any
+ * key, `cinatra` and its future keys included) and of each JSON file under the
+ * pack's `cinatra/` folder (`manifestJson`: pack path -> parsed value), resolved
+ * against the pack root AND against the folder of the file that holds it. A
+ * value's query or fragment is dropped; `./`, a leading `/` and `..` steps are
+ * normalised. A name without an extension also names the file it loads as
+ * (`<name><ext>` and `<name>/index<ext>` for each PROGRAM_CODE_EXTENSIONS ext),
+ * so the set errs towards counting.
+ */
+export function namedPaths(packageJson, manifestJson = {}) {
+  const named = new Set();
+  const add = (value, holderDir) => {
+    for (const base of new Set([".", holderDir])) {
+      const rel = normaliseRef(value, base);
+      if (rel === null) continue;
+      named.add(rel);
+      for (const ext of PROGRAM_CODE_EXTENSIONS) {
+        named.add(`${rel}${ext}`);
+        named.add(`${rel}/index${ext}`);
+      }
+    }
+  };
+  for (const v of stringValues(packageJson)) add(v, ".");
+  for (const [holder, parsed] of Object.entries(manifestJson)) {
+    for (const v of stringValues(parsed)) add(v, posix.dirname(holder));
+  }
+  return named;
+}
+
+/**
  * The skill folders among a pack's files: every folder (never the pack root)
  * that directly holds a file named SKILL.md.
  */
@@ -207,17 +294,22 @@ export function insideSkillFolder(relPath, folders) {
 }
 
 /**
- * The `codeFiles` findings of one agent pack: program code outside its skill
- * folders, less the test and build files its manifest does not ship. Sorted.
+ * The `codeFiles` findings of one agent pack. A code file is left out only
+ * when no manifest names it AND either it lies in a skill folder, or npm does
+ * not ship it and it is a test or build file by place or name. Sorted.
+ * `manifestJson` maps each `cinatra/` JSON file's pack path to its parsed value.
  */
-export function agentCodeFiles({ relPaths, packageJson }) {
+export function agentCodeFiles({ relPaths, packageJson, manifestJson = {} }) {
   const folders = skillFolders(relPaths);
   const filesList = readFilesList(packageJson);
+  const named = namedPaths(packageJson, manifestJson);
   const out = [];
   for (const p of relPaths) {
     if (!isProgramCode(p)) continue;
-    if (insideSkillFolder(p, folders)) continue;
-    if (isTestOrBuildFile(p) && !shippedBy(filesList, p)) continue;
+    if (!named.has(p)) {
+      if (insideSkillFolder(p, folders)) continue;
+      if (!npmShips(packageJson, filesList, p) && isTestOrBuildFile(p)) continue;
+    }
     out.push(p);
   }
   return out.sort();
@@ -237,12 +329,55 @@ export function toolDeclarationKeys(packageJson) {
 }
 
 /**
+ * True when an ApiNode's `url` calls the passthrough route, by the product's
+ * own test: the string contains the route path (case as written). So a query,
+ * a fragment, a trailing slash, a relative path and a templated or absolute
+ * base all count, as they do for the product's compiler and run-time checks.
+ */
+export function isPassthroughUrl(url) {
+  return typeof url === "string" && url.includes(PASSTHROUGH_ROUTE_PATH);
+}
+
+/**
+ * Every passthrough ApiNode of a flow, at any depth: `{ nodeId, tool }`, or,
+ * when `data.tool` is missing, not a string or a template,
+ * `{ nodeId, tool: null, unreadable }`. One predicate: `isPassthroughUrl`.
+ */
+export function collectPassthroughCalls(flow) {
+  const calls = [];
+  const seen = new Set();
+  const walk = (value) => {
+    if (Array.isArray(value)) {
+      for (const v of value) walk(v);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    if (value.component_type === "ApiNode" && isPassthroughUrl(value.url)) {
+      const nodeId = typeof value.id === "string" && value.id ? value.id : String(value.name ?? "(no id)");
+      const tool = value.data && typeof value.data === "object" ? value.data.tool : undefined;
+      let call;
+      if (typeof tool !== "string" || tool === "") call = { nodeId, tool: null, unreadable: "data.tool is missing or not a string" };
+      else if (tool.includes("{{")) call = { nodeId, tool: null, unreadable: `data.tool is the template ${JSON.stringify(tool)}` };
+      else call = { nodeId, tool };
+      const key = `${nodeId}\u0000${call.tool}\u0000${call.unreadable ?? ""}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        calls.push(call);
+      }
+    }
+    for (const v of Object.values(value)) walk(v);
+  };
+  walk(flow);
+  return calls;
+}
+
+/**
  * One parsed flow's fixed tool steps: `{ extensionToolSteps, toolSteps }`.
  * `extensionToolSteps` are the node ids that call `extension_tool`;
  * `toolSteps` every passthrough call (any tool), as `nodeId -> tool` lines.
  */
 export function flowToolSteps(flow) {
-  const calls = collectPassthroughHostTools(flow);
+  const calls = collectPassthroughCalls(flow);
   const extensionToolSteps = new Set();
   const toolSteps = [];
   for (const c of calls) {
@@ -446,7 +581,14 @@ export function scan(repoRoot) {
     }
 
     if (kind === "agent") {
-      const code = agentCodeFiles({ relPaths: packFiles(dir, rel), packageJson });
+      const relPaths = packFiles(dir, rel);
+      const manifestJson = Object.create(null);
+      for (const p of relPaths) {
+        if (p.startsWith(`${MANIFEST_DIR}/`) && p.toLowerCase().endsWith(".json")) {
+          manifestJson[p] = readJsonFile(join(dir, p), `${rel}/${p}`);
+        }
+      }
+      const code = agentCodeFiles({ relPaths, packageJson, manifestJson });
       if (code.length > 0) findings.codeFiles[name] = code;
     }
   }

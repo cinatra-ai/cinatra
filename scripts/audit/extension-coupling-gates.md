@@ -605,7 +605,7 @@ belongs in core, offered once to every agent.
 `scripts/audit/agent-extension-code-gate.mjs` runs in job `perpetual-core`
 of `.github/workflows/build-image.yml`, after the companion repositories are
 cloned. It decides from structure only — the manifest's `cinatra.kind`, the
-files in the pack, the manifest's `files` list and the parsed flow — and its
+files in the pack, the manifest values, the `files` list and the parsed flow — and its
 code names no pack, no tool and no file of a pack.
 
 **The universe** is the pinned extensions: every `packageName` of both
@@ -619,27 +619,45 @@ read, a lock, manifest or flow that does not parse, and a pinned pack whose
 1. `codeFiles` — in a pack of kind `agent`, a file with a program-code
    extension (`.js .mjs .cjs .ts .mts .cts .tsx .jsx .py .sh`, the one constant
    `PROGRAM_CODE_EXTENSIONS`: the JavaScript and TypeScript forms core's border
-   gate scans, plus Python and shell; `.d.ts` counts), anywhere in the pack,
-   except:
-   - inside a **skill folder**: a folder of the pack, never its root, that
-     holds a file named `SKILL.md`, at any depth below it;
-   - a **test or build file** of the pack that the manifest does **not ship**.
-     A test file sits under a folder named `test`, `tests`, `__tests__`,
-     `__mocks__` or `__fixtures__`, or is named `*.test.*` / `*.spec.*`; a
-     build file sits at the pack root (the vendored `extension-kind-gate.mjs`
-     and other check scripts), under the top-level `scripts/` folder or under a
-     top-level dot folder. Shipping is read from `files` in `package.json`:
-     plain entries ship a path or a folder, `!` entries take one back. When
-     `files` is absent, not an array of strings, or holds a glob, everything
-     ships, so such a file counts. Every other code file counts whether it
-     ships or not: the materialized tree, not the package, is what a dev
-     build loads.
+   gate scans, plus Python and shell; `.d.ts` counts), anywhere in the pack.
+   **A file a manifest names always counts**: any string value anywhere in
+   `package.json` (every key: `main`, `bin`, `exports`, `cinatra.serverEntry`,
+   renderer entries and keys not yet invented) or in a JSON file under the
+   pack's `cinatra/` folder that resolves to its path, against the pack root
+   or the folder of the file that holds it (`./`, a leading `/` and `..`
+   normalised; a query or fragment dropped; a name without an extension also
+   names `<name><ext>` and `<name>/index<ext>`). A `cinatra/` JSON file that
+   does not parse is a scanner error. A file no manifest names is left out
+   only when
+   - it lies inside a **skill folder**: a folder of the pack, never its root,
+     that holds a file named `SKILL.md`, at any depth below it; or
+   - npm does **not ship** it AND it is a **test or build file** by its place
+     or name. A test file sits under a folder named `test`, `tests`,
+     `__tests__`, `__mocks__` or `__fixtures__`, or is named `*.test.*` /
+     `*.spec.*`; a build file sits at the pack root (the vendored
+     `extension-kind-gate.mjs` and other check scripts), under the top-level
+     `scripts/` folder or under a top-level dot folder. Shipping follows npm's
+     packing rules: plain `files` entries ship a path or a folder, `!` entries
+     take one back, and npm always packs the `main` and `bin` targets whatever
+     `files` says (`exports`, `module`, `types` and `browser` targets ship only
+     through `files`, and are named anyway). When `files` is absent, not an
+     array of strings, or holds a glob, everything ships, so such a file
+     counts.
+
+   Every other code file counts whether it ships or not: the materialized
+   tree, not the package, is what a dev build loads.
 2. `toolDeclarations` — a pinned manifest of any kind declaring
    `cinatra.tools`, one entry per declared tool name.
 3. `extensionToolSteps` — a passthrough ApiNode in a pinned flow
-   (`cinatra/oas.json`, parsed) whose `data.tool` is `extension_tool`, read with
-   the passthrough reader of `scripts/ci/pin-advance-host-tools.mjs`; one entry
-   per node id.
+   (`cinatra/oas.json`, parsed) whose `data.tool` is `extension_tool`; one entry
+   per node id. A node is a passthrough node by the product's own test
+   (`packages/agents/src/artifact-binding.ts` and
+   `validate-oas-runtime-invariants.ts`): its `url` contains the route path
+   `/api/agents/passthrough`, case as written. A query, a fragment, a trailing
+   slash, a relative path and a templated or absolute base all count; an
+   upper-case path does not, as for the product. A test reads the product
+   source and fails when the route path constant or that matching form
+   changes.
 
 **Counted, not failed**: the fixed (non-model) flow steps of every agent that
 call any tool through the passthrough, printed per agent on every run, so a
@@ -669,8 +687,8 @@ counted tool steps in 14 agents.
 - whether a function in core is truly generic (core is not scanned here);
 - whether a screen renderer in an agent pack is presentation or behaviour (it
   counts as code; its road is decided by a reading);
-- whether a test or build file, unshipped, is loaded at run time anyway (it is
-  left out by its place and name alone);
+- whether a test or build file that is unshipped and named by no manifest is
+  loaded at run time anyway (it is left out by its place and name alone);
 - how much a recorded file grows: the list records files, not their size.
 
 ## Floors compared with the base branch (cinatra#3832)
