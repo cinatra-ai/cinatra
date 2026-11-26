@@ -3,6 +3,7 @@ import {
   CapabilityPlanRecorder,
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
+  MALFORMED_OUTWARD_SUBJECT,
   planPrimitiveRegistration,
   primitiveProvenanceStamp,
   readDeclaredOutward,
@@ -16,8 +17,9 @@ import {
 // stored item the call acts on and its revision. The capability plan reads that
 // declaration ONCE, with one total reader, and carries it on the planned entry
 // of every registration. A declaration can only add a tool to what the host
-// holds: every present value the host cannot read as a subject reads as
-// outward without a subject, and the reader never throws.
+// holds: a present declaration without a subject (or with a null one) reads as
+// outward without a subject, a present subject the host cannot read reads as a
+// malformed subject (never as no subject), and the reader never throws.
 //
 // These cases drive the real reader, the real `planPrimitiveRegistration` and
 // the real `CapabilityPlanRecorder`; nothing is replaced.
@@ -53,8 +55,15 @@ const OUTWARD_WITHOUT_SUBJECT: ReadonlyArray<readonly [string, unknown]> = [
   ["false", false],
   ["a string", "yes"],
   ["a number", 1],
-  ["an array", []],
   ["a function", () => undefined],
+  ["a declaration with an undefined subject", { subject: undefined }],
+  ["a declaration with a null subject", { subject: null }],
+];
+
+// Every present declaration whose subject the host cannot read: a malformed
+// subject, never outward without a subject (cinatra#3745).
+const OUTWARD_WITH_MALFORMED_SUBJECT: ReadonlyArray<readonly [string, unknown]> = [
+  ["an array", []],
   ["a subject missing one input name", { subject: { artifactId: "itemId" } }],
   ["a subject with an empty input name", { subject: { artifactId: "", representationRevisionId: "revisionId" } }],
   ["a subject with a non-string input name", { subject: { artifactId: 1, representationRevisionId: "revisionId" } }],
@@ -108,17 +117,22 @@ describe("the planned entry carries the outward declaration of its registration"
     expect(readDeclaredOutward({ ...baseConfig(), outward: value })).toEqual({ subject: null });
   });
 
+  it.each(OUTWARD_WITH_MALFORMED_SUBJECT)("plans %s as an outward declaration with a malformed subject", (_label, value) => {
+    expect(plan({ ...baseConfig(), outward: value }).declaredOutward).toEqual({ subject: MALFORMED_OUTWARD_SUBJECT });
+    expect(readDeclaredOutward({ ...baseConfig(), outward: value })).toEqual({ subject: MALFORMED_OUTWARD_SUBJECT });
+  });
+
   it.each(THROWING_ACCESSORS)(
-    "plans a throwing accessor on %s as an outward declaration without a subject, and the recorder does not throw",
+    "plans a throwing accessor on %s as an outward declaration with a malformed subject, and the recorder does not throw",
     (_label, makeConfig) => {
-      expect(plan(makeConfig()).declaredOutward).toEqual({ subject: null });
+      expect(plan(makeConfig()).declaredOutward).toEqual({ subject: MALFORMED_OUTWARD_SUBJECT });
       expect(() => readDeclaredOutward(makeConfig())).not.toThrow();
       const recorder = new CapabilityPlanRecorder({ host: HOST });
       let recorded: ReturnType<CapabilityPlanRecorder["record"]> | undefined;
       expect(() => {
         recorded = recorder.record(NAME, makeConfig());
       }).not.toThrow();
-      expect(recorded?.declaredOutward).toEqual({ subject: null });
+      expect(recorded?.declaredOutward).toEqual({ subject: MALFORMED_OUTWARD_SUBJECT });
     },
   );
 

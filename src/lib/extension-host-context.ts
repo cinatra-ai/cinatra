@@ -1879,8 +1879,10 @@ function ownString(value: object, key: string): string | undefined {
  */
 export function checkOutwardRunAction(input: {
   frame: unknown; toolName: string; owner: OutwardActionOwner | null | undefined;
-  /** The tool's declared subject fields (null: the tool declares no subject). */
-  subject?: OutwardActionSubjectFields | null;
+  /** The tool's declared subject fields (null: the tool declares no subject;
+   * `"malformed"`: it declares one that cannot be read, refused with
+   * `action_subject_invalid`, never treated as no subject). */
+  subject?: OutwardActionSubjectFields | "malformed" | null;
   /** The call's prepared arguments. */
   args?: unknown;
 }): CheckedOutwardRunAction {
@@ -1926,6 +1928,9 @@ export function checkOutwardRunAction(input: {
     action = Object.freeze({ toolName: input.toolName, packageName: identity.packageName, version: identity.version,
       installId: identity.installId, digest: identity.digest });
   }
+  // A declared subject that could not be read never means "no subject": the
+  // call would otherwise be bound to the decision alone, for any item.
+  if (input.subject === "malformed") throw new OutwardActionRefusal("action_subject_invalid");
   // The item and revision the call acts on, read by the declared field names.
   const subject = input.subject === undefined || input.subject === null ? null : readCallSubject(input.subject, input.args);
   // The frame's verified decision of this visit, read once from its own data

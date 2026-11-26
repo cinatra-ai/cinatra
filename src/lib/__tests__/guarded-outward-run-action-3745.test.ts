@@ -123,6 +123,7 @@ const PACKAGE = "@acme/outreach";
 const VERSION = "1.2.3";
 const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
 const REASON = "outward_effect_requires_recorded_decision";
+const GATE_ANSWERING = ["agent_run_resume", "approvals_decide"];
 
 const source = (stepId = "step-1") => ({
   contextId: "ctx-1", stepId, executionAttemptId: "attempt-1",
@@ -138,12 +139,13 @@ const runFrame = (over: Partial<Record<string, unknown>> = {}): McpRequestContex
 
 type ToolResult = { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
 
-/** One runtime server with the two outward tools; `owner` stamps an extension owner (absent: a host built-in). */
+/** One runtime server with the two outward tools (or `names`); `owner` stamps an extension owner (absent: a host
+ * built-in); `subject` is the declared `outward.subject`, passed as written. */
 async function buildServer(owner?: { packageName: string; version: string; loadedIdentity?: object },
-  subject?: { artifactId: string; representationRevisionId: string }) {
+  subject?: unknown, names: readonly string[] = [OUTWARD, OTHER_OUTWARD]) {
   const handled: string[] = [];
   const config = (name: string) => ({
-    title: name, description: name, outward: subject ? { subject } : {},
+    title: name, description: name, outward: subject !== undefined ? { subject } : {},
     ...(owner ? { cinatraPrimitive: { ownerPackage: owner.packageName, resolvedVersion: owner.version,
       dispatchTarget: { kind: "extension-default", packageName: owner.packageName, version: owner.version, name,
         ...(owner.loadedIdentity ? { loadedIdentity: owner.loadedIdentity } : {}) } } } : {}),
@@ -152,7 +154,7 @@ async function buildServer(owner?: { packageName: string; version: string; loade
     name: "guarded-outward-test",
     version: "0.0.0",
     registerCapabilities: (toolServer) => {
-      for (const name of [OUTWARD, OTHER_OUTWARD]) {
+      for (const name of names) {
         (toolServer.registerTool as unknown as (n: string, c: unknown, h: (...a: unknown[]) => unknown) => unknown)(
           name, config(name), async () => {
             handled.push(name);
@@ -202,7 +204,8 @@ describe("the guarded outward run action", () => {
     const realLookup = augmentModule.lookupPrimitiveClassification;
     auditSpy = vi.spyOn(auditModule, "logAuditEvent").mockResolvedValue(undefined);
     vi.spyOn(augmentModule, "lookupPrimitiveClassification").mockImplementation((name: string) =>
-      name === OUTWARD || name === OTHER_OUTWARD ? { ...FIXTURE_CLASSIFICATION } : realLookup(name));
+      name === OUTWARD || name === OTHER_OUTWARD || GATE_ANSWERING.includes(name)
+        ? { ...FIXTURE_CLASSIFICATION } : realLookup(name));
     vi.spyOn(extensionRegistryModule, "getEffectiveExtensionMcpTool").mockReturnValue(undefined);
   });
 
@@ -419,6 +422,17 @@ describe("the guarded outward run action", () => {
       expect(server.handled).toEqual([]);
     });
 
+    // A subject that is declared but cannot be read (here one input name is missing) is never "no subject": otherwise
+    // the tool would be bound to the decision alone and admitted for any item.
+    it("is refused, before any consumption, when its declared subject is malformed", async () => {
+      const server = await buildServer(undefined, { artifactId: "postId" });
+      const result = await server.call(OUTWARD, runFrame(), { postId: "post-9", postRevision: "revision-Z" });
+      expect(result.content?.[0]?.text).toContain(`${REASON}:action_subject_invalid`);
+      expect(store.consume).not.toHaveBeenCalled();
+      expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+      expect(server.handled).toEqual([]);
+    });
+
     it("a tool without a subject hands the consumption no subject (it is bound to the decision only)", async () => {
       const server = await buildServer();
       await server.call(OUTWARD, runFrame(), { postId: "post-9", postRevision: "revision-Z" });
@@ -431,6 +445,21 @@ describe("the guarded outward run action", () => {
   // and the guarded action hands it to the consumption unchanged. The consumption double here keeps the visits of the
   // step and answers as the real consumption does for a call with and without that id (the rule itself is pinned
   // through the real function in packages/agents).
+  // The tools that answer a person's pending gate declare no subject; one consumed decision must not let them answer
+  // any gate with any arguments, so on a run frame they stay refused as before the guarded action.
+  it("refuses the gate-answering tools on a run frame even with a released decision, and uses nothing up", async () => {
+    store.decisions.set("run-1|step-1", { tools: new Set(GATE_ANSWERING), consumed: false,
+      released: [{ artifactId: "post-1", representationRevisionId: "revision-A" }] });
+    const server = await buildServer(undefined, undefined, GATE_ANSWERING);
+    for (const name of GATE_ANSWERING) {
+      const result = await server.call(name, runFrame(), { runId: "run-1", decision: "approve" });
+      expect(result.content?.[0]?.text).toContain(REASON);
+    }
+    expect(server.handled).toEqual([]);
+    expect(store.consume).not.toHaveBeenCalled();
+    expect(store.decisions.get("run-1|step-1")!.consumed).toBe(false);
+  });
+
   describe("the decision of the call's own visit", () => {
     type Visit = { id: string; stepId: string; consumed: boolean };
     let visits: Visit[];

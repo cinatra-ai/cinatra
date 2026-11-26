@@ -176,6 +176,16 @@ export const OUTWARD_EFFECT_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * cinatra#3745: the tools of the outward-effect set that answer a person's
+ * pending gate. The guarded outward run action consumes a decision the person
+ * released for the step's offered tool; these tools declare no subject, so one
+ * consumed decision would let them answer any gate with any arguments, a gate
+ * the person never saw among them. They therefore never take the guarded
+ * action: on a run frame they stay refused exactly as before it.
+ */
+const GATE_ANSWERING_TOOL_NAMES: ReadonlySet<string> = new Set(["agent_run_resume", "approvals_decide"]);
+
+/**
  * True when the call is a tool of the outward-effect set, or a tool whose
  * registration declares that it acts outward, on an agent run's frame, so it is
  * served only together with the person's recorded decision for the run's
@@ -250,9 +260,11 @@ export type McpBoundaryRequest = {
   /**
    * cinatra#3745: the names of the tool's two input fields that carry the item
    * the call acts on and its revision (the planned `outward.subject`), or null
-   * when the tool declares none. Read by the guarded outward run action only.
+   * when the tool declares none, or `"malformed"` when its declared subject is
+   * present but unreadable (the guarded action refuses that call). Read by the
+   * guarded outward run action only.
    */
-  outwardSubject?: Readonly<{ artifactId: string; representationRevisionId: string }> | null;
+  outwardSubject?: Readonly<{ artifactId: string; representationRevisionId: string }> | "malformed" | null;
   /** cinatra#3745: the call's prepared arguments, read only for the subject fields. */
   toolArguments?: unknown;
 };
@@ -304,7 +316,7 @@ function synthActor(ctx: McpBoundaryRequest["ctx"], extraRoles?: string[]): Acto
  * refused.
  */
 export async function enforceMcpBoundary(req: McpBoundaryRequest): Promise<McpBoundaryDecision> {
-  if (req.outwardOwner === undefined ||
+  if (req.outwardOwner === undefined || GATE_ANSWERING_TOOL_NAMES.has(req.primitiveName) ||
       !needsRecordedDecision(req.primitiveName, req.ctx, req.declaresOutward === true)) {
     return decideMcpBoundary(req, false);
   }

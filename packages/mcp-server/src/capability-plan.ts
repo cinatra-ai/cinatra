@@ -438,8 +438,21 @@ export type PrimitiveIdentityFailure =
  * carry the stored item the call acts on and its revision, or is `null`.
  */
 export type PlannedOutwardDeclaration = {
-  readonly subject: { readonly artifactId: string; readonly representationRevisionId: string } | null;
+  /**
+   * The two input fields that carry the item the tool acts on and its revision;
+   * `null` when the tool declares no subject (absent or null `outward.subject`);
+   * `MALFORMED_OUTWARD_SUBJECT` when a subject is present but cannot be read as
+   * those two fields (cinatra#3745: such a tool is never bound to a decision
+   * alone, so its outward run call is refused).
+   */
+  readonly subject:
+    | { readonly artifactId: string; readonly representationRevisionId: string }
+    | typeof MALFORMED_OUTWARD_SUBJECT
+    | null;
 };
+
+/** The planned subject of an `outward` declaration whose subject is present but unreadable. */
+export const MALFORMED_OUTWARD_SUBJECT = "malformed" as const;
 
 /**
  * One planned primitive: everything an admission decision needs about ONE
@@ -685,9 +698,13 @@ function readDeclarationIsMalformed(config: unknown): boolean {
  *
  * TOTAL, and a declaration can only add a tool to what the host holds. A config
  * that is not an object, or an `outward` that is `undefined` or `null`, reads
- * as `null`. A plain object whose `subject` is a plain object naming two
+ * as `null`. An `outward` that is not an object (`true`, a string, a function)
+ * and a plain object whose `subject` is `undefined` or `null` read as outward
+ * without a subject. A plain object whose `subject` is a plain object naming two
  * non-empty input fields reads as those two names, copied. Every other present
- * value, and any accessor that throws, reads as outward without a subject.
+ * subject (a missing or empty name, a non-plain object), an `outward` object
+ * that is not a plain object, and any accessor that throws read as outward with
+ * a malformed subject (`MALFORMED_OUTWARD_SUBJECT`), never as no subject.
  * Each property is read once.
  */
 export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration | null {
@@ -696,22 +713,24 @@ export function readDeclaredOutward(config: unknown): PlannedOutwardDeclaration 
   try {
     outward = (config as { outward?: unknown }).outward;
   } catch {
-    return { subject: null };
+    return { subject: MALFORMED_OUTWARD_SUBJECT };
   }
   if (outward === undefined || outward === null) return null;
+  if (typeof outward !== "object") return { subject: null };
   try {
-    if (!isPlainObject(outward)) return { subject: null };
+    if (!isPlainObject(outward)) return { subject: MALFORMED_OUTWARD_SUBJECT };
     const subject: unknown = (outward as { subject?: unknown }).subject;
-    if (!isPlainObject(subject)) return { subject: null };
+    if (subject === undefined || subject === null) return { subject: null };
+    if (!isPlainObject(subject)) return { subject: MALFORMED_OUTWARD_SUBJECT };
     const artifactId: unknown = (subject as { artifactId?: unknown }).artifactId;
     const representationRevisionId: unknown = (subject as { representationRevisionId?: unknown })
       .representationRevisionId;
     if (!nonEmptyString(artifactId) || !nonEmptyString(representationRevisionId)) {
-      return { subject: null };
+      return { subject: MALFORMED_OUTWARD_SUBJECT };
     }
     return { subject: { artifactId, representationRevisionId } };
   } catch {
-    return { subject: null };
+    return { subject: MALFORMED_OUTWARD_SUBJECT };
   }
 }
 
