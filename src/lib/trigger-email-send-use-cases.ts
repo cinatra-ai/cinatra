@@ -224,7 +224,8 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
       const runId = agentRun?.runId ?? ctx?.verifiedRunScopeId ?? (ctx?.verifiedStepId ? ctx.runId : undefined);
       if (typeof runId !== "string" || runId.trim() === "") return null;
       const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
-      const publishDecisionId = ctx?.verifiedPublishDecisionId;
+      // The decision the model bridge verified for the call (the token's signed `pdc` claim, cinatra#3745).
+      const publishDecisionId = ctx?.verifiedPublishDecisionId ?? agentRun?.verifiedPublishDecisionId;
       // The decision the passthrough route's call check CLAIMED for this call (cinatra#4762), as the server took it.
       const claim = ctx?.publishCallClaim;
       return {
@@ -800,14 +801,20 @@ async function runInitialSend(args: {
   });
 
   /**
-   * THE ROAD OF THE SEND (cinatra#3089), decided from the call's publish claim
-   * and what the claimed decision's CARD DECLARED, before anything is read:
-   *   - no claim on the call, or a claimed, released decision whose card
-   *     declared no list row and no artifacts row: the OLD road, below,
-   *     unchanged;
-   *   - a claimed call whose decision cannot be told, is not the claimed one,
-   *     is not released, or whose declared list is not exact: REFUSED;
-   *   - a claimed call with a released list of the exact form: REFUSED with
+   * THE ROAD OF THE SEND (cinatra#3089), decided from the decision that
+   * governs the call and what its CARD DECLARED, before anything is read. A
+   * call is GOVERNED when the server's context of the call carries the
+   * passthrough route's publish claim OR the publish decision the model
+   * bridge verified (the on-behalf-of token's signed decision); the governing
+   * decision is the claimed one, else the signed one, read in the call's own
+   * run and checked against the call's verified step:
+   *   - an ungoverned call (a person's send, a test send), or a governed call
+   *     whose released decision's card declared no list row and no artifacts
+   *     row: the OLD road, below, unchanged;
+   *   - a governed call whose decision cannot be told, is not the governing
+   *     one, is not released, whose declaration was not recorded, or whose
+   *     declared list is not exact: REFUSED;
+   *   - a governed call with a released list of the exact form: REFUSED with
    *     `approved_send_unavailable`, since the released-list send is not
    *     available yet.
    * A refusal answers one fixed code and nothing else: no reader's text, no
@@ -821,11 +828,14 @@ async function runInitialSend(args: {
       return "calling_run_unreadable";
     }
     const claim = callingRun?.claim;
-    if (!callingRun || !claim) return null;
-    const { runId, stepId, publishDecisionId: signed } = callingRun;
+    const signed = callingRun?.publishDecisionId;
+    if (!callingRun || (!claim && signed === undefined)) return null;
+    const { runId, stepId } = callingRun;
     if (!stepId) return "claim_without_step";
-    if (claim.runId !== runId) return "decision_claim_other_run";
-    if (signed !== undefined && signed !== claim.decisionId) return "decision_claim_conflict";
+    if (claim && claim.runId !== runId) return "decision_claim_other_run";
+    if (claim && signed !== undefined && signed !== claim.decisionId) return "decision_claim_conflict";
+    // The claimed decision (passthrough), else the decision the bridge verified for the call.
+    const decisionId = claim?.decisionId ?? signed!;
     let governing: StepPublishDecision | null;
     let decision: StepPublishDecision | null;
     let store: typeof import("@cinatra-ai/agents/publish-decision-store");
@@ -837,13 +847,13 @@ async function runInitialSend(args: {
     if (!governing) return "decision_missing";
     if (signed !== undefined && governing.id !== signed) return "decision_signed_other";
     try {
-      decision = await args.readClaimedPublishDecision(runId, claim.decisionId);
+      decision = await args.readClaimedPublishDecision(runId, decisionId);
       store = await import("@cinatra-ai/agents/publish-decision-store");
     } catch {
       return "decision_claim_unreadable";
     }
-    if (!decision || decision.id !== claim.decisionId) return "decision_claim_not_current";
-    if (governing.id !== claim.decisionId) return "decision_claim_superseded";
+    if (!decision || decision.id !== decisionId) return "decision_claim_not_current";
+    if (governing.id !== decisionId) return "decision_claim_superseded";
     const read = store.releasedDecisionList({
       decision,
       entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
@@ -856,7 +866,7 @@ async function runInitialSend(args: {
     return read.list === null ? null : "approved_send_unavailable";
   })();
   if (refusal !== null) {
-    // The one place a claimed call's refusal is answered: only a code of the
+    // The one place a governed call's refusal is answered: only a code of the
     // closed set passes; any other value answers `claimed_send_refused`.
     const CLAIMED_SEND_REFUSALS: ReadonlySet<string> = new Set([
       "calling_run_unreadable", "claim_without_step", "decision_claim_other_run", "decision_claim_conflict",
@@ -864,6 +874,7 @@ async function runInitialSend(args: {
       "decision_claim_not_current", "decision_claim_superseded", "approved_send_unavailable",
       "released_list_fields_invalid", "decision_not_released", "released_list_malformed",
       "released_list_ambiguous", "released_list_not_shown", "released_list_bodies_not_drawn",
+      "released_list_undetermined",
     ]);
     return {
       status: "failed",

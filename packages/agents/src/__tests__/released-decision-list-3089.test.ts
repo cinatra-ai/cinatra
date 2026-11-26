@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../db", () => ({ db: {} }));
 
-import { releasedDecisionList, releasedDecisionText } from "../publish-decision-store";
+import { decodeStoredPublishDecision, releasedDecisionList, releasedDecisionText } from "../publish-decision-store";
 
 const FIELDS = ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"] as const;
 const SHOWN = [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "subject" }];
@@ -69,6 +69,11 @@ describe("releasedDecisionList (cinatra#3089)", () => {
       [entries(1)[0], null],
       ["art-0"],
     ];
+    const UNDETERMINED = {
+      ok: false,
+      code: "released_list_undetermined",
+      error: "the publish decision recorded no declaration of its card, so whether it released a list cannot be told",
+    };
     const MALFORMED = {
       ok: false,
       code: "released_list_malformed",
@@ -78,7 +83,8 @@ describe("releasedDecisionList (cinatra#3089)", () => {
       expect(read(decision(value)), JSON.stringify(value)).toEqual(MALFORMED);
       // The same values under a card that declared no list row and no artifacts row: no list (the old road).
       expect(read({ ...decision(value), declaredRows: [] }), JSON.stringify(value)).toEqual({ ok: true, list: null });
-      expect(read({ ...decision(value), declaredRows: null } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+      // A declaration that was not recorded (null) is refused: it never reads as "no list declared".
+      expect(read({ ...decision(value), declaredRows: null } as unknown as ReturnType<typeof decision>)).toEqual(UNDETERMINED);
     }
     // One declared row of either kind is a declared list: the other missing does not make it "no list".
     const onlyArtifacts = { ...decision(notLists[15]), declaredRows: decision([]).declaredRows.filter((r) => r.kind === "artifacts") };
@@ -87,6 +93,32 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     expect(read(onlyList as ReturnType<typeof decision>)).toEqual(MALFORMED);
     // A text row alone declares no list.
     expect(read({ ...decision(notLists[15]), declaredRows: [{ label: "From", input: "senderEmail" }] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+  });
+
+  it("L4b an unrecorded declaration is refused whatever was surfaced; a recorded one with no list or artifacts row is no list", () => {
+    const UNDETERMINED = { ok: false, code: "released_list_undetermined" };
+    // Null with an exact released list, with no list, and with nothing surfaced: refused alike.
+    expect(read({ ...decision(entries(2)), declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject(UNDETERMINED);
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject(UNDETERMINED);
+    // Recorded as an empty array (the dispatched plan declares no rows for the node): no list, the old road.
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: [] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+    // Recorded rows, none of kind list or artifacts: no list, the old road.
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: [{ label: "From", input: "senderEmail" }, { label: "Note", input: "note" }] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+    // The release check still comes first.
+    expect(read({ ...decision(entries(1), { status: "parked" }), declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject({ ok: false, code: "decision_not_released" });
+  });
+
+  it("L4c a stored declaration is read as recorded: text that cannot be parsed is refused at the read, [] is no rows, absent is null", () => {
+    const stored = (declaredRows: string | null) => ({
+      id: "d-1", orgId: "org-1", runId: "run-1", nodeId: "send", gateTaskId: "t-1", a2aContextId: null, status: "released",
+      surfacedValues: "{}", declaredRows, runGeneration: 0, releasedPauseGeneration: null, decidedBy: "user-2",
+      decidedAt: null, decisionNote: null, createdAt: new Date(), expiresAt: new Date(), callsInFlight: 0,
+    }) as unknown as Parameters<typeof decodeStoredPublishDecision>[0];
+    for (const bad of ["{not json", "{}", '[{"label":7,"input":"x"}]', '"[]"']) {
+      expect(() => decodeStoredPublishDecision(stored(bad)), bad).toThrow(/unreadable declared rows/);
+    }
+    expect(decodeStoredPublishDecision(stored("[]")).declaredRows).toEqual([]);
+    expect(decodeStoredPublishDecision(stored(null)).declaredRows).toBeNull();
   });
 
   it("L5 50 entries are a list and 51 are refused", () => {
@@ -107,7 +139,6 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     const shown = list.map((e) => ({ email: e.recipientEmail, subject: e.subject }));
     const refusals = [
       { ...decision(list), declaredRows: [] },
-      { ...decision(list), declaredRows: null },
       { ...decision(list), declaredRows: [{ label: "Recipients", input: "recipients" }] },
       decision(list, { shown: [shown[1]!, shown[0]!] }),
       decision(list, { shown: [shown[0]!] }),
