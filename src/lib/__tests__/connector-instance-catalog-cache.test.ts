@@ -81,6 +81,17 @@ describe("resolveToolAcrossServers — presence + duplicate-name routing (§3.6)
     const r = resolveToolAcrossServers([mk("a", ["dup"]), mk("b", ["dup"])], "dup", "b");
     expect(r).toMatchObject({ ok: true, serverId: "b" });
   });
+  it("two rows of the name on ONE server → ambiguous_tool, with or without that serverId (cinatra#3745)", () => {
+    expect(resolveToolAcrossServers([mk("a", ["dup", "dup"])], "dup", "a")).toMatchObject({
+      ok: false,
+      reason: "ambiguous_tool",
+      candidateServerIds: ["a", "a"],
+    });
+    expect(resolveToolAcrossServers([mk("a", ["dup", "dup"]), mk("b", ["x"])], "dup")).toMatchObject({
+      ok: false,
+      reason: "ambiguous_tool",
+    });
+  });
 });
 
 describe("composeSortedCatalog — stable sort key (serverId, name), slash-safe", () => {

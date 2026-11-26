@@ -394,6 +394,27 @@ export type InvokeConnectorInstanceToolInput = {
   /** The connector primitive name for the authority + execution audit rows. */
   primitiveName?: string;
   sourceType?: string;
+  /**
+   * cinatra#3745 — the `rawAnnotations` of the catalog row the caller checked
+   * (as `listConnectorInstanceTools` served it). When present, the call is
+   * refused with `catalog_entry_changed` unless the row the host resolves now
+   * carries canonically equal annotations. See `refuseUnboundEntry`.
+   */
+  expectedRawAnnotations?: Record<string, unknown>;
+  /**
+   * cinatra#3745 — a caller that must only ever read says so: when present,
+   * the call is refused with `catalog_entry_not_read` unless the resolved row
+   * is read-class by the host's own classifier and its name is not on the
+   * known-destructive list.
+   */
+  expectedClass?: "read";
+  /**
+   * cinatra#3745 — the server of the catalog row the caller checked. When
+   * present, the call is refused with `catalog_entry_changed` unless the row
+   * resolves on exactly that server (the guarded call also sends it as
+   * `serverId`, which narrows the resolution to that server).
+   */
+  expectedServerId?: string;
 };
 
 export type ListConnectorInstanceToolsInput = {
@@ -662,6 +683,137 @@ export async function acquireSnapshots(
   return served;
 }
 
+/** A deep copy of a catalog value (schema or annotations) for anything that
+ * leaves the invoker: a served row or a hook input. Mutating the copy cannot
+ * change what a later call compares or classifies (cinatra#3745). A copy, not
+ * a frozen object: the caller keeps the mutable row it always received, and
+ * the stored value stays out of its reach either way. Catalog values come from
+ * the site's JSON, so `structuredClone` copies them whole (own `__proto__`
+ * keys included). */
+function detachedCatalogValue<T>(value: T): T {
+  return value === null || typeof value !== "object" ? value : structuredClone(value);
+}
+
+/** Whether an invoker call carries any guard of the guarded call. */
+function isGuardedCall(
+  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
+): boolean {
+  return (
+    input.expectedServerId !== undefined || input.expectedRawAnnotations !== undefined || input.expectedClass !== undefined
+  );
+}
+
+/** Whether `value` is a plain object: a non-null object whose prototype is
+ * `Object.prototype` or `null`. A `Map`, a `Date`, a class instance or an
+ * array is not. The one predicate for annotations records (cinatra#3745). */
+export function isPlainAnnotationsRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/** Canonical JSON of an annotations record: object keys sorted at every
+ * depth, array order kept. The value and every object nested in it must be a
+ * plain object or an array; anything else (a `Map`, a `Date`, a class
+ * instance, a BigInt, a cycle) throws, and the caller refuses the call, so a
+ * value with no enumerable own keys never reads as `{}`.
+ *
+ * The text is written straight from the sorted own keys, never through a new
+ * object: assigning a caller- or site-owned key into `{}` would run the
+ * `__proto__` setter instead of creating the key (so an own `__proto__`
+ * annotation would vanish from the comparison), and an object's key order
+ * puts integer-like keys first whatever the sort said. A key whose value is
+ * `undefined`, a function or a symbol drops out, as in `JSON.stringify`; in an
+ * array such a value reads as `null`. */
+function canonicalAnnotationsJson(value: unknown): string {
+  const dropped = (v: unknown) => v === undefined || typeof v === "function" || typeof v === "symbol";
+  const write = (v: unknown): string => {
+    if (v === null || typeof v !== "object") {
+      if (typeof v === "bigint") throw new TypeError("annotation value cannot be compared");
+      return JSON.stringify(v);
+    }
+    if (Array.isArray(v)) return `[${v.map((item) => (dropped(item) ? "null" : write(item))).join(",")}]`;
+    if (!isPlainAnnotationsRecord(v)) throw new TypeError("annotation value is not a plain object");
+    const keys = Object.keys(v)
+      .filter((key) => !dropped(v[key]))
+      .sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${write(v[key])}`).join(",")}}`;
+  };
+  if (!isPlainAnnotationsRecord(value)) throw new TypeError("annotations are not a plain object");
+  return write(value);
+}
+
+/** Whether two annotations values are canonically equal; a value that cannot
+ * be written (see `canonicalAnnotationsJson`) never equals. */
+function sameAnnotations(a: unknown, b: unknown): boolean {
+  try {
+    return canonicalAnnotationsJson(a) === canonicalAnnotationsJson(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Step 1b (cinatra#3745) — bind the call to the row its caller checked. A
+ * connector's read tool lists the catalog, checks the row, then calls; the
+ * host resolves the call against its OWN cached snapshot, which may refresh in
+ * between and turn the same `{serverId, name}` into an ordinary write that no
+ * hook stops. Catalog revisions cannot bind a call (a new one is minted at
+ * every snapshot load), so the binding is the row's annotations themselves.
+ *
+ * Equality: canonical JSON with sorted keys at every depth. The host side
+ * reads the resolved entry's `rawAnnotations`; the catalog always stores an
+ * unannotated row as `{}` (and the list serves it as `{}`), and a defensive
+ * non-object entry value also reads as `{}`, so a row listed and sent back
+ * unchanged — through a JSON round trip too — is always equal. The caller's
+ * value, and every object in it, must be a plain object (or an array inside
+ * it): `null`, an array, a primitive, a `Map`, a `Date` or a class instance
+ * never equals and is refused. A key whose value is `undefined` drops out, as
+ * it does on the wire. `expectedServerId`, when present, must equal the
+ * resolved row's server.
+ *
+ * Trusting the caller's values is safe: either field can only ADD a refusal,
+ * never skip the policy, a hook or any other check below. A refusal executes
+ * nothing, parks nothing and fires no hook.
+ */
+function refuseUnboundEntry(
+  input: Pick<InvokeConnectorInstanceToolInput, "expectedRawAnnotations" | "expectedClass" | "expectedServerId">,
+  serverId: string,
+  name: string,
+  entry: CatalogToolEntry,
+): void {
+  if (input.expectedServerId !== undefined && input.expectedServerId !== serverId) {
+    throw new InvokerError(
+      "catalog_entry_changed",
+      "the site tool resolved on another server than the one it was listed on; list the tools again before calling it",
+    );
+  }
+  if (input.expectedRawAnnotations !== undefined) {
+    const raw: unknown = entry.rawAnnotations;
+    const current = raw === null || typeof raw !== "object" ? {} : raw;
+    if (!sameAnnotations(current, input.expectedRawAnnotations)) {
+      throw new InvokerError(
+        "catalog_entry_changed",
+        "the site tool changed since it was listed; list the tools again before calling it",
+      );
+    }
+  }
+  if (input.expectedClass !== undefined) {
+    // Only "read" is enforced; any other value (a later class this host does
+    // not know) is refused rather than read as no assertion.
+    if (
+      input.expectedClass !== "read" ||
+      classifyAnnotations(entry.rawAnnotations) !== "read" ||
+      isKnownDestructiveToolName(name)
+    ) {
+      throw new InvokerError(
+        "catalog_entry_not_read",
+        "the site tool is not a read tool; this call may only read",
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // invokeConnectorInstanceTool — the D1 single-pass order (steps 0→5).
 // ---------------------------------------------------------------------------
@@ -700,16 +852,32 @@ export async function invokeConnectorInstanceTool(
     deps,
   );
   const resolution = resolveToolAcrossServers(snapshots, input.toolName, input.serverId);
+  if (!resolution.ok && isGuardedCall(input)) {
+    // cinatra#3745 — a guarded call names the row it listed; when that row no
+    // longer resolves (gone from the listed server, whether or not another
+    // server now carries the name, or no longer unique there), the listed row
+    // is not the row that would run: ONE contracted reason for every case.
+    throw new InvokerError(
+      "catalog_entry_changed",
+      "the site tool changed since it was listed; list the tools again before calling it",
+    );
+  }
   if (!resolution.ok) {
     if (resolution.reason === "ambiguous_tool") {
       throw new InvokerError(
         "ambiguous_tool",
-        `toolName "${input.toolName}" is non-unique across enrolled servers; a serverId is required (candidates: ${resolution.candidateServerIds.join(", ")})`,
+        input.serverId
+          ? `toolName "${input.toolName}" has more than one row on server "${input.serverId}"; the call cannot name one`
+          : `toolName "${input.toolName}" is non-unique across enrolled servers; a serverId is required (candidates: ${resolution.candidateServerIds.join(", ")})`,
       );
     }
     throw new InvokerError("tool_not_found", `tool "${input.toolName}" is not present in the instance catalog`);
   }
   const { serverId, name, entry, snapshot } = resolution;
+
+  // Step 1b — bind the call to the row its caller checked (cinatra#3745):
+  // BEFORE the policy, the hooks and the execution.
+  refuseUnboundEntry(input, serverId, name, entry);
 
   // Step 2 — per-instance tool policy floor (§2.6 / §10-A3).
   const ref: ToolRef = { serverId, name };
@@ -773,8 +941,9 @@ export async function invokeConnectorInstanceTool(
       floorHit,
       ...(input.sourceType ? { sourceType: input.sourceType } : {}),
       endpointUrl: confirmationEndpointUrl,
-      inputSchema: entry.inputSchema,
-      rawAnnotations: entry.rawAnnotations,
+      // Copies: a hook never holds the catalog's stored objects (cinatra#3745).
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       ...(input.intent ? { intent: input.intent } : {}),
       primitiveName,
       catalogRevision: snapshot.catalogRevision,
@@ -826,8 +995,9 @@ export async function invokeConnectorInstanceTool(
       derivedClass,
       ...(input.sourceType ? { sourceType: input.sourceType } : {}),
       endpointUrl: contentReviewEndpointUrl,
-      inputSchema: entry.inputSchema,
-      rawAnnotations: entry.rawAnnotations,
+      // Copies: a hook never holds the catalog's stored objects (cinatra#3745).
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       ...(input.intent ? { intent: input.intent } : {}),
       primitiveName,
       catalogRevision: snapshot.catalogRevision,
@@ -1049,14 +1219,17 @@ export async function listConnectorInstanceTools(
       warnedInvalid = true;
       deps.warnInvalidPolicy?.(input.connectorKey, effectiveInstanceId);
     }
+    // cinatra#3745 — every object in a served row is a deep copy: the
+    // catalog's stored schemas and annotations, which the guarded call compares
+    // and classifies, are never handed out by reference.
     return {
       name: entry.name,
       serverId: entry.serverId,
-      inputSchema: entry.inputSchema,
-      ...(entry.outputSchema !== undefined ? { outputSchema: entry.outputSchema } : {}),
+      inputSchema: detachedCatalogValue(entry.inputSchema),
+      ...(entry.outputSchema !== undefined ? { outputSchema: detachedCatalogValue(entry.outputSchema) } : {}),
       ...(entry.label !== undefined ? { label: entry.label } : {}),
       ...(entry.description !== undefined ? { description: entry.description } : {}),
-      rawAnnotations: entry.rawAnnotations,
+      rawAnnotations: detachedCatalogValue(entry.rawAnnotations),
       derivedClass: classifyAnnotations(entry.rawAnnotations),
       policyStatus: decision.status,
       cacheAgeMs: Math.max(0, now - snap.fetchedAtMs),

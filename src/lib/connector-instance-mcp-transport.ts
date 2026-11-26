@@ -140,6 +140,10 @@ export type InvokerErrorCode =
   | "ambiguous_tool" // toolName non-unique across servers; serverId required (§3.6)
   | "catalog_revision_changed" // a stale cursor was paged against a bumped snapshot (§3.5)
   | "catalog_unavailable" // an explicitly-targeted enrolled server has no obtainable snapshot (cinatra#2018 S3)
+  | "catalog_entry_changed" // a guarded call's listed row is not the row that would run: other annotations, another server, or gone from the listed server — NOT executed (cinatra#3745)
+  | "guarded_call_required" // an `invokeSiteTool` call carried `expectedRawAnnotations` or `expectedClass`; such a call must use `invokeSiteToolGuarded` — NOT executed (cinatra#3745)
+  | "guarded_server_id_required" // an `invokeSiteToolGuarded` call named no non-empty `serverId`; a guarded call is bound to the server of the row it listed — NOT executed (cinatra#3745)
+  | "catalog_entry_not_read" // the caller asked for `expectedClass:"read"` and the resolved row is not read-class or carries a known-destructive name, or the caller sent an `expectedClass` other than "read" — NOT executed (cinatra#3745)
   // ── destructive-confirmation (cinatra#2020 S5, invoker step 3) ───────────
   | "pending_confirmation" // destructive call PARKED pending the user's explicit confirmation — NOT executed; the message text is the model-facing rendering (§2.1)
   | "confirmation_unavailable" // confirmation subsystem/store failure or pending-cap hit — REFUSED fail-closed rather than executing unconfirmed (§2.3)
