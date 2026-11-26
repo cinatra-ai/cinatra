@@ -1,6 +1,6 @@
 /**
  * cinatra#3089 — an effect of one bound revision, at most once per run, and the
- * filed artifacts of a run, on the materialization ledger.
+ * review filings of a run, on the materialization ledger.
  *
  * The pooled db is mocked as the ledger's other tests mock it; the functions
  * under test run unchanged.
@@ -24,6 +24,10 @@
  *      written again, and one that never lands is performed and in doubt
  *   F1 the filed artifacts of a run are its finalized mid-run rows in the
  *      organization, capped, from the ledger alone
+ *   F2 a run id of another organization answers exactly like an unknown one
+ *   F3 a run over the cap counts as filed without reading an object; an
+ *      artifact the actor cannot read (absent, or a read error) counts as filed;
+ *      only an artifact of the asked type otherwise counts
  *   N1 the ledger module reads and writes no objects row
  */
 import { readFileSync } from "node:fs";
@@ -297,6 +301,11 @@ describe("cinatra#3089 — the review filings of a run", () => {
       return { rows: ids.slice(0, limit).map((artifact_id) => ({ artifact_id })) };
     });
   }
+  const kernelActor = { principalId: "user-1", organizationId: "org-a" } as never;
+  // Loaded when asked: the reading lives beside the decided-revision read.
+  const ask = async (runId: string, cap?: number) =>
+    (await import("../current-decided-revision-read")).runHasFiledReviewArtifacts({ actor: kernelActor, orgId: "org-a", runId, objectTypeId: "type-a", ...(cap ? { cap } : {}) });
+
   it("F1 the filed artifacts of a run are its finalized mid-run rows in the organization, capped", async () => {
     filings([
       { org_id: "org-a", run_id: "run-1", path: "materialize_tool", phase: "finalized", artifact_id: "art-2" },
@@ -309,6 +318,36 @@ describe("cinatra#3089 — the review filings of a run", () => {
     const [sql, params] = poolQueryMock.mock.calls[1] as [string, unknown[]];
     expect(sql).toMatch(/LIMIT \$3/);
     expect(params).toEqual(["run-1", "org-a", 2]);
+  });
+
+  it("F2 a run id of another organization answers exactly like an unknown one", async () => {
+    filings([{ org_id: "org-b", run_id: "run-b", path: "materialize_tool", phase: "finalized", artifact_id: "art-b" }]);
+    getObjectByIdMock.mockReturnValue({ id: "art-b", type: "type-a" });
+    // red-first-expect: Cannot find module '/src/lib/artifacts/current-decided-revision-read'
+    const foreign = await ask("run-b");
+    const unknown = await ask("run-none");
+    expect(foreign).toBe(false);
+    expect(foreign).toBe(unknown);
+    expect(getObjectByIdMock).not.toHaveBeenCalled();
+  });
+
+  it("F3 over the cap, or an artifact the actor cannot read, counts as filed; else only the asked type", async () => {
+    const rows = ["art-1", "art-2", "art-3"].map((artifact_id) => ({ org_id: "org-a", run_id: "run-1", path: "materialize_tool", phase: "finalized", artifact_id }));
+    filings(rows);
+    expect(await ask("run-1", 2)).toBe(true);
+    expect(getObjectByIdMock).not.toHaveBeenCalled();
+    getObjectByIdMock.mockImplementation((id: string) => ({ id, type: "type-other" }));
+    expect(await ask("run-1")).toBe(false);
+    expect(getObjectByIdMock).toHaveBeenCalledWith("art-1", { orgId: "org-a" }, kernelActor);
+    getObjectByIdMock.mockImplementation((id: string) => (id === "art-2" ? null : { id, type: "type-other" }));
+    expect(await ask("run-1")).toBe(true);
+    getObjectByIdMock.mockImplementation((id: string) => {
+      if (id === "art-3") throw new Error("read failed");
+      return { id, type: "type-other" };
+    });
+    expect(await ask("run-1")).toBe(true);
+    getObjectByIdMock.mockImplementation((id: string) => ({ id, type: id === "art-3" ? "type-a" : "type-other" }));
+    expect(await ask("run-1")).toBe(true);
   });
 
   it("N1 the ledger module reads and writes no objects row", () => {
