@@ -81,6 +81,7 @@ describe("readAgentPayloadFromExtractedPackage", () => {
       "utf8",
     );
 
+    // red-first-expect: promise resolved
     await expect(readAgentPayloadFromExtractedPackage(pkgDir)).rejects.toThrow(
       /root agent\.json and no cinatra\/oas\.json\. An agent's definition is cinatra\/oas\.json/,
     );
