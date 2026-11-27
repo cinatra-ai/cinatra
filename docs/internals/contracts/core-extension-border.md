@@ -63,9 +63,12 @@ the port bounds nothing a manifest declares), or when its signature names a type
 its file imports from outside the SDK (a raw handle: a database client, a queue, a
 framework object). A name parameter typed by a literal union or by a named alias — such
 as one the manifest schema exports — passes. The members that stood on main when the
-rule landed are ledger entries with their reasons; the rule was seeded once through the
-ledger's `seededRules`, so a new entry of it is growth against the base, and taking it
-off that list is growth too. A root aggregate that cannot be found fails the gate.
+rule landed are ledger entries with their reasons. They were seeded once through the
+ledger's `seededRules`: a listed rule is seeded only when the base copy of the gate script
+does not know it (it is not in the base's `KNOWN_RULES`; with no such list, its id does not
+occur in the base text), and a base copy that cannot be read seeds nothing. A rule the base
+check knows is never seeded, so a new entry of it is growth against the base, and taking a
+rule off `seededRules` is growth too. A root aggregate that cannot be found fails the gate.
 
 Stated limits. The rule reads what an ordinary change writes; a disguise is left to
 review. It reads only the port types the two aggregates list by a plain type name, and

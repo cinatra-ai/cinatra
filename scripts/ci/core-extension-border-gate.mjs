@@ -67,7 +67,14 @@ import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
-import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
+import {
+  FETCHED_REF_PREFIX,
+  PULL_REQUEST_BASE_VAR,
+  compareFloorWithBase,
+  readFileAtBase,
+  reportFloorGuard,
+  resolveFloorBase,
+} from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -78,6 +85,9 @@ export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
 export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+
+/** This script, repo-relative, as the seed rule reads its base copy. */
+export const GATE_FILE = "scripts/ci/core-extension-border-gate.mjs";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -837,22 +847,38 @@ export function wildcardBaselineEntries(doc) {
 //
 // THE ONE-TIME SEED OF A NEW RULE. A rule added to this gate after the ledger
 // landed records the findings that stand on the day it lands. Its introducing
-// change lists the rule in the ledger's `seededRules`; a rule listed there on
-// the checkout, absent from the base's list and holding no base entry, is the
-// seed, and its entries are not growth. Once on the base, the rule is held like
-// every other: a new entry of it is growth, and taking it off `seededRules` is
-// growth too, so a rule is never seeded twice.
-export function seedingRules(previousDoc, currentDoc) {
-  const baseSeeded = new Set(previousDoc?.seededRules ?? []);
-  const baseRules = new Set((previousDoc?.entries ?? []).map((e) => e.rule));
-  return new Set((currentDoc?.seededRules ?? []).filter((r) => !baseSeeded.has(r) && !baseRules.has(r)));
+// change lists the rule in the ledger's `seededRules`. A listed rule is seeded
+// only when the BASE copy of this script does not know it at all (it is not in
+// the base's KNOWN_RULES list; a base copy with no such list: the rule id does
+// not occur in its text). A rule the base check knows is never seeded, whatever
+// `seededRules` says, and a base copy that cannot be read seeds nothing. Taking
+// a rule off `seededRules` is growth, so the list only grows.
+
+/** The predicate "the base check knows this rule", read from the text of the
+ *  base copy of this script, or null when that copy could not be read. */
+export function baseKnowsRuleFrom(baseScriptText) {
+  if (typeof baseScriptText !== "string") return null;
+  const list = baseScriptText.match(/export const KNOWN_RULES = new Set\(\[([\s\S]*?)\]\)/);
+  if (list) {
+    const ids = new Set([...list[1].matchAll(/["'`]([^"'`]+)["'`]/g)].map((m) => m[1]));
+    return (rule) => ids.has(rule);
+  }
+  return (rule) => baseScriptText.includes(rule);
 }
 
-export function baselineGrowth(previousDoc, currentDoc) {
+/** The rules the checkout's ledger seeds against the base: listed in
+ *  `seededRules` and unknown to the base check. Nothing when the base check
+ *  could not be read (`baseKnows` null or absent). */
+export function seedingRules(currentDoc, baseKnows) {
+  if (typeof baseKnows !== "function") return new Set();
+  return new Set((currentDoc?.seededRules ?? []).filter((r) => !baseKnows(r)));
+}
+
+export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null } = {}) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
   const grown = [];
-  const seeding = seedingRules(previousDoc, currentDoc);
+  const seeding = seedingRules(currentDoc, baseKnows);
   const headSeeded = new Set(currentDoc?.seededRules ?? []);
   for (const r of previousDoc?.seededRules ?? []) {
     if (!headSeeded.has(r)) grown.push(`seeded rule taken off the list: ${r} (a rule is seeded once)`);
@@ -862,6 +888,14 @@ export function baselineGrowth(previousDoc, currentDoc) {
     const was = previous.get(id);
     if (!was) {
       if (seeding.has(e.rule)) continue;
+      if (headSeeded.has(e.rule)) {
+        const why =
+          typeof baseKnows === "function"
+            ? `the base check already knows the rule ${e.rule}; only a rule new to the check is seeded`
+            : `the base copy of the check could not be read; nothing is seeded`;
+        grown.push(`new entry: ${id} (listed in seededRules, but ${why})`);
+        continue;
+      }
       grown.push(`new entry: ${id}`);
       continue;
     }
@@ -877,6 +911,21 @@ export function baselineGrowth(previousDoc, currentDoc) {
 /** The ledger compared with its copy on the base branch (cinatra#3831). Growth
  *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
  *  base that cannot be read fails closed. */
+/** The base copy of this script, read where the base guard reads the ledger:
+ *  the named base, else the reference the guard fetched the pull request's base
+ *  branch into. Null when neither can be read. */
+export function readBaseGateText(repoRoot, env) {
+  const where = resolveFloorBase(FLOOR_BASE_VAR, env);
+  if (where.kind !== "ref") return null;
+  const refs = [where.ref];
+  if (where.source === PULL_REQUEST_BASE_VAR) refs.push(`${FETCHED_REF_PREFIX}${env[PULL_REQUEST_BASE_VAR]}`);
+  for (const ref of refs) {
+    const read = readFileAtBase(repoRoot, ref, GATE_FILE);
+    if (read.ok) return read.text;
+  }
+  return null;
+}
+
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
   return compareFloorWithBase({
     gate: "core-extension-border",
@@ -884,7 +933,8 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     floorPath: FLOOR_FILE,
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
     parse: (text) => JSON.parse(text),
-    grown: (base, head) => baselineGrowth(base, head),
+    grown: (base, head) =>
+      baselineGrowth(base, head, { baseKnows: baseKnowsRuleFrom(readBaseGateText(repoRoot, env)) }),
     repoRoot,
     env,
   });

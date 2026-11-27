@@ -67,7 +67,13 @@ type GateModule = {
     reasons: Map<string, string>;
   };
   unjustifiedBaselineEntries: (baseline: unknown) => string[];
-  baselineGrowth: (previous: unknown, current: unknown) => string[];
+  baselineGrowth: (
+    previous: unknown,
+    current: unknown,
+    opts?: { baseKnows?: ((rule: string) => boolean) | null },
+  ) => string[];
+  baseKnowsRuleFrom: (text: string | null) => ((rule: string) => boolean) | null;
+  readBaseGateText: (repoRoot: string, env: Record<string, string | undefined>) => string | null;
   packTypeNamespaces: (packs: Set<string>, workspacePackages?: Set<string>) => Map<string, string>;
   walkProductFiles: (dir: string, acc?: string[], repoRoot?: string | null) => string[];
   GENERATED_PATHS: Set<string>;
@@ -498,29 +504,56 @@ describe("core/extension border — a port member bounds what it takes", () => {
 
 describe("core/extension border — a new rule is seeded once", () => {
   const rule = "unbounded-port-member";
-  const e = (key: string) => ({ rule, key, reason: "a member that stood on main when the rule landed" });
+  const e = (r: string, key: string) => ({ rule: r, key, reason: "a member that stood on main when the rule landed" });
+  // The base check as it stood before the rule landed: it knows the old rules only.
+  const baseText = 'export const KNOWN_RULES = new Set([\n  "pack-table-literal",\n  "pack-type-id-in-core",\n]);\n';
+  const baseKnows = gate.baseKnowsRuleFrom(baseText);
 
-  it("does not count the introducing change's entries of a seeded rule as growth", () => {
-    expect(gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e("a.ts::P.m")] })).toEqual([]);
+  it("does not count the entries of a rule new to the check as growth", () => {
+    expect(
+      gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e(rule, "a.ts::P.m")] }, { baseKnows }),
+    ).toEqual([]);
   });
 
-  it("refuses a new entry once the rule is seeded on the base", () => {
-    const base = { seededRules: [rule], entries: [e("a.ts::P.m")] };
-    expect(gate.baselineGrowth(base, { seededRules: [rule], entries: [e("a.ts::P.m"), e("a.ts::P.n")] })).toEqual([
-      `new entry: ${rule}::a.ts::P.n`,
+  it("refuses to seed an old rule the base check knows, even with no base entry", () => {
+    const head = { seededRules: ["pack-table-literal"], entries: [e("pack-table-literal", "src/x.ts::ext_example_t")] };
+    expect(gate.baselineGrowth({ entries: [] }, head, { baseKnows })).toEqual([
+      "new entry: pack-table-literal::src/x.ts::ext_example_t (listed in seededRules, but the base check already knows the rule pack-table-literal; only a rule new to the check is seeded)",
     ]);
+  });
+
+  it("seeds nothing when the base copy of the check cannot be read", () => {
+    expect(gate.baseKnowsRuleFrom(null)).toBeNull();
+    expect(gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e(rule, "a.ts::P.m")] })).toEqual([
+      `new entry: ${rule}::a.ts::P.m (listed in seededRules, but the base copy of the check could not be read; nothing is seeded)`,
+    ]);
+  });
+
+  it("refuses a new entry once the base check knows the rule", () => {
+    const knows = gate.baseKnowsRuleFrom(baseText.replace("]);", `  "${rule}",\n]);`));
+    const base = { seededRules: [rule], entries: [e(rule, "a.ts::P.m")] };
+    const head = { seededRules: [rule], entries: [e(rule, "a.ts::P.m"), e(rule, "a.ts::P.n")] };
+    expect(gate.baselineGrowth(base, head, { baseKnows: knows })).toEqual([
+      `new entry: ${rule}::a.ts::P.n (listed in seededRules, but the base check already knows the rule ${rule}; only a rule new to the check is seeded)`,
+    ]);
+  });
+
+  it("falls back to the rule id in the base text when the base has no rule list", () => {
+    const knows = gate.baseKnowsRuleFrom('const r = "pack-table-literal";\n');
+    expect(knows?.("pack-table-literal")).toBe(true);
+    expect(knows?.(rule)).toBe(false);
+  });
+
+  it("reads the base copy of the check itself, and answers null for a base it cannot read", () => {
+    const text = gate.readBaseGateText(REPO_ROOT, { CORE_EXTENSION_BORDER_BASE: "HEAD" });
+    const knows = gate.baseKnowsRuleFrom(text);
+    expect(knows?.("pack-table-literal")).toBe(true);
+    expect(gate.readBaseGateText(REPO_ROOT, { CORE_EXTENSION_BORDER_BASE: "refs/no/such-ref" })).toBeNull();
   });
 
   it("refuses taking a seeded rule off the list, so it is never seeded twice", () => {
-    expect(gate.baselineGrowth({ seededRules: [rule], entries: [] }, { entries: [] })).toEqual([
+    expect(gate.baselineGrowth({ seededRules: [rule], entries: [] }, { entries: [] }, { baseKnows })).toEqual([
       `seeded rule taken off the list: ${rule} (a rule is seeded once)`,
-    ]);
-  });
-
-  it("does not seed a rule the base already holds entries of", () => {
-    const base = { entries: [e("a.ts::P.m")] };
-    expect(gate.baselineGrowth(base, { seededRules: [rule], entries: [e("a.ts::P.m"), e("a.ts::P.n")] })).toEqual([
-      `new entry: ${rule}::a.ts::P.n`,
     ]);
   });
 
