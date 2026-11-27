@@ -18,7 +18,7 @@
  *
  *   pnpm exec vitest run src/lib/blog/__tests__/publish-artifact-read-contract.test.ts
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
@@ -99,6 +99,16 @@ describe("host-side reader helpers exist and have the documented `liveOnly: true
   it("the idea-summary materializer module is gone", () => {
     const path = fileURLToPath(new URL("../../blog-idea-artifact-materializer.ts", import.meta.url));
     expect(existsSync(path)).toBe(false);
+  });
+
+  // cinatra#4862: the blog plugin definition (src/lib/blog/plugin/definition)
+  // had no importer and is deleted; its barrel export went with it.
+  it("the src/lib/blog/plugin/definition module is gone and not re-exported", () => {
+    const path = fileURLToPath(new URL("../plugin/definition.ts", import.meta.url));
+    expect(existsSync(path)).toBe(false);
+    const indexPath = fileURLToPath(new URL("../index.ts", import.meta.url));
+    const indexText = readFileSync(indexPath, "utf8");
+    expect(indexText.includes("contentBlogPlugin")).toBe(false);
   });
 
   it("readBlogImageArtifactBytes is exported; WP image upload still flows through it", async () => {
