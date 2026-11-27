@@ -3,7 +3,7 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
  * agent_export -> agent_import round-trip contract (issue #130).
  *
  * Locks the live MCP export/import surface:
- *   - Canonical-path export: the ZIP carries agent.json (the on-disk OAS Flow,
+ *   - Canonical-path export: the ZIP carries cinatra/oas.json (the on-disk OAS Flow,
  *     byte-for-byte), manifest.json {version:1}, and the package's REAL
  *     on-disk sidecars (package.json + LICENSE) — exactly the files
  *     importAgentTemplateCore stages for the SPDX license gate and the
@@ -20,8 +20,8 @@ import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
  *     source (no packageName / package missing on disk / unreadable file)
  *     get an explicit { error } — never a ZIP. The old DB-derived shell
  *     (empty nodes / $referenced_components) was silently non-importable.
- *   - Schema doc gate: the agent_export description names agent.json (the
- *     entry the importer requires), not oas.json (doc drift from #130).
+ *   - Schema doc gate: the agent_export description names cinatra/oas.json
+ *     (the entry the importer requires), not agent.json (cinatra#4920).
  *
  * Hermetic: tmp-dir install root; store and host-app seams mocked; the
  * compile/zip/license modules under contract are real.
@@ -385,7 +385,7 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("agent_export canonical path", () => {
-  it("ships agent.json byte-for-byte plus manifest + real on-disk sidecars", async () => {
+  it("ships cinatra/oas.json byte-for-byte plus manifest + real on-disk sidecars", async () => {
     stageCanonicalPackage();
     seedTemplate();
 
@@ -397,12 +397,13 @@ describe("agent_export canonical path", () => {
     const files = readZipFiles(Buffer.from(result.zipBase64 as string, "base64"));
     expect([...files.keys()].sort()).toEqual([
       "LICENSE",
-      "agent.json",
+      "cinatra/oas.json",
       "manifest.json",
       "package.json",
     ]);
-    // agent.json is the canonical on-disk document, not a DB-derived shell.
-    expect(JSON.parse(files.get("agent.json")!)).toEqual(buildOasFlow());
+    // cinatra/oas.json is the canonical on-disk document, not a DB-derived shell.
+    expect(files.has("agent.json")).toBe(false);
+    expect(JSON.parse(files.get("cinatra/oas.json")!)).toEqual(buildOasFlow());
     expect(JSON.parse(files.get("manifest.json")!)).toMatchObject({ version: 1 });
     expect(JSON.parse(files.get("package.json")!)).toEqual({
       name: PACKAGE_NAME,
@@ -613,7 +614,7 @@ function collectNullDescriptionPaths(value: unknown, p = ""): string[] {
 }
 
 describe("agent_export repairs wayflow-style documents (#2645)", () => {
-  it("ships an archive whose agent.json carries metadata.cinatra.type and no null descriptions", async () => {
+  it("ships an archive whose cinatra/oas.json carries metadata.cinatra.type and no null descriptions", async () => {
     stageWayflowStylePackage();
     seedTemplate({ id: "tpl-wf", name: "Wayflow Drafter", packageName: WAYFLOW_PACKAGE_NAME });
 
@@ -621,7 +622,7 @@ describe("agent_export repairs wayflow-style documents (#2645)", () => {
     expect(result.error).toBeUndefined();
 
     const files = readZipFiles(Buffer.from(result.zipBase64 as string, "base64"));
-    const shipped = JSON.parse(files.get("agent.json")!) as Record<string, unknown>;
+    const shipped = JSON.parse(files.get("cinatra/oas.json")!) as Record<string, unknown>;
     const cinatra = (shipped.metadata as { cinatra: Record<string, unknown> }).cinatra;
     // Type derived from component_type: Flow -> "flow"; siblings preserved.
     expect(cinatra.type).toBe("flow");
@@ -664,7 +665,7 @@ describe("agent_export repairs wayflow-style documents (#2645)", () => {
     expect(result.error).toBeUndefined();
     const files = readZipFiles(Buffer.from(result.zipBase64 as string, "base64"));
     // Exact bytes of the staged on-disk file — no reformat, no key reorder.
-    expect(files.get("agent.json")).toBe(JSON.stringify(buildOasFlow(), null, 2));
+    expect(files.get("cinatra/oas.json")).toBe(JSON.stringify(buildOasFlow(), null, 2));
   });
 });
 
@@ -709,10 +710,10 @@ describe("agent_export fail-explicit fallback (no DB-derived shell)", () => {
 });
 
 describe("schema doc drift (#130)", () => {
-  it("agent_export description names agent.json (the entry agent_import requires), not oas.json", () => {
+  it("agent_export description names cinatra/oas.json (the entry agent_import requires), not agent.json", () => {
     const desc = AGENT_BUILDER_TOOL_META["agent_export"].description;
-    expect(desc).toContain("agent.json");
-    expect(desc).not.toContain("oas.json");
+    expect(desc).toContain("cinatra/oas.json");
+    expect(desc).not.toContain("agent.json");
   });
 
   it("agent_import description documents upsert-by-packageName", () => {
