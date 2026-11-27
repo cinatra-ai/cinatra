@@ -7,8 +7,9 @@ import "server-only";
 // join site in handlers.ts; only the definitions moved.
 
 import { existsSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
+import { findAgentDefinition } from "../agent-definition-order";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
 
@@ -135,40 +136,26 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
 export type AgentOasRead = { path: string; relPath: string; rootDir: string };
 
 /**
- * By-slug read of an agent definition (cinatra#4920): `cinatra/oas.json` only,
- * at the places the four-rung probe already read it (the operator's vendor
- * segment first, then first-party). Returns `null` when nothing is there, and
- * `{ error }` when the directory holds only the old definition file
- * (`cinatra/agent.json` in a vendor directory, or `cinatra/agent.json` /
- * `agent.json` in the legacy `<root>/<slug>/` directory). Never reads an old file.
+ * By-slug read of an agent definition (cinatra#4920): `cinatra/oas.json` only.
+ * The directory order and the old-layout error live in findAgentDefinition
+ * (../agent-definition-order), shared with the compiler: the first directory
+ * that holds ANY definition file decides (the operator's vendor segment, then
+ * first-party, then the legacy `<root>/<slug>/` directory). Returns `null`
+ * when nothing is there, and `{ error }` when that directory holds only an old
+ * definition file. Never reads an old file.
  */
 export function resolveAgentOasPathForRead(packageSlug: string): AgentOasRead | { error: string } | null {
   const root = resolveDevExtensionSourceRoot();
   if (!isSafePathSegment(packageSlug)) return null;
-  const vendors = safeVendorSegmentsForRead();
-  for (const vendor of vendors) {
-    const newRoot = join(root, vendor, packageSlug);
-    const oas = join(newRoot, "cinatra", "oas.json");
-    if (existsSync(oas)) return { path: oas, relPath: relative(process.cwd(), oas), rootDir: newRoot };
-  }
-  // Nothing at a `cinatra/oas.json`: name an old file if one is there.
-  const legacyRoot = join(/* turbopackIgnore: true */ root, LEGACY_SLUG_MAP[packageSlug] ?? packageSlug);
-  const old: Array<{ found: string; vendor: string }> = [
-    ...vendors.map((vendor) => ({ found: join(root, vendor, packageSlug, "cinatra", "agent.json"), vendor })),
-    { found: join(legacyRoot, "cinatra", "agent.json"), vendor: vendors[0] },
-    { found: join(legacyRoot, "agent.json"), vendor: vendors[0] },
-  ];
-  const show = (p: string) => relative(process.cwd(), p) || p;
-  for (const { found, vendor } of old) {
-    if (existsSync(found)) {
-      return {
-        error:
-          `Agent definition is in the old layout: found ${show(found)} in ${show(dirname(found).replace(/[\\/]cinatra$/, ""))}, which is no longer read. ` +
-          `The definition must be at ${show(join(root, vendor, packageSlug, "cinatra", "oas.json"))}; move it there.`,
-      };
-    }
-  }
-  return null;
+  const found = findAgentDefinition({
+    root,
+    vendors: safeVendorSegmentsForRead(),
+    slug: packageSlug,
+    legacySlug: LEGACY_SLUG_MAP[packageSlug] ?? packageSlug,
+  });
+  if (!found) return null;
+  if (found.kind === "old") return { error: found.message };
+  return { path: found.path, relPath: relative(process.cwd(), found.path), rootDir: found.rootDir };
 }
 
 // Resolves the on-disk directory that contains the agent (for sibling reads

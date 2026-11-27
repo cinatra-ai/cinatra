@@ -1,9 +1,13 @@
 /**
  * cinatra#4920 (direct readers): a by-slug read of an agent definition takes
- * `cinatra/oas.json` only. A directory with only `agent.json` or only
- * `cinatra/agent.json` fails with one plain error naming the directory, the
- * file found and the path the definition must be at; with both files,
- * `cinatra/oas.json` is read and the old file is ignored.
+ * `cinatra/oas.json` only, from the first directory that holds ANY definition
+ * file (operator vendor, then first-party, then the legacy directory). A
+ * directory with only `agent.json` or only `cinatra/agent.json` fails with one
+ * plain error naming the directory, the file found and the path the definition
+ * must be at. With both files in a directory, `cinatra/oas.json` is processed
+ * and the old file is ignored. Every handler is checked for POSITIVE proof:
+ * it succeeded (or reached its named downstream call) with the canonical file's
+ * own content or path.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/agent-source-by-slug-oas-only-4920.test.ts
  */
@@ -13,12 +17,26 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 
 // ---------------------------------------------------------------------------
-// vi.hoisted refs — capture the Verdaccio publisher mock so we can count calls.
+// vi.hoisted refs.
 // ---------------------------------------------------------------------------
 
-const { mockPublishAgentPackageFromGitDir, mockPublishAgentPackage } = vi.hoisted(() => ({
-  mockPublishAgentPackageFromGitDir: vi.fn(async () => ({ published: true })),
-  mockPublishAgentPackage: vi.fn(async () => ({ published: true })),
+const {
+  mockPublishAgentPackageFromGitDir,
+  mockPublishAgentPackage,
+  mockCompileOasAgentJson,
+  mockSyncCompiledTemplateToDb,
+  mockReadAgentTemplateById,
+  mockCreateZipBuffer,
+  identity,
+} = vi.hoisted(() => ({
+  mockPublishAgentPackageFromGitDir: vi.fn(),
+  mockPublishAgentPackage: vi.fn(),
+  mockCompileOasAgentJson: vi.fn(),
+  mockSyncCompiledTemplateToDb: vi.fn(async () => undefined),
+  mockReadAgentTemplateById: vi.fn(),
+  mockCreateZipBuffer: vi.fn(),
+  // The operator's vendor directory; null = identity unset (first-party only).
+  identity: { vendor: null as string | null },
 }));
 
 vi.mock("../verdaccio/client", () => ({
@@ -28,17 +46,49 @@ vi.mock("../verdaccio/client", () => ({
   publishAgentPackageFromGitDir: mockPublishAgentPackageFromGitDir,
 }));
 
-// Mock the instance-identity store so the on-disk path resolvers'
-// vendor-segment derivation (cinatra#537 — resolveAgentJsonPathForRead /
-// safeVendorSegmentsForRead now call readInstanceIdentity) never reaches the
-// REAL @/lib/database, which would block on a synchronous Postgres worker
-// (Atomics.wait, ~30s/call) with no DB reachable. Returning null = "identity
-// unset", so the resolvers fall back to the first-party "cinatra-ai" vendor
-// segment — exactly the layout this test's writeOasFixture writes to.
+// The on-disk path resolvers' vendor-segment derivation reads the instance
+// identity; the real store would reach @/lib/database. `identity.vendor` null =
+// "identity unset", so the resolvers use the first-party "cinatra-ai" vendor
+// segment only.
 vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(() => null),
+  readInstanceIdentity: vi.fn(() => (identity.vendor ? { vendorName: identity.vendor } : null)),
   markFirstPublishedIfCurrentScope: vi.fn(),
 }));
+
+// Publish-path dependencies (the same set the publish handler tests use).
+vi.mock("@cinatra-ai/extensions/license-detection", () => ({
+  detectSpdxLicense: vi.fn(async () => ({ tier: "permissive", spdxId: "MIT", reason: null })),
+  LicenseDetectionRejectedError: class extends Error { code = "LICENSE_DETECTION_REJECTED"; },
+  LicenseAcknowledgementRequiredError: class extends Error {
+    code = "LICENSE_ACKNOWLEDGEMENT_REQUIRED";
+  },
+}));
+vi.mock("@cinatra-ai/extensions/destination-resolver", () => ({
+  resolvePublishDestination: vi.fn(async () => ({
+    registryUrl: "http://127.0.0.1:4873",
+    token: "ci-test-token",
+    packageScope: "@cinatra",
+    destinationId: "local",
+  })),
+  PublishDestinationNotConfiguredError: class extends Error {},
+  InstanceNamespaceNotConfiguredError: class extends Error {},
+}));
+vi.mock("@/lib/dev-extensions", () => ({ readEffectivePublishScopeOverride: vi.fn(() => null) }));
+vi.mock("@/lib/verdaccio-config", () => ({
+  loadVerdaccioConfigForServer: vi.fn(async () => ({
+    registryUrl: "http://127.0.0.1:4873",
+    token: "ci-test-token",
+    packageScope: "@cinatra",
+  })),
+}));
+vi.mock("../install-from-package", () => ({
+  installAgentFromPackage: vi.fn(async () => undefined),
+  syncCompiledTemplateToDb: mockSyncCompiledTemplateToDb,
+}));
+vi.mock("../wayflow-reload-client", () => ({
+  triggerWayflowReload: vi.fn(async () => ({ ok: false, reason: "no_token" })),
+}));
+vi.mock("../wayflow-preflight", () => ({ preflightWayflowAgent: vi.fn(async () => ({ ok: true })) }));
 
 // ---------------------------------------------------------------------------
 // Mock the rest of the transitive chain (same surface as the handler test).
@@ -70,7 +120,6 @@ vi.mock("../wayflow-url", () => ({
 vi.mock("../verdaccio/publish-metadata", () => ({
   derivePublishMetadataFromSnapshot: vi.fn(),
 }));
-vi.mock("../install-from-package", () => ({ installAgentFromPackage: vi.fn() }));
 vi.mock("../review-task-actions", () => ({
   approveReviewTaskInternal: vi.fn(),
 }));
@@ -87,10 +136,10 @@ vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: vi.fn(() => process.cwd()),
   resolveDevExtensionSourceRoot: vi.fn(() => process.cwd()),
 }));
-vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
+vi.mock("../zip-helpers", () => ({ createZipBuffer: mockCreateZipBuffer }));
 vi.mock("../oas-compiler", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../oas-compiler")>()),
-  compileOasAgentJson: vi.fn((parsed: unknown) => parsed),
+  compileOasAgentJson: mockCompileOasAgentJson,
 }));
 vi.mock("@/lib/background-jobs", () => ({
   enqueueBackgroundJob: vi.fn(async () => undefined),
@@ -115,6 +164,7 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/lib/authz", () => ({
   logAuditEvent: vi.fn(async () => undefined),
+  can: vi.fn(async () => ({ allowed: true })),
   POLICY_VERSION: "1.0",
   AuthzError: class extends Error {
     statusCode = 403;
@@ -123,9 +173,14 @@ vi.mock("@/lib/authz", () => ({
 }));
 vi.mock("../auth-policy", () => ({
   enforceRunAccess: vi.fn(async () => undefined),
+  actorContextFromMcpRequest: vi.fn(() => null),
 }));
 vi.mock("../store", () => ({
   resolveDefaultOrgId: vi.fn(async () => "org-1"),
+  updateAgentTemplateOrigin: vi.fn(async () => undefined),
+  readAgentTemplateById: mockReadAgentTemplateById,
+  readAgentTemplateByPackageName: vi.fn(async () => null),
+  readAgentVersionsByTemplate: vi.fn(async () => []),
 }));
 vi.mock("@cinatra-ai/mcp-client", () => ({
   invokePrimitive: vi.fn(),
@@ -147,21 +202,10 @@ vi.mock("@cinatra-ai/mcp-client", () => ({
 import { createAgentBuilderPrimitiveHandlers } from "../mcp/handlers";
 
 const SLUG = "by-slug-oas-only-agent";
-const OLD_VENDOR_FILE = `cinatra-ai/${SLUG}/cinatra/agent.json`;
-const REQUIRED = `cinatra-ai/${SLUG}/cinatra/oas.json`;
-// The two old layouts the by-slug readers used to fall back to.
-const OLD_LAYOUTS: Array<{ name: string; file: string; shown: string; dir: string }> = [
-  { name: "cinatra/agent.json beside the vendor directory", file: OLD_VENDOR_FILE, shown: OLD_VENDOR_FILE, dir: `cinatra-ai/${SLUG}` },
-  { name: "cinatra/agent.json in the legacy directory", file: `${SLUG}/cinatra/agent.json`, shown: `${SLUG}/cinatra/agent.json`, dir: SLUG },
-  { name: "a flat agent.json in the legacy directory", file: `${SLUG}/agent.json`, shown: `${SLUG}/agent.json`, dir: SLUG },
-];
+const FIRST_PARTY = "cinatra-ai";
+const OPERATOR = "acme";
 
-function oldLayoutMessage(layout: { shown: string; dir: string }): string {
-  return (
-    `Agent definition is in the old layout: found ${layout.shown} in ${layout.dir}, which is no longer read. ` +
-    `The definition must be at ${REQUIRED}; move it there.`
-  );
-}
+type Canon = { tag: string; marker: string; rel: string; abs: string; dir: string; slug: string };
 
 let tmpRoot: string;
 let originalCwd: string;
@@ -172,47 +216,157 @@ async function put(rel: string, content: string): Promise<void> {
   await fs.writeFile(full, content, "utf-8");
 }
 
-const OAS = JSON.stringify({
-  agentspec_version: "26.1.0",
-  component_type: "Flow",
-  id: "oas-only-flow",
-  name: "Oas Only",
-  description: "read from cinatra/oas.json",
-  metadata: { cinatra: { type: "node", packageName: `@example-org/${SLUG}` } },
-  nodes: [{ $component_ref: "start" }, { $component_ref: "end" }],
-  start_node: { $component_ref: "start" },
-  control_flow_connections: [],
-  $referenced_components: {
-    start: { component_type: "StartNode", id: "start" },
-    end: { component_type: "EndNode", id: "end" },
-  },
-});
+// A canonical definition whose own content carries `marker` (a tag naming the
+// directory it sits in), so a handler's result shows WHICH file it processed.
+function oas(marker: string): string {
+  return JSON.stringify({
+    agentspec_version: "26.1.0",
+    component_type: "Flow",
+    id: "oas-only-flow",
+    name: "Oas Only",
+    description: marker,
+    metadata: { cinatra: { type: "node" } },
+    inputs: [],
+    outputs: [],
+    nodes: [{ $component_ref: "start" }, { $component_ref: "end" }],
+    start_node: { $component_ref: "start" },
+    control_flow_connections: [],
+    $referenced_components: {
+      start: { component_type: "StartNode", id: "start" },
+      end: { component_type: "EndNode", id: "end" },
+    },
+  });
+}
+// An old-layout file: valid JSON that every handler would visibly mishandle
+// (a blocker in review/compile/publish, invalid in validate, shown by read).
 const OLD_ONLY = JSON.stringify({ name: "OLD FILE MUST NOT BE READ" });
 
-function run(name: string, input: Record<string, unknown> = { packageSlug: SLUG }): Promise<any> {
+/** The canonical definition of `vendor`'s package: written, and described. */
+async function putCanonical(vendor: string): Promise<Canon> {
+  const marker = `CANONICAL-${vendor}`;
+  const rel = `${vendor}/${SLUG}/cinatra/oas.json`;
+  await put(rel, oas(marker));
+  return { tag: vendor, marker, rel, abs: path.join(process.cwd(), rel), dir: path.join(process.cwd(), vendor, SLUG), slug: SLUG };
+}
+
+// A handler result: each handler returns its own shape.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Result = any;
+
+function run(name: string, input: Record<string, unknown>): Promise<Result> {
   const handler = createAgentBuilderPrimitiveHandlers()[name];
   return handler({
     primitiveName: name,
     input,
     actor: { actorType: "user", source: "ui", userId: "u-admin", platformRole: "platform_admin" },
     mode: "deterministic",
-  }) as Promise<any>;
+  }) as Promise<Result>;
 }
 
-// Each handler's own way of carrying the error text.
-const HANDLERS: Array<{ name: string; texts: (r: any) => string[] }> = [
-  { name: "agent_source_read", texts: (r) => [r.error] },
-  { name: "agent_source_validate", texts: (r) => r.errors },
-  { name: "agent_source_review", texts: (r) => (r.blockers ?? []).map((b: { message: string }) => b.message) },
-  { name: "agent_source_compile", texts: (r) => [r.error] },
-  { name: "agent_source_publish", texts: (r) => [r.error] },
+type Handler = {
+  name: string;
+  input: Record<string, unknown>;
+  /** The error text(s) this handler returns, each in its own shape. */
+  texts: (r: Result) => string[];
+  /** Positive proof: it processed the canonical file `c`. */
+  processed: (r: Result, c: Canon) => void;
+};
+
+const SLUG_INPUT = { packageSlug: SLUG };
+const HANDLERS: Handler[] = [
+  {
+    name: "agent_source_read",
+    input: SLUG_INPUT,
+    texts: (r) => [r.error],
+    processed: (r, c) => {
+      expect(r.error).toBeUndefined();
+      expect(r.path).toBe(c.rel);
+      expect(r.content.description).toBe(c.marker);
+    },
+  },
+  {
+    name: "agent_source_validate",
+    input: SLUG_INPUT,
+    texts: (r) => r.errors,
+    processed: (r) => expect(r).toEqual({ valid: true, errors: [] }),
+  },
+  {
+    name: "agent_source_review",
+    input: SLUG_INPUT,
+    texts: (r) => (r.blockers ?? []).map((b: { message: string }) => b.message),
+    processed: (r) => {
+      expect(r.error).toBeUndefined();
+      expect(r.blockers).toEqual([]);
+    },
+  },
+  {
+    name: "agent_source_compile",
+    input: SLUG_INPUT,
+    texts: (r) => [r.error],
+    processed: (r, c) => {
+      expect(r.error).toBeUndefined();
+      expect(r.path).toBe(c.rel);
+      // The compiler was handed the canonical file's path, and the row sync
+      // names the package of the directory that holds it.
+      expect(mockCompileOasAgentJson).toHaveBeenCalledWith(expect.objectContaining({ oasSourcePath: c.abs }));
+      expect(mockSyncCompiledTemplateToDb).toHaveBeenCalledWith(`@${c.tag}/${c.slug}`, null, expect.anything(), expect.anything());
+    },
+  },
+  {
+    name: "agent_source_publish",
+    input: { ...SLUG_INPUT, destination: "private" },
+    texts: (r) => [r.error],
+    processed: (r, c) => {
+      expect(r.error).toBeUndefined();
+      expect(r.published).toBe(true);
+      // The publisher got the package root of the directory that holds the canonical file.
+      expect(mockPublishAgentPackageFromGitDir).toHaveBeenCalledTimes(1);
+      expect(mockPublishAgentPackageFromGitDir.mock.calls[0][0]).toMatchObject({ agentDir: c.dir });
+    },
+  },
+  {
+    name: "agent_export",
+    input: { templateId: "template-1" },
+    texts: (r) => [String(r.error).replace(/^Export unavailable: /, "")],
+    processed: (r, c) => {
+      expect(r.error).toBeUndefined();
+      expect(r.fileName).toMatch(/\.zip$/);
+      const entries = mockCreateZipBuffer.mock.calls[0][0] as Array<{ name: string; content: string }>;
+      const exported = JSON.parse(entries.find((e) => e.name === "agent.json")!.content);
+      expect(exported.description).toBe(c.marker);
+    },
+  },
 ];
+
+const message = (found: string, dir: string, required: string) =>
+  `Agent definition is in the old layout: found ${found} in ${dir}, which is no longer read. ` +
+  `The definition must be at ${required}; move it there.`;
 
 describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", () => {
   beforeEach(async () => {
     tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "by-slug-oas-only-"));
     originalCwd = process.cwd();
     process.chdir(tmpRoot);
+    identity.vendor = null;
+    mockPublishAgentPackageFromGitDir.mockReset();
+    mockPublishAgentPackageFromGitDir.mockResolvedValue({
+      packageName: `@cinatra/${SLUG}`,
+      packageVersion: "0.1.0",
+      registryUrl: "http://127.0.0.1:4873",
+      published: true,
+      alreadyPublished: false,
+    });
+    mockCompileOasAgentJson.mockReset();
+    mockCompileOasAgentJson.mockImplementation(async (opts: { packageName: string }) => ({
+      ok: true,
+      value: { packageName: opts.packageName, compiledPlan: { steps: [] }, prompt: "compiled prompt", type: "flow" },
+      siblingLifecycle: { readable: false },
+    }));
+    mockSyncCompiledTemplateToDb.mockClear();
+    mockCreateZipBuffer.mockReset();
+    mockCreateZipBuffer.mockReturnValue(Buffer.from("zip"));
+    mockReadAgentTemplateById.mockReset();
+    mockReadAgentTemplateById.mockResolvedValue({ id: "template-1", name: "Export Agent", packageName: `@x/${SLUG}` });
   });
   afterEach(async () => {
     process.chdir(originalCwd);
@@ -221,33 +375,74 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
 
   for (const h of HANDLERS) {
     describe(h.name, () => {
+      // The two old layouts the by-slug readers used to fall back to.
+      const OLD_LAYOUTS = [
+        { name: "cinatra/agent.json beside the vendor directory", file: `${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, dir: `${FIRST_PARTY}/${SLUG}` },
+        { name: "cinatra/agent.json in the legacy directory", file: `${SLUG}/cinatra/agent.json`, dir: SLUG },
+        { name: "a flat agent.json in the legacy directory", file: `${SLUG}/agent.json`, dir: SLUG },
+      ];
       for (const layout of OLD_LAYOUTS) {
         it(`refuses ${layout.name} with the old-layout message`, async () => {
           await put(layout.file, OLD_ONLY);
-          const result = await run(h.name);
-          expect(h.texts(result)).toContain(oldLayoutMessage(layout));
+          const result = await run(h.name, h.input);
+          expect(h.texts(result)).toContain(message(layout.file, layout.dir, `${FIRST_PARTY}/${SLUG}/cinatra/oas.json`));
           expect(JSON.stringify(result)).not.toContain("OLD FILE MUST NOT BE READ");
         });
       }
 
-      it("does not call the old file when cinatra/oas.json is there too", async () => {
-        await put(`cinatra-ai/${SLUG}/cinatra/oas.json`, OAS);
-        await put(OLD_VENDOR_FILE, OLD_ONLY);
+      it("processes cinatra/oas.json and ignores the old files when both are there", async () => {
+        const canon = await putCanonical(FIRST_PARTY);
+        await put(`${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, OLD_ONLY);
         await put(`${SLUG}/agent.json`, OLD_ONLY);
-        const result = await run(h.name);
-        for (const text of h.texts(result).filter(Boolean)) expect(text).not.toMatch(/old layout/);
+        const result = await run(h.name, h.input);
+        h.processed(result, canon);
         expect(JSON.stringify(result)).not.toContain("OLD FILE MUST NOT BE READ");
+      });
+
+      // Two vendors: the operator's directory is the first candidate, the
+      // first-party one the second. The first directory that holds ANY
+      // definition file decides, as on main (where the first match wins), with
+      // an old-layout match turned into the migration error.
+      describe("two vendors", () => {
+        beforeEach(() => {
+          identity.vendor = OPERATOR;
+        });
+
+        it("operator old-layout + first-party canonical: the operator's migration error", async () => {
+          await put(`${OPERATOR}/${SLUG}/cinatra/agent.json`, OLD_ONLY);
+          await putCanonical(FIRST_PARTY);
+          const result = await run(h.name, h.input);
+          expect(h.texts(result)).toContain(
+            message(`${OPERATOR}/${SLUG}/cinatra/agent.json`, `${OPERATOR}/${SLUG}`, `${OPERATOR}/${SLUG}/cinatra/oas.json`),
+          );
+          expect(mockPublishAgentPackageFromGitDir).not.toHaveBeenCalled();
+          expect(mockCompileOasAgentJson).not.toHaveBeenCalled();
+          expect(mockCreateZipBuffer).not.toHaveBeenCalled();
+        });
+
+        it("operator canonical + first-party old-layout: the operator's canonical file", async () => {
+          const canon = await putCanonical(OPERATOR);
+          await put(`${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, OLD_ONLY);
+          const result = await run(h.name, h.input);
+          h.processed(result, canon);
+        });
+
+        it("operator has nothing + first-party canonical: the first-party file", async () => {
+          const canon = await putCanonical(FIRST_PARTY);
+          const result = await run(h.name, h.input);
+          h.processed(result, canon);
+        });
+
+        it("operator has nothing + first-party old-layout: the first-party migration error", async () => {
+          await put(`${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, OLD_ONLY);
+          const result = await run(h.name, h.input);
+          expect(h.texts(result)).toContain(
+            message(`${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, `${FIRST_PARTY}/${SLUG}`, `${FIRST_PARTY}/${SLUG}/cinatra/oas.json`),
+          );
+        });
       });
     });
   }
-
-  it("agent_source_read returns the content of cinatra/oas.json when both files exist", async () => {
-    await put(`cinatra-ai/${SLUG}/cinatra/oas.json`, OAS);
-    await put(OLD_VENDOR_FILE, OLD_ONLY);
-    const result = await run("agent_source_read");
-    expect(result.error).toBeUndefined();
-    expect(JSON.stringify(result)).toContain("read from cinatra/oas.json");
-  });
 
   it("agent_source_list still lists a directory that has only the old file (left out of this piece)", async () => {
     await put(`${SLUG}/agent.json`, JSON.stringify({ name: "Old Layout Agent" }));
