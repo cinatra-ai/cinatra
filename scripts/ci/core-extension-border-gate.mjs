@@ -439,20 +439,32 @@ const NAME_PARAM_RE = /(?:name|key)$/i;
 /** The wrappers a type is read through: `Promise<…>`, `Partial<…>`, … */
 const WRAPPER_TYPES = new Set(["Promise", "Partial", "Readonly", "Array", "ReadonlyArray"]);
 
-/** True when the type node is `leaf`, or a union, intersection, parenthesised
+/** True when the type node is `leaf`, or a union, intersection (by default any
+ *  constituent; every one when `intersectionAll`), parenthesised
  *  type, array, `readonly` array, optional type or a WRAPPER_TYPES reference
  *  that contains such a node at any depth (so `X | null`, `X[]`,
  *  `Promise<X>` read as X). */
-export function typeContains(node, isLeaf) {
+export function typeContains(node, isLeaf, intersectionAll = false) {
   if (!node) return false;
   if (isLeaf(node)) return true;
-  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) return node.types.some((t) => typeContains(t, isLeaf));
-  if (ts.isParenthesizedTypeNode(node) || ts.isTypeOperatorNode(node) || ts.isOptionalTypeNode(node)) {
-    return typeContains(node.type, isLeaf);
+  if (ts.isIntersectionTypeNode(node) && intersectionAll) {
+    // `unknown & X` reduces to X: an intersection holds the leaf only when
+    // every constituent does. `any` absorbs the rest and keeps it untyped.
+    const anyKeyword = (n) => n.kind === ts.SyntaxKind.AnyKeyword;
+    return (
+      node.types.some((t) => typeContains(t, anyKeyword, true)) ||
+      node.types.every((t) => typeContains(t, isLeaf, true))
+    );
   }
-  if (ts.isArrayTypeNode(node)) return typeContains(node.elementType, isLeaf);
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) {
+    return node.types.some((t) => typeContains(t, isLeaf, intersectionAll));
+  }
+  if (ts.isParenthesizedTypeNode(node) || ts.isTypeOperatorNode(node) || ts.isOptionalTypeNode(node)) {
+    return typeContains(node.type, isLeaf, intersectionAll);
+  }
+  if (ts.isArrayTypeNode(node)) return typeContains(node.elementType, isLeaf, intersectionAll);
   if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && WRAPPER_TYPES.has(node.typeName.text)) {
-    return (node.typeArguments ?? []).some((t) => typeContains(t, isLeaf));
+    return (node.typeArguments ?? []).some((t) => typeContains(t, isLeaf, intersectionAll));
   }
   return false;
 }
@@ -478,7 +490,7 @@ export function isUntypedLeaf(n) {
 
 /** A parameter's type is an untyped input (an unannotated parameter is `any`). */
 export function isUntypedInput(type) {
-  return !type || typeContains(type, isUntypedLeaf);
+  return !type || typeContains(type, isUntypedLeaf, true);
 }
 
 /** A parameter's type is a free name: `string`, or a form containing it. */
@@ -832,8 +844,11 @@ export function wildcardBaselineEntries(doc) {
 // only when the BASE copy of this script does not know it at all (it is not in
 // the base's KNOWN_RULES list; a base copy with no such list: the rule id does
 // not occur in its text). A rule the base check knows is never seeded, whatever
-// `seededRules` says, and a base copy that cannot be read seeds nothing. Taking
-// a rule off `seededRules` is growth, so the list only grows.
+// `seededRules` says, and a base copy that cannot be read seeds nothing. Even
+// in a seeded rule an entry is exempt only when the declaration it names already
+// stands in the BASE tree (baseDeclaresFrom): this change may not add a member
+// and record it. Taking a rule off `seededRules` is growth, so the list only
+// grows.
 
 /** The predicate "the base check knows this rule", read from the text of the
  *  base copy of this script, or null when that copy could not be read. */
@@ -855,7 +870,30 @@ export function seedingRules(currentDoc, baseKnows) {
   return new Set((currentDoc?.seededRules ?? []).filter((r) => !baseKnows(r)));
 }
 
-export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null } = {}) {
+/** The predicate "the BASE tree already declares what this ledger entry
+ *  names", from `readBase(path)` (the text of a repo file at the base, or null
+ *  when it cannot be read). An entry key is `<file>::<detail>`; the detail of a
+ *  port member is read the way the rule reads it, from the base copy of the
+ *  port root's file. Anything else, or an unreadable base file, is not declared. */
+export function baseDeclaresFrom(readBase, roots = PORT_ROOTS) {
+  const found = new Map();
+  return (rule, key) => {
+    if (rule !== "unbounded-port-member") return false;
+    const at = key.indexOf("::");
+    if (at < 0) return false;
+    const file = key.slice(0, at);
+    const root = roots.find((r) => r.file === file);
+    if (!root) return false;
+    if (!found.has(file)) {
+      const text = readBase(file);
+      const members = typeof text === "string" ? scanPortMembers({ file, text, rootType: root.type }) : null;
+      found.set(file, new Set((members ?? []).map((f) => `${f.file}::${f.detail}`)));
+    }
+    return found.get(file).has(key);
+  };
+}
+
+export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null, baseDeclares = null } = {}) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
   const grown = [];
@@ -868,10 +906,13 @@ export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null } = {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
-      if (seeding.has(e.rule)) continue;
+      // A seeded entry is exempt only when the declaration it names already
+      // stands in the base tree: this change may not add a member and record it.
+      if (seeding.has(e.rule) && typeof baseDeclares === "function" && baseDeclares(e.rule, e.key)) continue;
       if (headSeeded.has(e.rule)) {
-        const why =
-          typeof baseKnows === "function"
+        const why = seeding.has(e.rule)
+          ? "its declaration is not in the base tree; only a member that already stood there is seeded"
+          : typeof baseKnows === "function"
             ? `the base check already knows the rule ${e.rule}; only a rule new to the check is seeded`
             : `the base copy of the check could not be read; nothing is seeded`;
         grown.push(`new entry: ${id} (listed in seededRules, but ${why})`);
@@ -896,12 +937,18 @@ export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null } = {
  *  the named base, else the reference the guard fetched the pull request's base
  *  branch into. Null when neither can be read. */
 export function readBaseGateText(repoRoot, env) {
+  return readBaseFileText(repoRoot, env, GATE_FILE);
+}
+
+/** One repo file as the base has it (same refs as the base copy of the script),
+ *  or null when it cannot be read. */
+export function readBaseFileText(repoRoot, env, path) {
   const where = resolveFloorBase(FLOOR_BASE_VAR, env);
   if (where.kind !== "ref") return null;
   const refs = [where.ref];
   if (where.source === PULL_REQUEST_BASE_VAR) refs.push(`${FETCHED_REF_PREFIX}${env[PULL_REQUEST_BASE_VAR]}`);
   for (const ref of refs) {
-    const read = readFileAtBase(repoRoot, ref, GATE_FILE);
+    const read = readFileAtBase(repoRoot, ref, path);
     if (read.ok) return read.text;
   }
   return null;
@@ -915,7 +962,10 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
     parse: (text) => JSON.parse(text),
     grown: (base, head) =>
-      baselineGrowth(base, head, { baseKnows: baseKnowsRuleFrom(readBaseGateText(repoRoot, env)) }),
+      baselineGrowth(base, head, {
+        baseKnows: baseKnowsRuleFrom(readBaseGateText(repoRoot, env)),
+        baseDeclares: baseDeclaresFrom((path) => readBaseFileText(repoRoot, env, path)),
+      }),
     repoRoot,
     env,
   });

@@ -70,8 +70,15 @@ type GateModule = {
   baselineGrowth: (
     previous: unknown,
     current: unknown,
-    opts?: { baseKnows?: ((rule: string) => boolean) | null },
+    opts?: {
+      baseKnows?: ((rule: string) => boolean) | null;
+      baseDeclares?: ((rule: string, key: string) => boolean) | null;
+    },
   ) => string[];
+  baseDeclaresFrom: (
+    readBase: (path: string) => string | null,
+    roots?: { file: string; type: string }[],
+  ) => (rule: string, key: string) => boolean;
   baseKnowsRuleFrom: (text: string | null) => ((rule: string) => boolean) | null;
   readBaseGateText: (repoRoot: string, env: Record<string, string | undefined>) => string | null;
   packTypeNamespaces: (packs: Set<string>, workspacePackages?: Set<string>) => Map<string, string>;
@@ -467,7 +474,7 @@ describe("core/extension border — a port member bounds what it takes", () => {
     ["union with null", (t) => `${t} | null`],
     ["union with undefined", (t) => `${t} | undefined`],
     ["parenthesised", (t) => `(${t})`],
-    ["intersection", (t) => `${t} & { id: string }`],
+    ["intersection of untyped constituents", (t) => `${t} & ${t}`],
     ["array", (t) => `${t}[]`],
     ["readonly array", (t) => `readonly ${t}[]`],
     ["Array<>", (t) => `Array<${t}>`],
@@ -478,6 +485,20 @@ describe("core/extension border — a port member bounds what it takes", () => {
   ];
   const UNTYPED = ["unknown", "any", "object", "Record<string, unknown>", "Record<string, any>", "{ [k: string]: unknown }"];
   const TYPED = ["Shape", '"first" | "second"'];
+
+  // `unknown & X` reduces to X: an intersection is untyped only when every
+  // constituent is, while `any` absorbs the rest and keeps it untyped.
+  it("passes an intersection that holds a typed shape beside unknown, object or a Record", () => {
+    for (const t of ["unknown & { id: string }", "object & { id: string }", "{ id: string } & unknown", "Record<string, unknown> & Shape"]) {
+      expect(ports(portFile(`run(jobName: string, payload: ${t}): void;`))).toEqual([]);
+    }
+  });
+
+  it("refuses an intersection that holds any, or only untyped constituents", () => {
+    for (const t of ["any & { id: string }", "{ id: string } & any", "unknown & object", "unknown & Record<string, unknown>"]) {
+      expect(ports(portFile(`run(jobName: string, payload: ${t}): void;`))).toEqual(["unbounded-port-member ExamplePort.run"]);
+    }
+  });
 
   for (const [form, wrap] of INPUT_FORMS) {
     for (const leaf of UNTYPED) {
@@ -614,10 +635,48 @@ describe("core/extension border — a new rule is seeded once", () => {
   const baseText = 'export const KNOWN_RULES = new Set([\n  "pack-table-literal",\n  "pack-type-id-in-core",\n]);\n';
   const baseKnows = gate.baseKnowsRuleFrom(baseText);
 
-  it("does not count the entries of a rule new to the check as growth", () => {
+  // The declaration a seeded entry names must already stand in the BASE tree.
+  const HOST = "packages/sdk-extensions/src/host-context.ts";
+  const ROOTS = [{ file: HOST, type: "ExampleContext" }];
+  const hostText = (member: string) =>
+    [
+      `export type ExamplePort = {\n  ${member}\n  ping(): Promise<void>;\n};`,
+      "export type ExampleContext = {\n  example: ExamplePort;\n};",
+      "",
+    ].join("\n");
+  const oldMember = "run(name: string, input: unknown): Promise<unknown>;";
+  const newMember = "push(name: string, input: unknown): Promise<unknown>;";
+  const declaredAtBase = (text: string | null) => gate.baseDeclaresFrom((path) => (path === HOST ? text : null), ROOTS);
+
+  it("seeds an entry of a rule new to the check when its declaration stands in the base tree", () => {
+    const baseDeclares = declaredAtBase(hostText(oldMember));
     expect(
-      gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e(rule, "a.ts::P.m")] }, { baseKnows }),
+      gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e(rule, `${HOST}::ExamplePort.run`)] }, { baseKnows, baseDeclares }),
     ).toEqual([]);
+  });
+
+  it("refuses an entry of a rule new to the check whose declaration is only at the head", () => {
+    const baseDeclares = declaredAtBase(hostText(oldMember));
+    expect(
+      gate.baselineGrowth(
+        { entries: [] },
+        {
+          seededRules: [rule],
+          entries: [e(rule, `${HOST}::ExamplePort.run`), e(rule, `${HOST}::ExamplePort.push`)],
+        },
+        { baseKnows, baseDeclares },
+      ),
+    ).toEqual([
+      `new entry: ${rule}::${HOST}::ExamplePort.push (listed in seededRules, but its declaration is not in the base tree; only a member that already stood there is seeded)`,
+    ]);
+  });
+
+  it("refuses a seeded entry when the base file cannot be read, or the base declares nothing", () => {
+    const head = { seededRules: [rule], entries: [e(rule, `${HOST}::ExamplePort.run`)] };
+    for (const baseDeclares of [declaredAtBase(null), declaredAtBase(hostText(newMember)), declaredAtBase("export type Other = {};")]) {
+      expect(gate.baselineGrowth({ entries: [] }, head, { baseKnows, baseDeclares })).toHaveLength(1);
+    }
+    expect(gate.baselineGrowth({ entries: [] }, head, { baseKnows })).toHaveLength(1);
   });
 
   it("refuses to seed an old rule the base check knows, even with no base entry", () => {

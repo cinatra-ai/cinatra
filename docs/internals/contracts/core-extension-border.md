@@ -61,9 +61,11 @@ it takes a free name together with an untyped input: the port then bounds nothin
 manifest declares. A free name is a parameter whose name ends in `name` or `key` and whose
 type is `string` or a union or optional form containing `string`. An untyped input is a
 parameter whose type is `unknown`, `any`, `object`, `Record<string, unknown|any>` or a type
-literal of index signatures only, or a union, intersection, parenthesised type, array,
+literal of index signatures only, or a union, parenthesised type, array,
 `readonly` array, `| null` / `| undefined` form or `Promise<…>`, `Partial<…>`,
-`Readonly<…>`, `Array<…>` wrapper that contains one at any depth. A name typed by a literal
+`Readonly<…>`, `Array<…>` wrapper that contains one at any depth. An intersection is
+untyped only when every constituent is (`unknown & { id: string }` reduces to the typed
+shape and passes), or when one constituent is `any`. A name typed by a literal
 union or by a named alias — such as one the manifest schema exports — passes. Each
 offending declaration is one finding: an overload of a member carries its ordinal
 (`(occurrence 2)`), as every repeated crossing of the gate does. A root aggregate that
@@ -73,8 +75,11 @@ The members that stood on main when the rule landed are ledger entries with thei
 reasons. They were seeded once through the ledger's `seededRules`: a listed rule is seeded
 only when the base copy of the gate script does not know it (it is not in the base's
 `KNOWN_RULES`; with no such list, its id does not occur in the base text), and a base copy
-that cannot be read seeds nothing. A rule the base check knows is never seeded, so a new
-entry of it is growth against the base, and taking a rule off `seededRules` is growth too.
+that cannot be read seeds nothing. Even then an entry is seeded only when the member it
+names already stands in the base tree (the base copy of the port root's file, read with the
+same rule); an entry whose declaration is only at the head is growth. A rule the base check
+knows is never seeded, so a new entry of it is growth against the base, and taking a rule off
+`seededRules` is growth too.
 
 The second half the issue asked for, a member whose signature names a raw handle (a type
 imported from outside the SDK), is not built: it had no finding on main.
