@@ -1,3 +1,4 @@
+// red-first-expect: agent.json not found
 import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
  * cinatra#4150: importAgentTemplateCore (the loader and ZIP path) writes the
@@ -86,7 +87,7 @@ const OAS = JSON.stringify({
 function zip(opts?: { version: string | null }): string {
   const version = opts === undefined ? "0.1.0" : opts.version;
   return createZipBuffer([
-    { name: "agent.json", content: OAS },
+    { name: "cinatra/oas.json", content: OAS },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
     {
       name: "package.json",

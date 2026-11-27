@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { PRODUCT_ROOTS } from "../core-extension-border-gate.mjs";
 import { makeFloorRepo } from "../../audit/__tests__/floor-base-fixture.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -220,6 +221,19 @@ describe("gates-pnpm — the border floors are compared with the base branch", (
       "scripts/audit/**",
     ]) {
       expect(filter).toContain(`- '${input}'`);
+    }
+  });
+
+  it("names every root the core/extension border gate reads in the path filter (#4512)", () => {
+    const changes = JOBS.get("changes") ?? "";
+    const filter = changes.slice(changes.indexOf("pnpm_suites:"));
+    // The gate walks PRODUCT_ROOTS and also lists the committed extensions/ tree
+    // (its committed-pack-file rule, `git ls-files -- extensions`).
+    const gateSource = readFileSync(join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs"), "utf8");
+    expect(gateSource).toContain('"ls-files", "--", "extensions"');
+    const roots = [...PRODUCT_ROOTS, "extensions"];
+    for (const root of roots) {
+      expect(filter, `the filter must name ${root}/**`).toContain(`- '${root}/**'`);
     }
   });
 
