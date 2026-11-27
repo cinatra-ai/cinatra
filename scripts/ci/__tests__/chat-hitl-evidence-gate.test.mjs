@@ -53,6 +53,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
 const GATE_CLI = join(REPO_ROOT, "scripts", "ci", "chat-hitl-evidence-gate.mjs");
 
+// The environment a spawned CLI sees is the test's own, never the CI run's: every
+// variable the gate or the shared floor guard reads is cleared, then `run` names
+// the ones a case sets (GITHUB_EVENT_NAME, GITHUB_BASE_REF, CHAT_HITL_EVIDENCE_BASE,
+// FLOOR_BASE_FETCH, GITHUB_HEAD_REF, GITHUB_REF_NAME).
+const OWNED_VARS = [
+  "GITHUB_EVENT_NAME",
+  "GITHUB_BASE_REF",
+  "CHAT_HITL_EVIDENCE_BASE",
+  "FLOOR_BASE_FETCH",
+  "GITHUB_HEAD_REF",
+  "GITHUB_REF_NAME",
+];
+function ownEnv(run = NO_PULL_REQUEST_RUN) {
+  const out = envWithoutBase(process.env);
+  for (const k of OWNED_VARS) delete out[k];
+  return { ...out, ...run };
+}
+
 const POLICY = JSON.parse(readFileSync(POLICY_PATH, "utf8"));
 const GRANDFATHERED = POLICY.grandfatheredBranches[0];
 
@@ -371,6 +389,7 @@ describe("the CLI on the real tree", () => {
     const run = spawnSync(process.execPath, [GATE_CLI, "--json"], {
       cwd: REPO_ROOT,
       encoding: "utf8",
+      env: ownEnv(NO_PULL_REQUEST_RUN),
     });
     expect(run.status, run.stderr).toBe(0);
     const parsed = JSON.parse(run.stdout);
@@ -503,7 +522,7 @@ describe("chat-hitl-evidence-gate — the recorded lists may not grow against th
       const run = spawnSync(process.execPath, [join(f.root, copies[0]), ...flags], {
         cwd: f.root,
         encoding: "utf8",
-        env: { ...envWithoutBase(process.env), ...PULL_REQUEST_RUN },
+        env: ownEnv(PULL_REQUEST_RUN),
       });
       expect(run.status, flags.join(" ")).toBe(1);
       expect(run.stderr, flags.join(" ")).toContain("knownFindings entry pointer-text:a.ts:1");
