@@ -331,6 +331,7 @@ describe("visible start-input contract before an installable seed is returned", 
 describe("a model step the run does not read is refused before an installable seed is returned (cinatra#4897)", () => {
   it("refuses a flow whose agent tool holds an inline flow with a model step, and names the step", async () => {
     const dir = await stageOasOnlyPackage({ oas: JSON.stringify(withUnreadModelStep(JSON.parse(VALID_OAS_FIXTURE))) });
+    // red-first-expect: promise resolved
     await expect(
       buildAgentTemplateInstallSeed({
         extractedTempDir: dir, packageName: PACKAGE_NAME, packageVersion: "0.1.0", manifest: manifest(),
