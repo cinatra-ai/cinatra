@@ -28,14 +28,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
-const BASELINE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
+// The old config/ path is read only so this file still loads on the base tree of
+// the move, where the list has not moved yet.
+const NEW_BASELINE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
+const BASELINE_PATH = existsSync(NEW_BASELINE_PATH)
+  ? NEW_BASELINE_PATH
+  : path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
 
 type Finding = {
   rule: string;
@@ -624,7 +629,8 @@ const floorFixture: FloorFixture = (await import(
 )) as unknown as FloorFixture;
 
 describe("core/extension border — the floor is compared with the base branch", () => {
-  const FLOOR = "scripts/ci/core-extension-border-baseline.json";
+  // The gate's own ledger path (the old config/ path on the base tree of the move).
+  const FLOOR = gate.FLOOR_FILE;
   const KEY = "src/lib/example-module.ts::@cinatra-ai/web-research-agent:finding";
   const REASON = "a crossing recorded in a fixture ledger, with its reason";
   const typeEntry = () => ({ rule: "pack-type-id-in-core", key: KEY, reason: REASON });
@@ -679,10 +685,11 @@ describe("core/extension border — the floor is compared with the base branch",
 
   // The ledger moved from config/ to beside its script. A base commit that
   // predates the move holds it at the old path; it is read there, never skipped.
+  const NEW_FLOOR = "scripts/ci/core-extension-border-baseline.json";
   const LEGACY_FLOOR = "config/core-extension-border-baseline.json";
 
   it("a base that still holds the ledger at its old path is compared there: growth FAILS", () => {
-    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3)]) }, { [FLOOR]: ledger([domainEntry(3), typeEntry()]) });
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3)]) }, { [NEW_FLOOR]: ledger([domainEntry(3), typeEntry()]) });
     const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
     expect(r.ok).toBe(false);
     expect(r.status).toBe("grew");
@@ -690,18 +697,22 @@ describe("core/extension border — the floor is compared with the base branch",
   });
 
   it("a base that still holds the ledger at its old path is compared there: a shrink PASSES", () => {
-    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [FLOOR]: ledger([domainEntry(3)]) });
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [NEW_FLOOR]: ledger([domainEntry(3)]) });
     const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
     expect(r.ok).toBe(true);
     expect(r.status).toBe("held");
+    expect(r.lines.join("\n")).toContain(`${NEW_FLOOR} does not grow against`);
   });
 
   it("a base with the ledger at neither path still FAILS closed", () => {
-    const root = repo({ "README.md": "a base without a ledger\n" }, { [FLOOR]: ledger([typeEntry()]) });
+    const root = repo(
+      { "README.md": "a base without a ledger\n" },
+      { [NEW_FLOOR]: ledger([typeEntry()]), [LEGACY_FLOOR]: ledger([typeEntry()]) },
+    );
     const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
     expect(r.ok).toBe(false);
     expect(r.status).toBe("unreadable");
-    expect(r.lines[0]).toContain("is not on the base");
+    expect(r.lines[0]).toContain(`${NEW_FLOOR} is not on the base`);
   });
 
   it("a stale entry FAILS, and no stale entry passes", () => {
