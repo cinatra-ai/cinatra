@@ -20,6 +20,7 @@ import {
 import { mcpRequestContextStorage } from "./request-context";
 import {
   CapabilityPlanRecorder,
+  decisionBlocksDispatch,
   HOST_PRIMITIVE_OWNER_PACKAGE,
   HOST_PRIMITIVE_RELEASE_VERSION,
   type CapabilityPlan,
@@ -395,7 +396,7 @@ export async function createMcpRuntimeServer(input: {
           outwardSubject: planned.declaredOutward?.subject ?? null,
           toolArguments: cbArgs[0],
         });
-        if (!decision.allowed && decision.shouldBlock) {
+        if (decisionBlocksDispatch(decision)) {
           return {
             content: [
               { type: "text", text: `Authorization denied for ${name}: ${decision.reason}` },

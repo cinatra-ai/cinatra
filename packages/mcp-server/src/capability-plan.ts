@@ -694,6 +694,15 @@ function readDeclarationIsMalformed(config: unknown): boolean {
 }
 
 /**
+ * True when a boundary decision stops a tool call before its handler: a denial the boundary marks as blocking. Every
+ * MCP dispatcher (the runtime server's tool wrapper, the in-process self-invocation) decides with this one predicate,
+ * and any other decision dispatches.
+ */
+export function decisionBlocksDispatch(decision: { allowed: boolean; shouldBlock?: boolean }): boolean {
+  return !decision.allowed && decision.shouldBlock === true;
+}
+
+/**
  * Read a registration's `outward` declaration (cinatra#3745).
  *
  * TOTAL, and a declaration can only add a tool to what the host holds. A config

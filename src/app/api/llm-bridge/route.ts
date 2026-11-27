@@ -129,6 +129,7 @@ import {
   GEMINI_MEDIA_MIME_ALLOWLIST,
   MEDIA_MAX_BYTES,
   streamFetchWithSizeCap,
+  resolveBridgeToolboxIds,
 } from "./_llm-dispatch";
 import {
   BridgeUrlError,
@@ -136,13 +137,6 @@ import {
   validateExternalUrl,
 } from "./_url-validation";
 import { safeFetch } from "./_safe-fetch";
-
-// Built-in provider tool names travel in the same `toolbox_ids` list as
-// MCP toolbox IDs. The bridge route partitions on this set: members route
-// to `extraTools` as provider-native tools; non-members route to
-// `declaredToolboxIds` (resolved by resolveMcpToolsForDeclaredIds against
-// "cinatra-mcp" + external registry).
-const BUILT_IN_BRIDGE_TOOLS: ReadonlySet<string> = new Set(["web_search"]);
 
 // ---------------------------------------------------------------------------
 // Unified LLM Bridge
@@ -1921,13 +1915,7 @@ async function handleBridge(req: Request, holdRelease: (release: () => Promise<v
       // `"cinatra-mcp"` + external MCP server ids, so a built-in like
       // `"web_search"` would silently fall through. Built-in names are
       // mapped to provider tools and routed via `extraTools` instead.
-      const allDeclaredToolboxIds = body.toolbox_ids ?? ["cinatra-mcp"];
-      const builtInToolNames = allDeclaredToolboxIds.filter((id) =>
-        BUILT_IN_BRIDGE_TOOLS.has(id),
-      );
-      const mcpToolboxIds = allDeclaredToolboxIds.filter(
-        (id) => !BUILT_IN_BRIDGE_TOOLS.has(id),
-      );
+      const { builtIns: builtInToolNames, mcp: mcpToolboxIds } = resolveBridgeToolboxIds(body.toolbox_ids);
       for (const name of builtInToolNames) {
         if (name === "web_search") {
           // Provider-native web_search tool; OpenAI emits { type: "web_search" }.
