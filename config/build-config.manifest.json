@@ -87,7 +87,6 @@
     { "alias": "@cinatra-ai/agents/auditor-apply", "target": "./packages/agents/src/auditor-apply.ts" },
     { "alias": "@cinatra-ai/agents/agent-runtime-mount", "target": "./packages/agents/src/agent-runtime-mount.ts" },
     { "alias": "@cinatra-ai/agents/client-entry", "target": "./packages/agents/src/client-entry.ts" },
-    { "alias": "@cinatra-ai/agents/cli", "target": "./packages/agents/src/cli/index.ts" },
     { "alias": "@cinatra-ai/agents/auth-policy", "target": "./packages/agents/src/auth-policy.ts" },
     { "alias": "@cinatra-ai/agents/auth-policy-types", "target": "./packages/agents/src/auth-policy-types.ts" },
     { "alias": "@cinatra-ai/agents/install-targets", "target": "./packages/agents/src/install-targets.ts" },

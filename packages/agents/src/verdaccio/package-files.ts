@@ -38,10 +38,14 @@ export type AgentPackageFiles = {
   packageName: string;
   packageVersion: string;
   manifest: AgentPackageManifest;
+  /**
+   * The template and version, validated against the package contract. It is NOT
+   * shipped: a published tarball carries no root `agent.json`; its one
+   * definition file is `cinatra/oas.json`.
+   */
   payload: AgentPackagePayload;
   files: {
     "package.json": string;
-    "agent.json": string;
     "README.md": string;
     // Synthesized OAS Flow document. Post-engineering#378 the installer
     // (buildAgentTemplateInstallSeed) seeds the agent_templates row strictly
@@ -335,6 +339,10 @@ function buildAgentMetadata(
   if (input.agentDependencies && Object.keys(input.agentDependencies).length > 0) {
     metadata.agentDependencies = { ...input.agentDependencies };
   }
+  // The release note moves with the manifest: it no longer lives in a root
+  // agent.json, and the registry read takes the summary's changelog from here.
+  const changelog = input.changelog?.trim();
+  if (changelog) metadata.changelog = changelog;
   // Emit executionProvider when the template declares a non-default provider.
   // Schema (package-contract.ts) marks this field optional; install path
   // (agents-install.mjs line 355) falls back to "default" when absent, so
@@ -441,10 +449,9 @@ export function buildAgentPackageFiles(
       approvalPolicy: input.template.approvalPolicy,
       taskSpec: input.template.taskSpec ?? null,
       status: input.template.status,
-      // Mirror metadata.executionProvider into agent.json payload so the
-      // install-side reader (agents-install.mjs line 355) can prefer
-      // `template.executionProvider` over `cinatra.executionProvider` without a
-      // fallback-to-"default" branch.
+      // Mirror metadata.executionProvider into the contract payload so a reader
+      // can prefer `template.executionProvider` over `cinatra.executionProvider`
+      // without a fallback-to-"default" branch.
       ...(input.template.executionProvider && input.template.executionProvider !== "default"
         ? { executionProvider: input.template.executionProvider }
         : {}),
@@ -465,11 +472,10 @@ export function buildAgentPackageFiles(
     payload,
     files: {
       "package.json": `${JSON.stringify(manifest, null, 2)}\n`,
-      "agent.json": `${JSON.stringify(payload, null, 2)}\n`,
       "README.md": buildReadme(input, packageName, metadata),
       // Synthesize the OAS Flow document from the DB template so the published
-      // package carries cinatra/oas.json. Without it the post-engineering#378 installer
-      // throws (legacy agent.json-only packages are no longer installable).
+      // package carries cinatra/oas.json, its one definition file. Without it
+      // the post-engineering#378 installer throws; no root agent.json ships.
       "cinatra/oas.json": `${JSON.stringify(buildAgentOasFromTemplate(input.template), null, 2)}\n`,
     },
   };

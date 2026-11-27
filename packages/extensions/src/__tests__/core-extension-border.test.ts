@@ -28,14 +28,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
-const BASELINE_PATH = path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
+// The old config/ path is read only so this file still loads on the base tree of
+// the move, where the list has not moved yet.
+const NEW_BASELINE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
+const BASELINE_PATH = existsSync(NEW_BASELINE_PATH)
+  ? NEW_BASELINE_PATH
+  : path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
 
 type Finding = {
   rule: string;
@@ -94,6 +99,14 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  KNOWN_RULES: Set<string>;
+  rulesListDefects: (doc: unknown, opts?: { requireList?: boolean }) => string[];
+  packStepWordRuns: (packs: Iterable<string>) => Set<string>;
+  kindCrossesBorder: (kind: string, runs: Set<string>) => string | null;
+  scanStepScreenKindTables: (input: { file: string; text: string; packs: Set<string> }) => {
+    findings: Finding[];
+    tables: number;
+  };
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -413,7 +426,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
   });
 
   it("refuses a ledger that gained an entry", () => {
-    const previous = { entries: [entry()] };
+    const previous = { rules: [...gate.KNOWN_RULES], entries: [entry()] };
     const current = {
       entries: [
         entry(),
@@ -427,7 +440,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
 
   it("refuses a ledger that raised a recorded allowance", () => {
     const grown = gate.baselineGrowth(
-      { entries: [entry()] },
+      { rules: [...gate.KNOWN_RULES], entries: [entry()] },
       { entries: [entry({ files: { "src/lib/blog/store.ts": 1700 } })] },
     );
     expect(grown).toEqual(["raised allowance under pack-shaped-core-domain::src/lib/blog: src/lib/blog/store.ts 1606 -> 1700"]);
@@ -435,7 +448,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
 
   it("refuses a ledger that recorded a new file inside a module", () => {
     const grown = gate.baselineGrowth(
-      { entries: [entry()] },
+      { rules: [...gate.KNOWN_RULES], entries: [entry()] },
       { entries: [entry({ files: { "src/lib/blog/store.ts": 1606, "src/lib/blog/gate.ts": 40 } })] },
     );
     expect(grown).toEqual(["new file recorded under pack-shaped-core-domain::src/lib/blog: src/lib/blog/gate.ts"]);
@@ -444,7 +457,7 @@ describe("core/extension border — the ratchet only shrinks", () => {
   it("accepts a ledger that only lost entries and lowered allowances", () => {
     expect(
       gate.baselineGrowth(
-        { entries: [entry(), { rule: "pack-table-literal", key: "a::b", reason: "gone now" }] },
+        { rules: [...gate.KNOWN_RULES], entries: [entry(), { rule: "pack-table-literal", key: "a::b", reason: "gone now" }] },
         { entries: [entry({ files: { "src/lib/blog/store.ts": 1200 } })] },
       ),
     ).toEqual([]);
@@ -624,7 +637,8 @@ const floorFixture: FloorFixture = (await import(
 )) as unknown as FloorFixture;
 
 describe("core/extension border — the floor is compared with the base branch", () => {
-  const FLOOR = "config/core-extension-border-baseline.json";
+  // The gate's own ledger path (the old config/ path on the base tree of the move).
+  const FLOOR = gate.FLOOR_FILE;
   const KEY = "src/lib/example-module.ts::@cinatra-ai/web-research-agent:finding";
   const REASON = "a crossing recorded in a fixture ledger, with its reason";
   const typeEntry = () => ({ rule: "pack-type-id-in-core", key: KEY, reason: REASON });
@@ -634,7 +648,7 @@ describe("core/extension border — the floor is compared with the base branch",
     reason: REASON,
     files: { "src/lib/example-module/a.ts": lines },
   });
-  const ledger = (entries: unknown[]) => ({ entries });
+  const ledger = (entries: unknown[]) => ({ rules: [...gate.KNOWN_RULES], entries });
 
   const fixtures: { cleanup: () => void }[] = [];
   afterEach(() => {
@@ -677,6 +691,38 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(r.lines[0]).toContain(reason);
   });
 
+  // The ledger moved from config/ to beside its script. A base commit that
+  // predates the move holds it at the old path; it is read there, never skipped.
+  const NEW_FLOOR = "scripts/ci/core-extension-border-baseline.json";
+  const LEGACY_FLOOR = "config/core-extension-border-baseline.json";
+
+  it("a base that still holds the ledger at its old path is compared there: growth FAILS", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3)]) }, { [NEW_FLOOR]: ledger([domainEntry(3), typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("grew");
+    expect(r.growth).toEqual([`new entry: pack-type-id-in-core::${KEY}`]);
+  });
+
+  it("a base that still holds the ledger at its old path is compared there: a shrink PASSES", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [NEW_FLOOR]: ledger([domainEntry(3)]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("held");
+    expect(r.lines.join("\n")).toContain(`${NEW_FLOOR} does not grow against`);
+  });
+
+  it("a base with the ledger at neither path still FAILS closed", () => {
+    const root = repo(
+      { "README.md": "a base without a ledger\n" },
+      { [NEW_FLOOR]: ledger([typeEntry()]), [LEGACY_FLOOR]: ledger([typeEntry()]) },
+    );
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toContain(`${NEW_FLOOR} is not on the base`);
+  });
+
   it("a stale entry FAILS, and no stale entry passes", () => {
     const staleKey = `pack-type-id-in-core::${KEY}`;
     const r = gate.staleVerdict([staleKey]);
@@ -717,4 +763,469 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('does not grow against the base "HEAD"');
   }, 120_000);
+});
+
+// cinatra#4852: core registers no step-screen kind named after one pack's
+// step. The pack word runs come from the locks; the kind table is found by its
+// shape (`const <NAME>KIND_TABLE = { ... }`), never by a file name.
+describe("core/extension border — pack-step-kind-in-core", () => {
+  const STEP_PACKS = new Set([
+    "@cinatra-ai/acme-invoice-agent",
+    "@cinatra-ai/zephyr-connector",
+    "@example-org/note-artifact",
+  ]);
+  const TABLE_FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const table = (keys: string[]) =>
+    [
+      "const RENDERER_KIND_TABLE: Readonly<Record<",
+      "  string,",
+      "  { renderer: ComponentType<P>; makeCondition?: (ids: readonly string[]) => Cond }",
+      ">> = {",
+      ...keys.map((k) => `  "${k}": { renderer: Floor, bareAliases: ["${k}"] },`),
+      "};",
+      "",
+    ].join("\n");
+  const scanKinds = (keys: string[]) =>
+    gate.scanStepScreenKindTables({ file: TABLE_FILE, text: table(keys), packs: STEP_PACKS });
+
+  it("finds a kind that carries a pack's step words, and names the line", () => {
+    const r = scanKinds(["list-picker", "acme-invoice-approval"]);
+    expect(r.tables).toBe(1);
+    expect(r.findings.map((f) => [f.rule, f.detail, f.line])).toEqual([
+      ["pack-step-kind-in-core", "acme-invoice-approval (@cinatra-ai/acme-invoice-agent)", 6],
+    ]);
+    expect(r.findings[0].message).toContain("(acme-invoice)");
+  });
+
+  it("finds a kind that carries a connector's vendor word", () => {
+    expect(scanKinds(["zephyr-sender"]).findings.map((f) => f.detail)).toEqual(["zephyr-sender (@cinatra-ai/zephyr-connector)"]);
+  });
+
+  it("passes a generic kind named for the screen's shape, and an artifact's type word", () => {
+    expect(scanKinds(["list-picker", "form", "artifact-review", "confirmation", "note-input"]).findings).toEqual([]);
+  });
+
+  it("derives the word runs from the pack names, not from a list", () => {
+    const runs = gate.packStepWordRuns(STEP_PACKS);
+    expect(runs.has("acme-invoice")).toBe(true);
+    expect(runs.has("zephyr")).toBe(true);
+    expect(runs.has("acme")).toBe(false);
+    expect(runs.has("note")).toBe(false);
+    expect(gate.kindCrossesBorder("acme-invoice-review", runs)).toBe("acme-invoice");
+  });
+
+  it("does not read a kind table named only in a comment", () => {
+    const text = `// const RENDERER_KIND_TABLE = { "zephyr-sender": 1 };\n`;
+    expect(gate.scanStepScreenKindTables({ file: TABLE_FILE, text, packs: STEP_PACKS })).toEqual({
+      findings: [],
+      tables: 0,
+    });
+  });
+
+  it("finds the standing kinds in the real table, each held by the ledger", () => {
+    const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+    const kinds = r.findings.filter((f) => f.rule === "pack-step-kind-in-core");
+    expect(kinds.length).toBeGreaterThan(0);
+    expect(kinds.filter((f) => r.violations.includes(f))).toEqual([]);
+  });
+
+  it("the committed ledger lists every rule it ratchets", () => {
+    const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    expect(gate.rulesListDefects(doc, { requireList: true })).toEqual([]);
+    expect(gate.rulesListDefects({ entries: [] }, { requireList: true })).toEqual([
+      "the ledger has no `rules` array (the rules it ratchets)",
+    ]);
+  });
+
+  const KIND_KEY = `${TABLE_FILE}::zephyr-sender (@cinatra-ai/zephyr-connector)`;
+  const kindEntry = (key = KIND_KEY) => ({
+    rule: "pack-step-kind-in-core",
+    key,
+    reason: "a standing pack-named kind recorded in a fixture ledger",
+  });
+  const withRules = (rules: string[], entries: unknown[]) => ({ rules, entries });
+  const ALL = () => [...gate.KNOWN_RULES];
+  const BEFORE = () => ALL().filter((r) => r !== "pack-step-kind-in-core");
+
+  it("the pull request that adds the rule seeds its standing kinds once", () => {
+    expect(gate.baselineGrowth(withRules(BEFORE(), []), withRules(ALL(), [kindEntry()]))).toEqual([]);
+  });
+
+  it("once the base lists the rule, a pull request adding a kind entry fails", () => {
+    expect(
+      gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), [kindEntry(), kindEntry(`${TABLE_FILE}::acme-invoice-review`)])),
+    ).toEqual([`new entry: pack-step-kind-in-core::${TABLE_FILE}::acme-invoice-review`]);
+    // also after the rule's last entry left the ledger
+    expect(gate.baselineGrowth(withRules(ALL(), []), withRules(ALL(), [kindEntry()]))).toEqual([
+      `new entry: pack-step-kind-in-core::${KIND_KEY}`,
+    ]);
+  });
+
+  it("the ledger can shrink", () => {
+    expect(gate.baselineGrowth(withRules(ALL(), [kindEntry()]), withRules(ALL(), []))).toEqual([]);
+  });
+
+  it("the base guard refuses a kind entry the base ledger did not hold", () => {
+    const FLOOR = "scripts/ci/core-extension-border-baseline.json";
+    const f = floorFixture.makeFloorRepo({
+      base: { [FLOOR]: withRules(ALL(), []) },
+      head: { [FLOOR]: withRules(ALL(), [kindEntry()]) },
+    });
+    try {
+      const r = gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: pack-step-kind-in-core::${KIND_KEY}`]);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  it("a kind entry whose kind left the table is stale, and a tree with no kind table fails closed", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "step-kind-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      const lock = { packages: [...STEP_PACKS].map((packageName) => ({ packageName })) };
+      writeFileSync(path.join(root, "cinatra-required-extensions.lock.json"), JSON.stringify(lock));
+      writeFileSync(path.join(root, "cinatra-dev-extensions.lock.json"), JSON.stringify(lock));
+      mkdirSync(path.join(root, "packages", "agents", "src"), { recursive: true });
+      const baselinePath = path.join(root, "ledger.json");
+      writeFileSync(baselinePath, JSON.stringify(withRules(ALL(), [kindEntry()])));
+      expect(() => gate.scanRepository({ repoRoot: root, baselinePath })).toThrow(/no step-screen kind table/);
+      writeFileSync(path.join(root, TABLE_FILE), table(["list-picker", "acme-invoice-approval"]));
+      const r = gate.scanRepository({ repoRoot: root, baselinePath });
+      expect(r.stale).toEqual([`pack-step-kind-in-core::${KIND_KEY}`]);
+      expect(gate.staleVerdict(r.stale).ok).toBe(false);
+      expect(r.violations.map((f) => f.detail)).toEqual(["acme-invoice-approval (@cinatra-ai/acme-invoice-agent)"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// A kind table is read whole or the check fails (fail closed): an entry whose
+// key the scanner cannot resolve to a literal name is itself a finding, never
+// skipped, so a pack-named kind cannot pass under a computed key or a spread.
+describe("core/extension border — an unreadable kind table entry fails the check", () => {
+  const STEP_PACKS = new Set(["@cinatra-ai/acme-invoice-agent", "@cinatra-ai/zephyr-connector"]);
+  const FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const scan = (text: string) =>
+    gate.scanStepScreenKindTables({ file: FILE, text, packs: STEP_PACKS }).findings.map((f) => f.detail);
+  const tableOf = (body: string, tail = "") =>
+    `const RENDERER_KIND_TABLE: Readonly<Record<string, Entry>> = {\n${body}\n}${tail};\n`;
+
+  it("judges a computed key whose same-file const holds the name", () => {
+    const text =
+      `const PACK_KIND = "zephyr-sender";\nconst GENERIC = 'list-picker' as const;\n` +
+      tableOf(`  [PACK_KIND]: { renderer: Floor },\n  [GENERIC]: { renderer: Picker },`);
+    expect(scan(text)).toEqual(["zephyr-sender (@cinatra-ai/zephyr-connector)"]);
+  });
+
+  it("judges a computed string or plain template-literal key", () => {
+    expect(scan(tableOf('  ["zephyr-sender"]: { renderer: Floor },\n  [`acme-invoice-review`]: { renderer: Floor },'))).toEqual([
+      "zephyr-sender (@cinatra-ai/zephyr-connector)",
+      "acme-invoice-review (@cinatra-ai/acme-invoice-agent)",
+    ]);
+  });
+
+  it("reads a numeric key, a shorthand key and an `as const` or `satisfies` wrapped table", () => {
+    expect(scan(tableOf("  1: { renderer: Floor },\n  cta,\n  form: { renderer: Form },", " as const"))).toEqual([]);
+    expect(scan(tableOf('  "zephyr-sender": { renderer: Floor },', " satisfies Record<string, Entry>"))).toEqual([
+      "zephyr-sender (@cinatra-ai/zephyr-connector)",
+    ]);
+  });
+
+  it("refuses a computed key bound to an imported const", () => {
+    const text = `import { PACK_KIND } from "./kinds";\n` + tableOf("  [PACK_KIND]: { renderer: Floor },");
+    expect(scan(text)).toEqual(["unreadable entry: [PACK_KIND]"]);
+  });
+
+  it("refuses a template-literal key with a substitution, and a member-expression key", () => {
+    expect(scan(tableOf("  [`${VENDOR}-sender`]: { renderer: Floor },\n  [Kinds.Sender]: { renderer: Floor },"))).toEqual([
+      "unreadable entry: [`${VENDOR}-sender`]",
+      "unreadable entry: [Kinds.Sender]",
+    ]);
+  });
+
+  it("refuses a spread entry", () => {
+    expect(scan(tableOf('  "list-picker": { renderer: Picker },\n  ...PACK_KINDS,'))).toEqual(["unreadable entry: ...PACK_KINDS"]);
+  });
+
+  it("refuses a table built by a call, a Map, or declared with no object", () => {
+    expect(scan("const RENDERER_KIND_TABLE: Readonly<Kinds> = buildKinds();\n")).toEqual(["unreadable entry: buildKinds()"]);
+    expect(scan('const RENDERER_KIND_TABLE: Readonly<Kinds> = new Map([["zephyr-sender", Floor]]);\n')).toEqual([
+      'unreadable entry: new Map([["zephyr-sender", Floor]])',
+    ]);
+    expect(scan("let RENDERER_KIND_TABLE: Readonly<Record<string, Entry>>;\n")).toEqual([
+      "kind table shape: RENDERER_KIND_TABLE (not `const`)",
+      "unreadable entry: (no initializer)",
+    ]);
+  });
+
+  it("the real kind table is read whole: no unreadable entry", () => {
+    const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+    expect(r.findings.filter((f) => f.detail.startsWith("unreadable entry"))).toEqual([]);
+  });
+});
+
+// The gate judges the table's DECLARATION only. What code does with the table
+// afterwards is left to tsc: the table must be `const` and typed `Readonly<...>`
+// at its declaration, so an entry added later does not compile.
+describe("core/extension border — a kind table is declared in the frozen shape", () => {
+  const STEP_PACKS = new Set(["@cinatra-ai/zephyr-connector"]);
+  const FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const scan = (text: string) =>
+    gate.scanStepScreenKindTables({ file: FILE, text, packs: STEP_PACKS }).findings.map((f) => [f.detail, f.line]);
+
+  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
+  it("a table that is not const or not typed Readonly is a finding", () => {
+    expect(scan('const RENDERER_KIND_TABLE: Record<string, Entry> = { "list-picker": 1 };\n')).toEqual([
+      ["kind table shape: RENDERER_KIND_TABLE (not typed `Readonly<...>`)", 1],
+    ]);
+    expect(scan('let RENDERER_KIND_TABLE: Readonly<Record<string, Entry>> = { "list-picker": 1 };\n')).toEqual([
+      ["kind table shape: RENDERER_KIND_TABLE (not `const`)", 1],
+    ]);
+    expect(scan('\nvar RENDERER_KIND_TABLE = { "list-picker": 1 } as const;\n')).toEqual([
+      ["kind table shape: RENDERER_KIND_TABLE (not `const`, not typed `Readonly<...>`)", 2],
+    ]);
+  });
+
+  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
+  it("a const table typed Readonly passes the shape, and its entries are still judged", () => {
+    expect(scan('const RENDERER_KIND_TABLE: Readonly<Record<string, Entry>> = {\n  "list-picker": 1,\n  "zephyr-sender": 2,\n};\n')).toEqual([
+      ["zephyr-sender (@cinatra-ai/zephyr-connector)", 3],
+    ]);
+  });
+
+  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
+  it("the real kind table passes the shape", () => {
+    const file = "packages/agents/src/register-default-renderers.ts";
+    const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
+    const r = gate.scanStepScreenKindTables({ file, text, packs: STEP_PACKS });
+    expect(r.tables).toBe(1);
+    expect(r.findings.map((f) => f.detail)).toEqual([]);
+  });
+});
+
+// cinatra#4852, third round: the kind tables are read from the TypeScript
+// syntax tree, never by text patterns, and each finding names the pinned
+// package(s) whose words it carries, so the ledger keeps a pack in the
+// universe after it leaves the locks.
+describe("core/extension border — pack-step-kind-in-core reads the syntax tree", () => {
+  const STEP_PACKS = new Set(["@cinatra-ai/acme-invoice-agent", "@cinatra-ai/zephyr-connector"]);
+  const FILE = "packages/agents/src/synthetic-kind-table.ts";
+  const Z = "zephyr-sender (@cinatra-ai/zephyr-connector)";
+  const scanIn = (file: string, text: string) => gate.scanStepScreenKindTables({ file, text, packs: STEP_PACKS });
+  const scan = (text: string, file = FILE) => scanIn(file, text).findings.map((f) => f.detail);
+  const tableOf = (body: string, name = "RENDERER_KIND_TABLE") =>
+    `const ${name}: Readonly<Record<string, Entry>> = {\n${body}\n};\n`;
+
+  it("reads a pack-named key after an entry whose value holds a regex literal with a brace", () => {
+    const text = tableOf(
+      '  "list-picker": { renderer: Picker, makeCondition: (v: string) => /\\}/.test(v) },\n' +
+        '  "zephyr-sender": { renderer: Floor },',
+    );
+    expect(scan(text)).toEqual([Z]);
+  });
+
+  it("reads past braces in a template literal, a string, a comment, and nested object values", () => {
+    const text = tableOf(
+      [
+        "  // a comment with a brace }",
+        '  "list-picker": { renderer: Picker, label: "a } brace", hint: `x ${"}"} y`, nested: { deep: { deeper: {} } } },',
+        "  /* } */ form: { renderer: Form },",
+        '  "zephyr-sender": { renderer: Floor },',
+      ].join("\n"),
+    );
+    expect(scan(text)).toEqual([Z]);
+  });
+
+  it("reads a table exported in another statement, two tables in one file, and a table inside a function", () => {
+    const text =
+      tableOf('  "zephyr-sender": { renderer: Floor },') +
+      "export { RENDERER_KIND_TABLE };\n" +
+      tableOf('  "acme-invoice-review": { renderer: Floor },', "OTHER_KIND_TABLE") +
+      "export function make() {\n" +
+      '  const localKindTable: Readonly<Record<string, number>> = { "zephyr-sender": 1 };\n' +
+      "  return Object.keys(localKindTable);\n" +
+      "}\n";
+    const r = scanIn(FILE, text);
+    expect(r.tables).toBe(3);
+    expect(r.findings.map((f) => [f.detail, f.line])).toEqual([
+      [Z, 2],
+      ["acme-invoice-review (@cinatra-ai/acme-invoice-agent)", 6],
+      [`${Z} (occurrence 2)`, 9],
+    ]);
+  });
+
+  it("reads a TSX table whose values hold JSX, and fails closed on a file that does not parse", () => {
+    const tsx = tableOf(
+      '  "list-picker": { render: () => <div className="a}">{"}"}</div> },\n  "zephyr-sender": { render: () => <Floor /> },',
+    );
+    expect(scan(tsx, "packages/agents/src/synthetic-kind-table.tsx")).toEqual([Z]);
+    const broken = tableOf('  "list-picker": { renderer: Picker ,,, },\n  "zephyr-sender": {');
+    expect(scan(broken)[0]).toMatch(/^unreadable entry: \(the file does not parse: /);
+  });
+
+  it("refuses a method or an accessor in the table", () => {
+    expect(scan(tableOf("  get zephyrSender() { return Floor; },\n  form() { return Form; },"))).toEqual([
+      "unreadable entry: get zephyrSender",
+      "unreadable entry: method form",
+    ]);
+  });
+
+  it("names the pinned package(s) each kind matched", () => {
+    const packs = new Set([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector", "@example-org/note-artifact"]);
+    const r = gate.scanStepScreenKindTables({ file: FILE, text: tableOf('  "zephyr-sender": 1,\n  "note-input": 2,'), packs });
+    expect(r.findings.map((f) => f.detail)).toEqual([
+      "zephyr-sender (@cinatra-ai/zephyr-connector, @cinatra-ai/zephyr-mail-connector)",
+    ]);
+  });
+
+  // The reviewer's case: a pack leaves the locks while its kind stays in the
+  // core table. The kind's ledger row names the pack, so the pack stays in the
+  // universe and the row stays live until the kind itself leaves the table.
+  describe("a pack that leaves the locks", () => {
+    const LEDGER_KEY = `${FILE}::${Z}`;
+    const setup = (lockPacks: string[], kinds: string[]) => {
+      const root = mkdtempSync(path.join(tmpdir(), "step-kind-unpin-"));
+      spawnSync("git", ["init", "-q"], { cwd: root });
+      const lock = { packages: lockPacks.map((packageName) => ({ packageName })) };
+      writeFileSync(path.join(root, "cinatra-required-extensions.lock.json"), JSON.stringify(lock));
+      writeFileSync(path.join(root, "cinatra-dev-extensions.lock.json"), JSON.stringify(lock));
+      mkdirSync(path.join(root, "packages", "agents", "src"), { recursive: true });
+      writeFileSync(path.join(root, FILE), tableOf(kinds.map((k) => `  "${k}": { renderer: Floor },`).join("\n")));
+      const baselinePath = path.join(root, "ledger.json");
+      const entries = [{ rule: "pack-step-kind-in-core", key: LEDGER_KEY, reason: "fixture" }];
+      writeFileSync(baselinePath, JSON.stringify({ rules: [...gate.KNOWN_RULES], entries }));
+      return { repoRoot: root, baselinePath };
+    };
+
+    it("keeps the kind's row live after the pack is unpinned, and stale once the kind is gone", () => {
+      const kept = setup(["@cinatra-ai/acme-invoice-agent"], ["list-picker", "zephyr-sender"]);
+      const gone = setup(["@cinatra-ai/acme-invoice-agent"], ["list-picker"]);
+      try {
+        const r = gate.scanRepository(kept);
+        expect(r.stale).toEqual([]);
+        expect(r.violations).toEqual([]);
+        expect(r.findings.filter((f) => f.rule === "pack-step-kind-in-core").map((f) => f.detail)).toEqual([Z]);
+        expect(gate.scanRepository(gone).stale).toEqual([`pack-step-kind-in-core::${LEDGER_KEY}`]);
+      } finally {
+        rmSync(kept.repoRoot, { recursive: true, force: true });
+        rmSync(gone.repoRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps the recorded row when a pack added to the locks matches the same kind", () => {
+      const f = setup([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector"], ["zephyr-sender"]);
+      try {
+        const r = gate.scanRepository(f);
+        expect(r.stale).toEqual([]);
+        expect(r.violations).toEqual([]);
+      } finally {
+        rmSync(f.repoRoot, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+// The one-time seeding of a rule's standing findings is open ONLY to a rule
+// the base did not know. A base ledger written before the `rules` list names
+// the rules it ratchets through the BASE COPY OF THE GATE SCRIPT; a zero-entry
+// rule there (B) is ratcheted all the same. The base script unread fails closed.
+describe("core/extension border — only a truly new rule may seed (the migration case)", () => {
+  const FLOOR = "scripts/ci/core-extension-border-baseline.json";
+  const SCRIPT = "scripts/ci/core-extension-border-gate.mjs";
+  const A = "pack-table-literal";
+  const B = "pack-named-passthrough";
+  const C = "pack-step-kind-in-core";
+  const REASON = "a standing crossing recorded in a fixture ledger";
+  const e = (rule: string, key: string) => ({ rule, key: `src/lib/x.ts::${key}`, reason: REASON });
+  const BASE_SCRIPT = `export const KNOWN_RULES = new Set([\n  "${A}",\n  "${B}",\n]);\n`;
+  const run = (base: Record<string, unknown>, head: Record<string, unknown>) => {
+    const f = floorFixture.makeFloorRepo({ base, head });
+    try {
+      return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+    } finally {
+      f.cleanup();
+    }
+  };
+  const preRulesBase = { [FLOOR]: { entries: [e(A, "a1")] }, [SCRIPT]: BASE_SCRIPT };
+
+  it("a zero-entry rule the base script knows cannot gain an entry", () => {
+    const r = run(preRulesBase, { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(B, "b1")] } });
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`new entry: ${B}::src/lib/x.ts::b1`]);
+  });
+
+  it("the rule this change adds seeds its entries once", () => {
+    const r = run(preRulesBase, { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } });
+    expect(r.lines).toEqual([expect.stringContaining("does not grow against")]);
+    expect(r.ok).toBe(true);
+  });
+
+  it("on the next change the seeded rule cannot grow", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] }, [SCRIPT]: BASE_SCRIPT },
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`new entry: ${C}::src/lib/x.ts::c2`]);
+  });
+
+  // The rule set is append-only against the base: a rule the base ratchets
+  // that the head no longer knows fails, so a rename cannot reset a floor.
+  it("a rule the base ratchets that the head no longer knows fails, naming it", () => {
+    const RETIRED = "pack-retired-rule";
+    const r = run(
+      { [FLOOR]: { rules: [A, B, RETIRED], entries: [e(A, "a1"), e(RETIRED, "r1")] } },
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${RETIRED}`]);
+  });
+
+  it("a renamed rule whose rows are re-seeded under the new name fails", () => {
+    const RENAMED = "pack-step-kind-in-host";
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] } },
+      { [FLOOR]: { rules: [A, B, RENAMED], entries: [e(A, "a1"), e(RENAMED, "c1"), e(RENAMED, "c2")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${C}`]);
+  });
+
+  it("a rule added on top of the base's list still seeds once", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1"), e(C, "c2")] } },
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("a head ledger whose rules list drops a rule the gate script still knows fails", () => {
+    const r = run(
+      { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1")] } },
+      { [FLOOR]: { rules: [A, B], entries: [e(A, "a1")] } },
+    );
+    expect(r.ok).toBe(false);
+    expect(r.growth).toEqual([`a rule of the base is gone at the head (the rule set is append-only): ${C}`]);
+    // and the committed-ledger check refuses any list that is not the script's KNOWN_RULES
+    const all = [...gate.KNOWN_RULES];
+    expect(gate.rulesListDefects({ rules: all.filter((x) => x !== C), entries: [] })).toEqual([
+      `a rule of the gate is not in \`rules\`: ${C}`,
+    ]);
+    expect(gate.rulesListDefects({ rules: [...all, "pack-extra"], entries: [] })).toEqual([
+      "unknown rule in `rules`: pack-extra",
+    ]);
+  });
+
+  it("fails closed when the base gate script cannot be read or names no rules", () => {
+    const head = { [FLOOR]: { rules: [A, B, C], entries: [e(A, "a1"), e(C, "c1")] } };
+    const gone = run({ [FLOOR]: { entries: [e(A, "a1")] } }, head);
+    expect(gone.status).toBe("unreadable");
+    expect(gone.lines.join("\n")).toContain(`${SCRIPT} is not on the base`);
+    const blank = run({ [FLOOR]: { entries: [e(A, "a1")] }, [SCRIPT]: "export const X = 1;\n" }, head);
+    expect(blank.status).toBe("unreadable");
+    expect(blank.lines.join("\n")).toContain("names no rule list");
+  });
 });

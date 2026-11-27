@@ -78,8 +78,10 @@ jobs:
               # verdaccio/client and runtime-install-gate, and the dashboards
               # vitest config aliases llm and org-write-kernel).
               - 'packages/**'
-              - 'src/lib/**'
-              - 'src/components/**'
+              # src/** as a whole, not two folders of it: the core/extension
+              # border gate reads every product file under src/ and packages/,
+              # so a change under src/app/** must run it too.
+              - 'src/**'
               - 'scripts/audit/**'
               - 'vitest.config.ts'
               - 'tsconfig.json'
@@ -90,7 +92,7 @@ jobs:
               - '.pnpmfile.cjs'
               # the step "Core/extension border — base guard": its gate, its
               # ledger and the files it reads outside the paths above
-              - 'config/core-extension-border-baseline.json'
+              - 'scripts/ci/core-extension-border-baseline.json'
               - 'config/skill-packaging-legacy-exceptions.json'
               - 'scripts/ci/core-extension-border-gate.mjs'
               - 'cinatra-required-extensions.lock.json'
@@ -297,7 +299,7 @@ jobs:
   # "Border floors — base guard" runs the application, connector and host
   # display gates with their floors under scripts/audit/**, and
   # "Core/extension border — base guard" runs scripts/ci/core-extension-border-gate.mjs
-  # with its ledger config/core-extension-border-baseline.json, the legacy list
+  # with its ledger scripts/ci/core-extension-border-baseline.json, the legacy list
   # and the two extension locks; the filter names those inputs. Its siblings
   # stay unconditional — `gates` reads `git ls-files` and docs/, the two
   # design-pin jobs read the pull request's own touched-path set.
