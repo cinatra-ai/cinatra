@@ -307,6 +307,8 @@ export function readFileAtBase(repoRoot, ref, path) {
  * @param {string} o.gate       the gate's name, the prefix of every line
  * @param {string} [o.envVar]   the gate's own base variable, when a workflow sets one
  * @param {string} o.floorPath  the floor file, repo-relative
+ * @param {string} [o.baseFallbackPath]  where an older base holds the same floor, read only when
+ *   the base has no file at `floorPath` (a floor that moved); a base with neither still fails closed
  * @param {*} o.headFloor       the floor the gate reads from the checkout (the gate's own shape)
  * @param {(text: string) => *} o.parse  base text -> the same shape; throws when the text is not a floor
  * @param {(baseFloor: *, headFloor: *) => string[]} o.grown  one line per growth, empty when the floor held
@@ -318,7 +320,7 @@ export function readFileAtBase(repoRoot, ref, path) {
  *   absorbed, with a NOTICE line.
  * @returns {{ status: "no-base"|"held"|"grew"|"unreadable", ok: boolean, lines: string[], ref?: string, baseFloor?: *, growth?: string[] }}
  */
-export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse, grown, repoRoot, env = process.env, permits }) {
+export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse, grown, repoRoot, env = process.env, permits, baseFallbackPath }) {
   const where = resolveFloorBase(envVar, env);
   if (where.kind === "none") {
     return {
@@ -359,7 +361,11 @@ export function compareFloorWithBase({ gate, envVar, floorPath, headFloor, parse
     said = `the base "${where.ref}" (fetched one commit deep from the remote "${BASE_REMOTE}")`;
   }
 
-  const read = readFileAtBase(repoRoot, ref, floorPath);
+  let read = readFileAtBase(repoRoot, ref, floorPath);
+  if (!read.ok && baseFallbackPath && baseFallbackPath !== floorPath) {
+    const older = readFileAtBase(repoRoot, ref, baseFallbackPath);
+    if (older.ok) read = older;
+  }
   if (!read.ok) return { ...unreadable(read.reason, ref), ...(fetched ? { fetched } : {}) };
   let baseFloor;
   try {
