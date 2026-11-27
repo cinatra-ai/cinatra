@@ -107,7 +107,7 @@ type GateModule = {
     findings: Finding[];
     tables: number;
   };
-  untypedPortInputFindings?: (input: { repoRoot?: string; file?: string; type?: string }) => Finding[];
+  untypedPortInputFindings?: (input: { repoRoot?: string; file?: string; type?: string; contractFile?: string }) => Finding[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -1235,14 +1235,27 @@ describe("core/extension border — only a truly new rule may seed (the migratio
 // pack's `register(ctx)` receives, never how a type is written. Each case writes a
 // declaration and compares the WHOLE list of findings; the same meaning is written
 // through different syntax to show that the syntax does not matter.
+const FIXTURE_TSCONFIG = JSON.stringify({
+  compilerOptions: { strict: true, skipLibCheck: true, lib: ["esnext"], module: "esnext", moduleResolution: "bundler", types: [] },
+});
+const FIXTURE_REGISTER =
+  'import type { ExtensionHostContext } from "./host-context";\nexport type ExtensionServerEntry = { register(ctx: ExtensionHostContext): void };\n';
+
 describe("core/extension border — a host port call takes typed inputs", () => {
   const JOBS = "interface JobsPort { enqueue(name: string, payload: unknown): void }";
   const HIT = ["JobsPort.enqueue(#2)"];
   function ports(files: Record<string, string>, input: { file?: string; type?: string } = {}): string[] {
     const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
     try {
-      for (const [name, text] of Object.entries(files)) writeFileSync(path.join(dir, name), text);
-      return (gate.untypedPortInputFindings?.({ repoRoot: dir, file: "host-context.ts", ...input }) ?? []).map((f) => f.detail);
+      // The rule reads the product's compiler options from a tsconfig.json and the context from the
+      // `register(ctx)` contract; a fixture that does not write its own gets the smallest of each.
+      const withDefaults: Record<string, string> = {
+        "tsconfig.json": FIXTURE_TSCONFIG,
+        "register.ts": FIXTURE_REGISTER,
+        ...files,
+      };
+      for (const [name, text] of Object.entries(withDefaults)) writeFileSync(path.join(dir, name), text);
+      return (gate.untypedPortInputFindings?.({ repoRoot: dir, file: "host-context.ts", contractFile: "register.ts", ...input }) ?? []).map((f) => f.detail);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1393,6 +1406,109 @@ describe("core/extension border — a host port call takes typed inputs", () => 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // The rule judges the type AT THE USE SITE: the `ctx` parameter of the registration contract, under the
+  // product's compiler options, never the declared generic and never a program built with other options.
+  describe("the type at the use, not the declared type", () => {
+    const entry = (param: string) =>
+      `import type { ExtensionHostContext } from "./host-context";\nexport type ExtensionServerEntry = { register(ctx: ${param}): void };\n`;
+    const TYPED = "interface TypedPort { enqueue(name: string, payload: { id: string }): void }";
+
+    it.each([
+      ["a type alias", "export type ExtensionHostContext<J = JobsPort> = { jobs: J };"],
+      ["an interface", "export interface ExtensionHostContext<J = JobsPort> { jobs: J }"],
+      ["an alias with a constraint and a default", "export type ExtensionHostContext<J extends { enqueue(...a: never[]): void } = JobsPort> = { jobs: J };"],
+    ])("a root generic with a default, consumed bare, is read through its default (%s)", (_name, root) => {
+      expect(ctx(JOBS, root)).toEqual(HIT);
+      expect(ctx(TYPED, root.replace("JobsPort", "TypedPort"))).toEqual([]);
+    });
+
+    it("a root generic is read as the contract writes it: an argument given there replaces the default", () => {
+      const root = `export ${JOBS}\nexport ${TYPED}\nexport type ExtensionHostContext<J = JobsPort> = { jobs: J };`;
+      const entryWith = (arg: string) =>
+        `import type { ExtensionHostContext, JobsPort, TypedPort } from "./host-context";\nexport type ExtensionServerEntry = { register(ctx: ExtensionHostContext<${arg}>): void };\n`;
+      expect(ports({ "host-context.ts": root, "register.ts": entryWith("TypedPort") })).toEqual([]);
+      expect(ports({ "host-context.ts": root, "register.ts": entryWith("JobsPort") })).toEqual(HIT);
+    });
+
+    it("a port generic with a default is read through its default", () => {
+      const root = "export type ExtensionHostContext = { jobs: JobsPort };";
+      expect(ctx("interface JobsPort<P = unknown> { enqueue(name: string, payload: P): void }", root)).toEqual(HIT);
+      expect(ctx("interface JobsPort<P = { id: string }> { enqueue(name: string, payload: P): void }", root)).toEqual([]);
+      expect(ctx("interface JobsPort<P = unknown> { enqueue(name: string, payload: P): void }", "export type ExtensionHostContext = { jobs: JobsPort<{ id: string }> };")).toEqual([]);
+    });
+
+    it("a constraint is read as the checker resolves it: through an indexed access on another parameter", () => {
+      const declarations =
+        "type Bag = Record<string, unknown>;\ninterface JobsPort { enqueue<K extends string, T extends Bag[K]>(key: K, payload: T): void }";
+      expect(ctx(declarations, "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual(["JobsPort.enqueue(#2)"]);
+    });
+
+    it("a parameter typed with a lib type only the product's options provide is typed, not reported", () => {
+      // AsyncDisposable lives in lib `esnext.disposable`; the fixture tsconfig names lib `esnext`, as the product's does.
+      const declarations = "interface JobsPort { enqueue(name: string, resource: AsyncDisposable): void }";
+      expect(ctx(declarations, "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual([]);
+    });
+
+    it("the options come from the nearest tsconfig.json, `extends` followed", () => {
+      const files = {
+        "tsconfig.base.json": FIXTURE_TSCONFIG,
+        "tsconfig.json": JSON.stringify({ extends: "./tsconfig.base.json" }),
+        "host-context.ts": "interface JobsPort { enqueue(name: string, resource: AsyncDisposable): void }\nexport type ExtensionHostContext = { jobs: JobsPort };\n",
+      };
+      expect(ports(files)).toEqual([]);
+      // The same file under a lib without the type does not resolve: the options are read, not assumed.
+      const old = { ...files, "tsconfig.base.json": JSON.stringify({ compilerOptions: { strict: true, lib: ["es2020"], types: [], skipLibCheck: true } }) };
+      expect(() => ports(old)).toThrow("[core-extension-border] the border check could not resolve a type at host-context.ts:1 (parameter #2)");
+    });
+
+    it("a tree with no readable tsconfig.json fails closed", () => {
+      expect(() => ports({ "tsconfig.json": "{ not json", "host-context.ts": "export type ExtensionHostContext = { id: string };\n" })).toThrow(/compiler options in tsconfig\.json cannot be read/);
+    });
+
+    it.each([
+      ["a parameter of an unknown name", "interface JobsPort { enqueue(name: string, payload: NoSuchType): void }", "host-context.ts:1 (parameter #2)"],
+      ["a rest parameter of an unknown name", "interface JobsPort { enqueue(...args: NoSuchType[]): void }", "host-context.ts:1 (parameter #1)"],
+      ["a constraint of an unknown name", "interface JobsPort { enqueue<T extends NoSuchType>(payload: T): void }", "host-context.ts:1 (parameter #1)"],
+      ["a port member of an unknown name", "interface JobsPort { enqueue: NoSuchType }", "host-context.ts:1 (enqueue)"],
+      ["a type from a module that is not there", 'interface JobsPort { enqueue(payload: import("./nowhere").Payload): void }', "host-context.ts:1 (parameter #1)"],
+    ])("%s: the scan fails closed with a plain line, not a finding", (_name, declarations, place) => {
+      expect(() => ctx(declarations, "export type ExtensionHostContext = { jobs: JobsPort };")).toThrow(
+        `[core-extension-border] the border check could not resolve a type at ${place}`,
+      );
+    });
+
+    it("a root property of an unknown name, and a context parameter of an unknown name, fail closed too", () => {
+      expect(() => ctx("", "export type ExtensionHostContext = { jobs: NoSuchPort };")).toThrow(/could not resolve a type at host-context\.ts:2 \(jobs\)$/);
+      expect(() => ports({ "host-context.ts": "export type ExtensionHostContext = { id: string };\n", "register.ts": entry("NoSuchContext") })).toThrow(
+        /could not resolve a type at register\.ts:2$/,
+      );
+    });
+
+    it("a WRITTEN any is a finding while an UNRESOLVED name is not: the checker's error type is told from any by its intrinsic name", () => {
+      const root = "export type ExtensionHostContext = { jobs: JobsPort };";
+      expect(ctx("interface JobsPort { enqueue(name: string, payload: any): void }", root)).toEqual(HIT);
+      expect(ctx("type Loose = any;\ninterface JobsPort { enqueue(name: string, payload: Loose): void }", root)).toEqual(HIT);
+      expect(() => ctx("interface JobsPort { enqueue(name: string, payload: NoSuchType): void }", root)).toThrow(/could not resolve a type/);
+    });
+
+    it("fails closed when the contract or its context parameter is not found, or is another type", () => {
+      const root = { "host-context.ts": "export type ExtensionHostContext = { id: string };\n" };
+      expect(() => ports({ ...root, "register.ts": "export type ExtensionServerEntry = { other(ctx: number): void };\n" })).toThrow(/registration contract ExtensionServerEntry\.register/);
+      expect(() => ports({ ...root, "register.ts": "export type Else = { register(ctx: number): void };\n" })).toThrow(/registration contract ExtensionServerEntry\.register/);
+      expect(() => ports({ ...root, "register.ts": "export type ExtensionServerEntry = { register(ctx: { id: string }): void };\n" })).toThrow(
+        /register\.ts:1 is not typed ExtensionHostContext/,
+      );
+      const none = mkdtempSync(path.join(tmpdir(), "border-port-nocontract-"));
+      try {
+        writeFileSync(path.join(none, "tsconfig.json"), FIXTURE_TSCONFIG);
+        writeFileSync(path.join(none, "host-context.ts"), root["host-context.ts"]);
+        expect(() => gate.untypedPortInputFindings?.({ repoRoot: none, file: "host-context.ts", contractFile: "register.ts" })).toThrow(/registration contract/);
+      } finally {
+        rmSync(none, { recursive: true, force: true });
+      }
+    });
   });
 
   it("the real tree: the six members that stood on main, whole list, and nothing else", () => {

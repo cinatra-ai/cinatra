@@ -50,8 +50,8 @@
 // rule set is append-only, so a rename cannot reset a floor). A base ledger without the list ratchets every rule its base copy of
 // this script knows (zero-entry rules too); that copy unread fails closed.
 //
-// THE PORTS (cinatra#4872): `untyped-port-input` reads the checker's types of the root
-// context `register(ctx)` receives; see untypedPortInputFindings and the contract document.
+// THE PORTS (cinatra#4872): `untyped-port-input` reads the checker's types of the `ctx` parameter
+// of the registration contract, under the product's compiler options; see untypedPortInputFindings and the contract document.
 //
 // Usage:
 //   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline, a stale entry or a grown ledger)
@@ -735,10 +735,52 @@ export function keepRecordedKindDetails(findings, baselineEntries) {
  *  object `register(ctx)` receives (cinatra#4872). */
 export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" };
 
-const PORT_COMPILER_OPTIONS = {
-  noEmit: true, strict: true, skipLibCheck: true, types: [],
-  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
-};
+/** The registration contract: the `ctx` parameter of `ExtensionServerEntry.register` is the
+ *  type the product hands every extension, so it is the type the rule walks (cinatra#4872).
+ *  Its type is read AT THAT PARAMETER, where the checker has applied every default type
+ *  argument, never from the declaration of the root. */
+export const PORT_CONTRACT = { file: "packages/sdk-extensions/src/register.ts", type: "ExtensionServerEntry", member: "register", parameter: 0 };
+
+/** The product's own compiler options, read from the nearest `tsconfig.json` at or above
+ *  `fromDir` (never above `repoRoot`), `extends` followed: lib, target, moduleResolution and
+ *  paths are the product's, so a type resolves here as it resolves in the product. Only what
+ *  a read-only scan needs is overridden. The `include` list is not expanded: the program is
+ *  rooted at the two contract files and follows their imports. No readable tsconfig fails closed. */
+function productCompilerOptions(repoRoot, fromDir) {
+  let dir = fromDir;
+  let config = null;
+  for (;;) {
+    const candidate = join(dir, "tsconfig.json");
+    if (existsSync(candidate)) {
+      config = candidate;
+      break;
+    }
+    if (dir === repoRoot || dirname(dir) === dir) break;
+    dir = dirname(dir);
+  }
+  if (!config) {
+    throw new Error(`[core-extension-border] no tsconfig.json at or above ${relative(repoRoot, fromDir) || "."} — the port rule needs the product's compiler options and fails closed rather than judging types under other ones`);
+  }
+  const fail = (d) => {
+    throw new Error(`[core-extension-border] the compiler options in ${relative(repoRoot, config)} cannot be read (${compact(ts.flattenDiagnosticMessageText(d.messageText, " "))}) — the port rule fails closed`);
+  };
+  const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, readDirectory: () => [], onUnRecoverableConfigFileDiagnostic: fail });
+  // 18003: "No inputs were found" — expected, the include list is not expanded.
+  for (const d of parsed?.errors ?? []) if (d.code !== 18003) fail(d);
+  return { ...parsed.options, noEmit: true, incremental: false, composite: false, tsBuildInfoFile: undefined };
+}
+
+/** A type the checker could not resolve (an unknown name, an unresolvable import) is
+ *  `any` to the eye but carries the intrinsic name "error" ("unresolved" for a deferred one);
+ *  a written `any` carries "any". */
+function isUnresolvedType(type) {
+  return (type.flags & ts.TypeFlags.Any) !== 0 && (type.intrinsicName === "error" || type.intrinsicName === "unresolved");
+}
+
+/** The plain line of a fail-closed scan: a type the checker could not resolve is not judged. */
+function unresolvedAt(place) {
+  return new Error(`[core-extension-border] the border check could not resolve a type at ${place}`);
+}
 
 /** The one question asked of a RESOLVED input type: does it carry no constraint.
  *  `any`, `unknown`, `object` and the empty object type (no property, no signature, no
@@ -748,21 +790,23 @@ const PORT_COMPILER_OPTIONS = {
  *  none, so `T & {}` (what `NonNullable<T>` resolves to) is untyped for an unconstrained
  *  `T` and `T & { id: string }` is not. Nothing inside an object, record, array or callback
  *  type is read. `seen` holds the type parameters on the current path. */
-function isUntypedType(checker, type, seen = new Set()) {
+function isUntypedType(checker, type, place, seen = new Set()) {
   const F = ts.TypeFlags;
+  if (isUnresolvedType(type)) throw unresolvedAt(place);
   if (type.flags & (F.Any | F.Unknown | F.NonPrimitive)) return true;
   if (type.flags & F.TypeParameter) {
     if (seen.has(type)) return false;
     seen.add(type);
     try {
-      const constraint = type.getConstraint();
-      return !constraint || isUntypedType(checker, constraint, seen);
+      // The constraint as the checker resolves it (a chain `T extends U extends X`, an indexed access).
+      const constraint = checker.getBaseConstraintOfType(type);
+      return !constraint || isUntypedType(checker, constraint, place, seen);
     } finally {
       seen.delete(type);
     }
   }
-  if (type.isUnion()) return type.types.some((c) => !(c.flags & (F.Null | F.Undefined)) && isUntypedType(checker, c, seen));
-  if (type.isIntersection()) return type.types.every((c) => isUntypedType(checker, c, seen));
+  if (type.isUnion()) return type.types.some((c) => !(c.flags & (F.Null | F.Undefined)) && isUntypedType(checker, c, place, seen));
+  if (type.isIntersection()) return type.types.every((c) => isUntypedType(checker, c, place, seen));
   return !!(type.flags & F.Object) && checker.getPropertiesOfType(type).length === 0 && type.getCallSignatures().length === 0
     && type.getConstructSignatures().length === 0 && checker.getIndexInfosOfType(type).length === 0;
 }
@@ -774,12 +818,14 @@ function isUntypedType(checker, type, seen = new Set()) {
  *  finding. Keyed `<Port>.<member>(#positions)`, positions comma-joined and one group per
  *  signature joined with `|`. A tree without the SDK package has no ports; one with it and
  *  without the root fails closed. */
-export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
+export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type, contractFile = PORT_CONTRACT.file } = {}) {
   const rootPath = join(repoRoot, file);
+  const contractPath = join(repoRoot, contractFile);
   if (!existsSync(rootPath) && !existsSync(dirname(dirname(rootPath)))) return [];
-  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+  const options = productCompilerOptions(repoRoot, dirname(rootPath));
+  const host = ts.createCompilerHost(options, true);
   host.realpath = (p) => p;
-  const program = ts.createProgram({ rootNames: [rootPath], options: PORT_COMPILER_OPTIONS, host });
+  const program = ts.createProgram({ rootNames: [rootPath, ...(existsSync(contractPath) ? [contractPath] : [])], options, host });
   const checker = program.getTypeChecker();
   const sourceFile = program.getSourceFile(rootPath);
   const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
@@ -788,7 +834,31 @@ export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = 
     throw new Error(`[core-extension-border] the port root ${type} is not an exported type of ${file} — the rule fails closed rather than reading no port`);
   }
   const F = ts.TypeFlags;
+  const rel = (f) => relative(repoRoot, f).split(sep).join("/");
+  const where = (d) => `${rel(d.getSourceFile().fileName)}:${d.getSourceFile().getLineAndCharacterOfPosition(d.getStart()).line + 1}`;
   const flat = (t) => (t.isUnion() ? t.types.flatMap(flat) : [t]);
+  // The type the product hands an extension: the `ctx` parameter of the registration contract, as
+  // the checker gives it at that parameter (every default type argument applied).
+  const contractSource = program.getSourceFile(contractPath);
+  const fnTypeParameters = (m) => (ts.isMethodSignature(m) ? m.parameters : m.type && ts.isFunctionTypeNode(m.type) ? m.type.parameters : undefined);
+  let ctxParameter;
+  if (contractSource) {
+    walk(contractSource, (n) => {
+      if (ctxParameter || !(ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n)) || n.name.text !== PORT_CONTRACT.type) return;
+      const members = ts.isInterfaceDeclaration(n) ? n.members : n.type && ts.isTypeLiteralNode(n.type) ? n.type.members : [];
+      const m = members.find((x) => (ts.isMethodSignature(x) || ts.isPropertySignature(x)) && x.name && ts.isIdentifier(x.name) && x.name.text === PORT_CONTRACT.member);
+      ctxParameter = m && fnTypeParameters(m)?.[PORT_CONTRACT.parameter];
+    });
+  }
+  if (!ctxParameter) {
+    throw new Error(`[core-extension-border] the registration contract ${PORT_CONTRACT.type}.${PORT_CONTRACT.member}(…) with its context parameter is not found in ${contractFile} — the rule fails closed rather than reading no port`);
+  }
+  const ctxPlace = where(ctxParameter);
+  const ctxType = checker.getNonNullableType(checker.getTypeAtLocation(ctxParameter));
+  if (isUnresolvedType(ctxType)) throw unresolvedAt(ctxPlace);
+  if ((ctxType.aliasSymbol ?? ctxType.getSymbol())?.name !== type) {
+    throw new Error(`[core-extension-border] the context parameter at ${ctxPlace} is not typed ${type} — the rule fails closed rather than reading another type`);
+  }
   // Every constituent of a union is read; the checker has already flattened intersections and inheritance.
   const membersOf = (t) => flat(t).flatMap((c) => flat(checker.getApparentType(c)).flatMap((a) => checker.getPropertiesOfType(a)));
   // A member declared only in the TypeScript lib or in node_modules is not ours to judge.
@@ -798,11 +868,21 @@ export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = 
       const sf = d.getSourceFile();
       return !program.isSourceFileDefaultLibrary(sf) && !sf.fileName.split("/").includes("node_modules");
     });
+  const placeOfProp = (prop) => {
+    const d = prop.valueDeclaration ?? prop.declarations?.[0];
+    return d ? where(d) : ctxPlace;
+  };
+  const typeOf = (prop) => {
+    const t = checker.getTypeOfSymbol(prop);
+    if (isUnresolvedType(t)) throw unresolvedAt(`${placeOfProp(prop)} (${prop.name})`);
+    return t;
+  };
   const positions = (sig) =>
     sig.getParameters().flatMap((p, i) => {
       const t = checker.getTypeOfSymbol(p);
+      const place = `${placeOfProp(p)} (parameter #${i + 1})`;
       const input = p.valueDeclaration?.dotDotDotToken ? checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t : t;
-      return isUntypedType(checker, input) ? [i + 1] : [];
+      return isUntypedType(checker, input, place) ? [i + 1] : [];
     });
   const out = [];
   const counts = new Map();
@@ -810,7 +890,7 @@ export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = 
   const judge = (owner, prop) => {
     if (judged.has(prop) || !isOwn(prop)) return;
     judged.add(prop);
-    const parts = flat(checker.getNonNullableType(checker.getTypeOfSymbol(prop)));
+    const parts = flat(checker.getNonNullableType(typeOf(prop)));
     const hits = parts.some((c) => c.flags & F.Any)
       ? ["any"]
       : parts.flatMap((c) => c.getCallSignatures()).map(positions).filter((at) => at.length > 0).map((at) => at.map((n) => `#${n}`).join(","));
@@ -820,16 +900,16 @@ export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = 
     out.push(
       finding(
         "untyped-port-input",
-        relative(repoRoot, at.fileName).split(sep).join("/"),
+        rel(at.fileName),
         at.getLineAndCharacterOfPosition(d.getStart()).line + 1,
         occurrenceDetail(counts, "untyped-port-input", `${owner}.${prop.name}(${hits.join("|")})`),
         "a host port member takes an untyped input (any, unknown, object, the empty object type or a type parameter without a constraint); it bounds nothing a manifest declares (cinatra#4872)",
       ),
     );
   };
-  for (const prop of membersOf(checker.getDeclaredTypeOfSymbol(rootSymbol))) {
+  for (const prop of membersOf(ctxType)) {
     judge(type, prop);
-    for (const port of flat(checker.getNonNullableType(checker.getTypeOfSymbol(prop)))) {
+    for (const port of flat(checker.getNonNullableType(typeOf(prop)))) {
       // The port's own name: its symbol, else the alias that names it. A utility alias (`Readonly<P>`) names
       // nothing, so a port without a name of its own takes its property's name.
       const own = port.getSymbol()?.name;

@@ -51,9 +51,23 @@ silenced by unpinning the pack it names.
 
 ## A host port call takes typed inputs
 
-The rule `untyped-port-input` (cinatra#4872) reads the type checker's types of
-`ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts`, the context
-`register(ctx)` receives, and never how a type is written. The properties of the root are
+The rule `untyped-port-input` (cinatra#4872) reads the type checker's types of the
+context `register(ctx)` receives, and never how a type is written. The type it walks is
+the type of the `ctx` parameter of `ExtensionServerEntry.register` in
+`packages/sdk-extensions/src/register.ts`, as the checker gives it at that parameter, with
+every default type argument applied (the root is `ExtensionHostContext` in
+`packages/sdk-extensions/src/host-context.ts`; a generic root consumed bare is read through
+its defaults, as the product uses it). The program is built from the product's own compiler
+options: the nearest `tsconfig.json` at or above the SDK package (the root one), `extends`
+followed, with only `noEmit` and `incremental` overridden, so lib, target, moduleResolution
+and paths are the product's. A type the checker cannot resolve (an unknown name, an
+unresolvable import) is told from a written `any` by the checker's intrinsic name (`error`,
+against `any`); it is never a finding: the check fails closed with the line "the border
+check could not resolve a type at `<file>:<line>`". The registration contract, its `ctx`
+parameter, or a `tsconfig.json` that cannot be found or read also fails closed. A type
+parameter's constraint is the base constraint the checker resolves.
+
+The properties of the root are
 the ports and the properties of a port are its calls; a union is read through every
 constituent, and the checker has already flattened intersections and inheritance, so an
 interface, an alias, `import("./ports").Port`, a namespace name, a nullable or optional
@@ -81,7 +95,8 @@ nested inside a port are not read; a member with no call signature (a `Function`
 a value) has no parameter to judge; a `this` parameter is not an input; members declared
 only in the TypeScript lib or in `node_modules` are not judged; a conditional or indexed
 access type is not unwrapped. A tree without `packages/sdk-extensions` has no ports; one
-with it and without the root type fails closed.
+with it and without the root type fails closed. An unresolved name inside
+an array, record or callback type is not searched, like the rest of its contents.
 
 ## What the gate does not see
 
