@@ -7,7 +7,8 @@
  * scripts/audit/_lib/skill-packaging-verdict.mjs); skills are out of this
  * check's scope, like connectors.
  *
- * LIMITS. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
+ * LIMITS. A file kept outside the shipped set (a test, a check script) is not
+ * looked at. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
  * content kind (a `.json`, a `.md`) is not counted even if something executes
  * it. Code inside a connector and code in core are out of its scope.
  *
@@ -17,7 +18,7 @@
  * index, and records, per key, the items of four classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
- * by `isContent`),
+ * by `isContent` and that the pack ships by its `files` list, `isShipped`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
@@ -95,9 +96,38 @@ export function isContent(rel) {
   return dot > 0 && CONTENT.extensions.has(name.slice(dot).toLowerCase());
 }
 
-/** The non-content files among `files` (`{ rel, link }`), sorted. */
-export function nonContentFiles(files) {
-  return files.filter((f) => f.link || !isContent(f.rel)).map((f) => f.rel).sort();
+const GLOB_RE = /[*?[\]{}()]/;
+const plainPath = (v) => v.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+/** The manifest paths npm always packs besides `files`: `main` and every `bin` target. */
+const manifestPaths = (pkg) => [pkg?.main, ...(typeof pkg?.bin === "string" ? [pkg.bin] : isPlainObject(pkg?.bin) ? Object.values(pkg.bin) : [])].filter((v) => typeof v === "string" && v).map(plainPath);
+
+/**
+ * True when the extension SHIPS `rel` (cinatra#4885): per the pack's
+ * `package.json` `files` list, read as npm reads plain file and directory
+ * entries (an entry names that file or everything below that folder; a `!`
+ * entry takes a path out again; the last entry that matches decides), plus
+ * `main` and the `bin` targets. A pack with no `files` list ships everything,
+ * and so does a list the check cannot read as plain paths (a glob entry, a
+ * non-string entry): when unknown, the file counts.
+ */
+export function isShipped(rel, pkg) {
+  const list = pkg?.files;
+  if (!Array.isArray(list)) return true;
+  if (list.some((e) => typeof e !== "string" || GLOB_RE.test(e.replace(/^!/, "")))) return true;
+  const under = (path, dir) => path === dir || path.startsWith(`${dir}/`);
+  if (manifestPaths(pkg).some((m) => under(rel, m))) return true;
+  let shipped = false;
+  for (const e of list) {
+    const neg = e.startsWith("!");
+    const path = plainPath(neg ? e.slice(1) : e);
+    if (path && under(rel, path)) shipped = !neg;
+  }
+  return shipped;
+}
+
+/** The non-content files among `files` (`{ rel, link }`) that the extension ships (`pkg`: its parsed package.json), sorted. */
+export function nonContentFiles(files, pkg) {
+  return files.filter((f) => isShipped(f.rel, pkg) && (f.link || !isContent(f.rel))).map((f) => f.rel).sort();
 }
 
 /**
@@ -315,7 +345,7 @@ export function scan(root) {
       if (unreadable.length) findings.unreadableSteps[`${name} :: ${e.rel}`] = { count: unreadable.length, items: unreadable };
     }
     if (isAgentPack(kind, entries)) {
-      const files = nonContentFiles(entries);
+      const files = nonContentFiles(entries, pkg);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
   }

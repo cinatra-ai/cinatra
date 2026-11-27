@@ -748,8 +748,8 @@ repositories are cloned and BEFORE `pnpm install`, followed by its
 `node --test` step: an install can run lifecycle scripts of companion
 packages, and the check imports only node built-ins and its own library
 files. It needs no judgement about a
-file: no "test", "build", "shipped" or "bin" reading. It classifies nothing
-beyond one closed content rule and one agent rule, and records items.
+file: no "test" or "build" reading. It classifies nothing beyond one closed
+content rule, one shipped rule and one agent rule, and records items.
 
 **The universe** is the pinned extensions: every `packageName` of both
 extension locks plus every key of `cinatra.devExtensions`. **Each pack is
@@ -782,17 +782,25 @@ connector's code is not judged here).
 
 **The four classes**, each a set of items that may only shrink:
 
-1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree,
-   EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
+1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree
+   that the extension SHIPS, EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
    extension is one of `.json .md .txt .yaml .yml .svg .png .jpg .jpeg .gif
    .webp .ico .csv`, whose exact name is `LICENSE`, `NOTICE`, `.gitignore`,
    `.gitattributes`, `.npmignore` or `.editorconfig`, or that lies under the
    pack's top-level `.github/` (the CI of the pack's own repository).
 
-   A symbolic link (mode 120000) or a gitlink (160000) always counts.
+   A shipped symbolic link (mode 120000) or gitlink (160000) always counts.
    Everything else counts: source of any language, extension-less files,
-   files under a `skills/` folder, `.npmrc`, config scripts, vendored check
-   scripts, tests.
+   files under a `skills/` folder, config scripts.
+
+   A file counts only if the extension ships it (`isShipped`): the pack's
+   `package.json` `files` list is read as npm reads plain file and directory
+   entries (a `!` entry takes a path out; the last matching entry decides),
+   plus `main` and the `bin` targets. A pack with no `files` list ships
+   everything, so there everything counts, tests included. Known limit: a
+   file kept outside the shipped set (a test, a repository check script) is
+   not looked at; and a `files` list with a glob or a non-string entry is not
+   read, so there everything counts.
 2. `toolDeclarations` (per pack) — every value of `cinatra.tools`, whether
    the product (`parseDeclaredTools` in
    `packages/sdk-extensions/src/manifest.ts`) accepts it or not; only an

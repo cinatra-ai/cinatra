@@ -18,6 +18,7 @@ import {
   flowSteps,
   isAgentPack,
   isContent,
+  isShipped,
   listGrowth,
   missingItems,
   nonContentFiles,
@@ -371,6 +372,62 @@ test("live: a file removed from the index but present at the pinned commit is st
     assert.equal(res.status, 0, res.out);
     assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    test\/read\.test\.mjs\n/);
     assert.equal(runGate(root).status, 0);
+  });
+});
+
+const SHIPS = ["cinatra", "src", "!src/__tests__"];
+const shippingPacks = () => ({
+  "ship-agent": {
+    packageJson: { name: "@example-org/ship-agent", files: SHIPS, cinatra: { kind: "agent" } },
+    files: { "cinatra/oas.json": "{}\n", "cinatra/tools/read.mjs": "export {};\n", "src/view.tsx": "export {};\n", ".npmrc": "x\n" },
+  },
+});
+const SHIP = "@example-org/ship-agent";
+const shipRecorded = () => ({
+  nonContentFiles: { [SHIP]: { count: 2, items: ["cinatra/tools/read.mjs", "src/view.tsx"] } },
+  toolDeclarations: {},
+  extensionToolSteps: {},
+  unreadableSteps: {},
+});
+
+test("shipped files: the package.json files list as npm reads it for plain entries; without a list everything ships", () => {
+  const all = plain("cinatra/tools/a.mjs", "src/a.ts", "src/__tests__/a.test.ts", "tests/a.test.mjs", "test/a.test.mjs", "extension-kind-gate.mjs", ".npmrc", "main.js", "bin/run");
+  assert.deepEqual(nonContentFiles(all, { files: SHIPS }), ["cinatra/tools/a.mjs", "src/a.ts"]);
+  assert.deepEqual(nonContentFiles(all, { files: ["./cinatra/", "main.js", "tests/a.test.mjs"] }), ["cinatra/tools/a.mjs", "main.js", "tests/a.test.mjs"]);
+  assert.deepEqual(nonContentFiles(all, { files: ["src", "!src/__tests__", "src/__tests__/a.test.ts"] }), ["src/__tests__/a.test.ts", "src/a.ts"]);
+  assert.deepEqual(nonContentFiles(all, { main: "./main.js", bin: { x: "bin/run" }, files: [] }), ["bin/run", "main.js"]);
+  assert.equal(nonContentFiles(all, {}).length, all.length);
+  assert.deepEqual(nonContentFiles(all, { files: [] }), []);
+  assert.equal(nonContentFiles(all).length, all.length);
+  // a link in the shipped set counts; an entry the check cannot read as a plain path ships everything
+  assert.deepEqual(nonContentFiles([{ rel: "cinatra/data.json", link: true }, { rel: "tests/x.json", link: true }], { files: ["cinatra"] }), ["cinatra/data.json"]);
+  assert.equal(nonContentFiles(all, { files: ["cinatra", "src/**/*.ts"] }).length, all.length);
+  assert.equal(nonContentFiles(all, { files: "cinatra" }).length, all.length);
+  assert.equal(isShipped("tests/a.test.mjs", { files: SHIPS }), false);
+});
+
+test("live: an unshipped test or check file added at the pin is not counted; a shipped code file still fails; a pack without a files list counts everything", () => {
+  withRoot({ packs: shippingPacks(), list: shipRecorded() }, (root) => {
+    assert.equal(runGate(root).status, 0);
+    const pack = packDir(root, "ship-agent");
+    writeFile(join(pack, "tests", "flow.test.mjs"), "\n");
+    writeFile(join(pack, "src", "__tests__", "view.test.ts"), "\n");
+    writeFile(join(pack, "extension-kind-gate.mjs"), "\n");
+    repin(root, "ship-agent", SHIP);
+    assert.equal(runGate(root).status, 0);
+    writeFile(join(pack, "src", "more.ts"), "export {};\n");
+    repin(root, "ship-agent", SHIP);
+    const grown = runGate(root);
+    assert.equal(grown.status, 1);
+    assert.match(grown.out, /\+ @example-org\/ship-agent: src\/more\.ts/);
+    assert.doesNotMatch(grown.out, /flow\.test|view\.test|extension-kind-gate/);
+  });
+  const open = shippingPacks();
+  delete open["ship-agent"].packageJson.files;
+  withRoot({ packs: open, list: shipRecorded() }, (root) => {
+    const out = runGate(root);
+    assert.equal(out.status, 1);
+    assert.match(out.out, /\+ @example-org\/ship-agent: \.npmrc/);
   });
 });
 
