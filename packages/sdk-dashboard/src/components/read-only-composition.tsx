@@ -39,7 +39,18 @@
 // is an ADDRESS: it carries no credential, and it adds no toolbar, filter,
 // modal, drag or save.
 
-import { useState, type ComponentProps, type ReactNode } from "react";
+// THE LIBRARY'S OWN STYLESHEET TRAVELS WITH THE COMPOSITION (cinatra#3092).
+// The dashboards shell loads it (`dashboards-client-shell.tsx`), but a display
+// draws this composition on pages outside that shell (`/artifacts/<id>`, the
+// review island), where nothing else loads it. Without it every `dc:` class is
+// inert: the card does not fill its grid cell, and the loading, error and empty
+// readings, sized by those classes, draw as nothing under the title bar. Only
+// the library's file can be loaded here: Cinatra's colour overrides live in
+// `@cinatra-ai/dashboards`, which this package must not import, and the app
+// cannot resolve `drizzle-cube` itself (it is not hoisted to the root).
+import "drizzle-cube/client/styles.css";
+
+import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CubeProvider, DashboardGridSurface, DashboardProvider } from "drizzle-cube/client";
 
@@ -47,6 +58,7 @@ import {
   narrowToSinglePortlet,
   type NarrowableDashboardConfig,
 } from "./narrow-to-single-portlet";
+import { withEagerLoad } from "./read-only-eager-load";
 
 /**
  * The data road a display hands the composition: the address its series are
@@ -63,7 +75,13 @@ export type ReadOnlyCompositionDataRoad = {
  *  optional data road. */
 export type ReadOnlyComposedDashboardProps = Omit<
   ComponentProps<typeof DashboardProvider>,
-  "children" | "dashboardModes" | "hideToolbar" | "editable"
+  | "children"
+  | "dashboardModes"
+  | "hideToolbar"
+  | "editable"
+  // A read-only display has nothing to persist; see `withoutPersistingCallbacks`.
+  | "onConfigChange"
+  | "onSave"
 > & {
   /** Given, the view mounts its own query client and cube provider over it;
    *  absent, it draws inside the providers its caller already mounts. */
@@ -116,6 +134,23 @@ function MountedDataRoad({
 }
 
 /**
+ * A READ-ONLY DISPLAY FORWARDS NO CALLBACK THAT RECEIVES A CONFIGURATION
+ * (cinatra#3092). drizzle-cube echoes the mounted configuration through
+ * `onConfigChange`/`onSave`, and the mounted copy carries `eagerLoad: true`
+ * that the author never wrote (`read-only-eager-load.ts`); a persisting caller
+ * would store it and silently change authored lazy opt-outs. There is nothing
+ * to persist here, so both are dropped at runtime as well as in the type (a
+ * caller that is not type-checked, or spreads a wider props object, still
+ * cannot reach the provider with them).
+ */
+function withoutPersistingCallbacks<T extends object>(props: T): Omit<T, "onConfigChange" | "onSave"> {
+  const rest = { ...props } as Record<string, unknown>;
+  delete rest.onConfigChange;
+  delete rest.onSave;
+  return rest as Omit<T, "onConfigChange" | "onSave">;
+}
+
+/**
  * A dashboard's portlet grid, drawn from a configuration, read-only.
  *
  * `editable={false}` is belt to the braces of mounting no editing UI: the
@@ -123,10 +158,13 @@ function MountedDataRoad({
  * that consults it renders its read-only reading too.
  */
 export function ReadOnlyComposedDashboard({ dataRoad, ...props }: ReadOnlyComposedDashboardProps) {
+  // Loaded at once, never deferred (cinatra#3092): see `read-only-eager-load.ts`.
+  const config = useMemo(() => withEagerLoad(props.config), [props.config]);
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
-        {...(props as ComponentProps<typeof DashboardProvider>)}
+        {...(withoutPersistingCallbacks(props) as ComponentProps<typeof DashboardProvider>)}
+        config={config as never}
         editable={false}
       >
         <div data-cinatra-read-only-composition="dashboard">
@@ -159,11 +197,14 @@ export function ReadOnlySinglePortlet({ portletId, dataRoad, ...rest }: ReadOnly
   };
   // THE NARROWING IS A PURE LEAF (`narrow-to-single-portlet.ts`) so the rule that
   // decides what the grid may see is provable without rendering drizzle-cube.
-  const narrowed = narrowToSinglePortlet(props.config, portletId);
+  const narrowed = useMemo(
+    () => withEagerLoad(narrowToSinglePortlet(props.config, portletId)),
+    [props.config, portletId],
+  );
   return (
     <DataRoadProviders dataRoad={dataRoad}>
       <DashboardProvider
-        {...(props as ComponentProps<typeof DashboardProvider>)}
+        {...(withoutPersistingCallbacks(props) as ComponentProps<typeof DashboardProvider>)}
         config={narrowed as never}
         editable={false}
       >

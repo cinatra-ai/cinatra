@@ -124,7 +124,15 @@ describe("without a road, each view renders exactly what it renders today", () =
     render(<Dashboard config={CONFIG} />);
     expect(rec.cube).toHaveLength(0);
     expect(rec.gridSawQueryClient).toEqual([false]);
-    expect(rec.dashboard).toEqual([{ config: CONFIG, editable: false }]);
+    // The same configuration, with drizzle-cube's eager loading set on the
+    // dashboard and every portlet (cinatra#3092): a read-only view never defers.
+    const given = CONFIG as unknown as { portlets: object[] };
+    expect(rec.dashboard).toEqual([
+      {
+        config: { ...given, eagerLoad: true, portlets: given.portlets.map((p) => ({ ...p, eagerLoad: true })) },
+        editable: false,
+      },
+    ]);
     expect(document.querySelector('[data-cinatra-read-only-composition="dashboard"]')).not.toBeNull();
   });
 
