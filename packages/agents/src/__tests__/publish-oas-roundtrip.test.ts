@@ -110,6 +110,22 @@ describe("engineering#420 publishAgentPackage emits cinatra/oas.json", () => {
     expect(parsed.component_type).toBe("Flow");
   });
 
+  it("ships package.json, README.md and cinatra/oas.json, and no root agent.json (#4920)", () => {
+    const files = buildAgentPackageFiles(
+      {
+        template: makeTemplate(),
+        version: makeVersion(),
+        semver: "1.0.0",
+        title: "Lead Researcher",
+        riskLevel: "low",
+        toolAccess: [],
+        hasApprovalGates: false,
+      },
+      CONFIG,
+    );
+    expect(Object.keys(files.files).sort()).toEqual(["README.md", "cinatra/oas.json", "package.json"]);
+  });
+
   it("synthesized OAS is structurally valid", () => {
     const oas = buildAgentOasFromTemplate(makeTemplate());
     expect(validateOasFlowStructural(oas)).toEqual([]);
