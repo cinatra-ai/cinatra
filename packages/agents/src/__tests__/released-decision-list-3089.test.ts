@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../db", () => ({ db: {} }));
 
-import { releasedDecisionList, releasedDecisionText } from "../publish-decision-store";
+import { decodeStoredPublishDecision, releasedDecisionList, releasedDecisionText } from "../publish-decision-store";
 
 const FIELDS = ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"] as const;
 const SHOWN = [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "subject" }];
@@ -46,17 +46,17 @@ describe("releasedDecisionList (cinatra#3089)", () => {
   it("L2 a list surfaced as JSON text is a list, but no card draws its bodies, so it is refused", () => {
     const list = entries(2);
     const answer = read(decision(JSON.stringify(list), { shown: list.map((e) => ({ email: e.recipientEmail, subject: e.subject })) }));
-    expect(answer).toEqual({ ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" });
+    expect(answer).toEqual({ ok: false, code: "released_list_bodies_not_drawn", error: "no artifacts row of the released publish decision draws the bodies of the released list" });
   });
 
   it("L3 a decision that is not released by a person answers an error", () => {
     expect(read(decision(entries(1), { status: "parked" })).ok).toBe(false);
     expect(read(decision(entries(1), { status: "declined" })).ok).toBe(false);
-    expect(read(decision(entries(1), { decidedBy: null }))).toEqual({ ok: false, error: "the publish decision is not released by a person" });
+    expect(read(decision(entries(1), { decidedBy: null }))).toEqual({ ok: false, code: "decision_not_released", error: "the publish decision is not released by a person" });
     expect(read(decision(entries(1), { decidedBy: "" })).ok).toBe(false);
   });
 
-  it("L4 no surfaced list of the entry shape answers no list", () => {
+  it("L4 a card that declared a list but surfaced none of the exact entry form is refused, never read as no list", () => {
     const notLists: unknown[] = [
       undefined, "", "   ", "{not json", "[{", "null", "7", '"abc"', "true", [], "[]",
       JSON.stringify(entries(1)[0]),
@@ -69,15 +69,62 @@ describe("releasedDecisionList (cinatra#3089)", () => {
       [entries(1)[0], null],
       ["art-0"],
     ];
+    const UNDETERMINED = {
+      ok: false,
+      code: "released_list_undetermined",
+      error: "the publish decision recorded no declaration of its card, so whether it released a list cannot be told",
+    };
+    const MALFORMED = {
+      ok: false,
+      code: "released_list_malformed",
+      error: "the card of the publish decision declared a list, but no surfaced value is a list of the exact form",
+    };
     for (const value of notLists) {
-      expect(read(decision(value)), JSON.stringify(value)).toEqual({ ok: true, list: null });
+      expect(read(decision(value)), JSON.stringify(value)).toEqual(MALFORMED);
+      // The same values under a card that declared no list row and no artifacts row: no list (the old road).
+      expect(read({ ...decision(value), declaredRows: [] }), JSON.stringify(value)).toEqual({ ok: true, list: null });
+      // A declaration that was not recorded (null) is refused: it never reads as "no list declared".
+      expect(read({ ...decision(value), declaredRows: null } as unknown as ReturnType<typeof decision>)).toEqual(UNDETERMINED);
     }
+    // One declared row of either kind is a declared list: the other missing does not make it "no list".
+    const onlyArtifacts = { ...decision(notLists[15]), declaredRows: decision([]).declaredRows.filter((r) => r.kind === "artifacts") };
+    expect(read(onlyArtifacts as ReturnType<typeof decision>)).toEqual(MALFORMED);
+    const onlyList = { ...decision(notLists[15]), declaredRows: decision([]).declaredRows.filter((r) => r.kind === "list") };
+    expect(read(onlyList as ReturnType<typeof decision>)).toEqual(MALFORMED);
+    // A text row alone declares no list.
+    expect(read({ ...decision(notLists[15]), declaredRows: [{ label: "From", input: "senderEmail" }] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
   });
 
-  it("L5 50 entries are a list and 51 are none", () => {
+  it("L4b an unrecorded declaration is refused whatever was surfaced; a recorded one with no list or artifacts row is no list", () => {
+    const UNDETERMINED = { ok: false, code: "released_list_undetermined" };
+    // Null with an exact released list, with no list, and with nothing surfaced: refused alike.
+    expect(read({ ...decision(entries(2)), declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject(UNDETERMINED);
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject(UNDETERMINED);
+    // Recorded as an empty array (the dispatched plan declares no rows for the node): no list, the old road.
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: [] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+    // Recorded rows, none of kind list or artifacts: no list, the old road.
+    expect(read({ ...decision(undefined), surfacedValues: { campaignId: "camp-1" }, declaredRows: [{ label: "From", input: "senderEmail" }, { label: "Note", input: "note" }] } as unknown as ReturnType<typeof decision>)).toEqual({ ok: true, list: null });
+    // The release check still comes first.
+    expect(read({ ...decision(entries(1), { status: "parked" }), declaredRows: null } as unknown as ReturnType<typeof decision>)).toMatchObject({ ok: false, code: "decision_not_released" });
+  });
+
+  it("L4c a stored declaration is read as recorded: text that cannot be parsed is refused at the read, [] is no rows, absent is null", () => {
+    const stored = (declaredRows: string | null) => ({
+      id: "d-1", orgId: "org-1", runId: "run-1", nodeId: "send", gateTaskId: "t-1", a2aContextId: null, status: "released",
+      surfacedValues: "{}", declaredRows, runGeneration: 0, releasedPauseGeneration: null, decidedBy: "user-2",
+      decidedAt: null, decisionNote: null, createdAt: new Date(), expiresAt: new Date(), callsInFlight: 0,
+    }) as unknown as Parameters<typeof decodeStoredPublishDecision>[0];
+    for (const bad of ["{not json", "{}", '[{"label":7,"input":"x"}]', '"[]"']) {
+      expect(() => decodeStoredPublishDecision(stored(bad)), bad).toThrow(/unreadable declared rows/);
+    }
+    expect(decodeStoredPublishDecision(stored("[]")).declaredRows).toEqual([]);
+    expect(decodeStoredPublishDecision(stored(null)).declaredRows).toBeNull();
+  });
+
+  it("L5 50 entries are a list and 51 are refused", () => {
     const fifty = entries(50);
     expect(read(decision(fifty))).toEqual({ ok: true, list: fifty });
-    expect(read(decision(entries(51)))).toEqual({ ok: true, list: null });
+    expect(read(decision(entries(51)))).toMatchObject({ ok: false, code: "released_list_malformed" });
   });
 
   it("L6 two surfaced lists of the entry shape answer an error: which one was released cannot be told", () => {
@@ -92,7 +139,6 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     const shown = list.map((e) => ({ email: e.recipientEmail, subject: e.subject }));
     const refusals = [
       { ...decision(list), declaredRows: [] },
-      { ...decision(list), declaredRows: null },
       { ...decision(list), declaredRows: [{ label: "Recipients", input: "recipients" }] },
       decision(list, { shown: [shown[1]!, shown[0]!] }),
       decision(list, { shown: [shown[0]!] }),
@@ -103,6 +149,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
     for (const d of refusals) {
       expect(read(d as ReturnType<typeof decision>)).toEqual({
         ok: false,
+        code: "released_list_not_shown",
         error: "no list row of the released publish decision shows each record of the released list",
       });
     }
@@ -137,7 +184,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
       ...decision(list, { shown: [{ email: "p0@example.com" }] }),
       declaredRows: [{ kind: "list" as const, label: "Recipients", input: "recipients", columns: [{ label: "Email", field: "email" }] }],
     };
-    const NO_ROW = { ok: false, error: "no list row of the released publish decision shows each record of the released list" };
+    const NO_ROW = { ok: false, code: "released_list_not_shown", error: "no list row of the released publish decision shows each record of the released list" };
     expect(read(onlyEmail as ReturnType<typeof decision>)).toEqual(NO_ROW);
     // The values drawn in each other's column do not show the entry either.
     const swapped = decision(entries(1), { shown: [{ email: "Subject 0", subject: "p0@example.com" }] });
@@ -152,7 +199,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
 
   it("L10 a column named for two fields, or a field named twice, is refused", () => {
     const d = decision(entries(1));
-    // red-first-expect: releasedDecisionList is not a function
+    // red-first-expect: to deeply equal
     const twiceColumn = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "recipientEmail", column: "email" }, { field: "subject", column: "email" }] });
     expect(twiceColumn.ok).toBe(false);
     const twiceField = releasedDecisionList({ decision: d, entryFields: FIELDS, shownFields: [{ field: "subject", column: "email" }, { field: "subject", column: "subject" }] });
@@ -165,7 +212,7 @@ describe("releasedDecisionList (cinatra#3089)", () => {
 
   it("L11 the bodies count only when the decision declares an artifacts row over the same surfaced list (not a proof of what the screen drew)", () => {
     const list = entries(2);
-    const NO_BODIES = { ok: false, error: "no artifacts row of the released publish decision draws the bodies of the released list" };
+    const NO_BODIES = { ok: false, code: "released_list_bodies_not_drawn", error: "no artifacts row of the released publish decision draws the bodies of the released list" };
     const noArtifactsRow = { ...decision(list), declaredRows: decision(list).declaredRows.filter((r) => r.kind !== "artifacts") };
     expect(read(noArtifactsRow as ReturnType<typeof decision>)).toEqual(NO_BODIES);
     const otherInput = { ...decision(list), declaredRows: decision(list).declaredRows.map((r) => (r.kind === "artifacts" ? { ...r, input: "recipients" } : r)) };

@@ -26,6 +26,7 @@
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
+import type { PublishDecisionRow } from "@cinatra-ai/agents/publish-decision-store";
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
@@ -101,7 +102,33 @@ export type TriggerEmailSendDeps = {
   // refuses fails the send visibly (cinatra#3089); any other projection failure
   // is warned and the send goes on. Defaults to the ledger-backed materializer.
   emitEmailFanout?: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
+  /**
+   * The run of the call, read from the server's own context of the call
+   * (cinatra#3089): the verified step, the decision the runtime signed and the
+   * decision the passthrough route CLAIMED for the call; null when the call
+   * carries no verified run. Never a field of the request or of a bundle.
+   */
+  readCallingRun?: () => Promise<CallingRun | null>;
+  /** The publish decision that governs a call of the verified step `stepId`
+   *  in `runId`; null when the step governs none (`readGoverningPublishDecision`). */
+  readPublishDecision?: (runId: string, stepId: string) => Promise<StepPublishDecision | null>;
+  /** The decision `decisionId` of `runId` in the run's current attempt; null
+   *  when the run holds no such decision (`readDecisionOfRun`). */
+  readClaimedPublishDecision?: (runId: string, decisionId: string) => Promise<StepPublishDecision | null>;
 };
+
+/** The run of a call, its verified step, the decision the runtime signed for
+ *  it and the decision the call's road claimed for it (see `readCallingRun`). */
+export type CallingRun = {
+  runId: string;
+  stepId?: string;
+  publishDecisionId?: string;
+  claim?: { runId: string; decisionId: string };
+};
+
+/** A step's publish decision, as the send reads it. */
+export type StepPublishDecision = Pick<PublishDecisionRow, "status" | "decidedBy" | "surfacedValues" | "declaredRows">
+  & Partial<Pick<PublishDecisionRow, "id">>;
 
 // Lazy default deps — heavy imports happen only when the adapter is actually
 // invoked in production. Unit tests inject mocks via the factory's deps arg.
@@ -187,6 +214,36 @@ export function buildLazyDefaultDeps(): TriggerEmailSendDeps {
     },
     emitEmailFanout(args) {
       return defaultEmitEmailFanout(args);
+    },
+    // The run of the call is a verified channel of the request frame only: an
+    // agent-run token's signed run, or the run a run-bound seam proved.
+    async readCallingRun() {
+      const { mcpRequestContextStorage } = await import("@cinatra-ai/mcp-server/request-context");
+      const ctx = mcpRequestContextStorage.getStore();
+      const agentRun = ctx?.delegatedActor?.delegation === "agent_run" ? ctx.delegatedActor : undefined;
+      const runId = agentRun?.runId ?? ctx?.verifiedRunScopeId ?? (ctx?.verifiedStepId ? ctx.runId : undefined);
+      if (typeof runId !== "string" || runId.trim() === "") return null;
+      const stepId = ctx?.verifiedStepId ?? agentRun?.verifiedStepId;
+      // The decision the model bridge verified for the call (the token's signed `pdc` claim, cinatra#3745).
+      const publishDecisionId = ctx?.verifiedPublishDecisionId ?? agentRun?.verifiedPublishDecisionId;
+      // The decision the passthrough route's call check CLAIMED for this call (cinatra#4762), as the server took it.
+      const claim = ctx?.publishCallClaim;
+      return {
+        runId: runId.trim(),
+        ...(typeof stepId === "string" && stepId !== "" ? { stepId } : {}),
+        ...(typeof publishDecisionId === "string" && publishDecisionId !== "" ? { publishDecisionId } : {}),
+        ...(claim && typeof claim.runId === "string" && typeof claim.decisionId === "string" && claim.decisionId !== ""
+          ? { claim: { runId: claim.runId, decisionId: claim.decisionId } }
+          : {}),
+      };
+    },
+    async readPublishDecision(runId, stepId) {
+      const { readGoverningPublishDecision } = await import("@cinatra-ai/agents/publish-decision-actions");
+      return readGoverningPublishDecision(runId, stepId);
+    },
+    async readClaimedPublishDecision(runId, decisionId) {
+      const { readDecisionOfRun } = await import("@cinatra-ai/agents/publish-decision-store");
+      return readDecisionOfRun(runId, decisionId);
     },
   };
 }
@@ -730,6 +787,9 @@ async function runInitialSend(args: {
     actor: PrimitiveActorContext,
   ) => Promise<ObjectsEnvelope | null>;
   emitEmailFanout: (args: EmailFanoutArgs) => Promise<EmailFanoutResult>;
+  readCallingRun: NonNullable<TriggerEmailSendDeps["readCallingRun"]>;
+  readPublishDecision: NonNullable<TriggerEmailSendDeps["readPublishDecision"]>;
+  readClaimedPublishDecision: NonNullable<TriggerEmailSendDeps["readClaimedPublishDecision"]>;
 }): Promise<InitialSendStateRow> {
   const { input, actor, sendEmail, getObjectByRef, emitEmailFanout } = args;
   const startedAt = new Date().toISOString();
@@ -739,6 +799,91 @@ async function runInitialSend(args: {
     completedAt: "",
     sentCount: 0,
   });
+
+  /**
+   * THE ROAD OF THE SEND (cinatra#3089), decided from the decision that
+   * governs the call and what its CARD DECLARED, before anything is read. A
+   * call is GOVERNED when the server's context of the call carries the
+   * passthrough route's publish claim OR the publish decision the model
+   * bridge verified (the on-behalf-of token's signed decision); the governing
+   * decision is the claimed one, else the signed one, read in the call's own
+   * run and checked against the call's verified step:
+   *   - an ungoverned call (a person's send, a test send), or a governed call
+   *     whose released decision's card declared no list row and no artifacts
+   *     row: the OLD road, below, unchanged;
+   *   - a governed call whose decision cannot be told, is not the governing
+   *     one, is not released, whose declaration was not recorded, or whose
+   *     declared list is not exact: REFUSED;
+   *   - a governed call with a released list of the exact form: REFUSED with
+   *     `approved_send_unavailable`, since the released-list send is not
+   *     available yet.
+   * A refusal answers one fixed code and nothing else: no reader's text, no
+   * thrown message, no id, nothing logged.
+   */
+  const refusal = await (async (): Promise<string | null> => {
+    let callingRun: CallingRun | null;
+    try {
+      callingRun = await args.readCallingRun();
+    } catch {
+      return "calling_run_unreadable";
+    }
+    const claim = callingRun?.claim;
+    const signed = callingRun?.publishDecisionId;
+    if (!callingRun || (!claim && signed === undefined)) return null;
+    const { runId, stepId } = callingRun;
+    if (!stepId) return "claim_without_step";
+    if (claim && claim.runId !== runId) return "decision_claim_other_run";
+    if (claim && signed !== undefined && signed !== claim.decisionId) return "decision_claim_conflict";
+    // The claimed decision (passthrough), else the decision the bridge verified for the call.
+    const decisionId = claim?.decisionId ?? signed!;
+    let governing: StepPublishDecision | null;
+    let decision: StepPublishDecision | null;
+    let store: typeof import("@cinatra-ai/agents/publish-decision-store");
+    try {
+      governing = await args.readPublishDecision(runId, stepId);
+    } catch {
+      return "decision_unreadable";
+    }
+    if (!governing) return "decision_missing";
+    if (signed !== undefined && governing.id !== signed) return "decision_signed_other";
+    try {
+      decision = await args.readClaimedPublishDecision(runId, decisionId);
+      store = await import("@cinatra-ai/agents/publish-decision-store");
+    } catch {
+      return "decision_claim_unreadable";
+    }
+    if (!decision || decision.id !== decisionId) return "decision_claim_not_current";
+    if (governing.id !== decisionId) return "decision_claim_superseded";
+    const read = store.releasedDecisionList({
+      decision,
+      entryFields: ["artifactId", "representationRevisionId", "contactId", "recipientEmail", "subject"],
+      shownFields: [
+        { field: "recipientEmail", column: "email" },
+        { field: "subject", column: "subject" },
+      ],
+    });
+    if (!read.ok) return read.code;
+    return read.list === null ? null : "approved_send_unavailable";
+  })();
+  if (refusal !== null) {
+    // The one place a governed call's refusal is answered: only a code of the
+    // closed set passes; any other value answers `claimed_send_refused`.
+    const CLAIMED_SEND_REFUSALS: ReadonlySet<string> = new Set([
+      "calling_run_unreadable", "claim_without_step", "decision_claim_other_run", "decision_claim_conflict",
+      "decision_unreadable", "decision_missing", "decision_signed_other", "decision_claim_unreadable",
+      "decision_claim_not_current", "decision_claim_superseded", "approved_send_unavailable",
+      "released_list_fields_invalid", "decision_not_released", "released_list_malformed",
+      "released_list_ambiguous", "released_list_not_shown", "released_list_bodies_not_drawn",
+      "released_list_undetermined",
+    ]);
+    return {
+      status: "failed",
+      startedAt,
+      completedAt: new Date().toISOString(),
+      sentCount: 0,
+      errorMessage: CLAIMED_SEND_REFUSALS.has(refusal) ? refusal : "claimed_send_refused",
+    };
+  }
 
   if (!input.approvedDraftBundleRef || !input.confirmedRecipientsRef) {
     const errorMessage =
@@ -1140,6 +1285,8 @@ export function createTriggerEmailSendUseCases(
     // The agent's SKILL.md polls up to 5 times — sync completion plus
     // memo'd state mean the first poll always reports completed.
     async startInitialSend(input, actor) {
+      let defaults: TriggerEmailSendDeps | null = null;
+      const fallback = () => (defaults ??= buildLazyDefaultDeps());
       const result = await runInitialSend({
         input,
         actor,
@@ -1148,6 +1295,9 @@ export function createTriggerEmailSendUseCases(
         // (e.g. a unit test) omits the optional fan-out seams.
         getObjectByRef: deps.getObjectByRef ?? fetchObjectsByRef,
         emitEmailFanout: deps.emitEmailFanout ?? defaultEmitEmailFanout,
+        readCallingRun: deps.readCallingRun ?? fallback().readCallingRun!,
+        readPublishDecision: deps.readPublishDecision ?? fallback().readPublishDecision!,
+        readClaimedPublishDecision: deps.readClaimedPublishDecision ?? fallback().readClaimedPublishDecision!,
       });
       sendStateByCampaign.set(input.campaignId, result);
       return {
