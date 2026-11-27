@@ -4,7 +4,14 @@ import { readFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
 import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
-import { findOldLayoutAgentDirs, oldLayoutAgentMessage, warnOldLayoutAgentDir } from "./old-agent-layout";
+import {
+  LEGACY_AGENT_DIR_NAMES,
+  agentSourceDirsForSlug,
+  agentSourceMessage,
+  reportedAgentSources,
+  scopedDefinitionPath,
+  warnAgentSource,
+} from "./old-agent-layout";
 // Operator-aware vendor dir for compile-time probes.
 // Reads the instance-identity store dynamically to avoid a hard import that
 // the unit-test transitive shim cannot stub. Missing store returns null and
@@ -671,13 +678,6 @@ function mergeParentLeafCinatra(
 // Path resolution for the OAS source file (traversal guard)
 // ---------------------------------------------------------------------------
 
-// The two slugs whose older directory names differ from the slug. Only the
-// old-layout lookup (`oldLayoutAgentDirsFor`) uses it: no definition is read there.
-const OAS_COMPILER_LEGACY_SLUG_MAP: Record<string, string> = {
-  "drupal-agent": "drupal-content-editor",
-  "wordpress-agent": "wordpress-content-editor",
-};
-
 // Derive renderer and riskClass from a child agent's own OAS so parent FlowNodes
 // don't need to redeclare metadata that belongs to the child.
 // Scans the child's $referenced_components for the first InputMessageNode that
@@ -690,7 +690,7 @@ function readChildOasRendererInfo(
   if (!candidates.some((p) => existsSync(p))) {
     // No cinatra/oas.json: say so when the child sits in the old layout, so its
     // missing renderer is not a silent gap (cinatra#4920).
-    for (const oldLayoutDir of oldLayoutAgentDirsFor(packageName)) warnOldLayoutAgentDir(oldLayoutDir);
+    for (const source of reportedAgentSourcesFor(packageName)) warnAgentSource(source);
     return null;
   }
   for (const p of candidates) {
@@ -738,19 +738,21 @@ function resolveAgentJsonPath(packageName: string): string[] | null {
   const slug = guardedAgentSlug(packageName);
   if (!slug) return null;
   const root = resolveDevExtensionSourceRoot();
-  return compilerVendorDirCandidates().map((vendor) => join(root, vendor, slug, "cinatra", "oas.json"));
+  return compilerVendorDirCandidates().map((vendor) => scopedDefinitionPath(join(root, vendor, slug)));
 }
 
-// EVERY directory of this package's agent in the OLD layout (agent.json, no
-// cinatra/oas.json): two can share a slug. They are looked for only to name them.
-function oldLayoutAgentDirsFor(packageName: string): string[] {
+// EVERY agent source directory of this package that is REPORTED, not read (an
+// agent.json, or a flat directory): two can share a slug. They are looked for
+// only to name them, by the same classifier every other reader uses.
+function reportedAgentSourcesFor(packageName: string) {
   const slug = guardedAgentSlug(packageName);
   if (!slug) return [];
-  return findOldLayoutAgentDirs(
-    resolveDevExtensionSourceRoot(),
-    compilerVendorDirCandidates(),
-    slug,
-    OAS_COMPILER_LEGACY_SLUG_MAP[slug] ?? slug,
+  const vendors = compilerVendorDirCandidates();
+  return reportedAgentSources(
+    agentSourceDirsForSlug(resolveDevExtensionSourceRoot(), vendors, slug, {
+      legacyDirName: LEGACY_AGENT_DIR_NAMES[slug] ?? slug,
+      targetVendor: vendors[0],
+    }),
   );
 }
 
@@ -1920,11 +1922,11 @@ export async function compileOasAgentJson(opts: {
       }
     }
     if (!oasSourcePath) {
-      const oldLayoutDirs = oldLayoutAgentDirsFor(opts.packageName);
+      const reported = reportedAgentSourcesFor(opts.packageName);
       return {
         ok: false,
-        error: oldLayoutDirs.length > 0
-          ? oldLayoutDirs.map((dir) => oldLayoutAgentMessage(dir)).join(" ")
+        error: reported.length > 0
+          ? reported.map((source) => agentSourceMessage(source)).join(" ")
           : `OAS source not found for ${opts.packageName} (tried ${candidates.join(", ")})`,
       };
     }

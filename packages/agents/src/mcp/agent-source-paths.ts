@@ -6,28 +6,33 @@ import "server-only";
 // path-safety guard CALLS live both here (helper definitions) and at every
 // join site in handlers.ts; only the definitions moved.
 
-import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
-import { findOldLayoutAgentDirs, oldLayoutAgentMessage, warnOldLayoutAgentDir } from "../old-agent-layout";
+import {
+  LEGACY_AGENT_DIR_NAMES,
+  agentSourceDirsForSlug,
+  agentSourceMessage,
+  classifyAgentSourceDir,
+  reportedAgentSources,
+  warnAgentSource,
+  type AgentSourceDir,
+} from "../old-agent-layout";
 
 // ---------------------------------------------------------------------------
 // Agent definition path resolution (cinatra#4920).
 // An agent's definition file is `<installDir>/<vendor>/<slug>/cinatra/oas.json`,
 // probed under the operator's own vendor segment first and the first-party one
-// second. Nothing else is read: a source tree in the old layout (an `agent.json`
-// and no `cinatra/oas.json`) resolves to null, and `oldLayoutAgentErrorForSlug`
-// names the directory and the move for the handlers that report the miss.
-// LEGACY_SLUG_MAP only lets that lookup find the two old directory names that
-// differed from their slug.
+// second. Nothing else is read. Whether a directory is READ or REPORTED is
+// decided by `../old-agent-layout` for every reader at once: a directory that
+// looks like an agent source but is not at that place (an `agent.json`, or a
+// flat `<root>/<slug>` directory) resolves to null here, and
+// `oldLayoutAgentErrorForSlug` names the directory, what was found and the
+// exact place for the handlers that report the miss.
 // ---------------------------------------------------------------------------
 
-export const LEGACY_SLUG_MAP: Record<string, string> = {
-  "drupal-agent": "drupal-content-editor",
-  "wordpress-agent": "wordpress-content-editor",
-};
+export const LEGACY_SLUG_MAP: Record<string, string> = { ...LEGACY_AGENT_DIR_NAMES };
 
 // Default on-disk vendor segment when no instance identity is configured.
 // This is the first-party scope (`@cinatra-ai`) WITHOUT npm's leading "@" —
@@ -110,50 +115,50 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
   // probed. This file is the only definition an agent has (cinatra#4920).
   for (const vendor of safeVendorSegmentsForRead()) {
     const newRoot = join(root, vendor, packageSlug);
-    const oasPath = join(newRoot, "cinatra", "oas.json");
-    if (existsSync(oasPath)) return { path: oasPath, relPath: relative(process.cwd(), oasPath), rootDir: newRoot };
+    const state = classifyAgentSourceDir(newRoot, "scoped", { root }, packageSlug);
+    if (state?.state === "read") {
+      return { path: state.definitionPath, relPath: relative(process.cwd(), state.definitionPath), rootDir: newRoot };
+    }
   }
   return null;
 }
 
 /**
- * EVERY directory of this slug's agent in the OLD layout (an `agent.json`, no
- * `cinatra/oas.json`). Probes where the retired read ladder looked: the vendor
+ * The state of EVERY agent source directory of this slug: the vendor
  * directories and the flat `<root>/<slug>` (or its old directory name). Two
- * directories can share a slug, and each is returned.
+ * directories can share a slug, and each has its own state.
  */
-export function findOldLayoutAgentDirsForSlug(packageSlug: string): string[] {
+export function agentSourceDirsForPackageSlug(packageSlug: string): AgentSourceDir[] {
   if (!isSafePathSegment(packageSlug)) return [];
-  return findOldLayoutAgentDirs(
-    resolveDevExtensionSourceRoot(),
-    safeVendorSegmentsForRead(),
-    packageSlug,
-    LEGACY_SLUG_MAP[packageSlug] ?? packageSlug,
-  );
+  const vendors = safeVendorSegmentsForRead();
+  return agentSourceDirsForSlug(resolveDevExtensionSourceRoot(), vendors, packageSlug, {
+    legacyDirName: LEGACY_SLUG_MAP[packageSlug] ?? packageSlug,
+    targetVendor: vendors[0],
+  });
 }
 
 /**
- * One sentence per old-layout directory: it names the directory (relative to
- * the working directory) and says to move it to `cinatra/oas.json`. With
- * `alsoLog` each is also logged once per directory, for a reader, like the
- * listing, that carries on without the agent.
+ * One sentence per REPORTED directory: it names the directory (relative to the
+ * working directory), what was found and the exact place the definition must
+ * be. With `alsoLog` each is also logged once per directory, for a reader, like
+ * the listing, that carries on without the agent.
  */
-export function oldLayoutAgentMessagesForDirs(dirs: readonly string[], alsoLog = false): string[] {
-  return dirs.map((dir) => {
-    if (alsoLog) warnOldLayoutAgentDir(dir);
-    return oldLayoutAgentMessage(relative(process.cwd(), dir));
+export function agentSourceWarnings(states: readonly AgentSourceDir[], alsoLog = false): string[] {
+  return reportedAgentSources(states).map((state) => {
+    if (alsoLog) warnAgentSource(state);
+    return agentSourceMessage(state, process.cwd());
   });
 }
 
 /**
  * The text a slug-keyed handler returns when it cannot find the agent because
- * the source tree is in the old layout: the sentence for EVERY old-layout
- * directory of the slug, joined. Null when the slug has none, so a handler
- * keeps its own "not found" text.
+ * its source directory is REPORTED: the sentence for EVERY such directory of
+ * the slug, joined. Null when the slug has none, so a handler keeps its own
+ * "not found" text.
  */
 export function oldLayoutAgentErrorForSlug(packageSlug: string): string | null {
-  const dirs = findOldLayoutAgentDirsForSlug(packageSlug);
-  return dirs.length === 0 ? null : oldLayoutAgentMessagesForDirs(dirs).join(" ");
+  const messages = agentSourceWarnings(agentSourceDirsForPackageSlug(packageSlug));
+  return messages.length === 0 ? null : messages.join(" ");
 }
 
 // Resolves the on-disk directory that contains the agent (for sibling reads

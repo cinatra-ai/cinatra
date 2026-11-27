@@ -73,15 +73,15 @@ import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
+  agentSourceWarnings,
   oldLayoutAgentErrorForSlug,
-  oldLayoutAgentMessagesForDirs,
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
   resolveAgentJsonPathForRead,
   resolveAgentRootDirForRead,
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
-import { isOldLayoutAgentDir } from "../old-agent-layout";
+import { enumerateAgentSourceDirs } from "../old-agent-layout";
 import { createZipBuffer } from "../zip-helpers";
 import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 // read the chat-side projectContext frame
@@ -2737,54 +2737,29 @@ async function handleAgentBuilderVersionDiff(
 async function handleAgentBuilderGitList(
   _request: PrimitiveRequest,
 ): Promise<unknown> {
-  // agents live under <installDir>/<vendor>/<slug>/. Walk the operator's
-  // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537). A source
-  // directory in the old layout (agent.json, no cinatra/oas.json) is not an
-  // agent any more: it is named in `warnings`, and the other agents still list.
-  // The old-layout directories are collected by DIRECTORY, not by slug: two of
-  // them can share a slug (a vendor dir and a flat one), and each is named.
+  // agents live under <installDir>/<vendor>/<slug>/. The walk is the one
+  // enumeration of agent source directories (`enumerateAgentSourceDirs`), over
+  // the operator's OWN vendor dir AND the first-party "cinatra-ai" dir
+  // (cinatra#537): a directory with `cinatra/oas.json` is listed, and every
+  // other directory that looks like an agent source (an agent.json, a flat
+  // <installDir>/<slug>/) is named in `warnings`, so none passes silently. The
+  // other agents still list. States are per DIRECTORY, not per slug: two can
+  // share a slug and each is named.
   const root = resolveDevExtensionSourceRoot();
-  const slugSet = new Set<string>();
-  const oldLayoutDirs = new Set<string>();
-
-  // New layout: <installDir>/<vendor>/<slug>/ — probe both the instance vendor
-  // segment and the first-party segment (deduped, filesystem-safe only).
-  for (const vendorSegment of safeVendorSegmentsForRead()) {
-    const vendorDir = join(root, vendorSegment);
-    if (!existsSync(vendorDir)) continue;
-    try {
-      const subEntries = (await readdir(vendorDir, { withFileTypes: true })) as unknown as Array<{
-        name: string;
-        isDirectory: () => boolean;
-      }>;
-      for (const sub of subEntries) {
-        if (!sub.isDirectory()) continue;
-        slugSet.add(sub.name);
-        if (isOldLayoutAgentDir(join(vendorDir, sub.name))) oldLayoutDirs.add(join(vendorDir, sub.name));
-      }
-    } catch {
-      /* skip if unreadable */
-    }
-  }
-
-  // Top-level <installDir>/<slug>/ directories: only an old-layout one is looked at.
-  let topEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  const vendors = safeVendorSegmentsForRead();
+  let sources: ReturnType<typeof enumerateAgentSourceDirs> = [];
   try {
-    topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
-      name: string;
-      isDirectory: () => boolean;
-    }>;
+    sources = enumerateAgentSourceDirs(root, vendors, { targetVendor: vendors[0] });
   } catch {
-    /* root unreadable — items collected so far still returned */
+    /* root unreadable — nothing to list */
   }
-  for (const entry of topEntries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === "cinatra") continue; // Vendor dir already walked above
-    if (isOldLayoutAgentDir(join(root, entry.name))) oldLayoutDirs.add(join(root, entry.name));
+  const slugSet = new Set<string>();
+  for (const source of sources) {
+    if (source.state === "read") slugSet.add(source.slug);
   }
 
   const items: unknown[] = [];
-  const warnings = oldLayoutAgentMessagesForDirs([...oldLayoutDirs], true);
+  const warnings = agentSourceWarnings(sources, true);
   for (const slug of slugSet) {
     const resolved = resolveAgentJsonPathForRead(slug);
     if (!resolved) continue;

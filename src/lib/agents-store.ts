@@ -44,7 +44,7 @@ import {
 // Installed-agent reads use `readInstalledAgentTemplates`, which filters
 // status to active/published and excludes drafts.
 import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
-import { isOldLayoutAgentDir, warnOldLayoutAgentDir } from "@cinatra-ai/agents/old-agent-layout";
+import { enumerateAgentSourceDirs, warnAgentSource } from "@cinatra-ai/agents/old-agent-layout";
 // Provider-declared agents live under `<installDir>/cinatra/<slug>/`
 // and are NOT in `agent_templates`. The matcher's "agents" axis must union the
 // DB-installed templates with the filesystem-provided agents so users see
@@ -454,26 +454,6 @@ function safeProviderVendorSegments(): string[] {
   return out;
 }
 
-// Agent-definition path resolution. Mirrors `resolveAgentJsonPathForRead` in
-// packages/agents/src/mcp/agent-source-paths.ts: an agent is defined by
-// `<installDir>/<vendor>/<slug>/cinatra/oas.json` and by nothing else
-// (cinatra#4920).
-//
-// cinatra#538: resolution is VENDOR-SCOPED, not "first match across vendors".
-// It resolves under ONE specific vendor segment so a same-slug agent under the
-// operator vendor and under first-party "cinatra-ai" BOTH surface as distinct
-// packageIds — instead of the operator dir shadowing the first-party one (the
-// previous "operator-first, return on first hit" behavior hid a same-slug
-// first-party agent from /agents).
-function resolveProviderAgentJsonPathUnderVendor(
-  installRoot: string,
-  vendor: string,
-  packageSlug: string,
-): string | null {
-  const oasPath = path.join(installRoot, vendor, packageSlug, "cinatra", "oas.json");
-  return existsSync(oasPath) ? oasPath : null;
-}
-
 /**
  * Filesystem walker for provider-declared agents: agents
  * shipped on disk under `<installDir>/cinatra/<slug>/` and not yet installed
@@ -513,48 +493,35 @@ export function readProviderDeclaredAgents(
   const candidates: Array<{ oasSourcePath: string; siblingPkgPaths: string[] }> = [];
   const vendorSegments = safeProviderVendorSegments();
 
-  // <installDir>/<vendor>/<slug>/cinatra/oas.json. A slug directory in the old
-  // layout (agent.json, no oas.json) is not an agent: it is named in a warning
-  // and left out, never an error, so one stale directory cannot hide the rest
-  // (cinatra#4920). `throwOnError` is about unreadable files, not about this.
-  for (const vendor of vendorSegments) {
-    const vendorDir = path.join(installRoot, vendor);
-    if (!existsSync(vendorDir)) continue;
+  // The one enumeration of agent source directories (`enumerateAgentSourceDirs`,
+  // shared with every other reader, cinatra#4920): a `<vendor>/<slug>/` directory
+  // with `cinatra/oas.json` is an agent; any other directory that looks like an
+  // agent source (an agent.json, a flat <installDir>/<slug>/) is not read and is
+  // named in a warning, never an error, so one stale directory cannot hide the
+  // rest. `throwOnError` is about unreadable directories and files, not about this.
+  const sources = (() => {
     try {
-      for (const sub of readdirSync(vendorDir, { withFileTypes: true })) {
-        if (!sub.isDirectory()) continue;
-        const jsonPath = resolveProviderAgentJsonPathUnderVendor(installRoot, vendor, sub.name);
-        if (jsonPath) {
-          candidates.push({
-            oasSourcePath: jsonPath,
-            siblingPkgPaths: [path.join(installRoot, vendor, sub.name, "package.json")],
-          });
-        } else if (isOldLayoutAgentDir(path.join(installRoot, vendor, sub.name))) {
-          warnOldLayoutAgentDir(path.join(installRoot, vendor, sub.name));
-        }
-      }
+      return enumerateAgentSourceDirs(installRoot, vendorSegments, {
+        targetVendor: vendorSegments[0],
+        onUnreadable: (dir, err) => {
+          if (options.throwOnError) throw err;
+          console.warn(`[agents-store] readdir failed for ${dir}:`, err);
+        },
+      });
     } catch (err) {
       if (options.throwOnError) throw err;
-      console.warn("[agents-store] readdir vendor dir failed:", err);
+      console.warn("[agents-store] readdir install root failed:", err);
+      return [];
     }
-  }
-
-  // A top-level <installDir>/<slug>/ that is NOT a walked vendor dir holds no
-  // agent; one in the old layout is named in a warning (cinatra#4920).
-  type DirEntry = { name: string; isDirectory: () => boolean };
-  let topEntries: DirEntry[] = [];
-  try {
-    topEntries = readdirSync(installRoot, { withFileTypes: true }) as unknown as DirEntry[];
-  } catch (err) {
-    if (options.throwOnError) throw err;
-    console.warn("[agents-store] readdir install root failed:", err);
-  }
-  const walkedVendorSegments = new Set(vendorSegments);
-  for (const entry of topEntries) {
-    if (!entry.isDirectory()) continue;
-    if (walkedVendorSegments.has(entry.name)) continue; // already walked above
-    if (isOldLayoutAgentDir(path.join(installRoot, entry.name))) {
-      warnOldLayoutAgentDir(path.join(installRoot, entry.name));
+  })();
+  for (const source of sources) {
+    if (source.state === "read") {
+      candidates.push({
+        oasSourcePath: source.definitionPath,
+        siblingPkgPaths: [path.join(source.dir, "package.json")],
+      });
+    } else {
+      warnAgentSource(source);
     }
   }
 

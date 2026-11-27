@@ -17,6 +17,8 @@ import path from "node:path";
 import { compileOasAgentJson, __resetRegistryCacheForTests, type CompiledAgentOasStep } from "../oas-compiler";
 
 const MOVE = "move it to cinatra/oas.json";
+// A flat directory is not a read place: its message names the SCOPED place.
+const MOVE_FLAT = "move the directory to ";
 const CHILD_RENDERER = "@example-org/child-agent:output";
 
 let tmpRoot: string;
@@ -122,11 +124,12 @@ afterEach(() => {
 describe("compileOasAgentJson by package name: cinatra/oas.json is the one source (cinatra#4920)", () => {
   const SLUG = "example-agent";
   const PACKAGE = `@example-org/${SLUG}`;
-  const OLD_LAYOUTS: Array<{ label: string; file: string[]; dir: string[] }> = [
-    { label: "vendor dir, cinatra/agent.json", file: ["cinatra-ai", SLUG, "cinatra", "agent.json"], dir: ["cinatra-ai", SLUG] },
-    { label: "vendor dir, root agent.json", file: ["cinatra-ai", SLUG, "agent.json"], dir: ["cinatra-ai", SLUG] },
-    { label: "flat dir, cinatra/agent.json", file: [SLUG, "cinatra", "agent.json"], dir: [SLUG] },
-    { label: "flat dir, root agent.json", file: [SLUG, "agent.json"], dir: [SLUG] },
+  const SCOPED = () => path.join(tmpRoot, "extensions", "cinatra-ai", SLUG);
+  const OLD_LAYOUTS: Array<{ label: string; file: string[]; dir: string[]; move: () => string }> = [
+    { label: "vendor dir, cinatra/agent.json", file: ["cinatra-ai", SLUG, "cinatra", "agent.json"], dir: ["cinatra-ai", SLUG], move: () => MOVE },
+    { label: "vendor dir, root agent.json", file: ["cinatra-ai", SLUG, "agent.json"], dir: ["cinatra-ai", SLUG], move: () => MOVE },
+    { label: "flat dir, cinatra/agent.json", file: [SLUG, "cinatra", "agent.json"], dir: [SLUG], move: () => MOVE_FLAT + SCOPED() },
+    { label: "flat dir, root agent.json", file: [SLUG, "agent.json"], dir: [SLUG], move: () => MOVE_FLAT + SCOPED() },
   ];
 
   it("compiles the agent it finds at <vendor>/<slug>/cinatra/oas.json", async () => {
@@ -135,13 +138,13 @@ describe("compileOasAgentJson by package name: cinatra/oas.json is the one sourc
     expect(res.ok, res.ok ? "" : (res as { error?: string }).error).toBe(true);
   });
 
-  it.each(OLD_LAYOUTS)("does not compile an agent.json-only tree ($label); the error names the directory and the move", async ({ file, dir }) => {
+  it.each(OLD_LAYOUTS)("does not compile an agent.json-only tree ($label); the error names the directory and the move", async ({ file, dir, move }) => {
     put(file, parentFlow("@example-org/child-agent"));
     const res = await compileOasAgentJson({ packageName: PACKAGE, registryPath: path.join(tmpRoot, "components.json") });
     expect(res.ok).toBe(false);
     const error = (res as { error: string }).error;
     expect(error).toContain(`${path.join(tmpRoot, "extensions", ...dir)} is an agent in the old layout`);
-    expect(error).toContain(MOVE);
+    expect(error).toContain(move());
     expect(error).not.toContain("(tried");
   });
 
@@ -154,7 +157,8 @@ describe("compileOasAgentJson by package name: cinatra/oas.json is the one sourc
     for (const dir of [path.join("cinatra-ai", SLUG), SLUG]) {
       expect(error).toContain(`${path.join(tmpRoot, "extensions", dir)} is an agent in the old layout`);
     }
-    expect(error.split(MOVE)).toHaveLength(3);
+    expect(error.split(MOVE)).toHaveLength(2);
+    expect(error.split(MOVE_FLAT + path.join(tmpRoot, "extensions", "cinatra-ai", SLUG))).toHaveLength(2);
   });
 
   it("a slug with no source at all keeps the plain not-found error, which lists oas.json only", async () => {

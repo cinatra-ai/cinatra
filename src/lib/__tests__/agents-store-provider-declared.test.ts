@@ -365,8 +365,29 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
       const named = messages.filter((m) => m.includes(`${dir} is an agent in the old layout`));
       // Named once, with the move, however many times the picker runs.
       expect(named).toHaveLength(1);
-      expect(named[0]).toContain("move it to cinatra/oas.json");
+      // The place the definition must be: the scoped one for a flat directory.
+      expect(named[0]).toMatch(/move it to cinatra\/oas\.json|move the directory to .*cinatra-ai.*cinatra\/oas\.json/);
     }
+    warn.mockRestore();
+  });
+
+  it("cinatra#4920: a FLAT directory holding cinatra/oas.json is not read; it is named with the scoped place", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    // The state the old "move it to cinatra/oas.json" guidance produced when the
+    // directory was flat: an oas.json beside the old agent.json, in a flat dir.
+    mkdirSync(path.join(tmpRoot, "flat-oas-agent", "cinatra"), { recursive: true });
+    writeFileSync(path.join(tmpRoot, "flat-oas-agent", "cinatra", "oas.json"), JSON.stringify({ name: "Flat" }));
+    writeFileSync(path.join(tmpRoot, "flat-oas-agent", "cinatra", "agent.json"), JSON.stringify({ name: "Flat" }));
+
+    expect(readProviderDeclaredAgents()).toEqual([]);
+
+    const messages = warn.mock.calls.map((call) => String(call[0]));
+    const named = messages.filter((m) => m.includes(`${path.join(tmpRoot, "flat-oas-agent")} is an agent in the old layout`));
+    expect(named).toHaveLength(1);
+    expect(named[0]).toContain("cinatra/oas.json and cinatra/agent.json");
+    expect(named[0]).toContain(
+      `move the directory to ${path.join(tmpRoot, "cinatra-ai", "flat-oas-agent")}, so that its definition is at ${path.join(tmpRoot, "cinatra-ai", "flat-oas-agent", "cinatra", "oas.json")}`,
+    );
     warn.mockRestore();
   });
 

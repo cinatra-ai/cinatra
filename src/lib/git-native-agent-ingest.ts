@@ -44,11 +44,12 @@
 // A DEFINITION THE LOADER CANNOT READ is logged with the definition it was
 // reading, recorded in the report, and the walk continues with the next one.
 // The loader is handed a path and answers with row counts, so neither the log
-// nor the report can carry the instance's connection string. A directory in the
-// OLD layout (an `agent.json`, no `cinatra/oas.json`) is treated the same way:
-// it is no definition, so the loader never sees it; it is logged and recorded
-// with the directory's name and "move it to cinatra/oas.json", and the walk
-// goes on (cinatra#4920).
+// nor the report can carry the instance's connection string. A directory
+// that looks like an agent source but is not read (an `agent.json`, a flat
+// `<slug>/` directory) is treated the same way: it is no definition, so the
+// loader never sees it; it is logged and recorded with the directory's name,
+// what was found and the exact place its definition must be, and the walk goes
+// on (cinatra#4920).
 // -----------------------------------------------------------------------------
 
 /**
@@ -64,12 +65,12 @@
 export const GIT_NATIVE_AGENT_INGEST_BUDGET_MS = 60_000;
 
 /**
- * A definition the loader could not read, or a directory in the old layout
- * (an `agent.json`, no `cinatra/oas.json`) that was not read as an agent, named
- * so an operator can find it.
+ * A definition the loader could not read, or an agent source directory that was
+ * not read as an agent (an `agent.json`, a flat directory), named so an operator
+ * can find it.
  */
 export type GitNativeAgentIngestFailure = {
-  /** The definition's path (or the old-layout directory), relative to the source root that was walked. */
+  /** The definition's path (or the directory that was not read), relative to the source root that was walked. */
   definitionPath: string;
   reason: string;
 };
@@ -146,15 +147,12 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * Every git-native agent definition under `sourceRoot`: the vendor namespace,
- * `<vendor>/<slug>/cinatra/oas.json`, and nothing else (cinatra#4920).
- *
- * A directory in the OLD layout (an `agent.json` at its root or in `cinatra/`,
- * and no `cinatra/oas.json`) is no definition. It is returned apart, in
- * `oldLayoutDirs`, so the walk can name it instead of passing over it silently:
- * one such directory must not stop the boot or cost the tree its other agents.
- * A vendor directory that yields at least one definition is not probed as an
- * agent directory itself.
+ * Every git-native agent source directory under `sourceRoot`, each in its one
+ * state (cinatra#4920): `<vendor>/<slug>/cinatra/oas.json` is READ and handed
+ * to the loader; any other directory that looks like an agent source (an
+ * `agent.json`, a flat `<slug>/` directory) is REPORTED, never loaded and never
+ * passed over silently, so one such directory must not stop the boot or cost the
+ * tree its other agents. Every top-level directory is a vendor here.
  *
  * A source root that cannot be read at all THROWS — that is a question about the
  * tree, and each caller answers it its own way. An unreadable directory BELOW
@@ -162,46 +160,16 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
  */
 async function collectDefinitions(
   sourceRoot: string,
-): Promise<{ definitions: string[]; oldLayoutDirs: string[] }> {
-  const { readdir } = await import("node:fs/promises");
-  const { join } = await import("node:path");
-  const { existsSync } = await import("node:fs");
-  const { isOldLayoutAgentDir } = await import("@cinatra-ai/agents/old-agent-layout");
-
-  const definitions: string[] = [];
-  const oldLayoutDirs: string[] = [];
-  const entries = await readdir(sourceRoot, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const entryPath = join(sourceRoot, entry.name);
-
-    // Vendor-namespace probe
-    // (e.g., extensions/cinatra-ai/<slug>-agent/cinatra/oas.json).
-    let foundInside = false;
-    try {
-      const subEntries = await readdir(entryPath, { withFileTypes: true });
-      for (const sub of subEntries) {
-        if (!sub.isDirectory()) continue;
-        const subPath = join(entryPath, sub.name);
-        const oasJson = join(subPath, "cinatra", "oas.json");
-        if (existsSync(oasJson)) {
-          definitions.push(oasJson);
-          foundInside = true;
-          // The inner `cinatra/` folder of a flat old-layout entry is not a slug.
-        } else if (sub.name !== "cinatra" && isOldLayoutAgentDir(subPath)) {
-          oldLayoutDirs.push(subPath);
-        }
-      }
-    } catch {
-      // Non-fatal — skip unreadable subdirectories
-    }
-    if (foundInside) continue;
-
-    // The entry itself, when it is an agent directory in the old layout
-    // (entry/cinatra/agent.json or entry/agent.json).
-    if (isOldLayoutAgentDir(entryPath)) oldLayoutDirs.push(entryPath);
-  }
-  return { definitions, oldLayoutDirs };
+): Promise<{
+  definitions: string[];
+  reported: Array<Extract<import("@cinatra-ai/agents/old-agent-layout").AgentSourceDir, { state: "reported" }>>;
+}> {
+  const { enumerateAgentSourceDirs, reportedAgentSources } = await import("@cinatra-ai/agents/old-agent-layout");
+  const sources = enumerateAgentSourceDirs(sourceRoot, null);
+  return {
+    definitions: sources.flatMap((source) => (source.state === "read" ? [source.definitionPath] : [])),
+    reported: reportedAgentSources(sources),
+  };
 }
 
 /** Read every git-native agent definition under `sourceRoot` into the database. */
@@ -222,7 +190,7 @@ export async function ingestGitNativeAgentDefinitions(
   }
   const budgetMs = options?.budgetMs ?? GIT_NATIVE_AGENT_INGEST_BUDGET_MS;
 
-  const { definitions, oldLayoutDirs } = await collectDefinitions(sourceRoot);
+  const { definitions, reported } = await collectDefinitions(sourceRoot);
   const report: GitNativeAgentIngestReport = {
     sourceRoot,
     found: definitions.length,
@@ -233,17 +201,17 @@ export async function ingestGitNativeAgentDefinitions(
     failures: [],
   };
 
-  // An old-layout directory is no definition. It is recorded as a read failure
+  // A reported directory is no definition. It is recorded as a read failure
   // (the boot prints it among "not read in") and logged with its directory, and
   // the walk goes on: it is a warning, never a reason to stop.
-  if (oldLayoutDirs.length > 0) {
-    const { oldLayoutAgentMessage, warnOldLayoutAgentDir } = await import(
-      "@cinatra-ai/agents/old-agent-layout"
-    );
-    for (const dir of oldLayoutDirs) {
-      const definitionPath = relative(sourceRoot, dir);
-      warnOldLayoutAgentDir(dir);
-      report.failures.push({ definitionPath, reason: oldLayoutAgentMessage(definitionPath) });
+  if (reported.length > 0) {
+    const { agentSourceMessage, warnAgentSource } = await import("@cinatra-ai/agents/old-agent-layout");
+    for (const source of reported) {
+      warnAgentSource(source);
+      report.failures.push({
+        definitionPath: relative(sourceRoot, source.dir),
+        reason: agentSourceMessage(source, sourceRoot),
+      });
     }
   }
 

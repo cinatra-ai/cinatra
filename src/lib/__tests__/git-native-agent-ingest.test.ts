@@ -122,7 +122,12 @@ describe("ingestGitNativeAgentDefinitions", () => {
     expect(report.failures.map((f) => f.definitionPath).sort()).toEqual([...oldDirs].sort());
     for (const failure of report.failures) {
       expect(failure.reason).toContain(failure.definitionPath);
-      expect(failure.reason).toContain("move it to cinatra/oas.json");
+      // The place the definition must be: the scoped one, never only a file name.
+      expect(failure.reason).toContain(
+        failure.definitionPath.startsWith("cinatra-ai")
+          ? "move it to cinatra/oas.json"
+          : `move the directory to ${path.join("cinatra-ai", failure.definitionPath)}`,
+      );
     }
     // Logged too, with the directory, once each.
     for (const dir of oldDirs) {
@@ -147,12 +152,10 @@ describe("ingestGitNativeAgentDefinitions", () => {
     );
   });
 
-  it("a directory that has both files is read from its oas.json and is not an old layout", async () => {
+  it("a scoped directory that has both files is read from its oas.json and is not an old layout", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "agent.json"));
-    await writeDefinition(path.join("legacy-both", "cinatra", "oas.json"));
-    await writeDefinition(path.join("legacy-both", "cinatra", "agent.json"));
 
     const loadDefinition = loaderImporting();
     const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
@@ -163,6 +166,58 @@ describe("ingestGitNativeAgentDefinitions", () => {
     ]);
     expect(report.failures).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("a FLAT directory that has both files is not loaded, and is named with the scoped place", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeDefinition(path.join("legacy-both", "cinatra", "oas.json"));
+    await writeDefinition(path.join("legacy-both", "cinatra", "agent.json"));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    expect(report.found).toBe(0);
+    expect(loadDefinition.paths).toEqual([]);
+    expect(report.failures).toHaveLength(1);
+    expect(report.failures[0]!.definitionPath).toBe("legacy-both");
+    expect(report.failures[0]!.reason).toContain("cinatra/oas.json and cinatra/agent.json");
+    expect(report.failures[0]!.reason).toContain(
+      `move the directory to ${path.join("cinatra-ai", "legacy-both")}, so that its definition is at ${path.join("cinatra-ai", "legacy-both", "cinatra", "oas.json")}`,
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${path.join(root, "legacy-both")} is an agent in the old layout`));
+  });
+
+  // The same shapes the readers in packages/agents run (agent-source-old-layout-4920):
+  // each directory is READ (handed to the loader) or REPORTED (named in the
+  // report), never silent.
+  it.each([
+    { label: "scoped, cinatra/oas.json", files: [["cinatra-ai", "x-agent", "cinatra", "oas.json"]], dir: ["cinatra-ai", "x-agent"], read: true },
+    { label: "scoped, cinatra/agent.json only", files: [["cinatra-ai", "x-agent", "cinatra", "agent.json"]], dir: ["cinatra-ai", "x-agent"], found: "cinatra/agent.json" },
+    { label: "scoped, root agent.json only", files: [["cinatra-ai", "x-agent", "agent.json"]], dir: ["cinatra-ai", "x-agent"], found: "agent.json" },
+    { label: "flat, cinatra/agent.json only", files: [["x-agent", "cinatra", "agent.json"]], dir: ["x-agent"], found: "cinatra/agent.json" },
+    { label: "flat, root agent.json only", files: [["x-agent", "agent.json"]], dir: ["x-agent"], found: "agent.json" },
+    { label: "flat, cinatra/oas.json only", files: [["x-agent", "cinatra", "oas.json"]], dir: ["x-agent"], found: "cinatra/oas.json" },
+    { label: "flat, cinatra/oas.json beside cinatra/agent.json", files: [["x-agent", "cinatra", "oas.json"], ["x-agent", "cinatra", "agent.json"]], dir: ["x-agent"], found: "cinatra/oas.json and cinatra/agent.json" },
+    { label: "vendor-scoped under another vendor, cinatra/oas.json", files: [["example-org", "x-agent", "cinatra", "oas.json"]], dir: ["example-org", "x-agent"], read: true },
+  ])("every shape is read or reported, never silent: $label", async ({ files, dir, read, found }) => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    for (const file of files) await writeDefinition(path.join(...file));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    if (read) {
+      expect(report.found).toBe(1);
+      expect(loadDefinition.paths).toEqual([path.join(...dir, "cinatra", "oas.json")]);
+      expect(report.failures).toEqual([]);
+      return;
+    }
+    expect(report.found).toBe(0);
+    expect(loadDefinition.paths).toEqual([]);
+    expect(report.failures).toHaveLength(1);
+    expect(report.failures[0]!.definitionPath).toBe(path.join(...dir));
+    expect(report.failures[0]!.reason).toContain(found!);
+    expect(report.failures[0]!.reason).toContain(path.join("cinatra-ai", "x-agent", "cinatra", "oas.json"));
   });
 
   it("an old-layout directory alone ingests nothing and does not throw", async () => {
