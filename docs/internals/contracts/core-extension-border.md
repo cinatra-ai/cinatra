@@ -49,6 +49,39 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+## The ports are a closed shape with typed inputs
+
+The rules `port-shape` and `untyped-port-input` (cinatra#4872) read the declarations of
+`ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts` (the TypeScript AST,
+from disk). They do not try to understand every shape TypeScript allows for a port: they
+require a closed one and refuse the rest as `port-shape`, keyed by the property or by
+`<Interface>.<member>`. The type checker answers one question: is a parameter's type `any`,
+`unknown`, `object` or an unconstrained type parameter, after removing `null` and `undefined`,
+in any union constituent, by its element type for a rest parameter.
+
+A root property is a port when its annotation (optionally `| null | undefined` or `?`)
+references an SDK interface or an SDK type alias of one type literal; it is an identity field
+when it is a primitive, a literal, an array or tuple of those, or a reference the checker
+resolves to such. Anything else on the root is `port-shape`. A port has no type parameters,
+extends SDK interfaces only, and holds methods, function-typed properties (optionally
+nullable) and output-only members (`readonly` properties and getters whose type cannot be
+called). Anything else in a port is `port-shape`.
+
+`untyped-port-input` is a method or function-typed property with an untyped parameter, keyed
+`<Interface>.<member>(#positions)`: positions, not names, so a rename that keeps the types
+keeps the key; positions are comma-joined and overloads joined with `|`.
+
+The six members that stood on main (all `untyped-port-input`; no `port-shape`) are ledger
+entries with reasons, and `PORT_SEEDS` in the gate script lists exactly their keys. The
+list's top-level `installedRules` marks the rules whose first recording is done: the base
+guard admits a rule's new entries only when the base list lacks its marker, the head list has
+it and lists exactly the seed. A marker can never be removed, so the seed admits nothing for
+good once main carries it, also when every entry is gone.
+
+Stated limits: the contents of object, record, array and callback parameter types are not
+read; a parameter typed `Function` is not untyped; a `this` parameter is not an input; the
+port set of a declared tool module is not read.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the
