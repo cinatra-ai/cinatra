@@ -22,6 +22,17 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// A namespace import, so that a tree without the list comparison (cinatra#3832)
+// still loads this file and fails by assertion.
+import * as gateLib from "../chat-hitl-evidence-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+} from "../../audit/__tests__/floor-base-fixture.mjs";
+
 import {
   decideOutcome,
   partitionFindings,
@@ -363,5 +374,138 @@ describe("the CLI on the real tree", () => {
     expect(run.status, run.stderr).toBe(0);
     const parsed = JSON.parse(run.stdout);
     expect(parsed.failing).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two recorded lists may not grow against the base branch (cinatra#3832).
+// The comparison is mode-blind on purpose: it never reads `enforcement`,
+// `gateLandedAt` or `trunkBranch` (a stated limit of the check).
+// ---------------------------------------------------------------------------
+
+describe("chat-hitl-evidence-gate — the recorded lists may not grow against the base", () => {
+  const FLOOR = "scripts/ci/chat-hitl-evidence-gate.rollout.json";
+  const MODES = ["off", "warn-first", "enforce-all"];
+  const LISTS = ["knownFindings", "grandfatheredBranches"];
+  const rollout = (over = {}) => ({
+    enforcement: "warn-first",
+    trunkBranch: "main",
+    gateLandedAt: "2026-08-19T00:00:00Z",
+    grandfatheredBranches: ["feat/old"],
+    knownFindings: ["pointer-text:old.ts:1"],
+    ...over,
+  });
+  const without = (doc, key) => Object.fromEntries(Object.entries(doc).filter(([k]) => k !== key));
+  const cleanups = [];
+  afterAll(() => cleanups.forEach((c) => c()));
+
+  function guard(base, head, env = PULL_REQUEST_RUN) {
+    expect(typeof gateLib.checkFloorAgainstBase).toBe("function");
+    const f = makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+    cleanups.push(f.cleanup);
+    return gateLib.checkFloorAgainstBase({ repoRoot: f.root, env });
+  }
+
+  it("an added entry FAILS in every mode on the base and on the head, naming the entry", () => {
+    for (const list of LISTS) {
+      for (const baseMode of MODES) {
+        for (const headMode of MODES) {
+          const head = rollout({ enforcement: headMode, [list]: [...rollout()[list], "new-entry"] });
+          const r = guard(rollout({ enforcement: baseMode }), head);
+          const at = `${list} base=${baseMode} head=${headMode}`;
+          expect(r.status, at).toBe("grew");
+          expect(r.lines.join("\n"), at).toContain(`${list} entry new-entry`);
+        }
+      }
+    }
+  });
+
+  it("an added entry FAILS whatever type the mode value has, on either side", () => {
+    for (const list of LISTS) {
+      for (const mode of [{ wrapped: "enforce-all" }, 5, null, ["off"], true, "no-such-mode"]) {
+        const grown = { [list]: [...rollout()[list], "new-entry"] };
+        const wrongHead = guard(rollout(), rollout({ ...grown, enforcement: mode }));
+        const wrongBase = guard(rollout({ enforcement: mode }), rollout(grown));
+        for (const r of [wrongHead, wrongBase]) {
+          expect(r.status, `${list} ${JSON.stringify(mode)}`).toBe("grew");
+          expect(r.ok).toBe(false);
+        }
+      }
+    }
+  });
+
+  it("removals PASS, and so does a mode, date or trunk change that leaves the lists alone", () => {
+    expect(guard(rollout(), rollout({ knownFindings: [], grandfatheredBranches: [] }))).toMatchObject({ ok: true, status: "held" });
+    expect(guard(rollout(), rollout())).toMatchObject({ ok: true, status: "held" });
+    const moved = rollout({ enforcement: "off", gateLandedAt: "2030-01-01T00:00:00Z", trunkBranch: "other" });
+    expect(guard(rollout(), moved)).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a null or absent list is the empty list, on both sides", () => {
+    for (const list of LISTS) {
+      const empty = rollout({ [list]: [] });
+      for (const form of [without(empty, list), rollout({ [list]: null })]) {
+        expect(guard(empty, form), list).toMatchObject({ ok: true, status: "held" });
+        expect(guard(form, empty), list).toMatchObject({ ok: true, status: "held" });
+        expect(guard(form, rollout({ [list]: ["new-entry"] })).status, list).toBe("grew");
+      }
+    }
+  });
+
+  it("a list that is not an array of strings FAILS on the head naming the field, and on the base", () => {
+    for (const list of LISTS) {
+      for (const bad of ["feat/x", 3, { a: 1 }, true, [1], [null], [["x"]]]) {
+        const at = `${list} ${JSON.stringify(bad)}`;
+        const head = guard(rollout(), rollout({ [list]: bad }));
+        expect(head, at).toMatchObject({ ok: false, status: "malformed" });
+        expect(head.lines.join("\n"), at).toContain(`${list} is not a list of names`);
+        const base = guard(rollout({ [list]: bad }), rollout());
+        expect(base, at).toMatchObject({ ok: false, status: "unreadable" });
+        expect(base.lines.join("\n"), at).toContain(`${list} is not a list of names`);
+      }
+    }
+  });
+
+  it("an unparsable head, an unparsable base and an unreadable base fail closed", () => {
+    for (const text of ["not json", "[]", "null", "5"]) {
+      expect(guard(rollout(), text), `head ${text}`).toMatchObject({ ok: false, status: "malformed" });
+      expect(guard(text, rollout()), `base ${text}`).toMatchObject({ ok: false, status: "unreadable" });
+    }
+    const r = guard(rollout(), rollout(), UNREADABLE_BASE_RUN);
+    expect(r).toMatchObject({ ok: false, status: "unreadable" });
+    expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+
+  it("a run that is no pull request says so and passes", () => {
+    const r = guard(rollout(), rollout({ knownFindings: ["new-entry"] }), NO_PULL_REQUEST_RUN);
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+  });
+
+  it("END TO END: base mode off, head adds a known finding; the CLI exits non-zero with and without --enforce", () => {
+    // The CLI works out its own root from its location, so it runs from a copy
+    // of the scripts it imports inside the fixture repository (head side only).
+    const copies = [
+      "scripts/ci/chat-hitl-evidence-gate.mjs",
+      "scripts/ci/lib/decision-pointer-contract.mjs",
+      "scripts/ci/lib/capture-record-contract.mjs",
+      "scripts/ci/lib/evidence-gate-rollout.mjs",
+      "scripts/audit/lib/floor-base-guard.mjs",
+    ];
+    const head = Object.fromEntries(copies.map((c) => [c, readFileSync(join(REPO_ROOT, c), "utf8")]));
+    head[FLOOR] = rollout({ enforcement: "off", knownFindings: ["pointer-text:a.ts:1"], grandfatheredBranches: [] });
+    const f = makeFloorRepo({
+      base: { [FLOOR]: rollout({ enforcement: "off", knownFindings: [], grandfatheredBranches: [] }) },
+      head,
+    });
+    cleanups.push(f.cleanup);
+    for (const flags of [[], ["--enforce"]]) {
+      const run = spawnSync(process.execPath, [join(f.root, copies[0]), ...flags], {
+        cwd: f.root,
+        encoding: "utf8",
+        env: { ...envWithoutBase(process.env), ...PULL_REQUEST_RUN },
+      });
+      expect(run.status, flags.join(" ")).toBe(1);
+      expect(run.stderr, flags.join(" ")).toContain("knownFindings entry pointer-text:a.ts:1");
+    }
   });
 });
