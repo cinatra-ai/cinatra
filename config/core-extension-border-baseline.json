@@ -1,6 +1,9 @@
 {
   "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. See docs/internals/contracts/core-extension-border.md.",
   "schemaVersion": 1,
+  "installedRules": [
+    "untyped-port-input"
+  ],
   "entries": [
     {
       "rule": "pack-named-passthrough",
@@ -247,6 +250,36 @@
       "rule": "skill-legacy-exception",
       "key": "config/skill-packaging-legacy-exceptions.json::embeddedSkills :: @cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
       "reason": "The one embedded skill that shipped before the packaging separation rule. The list is a ratchet for that pre-existing debt and empties as the skill is extracted into its own package."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(payload)",
+      "reason": "The payload of a job a pack enqueues is an untyped value, and the host casts the job name to its own job-name type; no declaration types either. Stood on main when the rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(input)",
+      "reason": "The input a pack passes to a host primitive is an untyped value, and the host forwards it to its self-invoker; the port itself types nothing. Stood on main when the rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(value)",
+      "reason": "The value of a write is an unconstrained type parameter, so the port types no record a pack writes. Stood on main when the rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(value)",
+      "reason": "The value of a set is an unconstrained type parameter, and the host stores any value under the key; the port types no setting. Stood on main when the rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(surface)",
+      "reason": "A pack registers a settings surface as an untyped value, and the host stores it as received; the port types no surface. Stood on main when the rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "untyped-port-input",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(surface)",
+      "reason": "A pack registers a setup surface as an untyped value, and the host stores it as received; the port types no surface. Stood on main when the rule landed (cinatra#4872)."
     }
   ]
 }

@@ -50,11 +50,18 @@
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
+//
+// UNTYPED PORT INPUT (cinatra#4872): the rule `untyped-port-input` reads the
+// TYPES a pack is handed, with the TypeScript type checker and no matcher of
+// its own: every member of every port of PORT_ROOT whose call signature has a
+// parameter that resolves to `any`, `unknown`, `object` or a type parameter
+// without a useful constraint. See the contract document for its stated limits.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -403,6 +410,139 @@ export function scanScopedToolAdmissions({ file, text, packs }) {
   return out;
 }
 
+/** The aggregate whose properties ARE the port types an extension is handed:
+ *  the object `register(ctx)` receives. The rule names no port and no member
+ *  itself; a root that cannot be found fails closed. */
+export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" };
+
+export const PORT_RULE = "untyped-port-input";
+
+const PORT_COMPILER_OPTIONS = {
+  noEmit: true,
+  strict: true,
+  skipLibCheck: true,
+  types: [],
+  target: ts.ScriptTarget.ES2022,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+};
+
+/** THE ONE TEST for a port, a member and every parameter: a type is untyped when
+ *  it, or the type with `null` and `undefined` removed, is `any`, `unknown`, the
+ *  non-primitive `object`, or a type parameter whose constraint is absent or
+ *  untyped; and a union is untyped when one constituent (`null` and `undefined`
+ *  aside) is. The checker has already reduced the rest (`unknown & { id: string }`,
+ *  `keyof Record<…>`); nothing inside an object, record or intersection is read. */
+function isUntypedType(checker, type, seen = new Set()) {
+  for (const t of [type, checker.getNonNullableType(type)]) {
+    if (t.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.NonPrimitive)) return true;
+    if (t.flags & ts.TypeFlags.TypeParameter && !seen.has(t)) {
+      seen.add(t);
+      const constraint = t.getConstraint();
+      if (!constraint || isUntypedType(checker, constraint, seen)) return true;
+    }
+    const nullish = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
+    if (t.isUnion() && t.types.some((c) => !(c.flags & nullish) && isUntypedType(checker, c, seen))) return true;
+  }
+  return false;
+}
+
+/** The constituents of a type once `null` and `undefined` are removed. */
+const partsOf = (checker, type) => {
+  const t = checker.getNonNullableType(type);
+  return t.isUnion() ? t.types : [t];
+};
+
+/** Every port member (inherited ones included) whose call signature takes an
+ *  untyped parameter, one finding per member. A member typed untyped is the
+ *  finding itself, and so is a port, and so is the root. The key of a member
+ *  carries each call signature that has an untyped parameter, in declaration
+ *  order, its parameter names sorted and comma-joined, the signatures joined
+ *  with `|`: `Port.run(input)`, and `Port.run(input|input)` for two overloads.
+ *  A rest parameter is read by its element type. Reads the checkout from disk
+ *  and nothing from git. A missing root throws. */
+export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
+  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+  host.realpath = (p) => p;
+  const rootPath = join(repoRoot, file);
+  const program = ts.createProgram({ rootNames: [rootPath], options: PORT_COMPILER_OPTIONS, host });
+  const checker = program.getTypeChecker();
+  const sourceFile = program.getSourceFile(rootPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  const rootSymbol = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === type);
+  if (!rootSymbol) {
+    throw new Error(
+      `[core-extension-border] the port root ${type} is not exported by ${file} — the rule fails closed rather than reading no port`,
+    );
+  }
+  const untyped = (t) => isUntypedType(checker, t);
+  const out = [];
+  const counts = new Map();
+  const add = (decl, detail, what) => {
+    const declFile = decl ? relative(repoRoot, decl.getSourceFile().fileName).split(sep).join("/") : file;
+    const line = decl ? decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1 : 1;
+    const message = `${what}; it bounds nothing a manifest declares (cinatra#4872)`;
+    out.push(finding(PORT_RULE, declFile.startsWith("..") ? file : declFile, line, occurrenceDetail(counts, PORT_RULE, detail), message));
+  };
+  const parameterType = (p) => {
+    const t = checker.getTypeOfSymbol(p);
+    const rest = p.valueDeclaration && ts.isParameter(p.valueDeclaration) && p.valueDeclaration.dotDotDotToken;
+    return (rest && checker.getIndexTypeOfType(t, ts.IndexKind.Number)) || t;
+  };
+  const rootType = checker.getDeclaredTypeOfSymbol(rootSymbol);
+  if (untyped(rootType)) {
+    add(rootSymbol.declarations?.[0], type, "the port root is itself typed any, unknown or object");
+    return out;
+  }
+  for (const portProp of checker.getPropertiesOfType(rootType)) {
+    const portType = checker.getTypeOfSymbol(portProp);
+    // A port that is itself untyped has no members to read: it is the finding.
+    if (untyped(portType)) {
+      add(portProp.declarations?.[0], portProp.name, "a host port is itself typed any, unknown or object");
+      continue;
+    }
+    for (const part of partsOf(checker, portType)) {
+      const named = part.aliasSymbol?.name ?? part.getSymbol()?.name;
+      const port = named && !named.startsWith("__") ? named : portProp.name;
+      for (const member of checker.getPropertiesOfType(part)) {
+        const memberType = checker.getTypeOfSymbol(member);
+        // A member that is itself untyped has no signature to read: it is the finding.
+        if (untyped(memberType)) {
+          add(member.declarations?.[0], `${port}.${member.name}`, "a host port member is itself typed any, unknown or object");
+          continue;
+        }
+        const signatures = partsOf(checker, memberType)
+          .flatMap((c) => c.getCallSignatures())
+          .map((sig) => sig.getParameters().filter((p) => untyped(parameterType(p))).map((p) => p.name).sort().join(","))
+          .filter((names) => names !== "");
+        if (signatures.length === 0) continue;
+        // Every untyped signature is in the key, so one more untyped parameter,
+        // or one more overload with one, is a new key and never the listed one.
+        const names = signatures.join("|");
+        add(
+          member.declarations?.[0],
+          `${port}.${member.name}(${names})`,
+          `a host port member takes an untyped input (${names}: any, unknown, object or an unconstrained type parameter)`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/** The FIRST RECORDING of the rule: exactly the keys that stood on main the day
+ *  it landed (`<file>::<port>.<member>(<untyped parameters>)`, the ledger's
+ *  key form). Inert for good once the base list carries the rule's marker in
+ *  `installedRules`, whatever entries are left. */
+export const PORT_SEED = [
+  "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(payload)",
+  "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(input)",
+  "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(value)",
+  "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(value)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(surface)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(surface)",
+];
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -574,7 +714,11 @@ export const KNOWN_RULES = new Set([
   "skill-legacy-exception",
   "materialized-extension-file",
   "pack-shaped-core-domain",
+  "untyped-port-input",
 ]);
+
+/** The rules the ledger marks as installed: their first recording is done. */
+export const installedRulesOf = (doc) => (Array.isArray(doc?.installedRules) ? doc.installedRules : []);
 
 /** Everything structurally wrong with a ledger, as messages. An unreadable or
  *  absent ledger is fatal: an empty ledger would silently re-admit every
@@ -583,6 +727,9 @@ export function baselineDefects(doc) {
   const bad = [];
   const entries = doc?.entries;
   if (!Array.isArray(entries)) return ["the ledger has no `entries` array"];
+  if (doc.installedRules !== undefined && (!Array.isArray(doc.installedRules) || !doc.installedRules.every((r) => KNOWN_RULES.has(r)))) {
+    bad.push("`installedRules` is not a list of known rules");
+  }
   const seen = new Set();
   for (const e of entries) {
     const id = `${e?.rule}::${e?.key}`;
@@ -653,6 +800,10 @@ export function baselineGrowth(previousDoc, currentDoc) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
   const grown = [];
+  // A rule marked installed stays marked: the marker is what closes its first recording.
+  for (const r of installedRulesOf(previousDoc)) {
+    if (!installedRulesOf(currentDoc).includes(r)) grown.push(`installed rule marker removed: ${r}`);
+  }
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
@@ -673,16 +824,42 @@ export function baselineGrowth(previousDoc, currentDoc) {
  *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
  *  base that cannot be read fails closed. */
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
-  return compareFloorWithBase({
+  const head = headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  const result = compareFloorWithBase({
     gate: "core-extension-border",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
-    headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
+    headFloor: head,
     parse: (text) => JSON.parse(text),
-    grown: (base, head) => baselineGrowth(base, head),
+    grown: (base, headDoc) => baselineGrowth(base, headDoc),
     repoRoot,
     env,
   });
+  if (result.status !== "grew") return result;
+  // The first recording of the port rule, and only that: its entries are not
+  // growth when the base list does not carry the rule's installed marker, the
+  // head list carries it, and the head lists exactly PORT_SEED. Once the base
+  // carries the marker (which can never be removed) the entries are shrink-only,
+  // also when none is left.
+  const ofRule = (doc) => (doc?.entries ?? []).filter((e) => e.rule === PORT_RULE).map((e) => String(e.key));
+  const seeded =
+    !installedRulesOf(result.baseFloor).includes(PORT_RULE) &&
+    installedRulesOf(head).includes(PORT_RULE) &&
+    JSON.stringify(ofRule(head).sort()) === JSON.stringify([...PORT_SEED].sort());
+  if (!seeded) return result;
+  const prefix = `new entry: ${PORT_RULE}::`;
+  const remaining = result.growth.filter((g) => !g.startsWith(prefix));
+  if (remaining.length > 0) {
+    return { ...result, growth: remaining, lines: [result.lines[0], ...remaining.map((g) => `  + ${g}`)] };
+  }
+  return {
+    status: "held",
+    ok: true,
+    ref: result.ref,
+    baseFloor: result.baseFloor,
+    growth: [],
+    lines: [`[core-extension-border] floor base guard: ${FLOOR_FILE} does not grow against the base "${result.ref}" (the ${PORT_RULE} entries are the closed first recording).`],
+  };
 }
 
 /** The verdict on the ledger entries whose crossing is gone: a stale entry
@@ -731,6 +908,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
 
   findings.push(...trackedExtensionFileFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
+  findings.push(...portMemberFindings({ repoRoot }));
 
   const present = new Set(findings.map(keyOf));
   const stale = [...baseline.keys]

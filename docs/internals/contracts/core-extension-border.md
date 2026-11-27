@@ -49,6 +49,49 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+## A port member takes a typed input
+
+The rule `untyped-port-input` (cinatra#4872) reads the types a pack is handed, not text,
+and it has no matcher of its own: it builds a TypeScript program over
+`packages/sdk-extensions/src/host-context.ts` (and what it imports) and asks the type
+checker, reading the checkout from disk and nothing from git. Each property of
+`ExtensionHostContext` is a port. For each property of a port (the checker lists the
+members it inherits too), the call signatures of its type with `null` and `undefined`
+removed are read, one function at a time when the type is a union of functions. This
+covers a method and a nullable function property alike. One test decides "untyped" for a
+port, a member and every parameter: the type, or the type without `null` and `undefined`,
+is `any`, `unknown`, the non-primitive `object`, or a type parameter whose constraint is
+absent or untyped, or a union with such a constituent (`input?: object`, `input: object | null`
+and `input: T | undefined` are untyped; an optional parameter reads like a required one). A
+rest parameter is read by its element type (`...args: unknown[]` is untyped).
+
+A member is one finding when a parameter of one of its signatures is untyped; whether it
+also takes a name does not matter. Its key carries each call signature that has an untyped
+parameter, in declaration order: the parameter names of a signature sorted and comma-joined,
+the signatures joined with `|` (`HostJobsPort.enqueue(payload)` for one, `X.run(input|input)`
+for two overloads). One more untyped parameter, or one more overload with one, of a listed
+member is therefore a new key. A port, a member or the root `ExtensionHostContext` that is
+itself untyped has nothing to read and is the finding: keyed by the port property (`jobs`),
+by `<port type>.<member>`, or by the root's name.
+
+The six members that stood on main when the rule landed are ledger entries with their
+reasons, and the constant `PORT_SEED` in the gate script lists exactly their keys. The seed
+is the first recording, and the list's top-level `installedRules` marks the rules whose first
+recording is done: the base guard admits the rule's new entries only when the base list does
+not carry the marker for the rule, the head list does, and the head lists exactly the seed.
+A marker can never be removed (a head that lacks one the base has fails), so once main
+carries it the seed admits nothing for good, also when every entry is gone, and the entries
+are shrink-only like those of every other rule.
+
+Stated limits. The rule reads what the checker resolves and nothing inside an object: an
+object literal, a `Record<string, unknown>`, an array or an intersection that the checker
+does not reduce to an untyped type is not looked into (`input: { data: unknown }` and
+`input: unknown[]` pass; `unknown & { id: string }` and `keyof Record<string, unknown>`
+reduce to typed forms and pass). A member typed `Function` has no signature and is not
+reported. A parameter of a callback that a member receives is not an input the member takes. Only the members of `ExtensionHostContext` are read: the port set of
+a declared tool module is not. A way around the check that needs a disguise on purpose is left
+to review.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the

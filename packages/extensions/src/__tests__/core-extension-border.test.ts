@@ -94,9 +94,20 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  // Optional: a tree whose gate does not know the rule yet has none of them.
+  PORT_RULE?: string;
+  portMemberFindings?: (input?: { repoRoot?: string; file?: string; type?: string }) => Finding[];
+  PORT_SEED?: string[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
+
+// Where the gate does not know the port rule (a plain main tree) these read as
+// empty, so the tests of the rule fail by assertion and not by a missing function.
+const PORT_RULE = gate.PORT_RULE ?? "untyped-port-input";
+const PORT_SEED = gate.PORT_SEED ?? [];
+const portMemberFindings = (input?: { repoRoot?: string; file?: string; type?: string }): Finding[] =>
+  gate.portMemberFindings?.(input) ?? [];
 
 const PACKS = new Set(["@cinatra-ai/blog-pipeline-agent", "@cinatra-ai/screenshot-artifact"]);
 const WORKSPACE = new Set(["@cinatra-ai/agents", "@cinatra-ai/extensions", "@cinatra-ai/chat"]);
@@ -717,4 +728,220 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('does not grow against the base "HEAD"');
   }, 120_000);
+});
+
+// cinatra#4872: a host port member does not take an untyped input. The rule
+// reads resolved types with the TypeScript checker, so each case below writes
+// a declaration and asks what the checker makes of it.
+describe("core/extension border — a port member does not take an untyped input", () => {
+  function portFindings(
+    declarations: string,
+    root = "export type ExtensionHostContext = { jobs: JobsPort };",
+  ): Finding[] {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      writeFileSync(
+        path.join(dir, "host-context.ts"),
+        `${declarations}\n${root}\n`,
+      );
+      return portMemberFindings({ repoRoot: dir, file: "host-context.ts" });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const portDetails = (declarations: string) => portFindings(declarations).map((f) => f.detail);
+
+  it("reports a method that takes an unknown input, name or no name", () => {
+    expect(portDetails("type JobsPort = { run(jobName: string, input: unknown): void; ping(input: any): void };")).toEqual([
+      "JobsPort.run(input)",
+      "JobsPort.ping(input)",
+    ]);
+  });
+
+  it("reports a nullable function property", () => {
+    expect(portDetails("type JobsPort = { run: ((jobName: string, input: unknown) => void) | null };")).toEqual([
+      "JobsPort.run(input)",
+    ]);
+  });
+
+  it("reports a member the port inherits", () => {
+    expect(
+      portDetails(
+        "interface UnsafePort { run(input: object): void }\ninterface JobsPort extends UnsafePort {}",
+      ),
+    ).toEqual(["JobsPort.run(input)"]);
+  });
+
+  it("reports an unconstrained type parameter, and one constrained to unknown", () => {
+    expect(
+      portDetails(
+        "type JobsPort = { set<T = unknown>(key: string, value: T): void; put<T extends unknown>(value: T): void };",
+      ),
+    ).toEqual(["JobsPort.set(value)", "JobsPort.put(value)"]);
+  });
+
+  it.each([
+    ["an optional object", "run(input?: object): void", "JobsPort.run(input)"],
+    ["an object or null", "run(input: object | null): void", "JobsPort.run(input)"],
+    ["an unknown or undefined", "run(input: unknown | undefined): void", "JobsPort.run(input)"],
+    ["a rest of unknown", "run(...args: unknown[]): void", "JobsPort.run(args)"],
+    ["an optional unconstrained type parameter", "run<T>(input?: T): void", "JobsPort.run(input)"],
+  ])("reports %s", (_name, member, key) => {
+    expect(portDetails(`type JobsPort = { ${member} };`)).toEqual([key]);
+  });
+
+  it.each([
+    ["an optional string", "run(input?: string): void"],
+    ["an object literal or null", "run(input: { id: string } | null): void"],
+    ["a rest of strings", "run(...args: string[]): void"],
+  ])("leaves %s alone", (_name, member) => {
+    expect(portDetails(`type JobsPort = { ${member} };`)).toEqual([]);
+  });
+
+  it("reads each function of a union of functions, and each port of a union of ports", () => {
+    expect(
+      portDetails("type JobsPort = { run: ((a: string) => void) | ((b: unknown) => void) | null };"),
+    ).toEqual(["JobsPort.run(b)"]);
+    expect(
+      portFindings(
+        "type A = { run(input: unknown): void };\ntype B = { stop(input: string): void };",
+        "export type ExtensionHostContext = { jobs: A | B | null };",
+      ).map((f) => f.detail),
+    ).toEqual(["A.run(input)"]);
+  });
+
+  it("reports a root that is itself untyped, so no port can vanish into it", () => {
+    expect(portFindings("", "export type ExtensionHostContext = any;").map((f) => f.detail)).toEqual([
+      "ExtensionHostContext",
+    ]);
+  });
+
+  it("names every untyped parameter in the key, sorted", () => {
+    expect(portDetails("type JobsPort = { run(payload: any, jobName: string, input: unknown): void };")).toEqual([
+      "JobsPort.run(input,payload)",
+    ]);
+  });
+
+  it("names every untyped parameter in the key, so one more is a violation and not the listed key", () => {
+    const listed = new Set(portFindings("type JobsPort = { run(input: unknown, payload: string): void };").map(gate.keyOf));
+    const widened = portFindings("type JobsPort = { run(input: unknown, payload: any): void };");
+    expect(gate.violationsOf(widened, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input,payload)"]);
+  });
+
+  it("carries each untyped signature in the key, so one more overload is a new key", () => {
+    const listed = new Set(portFindings("type JobsPort = { run(input: unknown): void };").map(gate.keyOf));
+    const overloaded = portFindings("type JobsPort = { run(input: unknown): void; run(input: unknown, n: number): void };");
+    expect(gate.violationsOf(overloaded, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input|input)"]);
+    // Only a signature with an untyped parameter counts, in declaration order.
+    expect(
+      portDetails("type JobsPort = { run(a: unknown): void; run(b: string): void; run(c: any, d: any): void };"),
+    ).toEqual(["JobsPort.run(a|c,d)"]);
+  });
+
+  it("reports a member whose own type is any, unknown or object, keyed without a parameter list", () => {
+    expect(portDetails("type JobsPort = { run: any; data: unknown; opts: object | null; ok: string };")).toEqual([
+      "JobsPort.run",
+      "JobsPort.data",
+      "JobsPort.opts",
+    ]);
+  });
+
+  it.each(["any", "unknown", "object"])("reports a port whose own type is %s, keyed by the port", (own) => {
+    expect(portDetails(`type JobsPort = ${own};`)).toEqual(["jobs"]);
+  });
+
+  it("leaves a typed parameter, a constrained type parameter and a reduced type alone", () => {
+    expect(
+      portDetails(
+        [
+          "type JobsPort = {",
+          "  typed(jobName: string, input: { id: string }): void;",
+          "  constrained<T extends { id: string }>(value: T): void;",
+          "  reduced(input: unknown & { id: string }): void;",
+          "  keyed(field: keyof Record<string, unknown>): void;",
+          "  record(input: Record<string, number>): void;",
+          "};",
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("finds the standing members of the real port declarations", () => {
+    expect(portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set(value)");
+  });
+
+  // The first recording is a closed seed: the keys that stood on main, admitted
+  // only on a base list that does not carry the rule's installed marker, with
+  // the marker at the head and exactly that set. The marker can never be removed.
+  describe("the first recording is a closed seed", () => {
+    const FLOOR = "config/core-extension-border-baseline.json";
+    const entry = (key: string) => ({
+      rule: PORT_RULE,
+      key,
+      reason: "a member of a fixture port, with its reason",
+    });
+    const seed = () => {
+      expect(PORT_SEED).not.toHaveLength(0);
+      return PORT_SEED.map(entry);
+    };
+    const marked = { installedRules: [PORT_RULE] };
+    const fixtures: { cleanup: () => void }[] = [];
+    afterEach(() => {
+      while (fixtures.length) fixtures.pop()?.cleanup();
+    });
+    function check(base: Record<string, unknown>, head: Record<string, unknown>) {
+      const f = floorFixture.makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+      fixtures.push(f);
+      return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+    }
+
+    it("names the six members that stand on main, and the committed ledger carries the marker", () => {
+      expect(PORT_SEED).toHaveLength(6);
+      const standing = portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => `${f.file}::${f.detail}`);
+      expect([...PORT_SEED].sort()).toEqual(standing.sort());
+      expect(JSON.parse(readFileSync(BASELINE_PATH, "utf8")).installedRules).toEqual([PORT_RULE]);
+    });
+
+    it("admits the seed set on a base without the marker", () => {
+      const r = check({ entries: [] }, { ...marked, entries: seed() });
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe("held");
+    });
+
+    it("refuses the seed set when the head carries no marker", () => {
+      expect(check({ entries: [] }, { entries: seed() }).ok).toBe(false);
+    });
+
+    it("refuses the seed set plus one extra key, and a part of the seed set", () => {
+      const extra = entry("packages/sdk-extensions/src/host-context.ts::HostJobsPort.extra(input)");
+      const r = check({ entries: [] }, { ...marked, entries: [...seed(), extra] });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toContain(`new entry: ${PORT_RULE}::${extra.key}`);
+      expect(check({ entries: [] }, { ...marked, entries: seed().slice(1) }).ok).toBe(false);
+    });
+
+    it("refuses a new key on a base that has entries and the marker, even one of the seed", () => {
+      const r = check({ ...marked, entries: seed().slice(1) }, { ...marked, entries: seed() });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: ${PORT_RULE}::${PORT_SEED[0]}`]);
+    });
+
+    it("refuses the seed re-listed on a base that carries the marker and no entry", () => {
+      const r = check({ ...marked, entries: [] }, { ...marked, entries: seed() });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toHaveLength(6);
+    });
+
+    it("refuses a head that lacks a marker the base has", () => {
+      const r = check({ ...marked, entries: seed() }, { entries: seed() });
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`installed rule marker removed: ${PORT_RULE}`]);
+    });
+
+    it("refuses a marker that is not a list of known rules", () => {
+      expect(gate.baselineDefects({ entries: [], installedRules: "untyped-port-input" })).toHaveLength(1);
+      expect(gate.baselineDefects({ entries: [], installedRules: ["no-such-rule"] })).toHaveLength(1);
+      expect(gate.baselineDefects({ entries: [], installedRules: [PORT_RULE] })).toEqual([]);
+    });
+  });
 });
