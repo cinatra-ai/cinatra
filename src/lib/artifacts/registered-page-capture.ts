@@ -5,8 +5,8 @@ import {
   type CaptureDegradeReason,
   type PreviewCaptureDeps,
 } from "./registered-page-render";
-import { normalizeOrigin } from "./cms-preview-capture-policy";
-import { findInertnessViolations, sanitizeCapturedHtml } from "./cms-preview-inertness";
+import { normalizeOrigin } from "./page-capture-policy";
+import { findInertnessViolations, sanitizeCapturedHtml } from "./page-capture-inertness";
 
 // ---------------------------------------------------------------------------
 // REGISTERED-PAGE CAPTURE (cinatra#4223): one page of a site the organisation

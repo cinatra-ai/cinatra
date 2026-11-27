@@ -212,7 +212,7 @@ describe("gates-pnpm — the border floors are compared with the base branch", (
     const changes = JOBS.get("changes") ?? "";
     const filter = changes.slice(changes.indexOf("pnpm_suites:"));
     for (const input of [
-      "config/core-extension-border-baseline.json",
+      "scripts/ci/core-extension-border-baseline.json",
       "config/skill-packaging-legacy-exceptions.json",
       "scripts/ci/core-extension-border-gate.mjs",
       "cinatra-required-extensions.lock.json",
