@@ -58,7 +58,14 @@ has a parameter of the plain `string` type and another parameter of type `any` o
 `unknown`. It reads the type checker's resolved types, never how a type is written:
 a union holding plain `string` (also `"a" | (string & {})`) is free, a union of string
 literals is bounded; a type parameter counts by its constraint (none or `unknown` is
-untyped, `string` is a free name). Every union constituent and every overload is read.
+untyped, `string` is a free name). Every overload is its own signature and is read.
+A signature is read as a list of ALTERNATIVE parameter lists, and a member is reported
+when any alternative has the shape. Fixed parameters are one list; a `this` parameter is
+not a parameter. A rest parameter gives one alternative per constituent of its type: a
+union of tuples one per tuple, a generic rest (`...args: A`) through its constraint, a
+tuple its elements (named or not, optional included), an array `T[]` zero or more `T`,
+where `T` fills both positions only when `T` itself can be a free name and untyped
+(`string | U` for a type parameter `U`; `string | unknown` is `unknown` and is not).
 The finding is keyed `<Port>.<member>`.
 
 The anchor is the only place the rule names anything: the SDK registration module

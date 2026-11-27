@@ -773,28 +773,6 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     return t;
   };
 
-  // The anchor: the entry type through the module's exports, then its `register`, then the context.
-  const sourceFile = program.getSourceFile(contractPath);
-  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
-  let entry = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === PORT_CONTRACT.type);
-  while (entry && entry.flags & ts.SymbolFlags.Alias) entry = checker.getAliasedSymbol(entry);
-  if (!entry || !entry.declarations?.length) throw fail("is not an export of its module");
-  const register = checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(entry), PORT_CONTRACT.member);
-  if (!register) throw fail(`has no ${PORT_CONTRACT.member} property`);
-  const signatures = flat(checker.getNonNullableType(typeOf(register))).flatMap((t) => t.getCallSignatures());
-  if (signatures.length === 0) throw fail(`${PORT_CONTRACT.member} has no call signature`);
-  const contexts = signatures.flatMap((sig) => {
-    const first = sig.getParameters()[0];
-    if (!first) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
-    const t = typeOf(first);
-    // A rest parameter `...args: [ctx: C]` hands over its first element.
-    const own = first.valueDeclaration?.dotDotDotToken ? (checker.isTupleType(t) ? checker.getTypeArguments(t)[0] : checker.getIndexTypeOfType(t, ts.IndexKind.Number)) : t;
-    if (!own) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
-    // `null` and `undefined` are no context; a type parameter is its default, else its constraint.
-    return flat(own).filter((c) => !(c.flags & (F.Null | F.Undefined))).map((c) => (c.flags & F.TypeParameter ? checker.getDefaultFromTypeParameter(c) ?? checker.getBaseConstraintOfType(c) : c));
-  });
-  if (contexts.some((c) => !c || c.flags & (F.Any | F.Unknown))) throw fail(`has an untyped ${PORT_CONTRACT.member} context`);
-
   // The two questions asked of a RESOLVED parameter type.
   const freeString = (t, seen = new Set()) => {
     if (t.flags & F.String) return true;
@@ -814,17 +792,47 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     }
     return t.isUnion() && t.types.some((c) => untyped(c, seen));
   };
-  // A rest parameter contributes its element types, a tuple one per position.
-  const parameterTypes = (sig) =>
-    sig.getParameters().flatMap((p) => {
-      const t = typeOf(p);
-      if (!p.valueDeclaration?.dotDotDotToken) return [t];
-      return checker.isTupleType(t) ? checker.getTypeArguments(t) : [checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t];
-    });
-  const hasShape = (sig) => {
-    const types = parameterTypes(sig);
-    return types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
+  // THE parameter lists of a call signature: a list of ALTERNATIVE parameter-type lists, decided on
+  // resolved types. Fixed parameters stay as they are (`this` is not a parameter); the one rest
+  // parameter (read from its `...` marker, the only declaration read) expands once per alternative of
+  // its type: a union per constituent, a type parameter through its base constraint, a tuple to its
+  // elements (named or not, optional or not), an array `T[]` to zero or more T (T counts as both the
+  // name and the payload position only when T alone can be a free name and untyped, `string | U`).
+  const restLists = (t, seen = new Set()) => {
+    if (t.isUnion()) return t.types.flatMap((c) => restLists(c, seen));
+    if (t.flags & F.TypeParameter) {
+      const c = seen.has(t) ? undefined : checker.getBaseConstraintOfType(t);
+      return c ? restLists(c, new Set(seen).add(t)) : [[t]];
+    }
+    if (checker.isTupleType(t)) return [checker.getTypeArguments(t)];
+    const e = checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t;
+    return [freeString(e) && untyped(e) ? [e, e] : [e]];
   };
+  const parameterLists = (sig) =>
+    sig.getParameters().reduce((lists, p) => {
+      const next = p.valueDeclaration?.dotDotDotToken ? restLists(typeOf(p)) : [[typeOf(p)]];
+      return lists.flatMap((l) => next.map((n) => [...l, ...n]));
+    }, [[]]);
+  // The anchor: the entry type through the module's exports, then its `register`, then the context.
+  const sourceFile = program.getSourceFile(contractPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  let entry = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === PORT_CONTRACT.type);
+  while (entry && entry.flags & ts.SymbolFlags.Alias) entry = checker.getAliasedSymbol(entry);
+  if (!entry || !entry.declarations?.length) throw fail("is not an export of its module");
+  const register = checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(entry), PORT_CONTRACT.member);
+  if (!register) throw fail(`has no ${PORT_CONTRACT.member} property`);
+  const signatures = flat(checker.getNonNullableType(typeOf(register))).flatMap((t) => t.getCallSignatures());
+  if (signatures.length === 0) throw fail(`${PORT_CONTRACT.member} has no call signature`);
+  const contexts = signatures.flatMap((sig) =>
+    parameterLists(sig).flatMap((list) => {
+      if (list.length === 0) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
+      // `null` and `undefined` are no context; a type parameter is its default, else its constraint.
+      return flat(list[0]).filter((c) => !(c.flags & (F.Null | F.Undefined))).map((c) => (c.flags & F.TypeParameter ? checker.getDefaultFromTypeParameter(c) ?? checker.getBaseConstraintOfType(c) : c));
+    }),
+  );
+  if (contexts.some((c) => !c || c.flags & (F.Any | F.Unknown))) throw fail(`has an untyped ${PORT_CONTRACT.member} context`);
+
+  const hasShape = (sig) => parameterLists(sig).some((types) => types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u))));
 
   // Members: own (not from the TypeScript lib or node_modules) and callable by an extension (not private or protected).
   const isOwn = (prop) =>

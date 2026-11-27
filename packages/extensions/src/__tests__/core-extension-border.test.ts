@@ -1307,6 +1307,58 @@ describe("core/extension border — unbounded-port-member", () => {
     expect(members(member)).toEqual([]);
   });
 
+  describe("every alternative parameter list of a signature is read", () => {
+    const UNSAFE = "[name: string, input: unknown]";
+    const SAFE_A = '[name: "known", input: { id: string }]';
+    it.each([
+      ["a rest of a union of tuples, the unsafe one first (the review's example)", `run(...args: ${UNSAFE} | ${SAFE_A}): void`],
+      ["a rest of a union of tuples, the unsafe one last", `run(...args: ${SAFE_A} | ${UNSAFE}): void`],
+      ["a rest of a union of three tuples, the unsafe one in the middle", `run(...args: ${SAFE_A} | ${UNSAFE} | [name: "b"]): void`],
+      ["a generic rest constrained to the unsafe tuple", `run<A extends ${UNSAFE}>(...args: A): void`],
+      ["a generic rest constrained to a union of tuples holding the unsafe one", `run<A extends ${SAFE_A} | ${UNSAFE}>(...args: A): void`],
+      ["a generic rest constrained to a generic rest", `run<A extends ${UNSAFE}, B extends A>(...args: B): void`],
+      ["a tuple with optional elements", "run(...args: [name?: string, input?: unknown]): void"],
+      ["a tuple with an unnamed element", "run(...args: [string, unknown]): void"],
+      ["a readonly tuple", "run(...args: readonly [name: string, input: unknown]): void"],
+      ["a fixed name and a rest tuple", "run(name: string, ...rest: [input: unknown]): void"],
+      ["a fixed name and an untyped rest array", "run(name: string, ...rest: unknown[]): void"],
+      ["a tuple with a rest element", "run(...args: [name: string, ...rest: unknown[]]): void"],
+      ["a rest array whose element type is a free name or a type parameter", "run<T>(...args: (string | T)[]): void"],
+      ["an optional name", "run(name?: string, input?: unknown): void"],
+      ["a payload that is a union of an object and unknown", "run(name: string, input: { id: string } | unknown): void"],
+      ["a pair of overloads of which a rest tuple is the unsafe one", `run(name: "a", input: { id: string }): void; run(...args: ${UNSAFE}): void`],
+    ])("%s is reported", (_name, member) => {
+      expect(members(member)).toEqual(HIT);
+    });
+    it("a rest of an alias of a union of tuples is reported", () => {
+      expect(seen({ "host-context.ts": `type Args = ${SAFE_A} | ${UNSAFE};\n${jobs("run(...args: Args): void")}` })).toEqual(HIT);
+    });
+    it.each([
+      ["a union of two safe tuples", `run(...args: ${SAFE_A} | [name: string, input: { id: string }]): void`],
+      ["a union of tuples that each hold a bounded name", `run(...args: [name: "a", input: unknown] | [name: "b", input: unknown]): void`],
+      ["a union of tuples that is free in one and untyped in the other", "run(...args: [name: string, input: { id: string }] | [name: \"a\", input: unknown]): void"],
+      ["a generic rest constrained to a union of safe tuples", `run<A extends ${SAFE_A} | [name: string, input: { id: string }]>(...args: A): void`],
+      ["a rest array of strings", "run(...args: string[]): void"],
+      ["a rest array of unknown (string | unknown is unknown)", "run(...args: (string | unknown)[]): void"],
+      ["a rest array of any", "run(...args: any[]): void"],
+      ["a rest array of a literal union", 'run(...args: ("a" | "b")[]): void'],
+      ["a rest array of a free name or an object", "run(...args: (string | { id: string })[]): void"],
+      ["a this parameter is not a parameter (untyped this)", "run(this: unknown, name: string): void"],
+      ["a this parameter is not a parameter (free this)", "run(this: string, input: unknown): void"],
+      ["a payload that is a union of an object and a literal", 'run(name: string, input: { id: string } | "x"): void'],
+    ])("%s passes", (_name, member) => {
+      expect(members(member)).toEqual([]);
+    });
+    it("a register whose context arrives as a union of rest tuples is read per alternative", () => {
+      expect(
+        seen({
+          "register.ts": 'import type { ExtensionHostContext } from "./host-context";\nexport type ExtensionServerEntry = { register(...args: [ctx: { id: string }] | [ctx: ExtensionHostContext]): void };\n',
+          "host-context.ts": jobs("run(name: string, input: unknown): void"),
+        }),
+      ).toEqual(HIT);
+    });
+  });
+
   it("a literal union bounds the name however it is declared", () => {
     expect(seen({ "host-context.ts": `type Job = "a" | "b";\n${jobs("run(name: Job, input: unknown): void")}` })).toEqual([]);
     expect(seen({ "host-context.ts": `const JOBS = ["a", "b"] as const;\ntype Job = (typeof JOBS)[number];\n${jobs("run(name: Job, input: unknown): void")}` })).toEqual([]);
