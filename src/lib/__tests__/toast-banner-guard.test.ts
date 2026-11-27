@@ -313,13 +313,18 @@ describe("toast-banner-scan - the baseline may not grow against the base", () =>
   // Every variable the script or the shared guard reads is named here: nothing
   // else of the outer environment reaches the spawned script.
   const OWNED = ["GITHUB_EVENT_NAME", "GITHUB_BASE_REF", "TOAST_BANNER_BASE", "FLOOR_BASE_FETCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME"];
-  function runScan(root: string, run: Record<string, string>) {
+  // Next's ambient `NodeJS.ProcessEnv` requires NODE_ENV, which the test-owned
+  // environment deliberately omits, so the one assertion lives here.
+  function scanEnv(run: Record<string, string>): NodeJS.ProcessEnv {
     const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" };
     for (const k of OWNED) delete env[k];
+    return { ...env, ...run } as NodeJS.ProcessEnv;
+  }
+  function runScan(root: string, run: Record<string, string>) {
     const r = spawnSync(
       process.execPath,
       [SCAN, "--package", root, "--baseline", path.join(root, FLOOR), "--scan-root", "src"],
-      { cwd: root, encoding: "utf8", env: { ...env, ...run } },
+      { cwd: root, encoding: "utf8", env: scanEnv(run) },
     );
     return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
   }
