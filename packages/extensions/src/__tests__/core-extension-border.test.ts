@@ -1229,3 +1229,154 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     expect(blank.lines.join("\n")).toContain("names no rule list");
   });
 });
+
+// cinatra#4872: `unbounded-port-member`. A host port member that takes a FREE NAME (a plain `string`
+// parameter) together with an UNTYPED PAYLOAD (`any` or `unknown`) is a generic tunnel. A finding is
+// keyed `<context property>.<member>`, the grant name. Every case compares the WHOLE list of findings;
+// a throw shows as a line of the list, so on a tree without the rule a case fails by assertion.
+describe("core/extension border — unbounded-port-member", () => {
+  const TSCONFIG = JSON.stringify({ compilerOptions: { strict: true, skipLibCheck: true, lib: ["esnext"], module: "esnext", moduleResolution: "bundler", types: [] } });
+  const REGISTER = 'import type { ExtensionHostContext } from "./host-context";\nexport type ExtensionServerEntry = { register(ctx: ExtensionHostContext): void };\n';
+  type Ports = { unboundedPortMemberFindings?: (input: { repoRoot?: string; contractFile?: string }) => Finding[] };
+  function found(files: Record<string, string>): Finding[] | string {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      for (const [name, text] of Object.entries({ "tsconfig.json": TSCONFIG, "register.ts": REGISTER, ...files })) writeFileSync(path.join(dir, name), text);
+      return (gate as unknown as Ports).unboundedPortMemberFindings?.({ repoRoot: dir, contractFile: "register.ts" }) ?? "not a function";
+    } catch (e) {
+      return `threw: ${(e as Error).message}`;
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const keys = (files: Record<string, string>) => {
+    const r = found(files);
+    return typeof r === "string" ? [r] : r.map((f) => f.detail);
+  };
+  const ctx = (decls: string, props: string) => ({ "host-context.ts": `${decls}export type ExtensionHostContext = ${props};\n` });
+  const jobs = (m: string, kind = "interface") => keys(ctx(`${kind} JobsPort { ${m} }\n`, "{ jobs: JobsPort }"));
+  const RUN = "run(name: string, input: unknown): void";
+
+  it("the issue's fixture: run(name: string, input: unknown) is reported; a literal-union name passes", () => {
+    expect(jobs(RUN)).toEqual(["jobs.run"]);
+    expect(jobs('run(name: "a" | "b", input: unknown): void')).toEqual([]);
+  });
+
+  it.each([
+    ["an any payload", "run(name: string, input: any): void"],
+    ["a generic payload", "run<T>(name: string, input: T): void"],
+    ["an optional name", "run(name?: string, input?: unknown): void"],
+    ["a name constrained to string", "run<N extends string>(name: N, input: unknown): void"],
+    ["a name with an open end", 'run(name: "a" | (string & {}), input: unknown): void'],
+    ["a function-typed property", "run: (name: string, input: unknown) => void"],
+    ["an overload of which one has the shape", 'run(name: "a", input: unknown): void; run(name: string, input: unknown): void'],
+  ])("%s is reported", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
+
+  it.each([
+    ["a name constrained to a literal union", 'run<N extends "a" | "b">(name: N, input: unknown): void'],
+    ["a typed payload", "run(name: string, input: { id: string }): void"],
+    ["a record payload", "run(name: string, input: Record<string, unknown>): void"],
+    ["a name only", "run(name: string): void"],
+  ])("%s passes", (_n, m) => expect(jobs(m)).toEqual([]));
+  it("a private member is not part of the surface", () => {
+    expect(jobs("private run(name: string, input: unknown): void {}", "class")).toEqual([]);
+  });
+
+  describe("a finding is keyed by the context property, with no deduplication", () => {
+    const base = `interface JobsPort { ${RUN} }\ninterface DerivedPort extends JobsPort { id: string }\n`;
+    it("two context properties of one port type are two findings, and one ledger entry covers only its own", () => {
+      const r = found(ctx(base, "{ jobs: JobsPort; cache: JobsPort }")) as Finding[];
+      expect(r.map((f) => f.detail)).toEqual(["jobs.run", "cache.run"]);
+      expect(gate.violationsOf(r, new Set([gate.keyOf(r[0])])).map((f) => f.detail)).toEqual(["cache.run"]);
+    });
+    it("a derived port on another property is its own finding", () => {
+      expect(keys(ctx(base, "{ jobs: JobsPort; derived: DerivedPort }"))).toEqual(["jobs.run", "derived.run"]);
+    });
+    it("an alias, a union with null and an intersection do not hide a property", () => {
+      expect(keys(ctx(`${base}type Jobs = JobsPort;\n`, "{ a: Jobs; b: JobsPort | null; c: JobsPort & { id: string } }"))).toEqual(["a.run", "b.run", "c.run"]);
+    });
+    it("a union context is read per constituent; one key of one file is one finding", () => {
+      expect(keys(ctx(base, "{ jobs: JobsPort } | { jobs: JobsPort } | { id: string }"))).toEqual(["jobs.run"]);
+      expect(keys(ctx(`${base}interface Other { ${RUN} }\n`, "{ jobs: JobsPort } | { cache: Other }"))).toEqual(["jobs.run", "cache.run"]);
+    });
+    it("a member that is a sub-namespace is read, and a self-referencing port ends", () => {
+      expect(keys(ctx(`interface Sub { ${RUN} }\ninterface Self { self: Self; sub: Sub }\n`, "{ p: Self }"))).toEqual(["p.sub.run"]);
+    });
+    it("a context property that is itself a function is keyed by its name", () => {
+      expect(keys(ctx("", "{ jobs: (name: string, input: unknown) => void }"))).toEqual(["jobs"]);
+    });
+  });
+
+  describe("a rest parameter is read conservatively, with no expansion", () => {
+    it.each([
+      ["a union of tuples (review example)", 'run(...args: [name: string, input: unknown] | [name: "a", input: { id: string }]): void'],
+      ["a variadic tuple with a generic spread (review example)", "run<A extends [unknown]>(name: string, ...rest: [boolean, ...A]): void"],
+      ["a fixed free name and a typed list: the rest part counts as untyped", "run(name: string, ...ids: number[]): void"],
+      ["a list of free names", "run(...names: string[]): void"],
+      ["an untyped fixed payload and a list of free names", "run(input: unknown, ...names: string[]): void"],
+      ["a tuple", "run(...args: [id: number]): void"],
+      ["a generic rest", "run<A extends number[]>(...args: A): void"],
+      ["a list of unknown", 'run(name: "a", ...rest: unknown[]): void'],
+    ])("%s is reported", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
+    it.each([
+      ["a plain list of one typed kind", "run(...ids: number[]): void"],
+      ["a readonly list of objects after a literal name", 'run(name: "a", ...ids: readonly { id: string }[]): void'],
+      ["an untyped fixed payload and a typed list", "run(input: unknown, ...ids: number[]): void"],
+    ])("%s passes", (_n, m) => expect(jobs(m)).toEqual([]));
+    it("a variadic registration context fails closed with a plain line", () => {
+      const register = REGISTER.replace("register(ctx: ExtensionHostContext)", "register(...ctx: [ExtensionHostContext])");
+      expect(keys({ ...ctx(`interface JobsPort { ${RUN} }\n`, "{ jobs: JobsPort }"), "register.ts": register })).toEqual([
+        "threw: [core-extension-border] the registration contract ExtensionServerEntry.register(…) is variadic: the registration context is variadic; the border check cannot read it in register.ts — the rule fails closed rather than reading no port",
+      ]);
+    });
+  });
+
+  it("an unresolved type and a missing anchor fail closed with a plain line", () => {
+    expect(jobs("run(name: string, input: Missing): void")).toEqual(["threw: [core-extension-border] the border check could not resolve a type of input in register.ts"]);
+    expect(keys({ ...ctx("", "{}"), "register.ts": "export type Other = {};\n" })).toEqual([
+      "threw: [core-extension-border] the registration contract ExtensionServerEntry.register(…) is not an export of its module in register.ts — the rule fails closed rather than reading no port",
+    ]);
+  });
+
+  describe("the ledger of this rule", () => {
+    const RULE = "unbounded-port-member";
+    const KEY = "packages/sdk-extensions/src/host-context.ts::jobs.enqueue";
+    const e = (key: string) => ({ rule: RULE, key, reason: "a standing member recorded in a fixture ledger" });
+    const growth = (base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({ base: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: base } }, head: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: head } } });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+    it("the base guard refuses a new entry of the rule and lets a shrink pass", () => {
+      const grew = growth([e(KEY)], [e(KEY), e(`${KEY}2`)]);
+      expect(grew.ok).toBe(false);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY}2`]);
+      expect(growth([e(KEY), e(`${KEY}2`)], [e(KEY)]).ok).toBe(true);
+    });
+    it("an entry whose member no longer has the shape is stale and fails", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-ledger-"));
+      try {
+        const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+        doc.entries.push(e("packages/sdk-extensions/src/host-context.ts::jobs.gone"));
+        const baselinePath = path.join(dir, "ledger.json");
+        writeFileSync(baselinePath, JSON.stringify(doc));
+        const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath });
+        expect(r.stale).toEqual([`${RULE}::packages/sdk-extensions/src/host-context.ts::jobs.gone`]);
+        expect(gate.staleVerdict(r.stale).ok).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60_000);
+    it("the real tree: the four members on main, whole list, each recorded", () => {
+      const file = "packages/sdk-extensions/src/host-context.ts";
+      const real = (gate as unknown as Ports).unboundedPortMemberFindings?.({ repoRoot: REPO_ROOT }) ?? [];
+      const list = real.map((f) => `${f.file}::${f.detail}`).sort();
+      expect(list).toEqual(["jobs.enqueue", "mcp.callPrimitive", "objects.write", "settings.set"].map((d) => `${file}::${d}`));
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(list);
+    }, 60_000);
+  });
+});
