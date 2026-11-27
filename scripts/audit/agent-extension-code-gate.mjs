@@ -7,7 +7,9 @@
  * scripts/audit/_lib/skill-packaging-verdict.mjs); skills are out of this
  * check's scope, like connectors.
  *
- * LIMITS. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
+ * LIMITS. A file is left out as a test ONLY by its base name (`*.test.<ext>`,
+ * `*.spec.<ext>`, `isTestFile`), so runtime code named like that on purpose is
+ * not counted. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
  * content kind (a `.json`, a `.md`) is not counted even if something executes
  * it. Code inside a connector and code in core are out of its scope.
  *
@@ -17,7 +19,8 @@
  * index, and records, per key, the items of four classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
- * by `isContent`),
+ * by `isContent`, not under a `.git` folder, `isSkippedDir`,
+ * and not named `*.test.<ext>` or `*.spec.<ext>`, `isTestFile`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
@@ -95,9 +98,19 @@ export function isContent(rel) {
   return dot > 0 && CONTENT.extensions.has(name.slice(dot).toLowerCase());
 }
 
-/** The non-content files among `files` (`{ rel, link }`), sorted. */
+/** True when `rel` lies under a folder named `.git`; no other folder name leaves a file out (a committed `node_modules` is counted: the product requires runtime dependencies bundled). */
+export function isSkippedDir(rel) {
+  return rel.split("/").slice(0, -1).some((d) => d === ".git");
+}
+
+/** True when the BASE NAME of `rel` is `*.test.<ext>` or `*.spec.<ext>`; a folder never decides (a `test/` folder holds helpers and runtime code too). */
+export function isTestFile(rel) {
+  return /\.(?:test|spec)\.[^./]+$/.test(rel.slice(rel.lastIndexOf("/") + 1));
+}
+
+/** The non-content files among `files` (`{ rel, link }`) outside `.git` that are not `*.test.*`/`*.spec.*` files, sorted. */
 export function nonContentFiles(files) {
-  return files.filter((f) => f.link || !isContent(f.rel)).map((f) => f.rel).sort();
+  return files.filter((f) => !isSkippedDir(f.rel) && !isTestFile(f.rel) && (f.link || !isContent(f.rel))).map((f) => f.rel).sort();
 }
 
 /**
