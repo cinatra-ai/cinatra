@@ -748,8 +748,8 @@ repositories are cloned and BEFORE `pnpm install`, followed by its
 `node --test` step: an install can run lifecycle scripts of companion
 packages, and the check imports only node built-ins and its own library
 files. It needs no judgement about a
-file: no "test", "build", "shipped" or "bin" reading. It classifies nothing
-beyond one closed content rule and one agent rule, and records items.
+file: no folder reading but `.git`, and no "build", "shipped" or "bin" reading. It classifies nothing
+beyond one closed content rule, one test-file name rule and one agent rule, and records items.
 
 **The universe** is the pinned extensions: every `packageName` of both
 extension locks plus every key of `cinatra.devExtensions`. **Each pack is
@@ -789,10 +789,27 @@ connector's code is not judged here).
    `.gitattributes`, `.npmignore` or `.editorconfig`, or that lies under the
    pack's top-level `.github/` (the CI of the pack's own repository).
 
-   A symbolic link (mode 120000) or a gitlink (160000) always counts.
+   A symbolic link (mode 120000) or a gitlink (160000) counts even with a content
+   extension, unless its base name is a test name (below).
    Everything else counts: source of any language, extension-less files,
    files under a `skills/` folder, `.npmrc`, config scripts, vendored check
-   scripts, tests.
+   scripts, helpers and fixtures, and any file under a `test/`, `build`, `dist`
+   or `out` folder: the product loads files from any folder of the pack (a
+   tool module under `cinatra/tools/test/`, source the host bundles from a
+   `build/` folder), so no folder name decides.
+
+   Two things leave a file out. A file under a folder named `.git`
+   (`isSkippedDir`) is never consumed source (a git tree holds none). A
+   committed `node_modules` is counted: the product requires every runtime
+   dependency to be bundled in the package and accepts it
+   (`src/lib/extension-package-store-core.ts`), so a bundled dependency is
+   code the agent ships. The listing is the pinned commit's tree (`git
+   ls-tree`), so an installed but untracked `node_modules` on a disk is never
+   seen. A file whose BASE NAME is
+   `*.test.<ext>` or `*.spec.<ext>` (`isTestFile`) is a test file; a link named
+   so is left out too. Stated limit: runtime code that is named `*.test.*` or
+   `*.spec.*` on purpose is not counted; the check records items and does not
+   judge what a file does.
 2. `toolDeclarations` (per pack) — every value of `cinatra.tools`, whether
    the product (`parseDeclaredTools` in
    `packages/sdk-extensions/src/manifest.ts`) accepts it or not; only an
@@ -840,7 +857,8 @@ pinned tree has a `skills/` folder, so counting such files changed none of
 these numbers. The agent rule (kind `agent`, or a pinned tree with
 `cinatra/oas.json` or `cinatra/agent.json`) adds no pack on these pins: every
 pinned pack with such a file is of kind `agent` (117 pinned packs: 30 agent,
-30 connector, 30 artifact, 27 skill), so the 254 files stay.
+30 connector, 30 artifact, 27 skill), so the 254 files stay. The test-file name rule then leaves out the `*.test.*`
+and `*.spec.*` files: the list holds 95.
 
 ## Floors compared with the base branch (cinatra#3832)
 
