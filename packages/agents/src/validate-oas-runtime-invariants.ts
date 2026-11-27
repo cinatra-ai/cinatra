@@ -544,12 +544,43 @@ function walkFlowComponents(
 // forEachRunStep; a model-bridge ApiNode written anywhere else (an inline
 // `nodes` entry, an agent's tools, a tool's flow) has its calls refused at run
 // time with step_tool_step_unknown, or, when a read step carries the same id,
-// answered with that step's declaration. A node's payload (data, metadata,
-// inputs, outputs) holds no steps and is not searched. Bounded work: one walk
-// of the run's traversal and one walk of the document.
+// answered with that step's declaration. The search follows ONLY the keys
+// through which the specification nests components; a node's request payload
+// (data, body, config, headers, metadata, ...) is never entered, so an object
+// that merely looks like a step inside it is not one. Bounded work: one walk of
+// the run's traversal and one walk of the nesting keys.
 // ---------------------------------------------------------------------------
 
-const PAYLOAD_KEYS = new Set(["data", "metadata", "inputs", "outputs"]);
+/**
+ * The keys through which a component holds other components (Agent Spec: a
+ * flow's start node, nodes and edges with their end nodes, an AgentNode's agent,
+ * an agent's tools and toolboxes, a FlowNode's subflow, a ParallelFlowNode's
+ * subflows, a ToolNode's tool, a tool's flow, a multi-agent pattern's agents)
+ * and `$referenced_components`. Every other key is payload.
+ */
+const NESTING_KEYS = [
+  "$referenced_components",
+  "start_node",
+  "nodes",
+  "control_flow_connections",
+  "data_flow_connections",
+  "from_node",
+  "to_node",
+  "source_node",
+  "destination_node",
+  "subflow",
+  "subflows",
+  "flow",
+  "agent",
+  "agents",
+  "tools",
+  "toolboxes",
+  "tool",
+  "workers",
+  "group_manager",
+  "first_agent",
+  "relationships",
+] as const;
 
 function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewFinding[] {
   const read = new Set<object>();
@@ -565,8 +596,7 @@ function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewF
       return;
     }
     if (!isPlainObject(value)) return;
-    const isComponent = typeof value.component_type === "string";
-    if (isComponent && isModelBridgeApiNode(value) && !read.has(value)) {
+    if (isModelBridgeApiNode(value) && !read.has(value)) {
       const id = typeof value.id === "string" && value.id !== "" ? value.id : null;
       const twin = id !== null ? readIds.get(id) : undefined;
       findings.push({
@@ -584,9 +614,18 @@ function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewF
         source: "deterministic",
       });
     }
-    for (const [k, v] of Object.entries(value)) {
-      if (isComponent && PAYLOAD_KEYS.has(k)) continue;
-      go(v, `${path}.${k}`, `${path}.${k}`);
+    for (const key of NESTING_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      const child = value[key];
+      const childPath = `${path}.${key}`;
+      if (key === "$referenced_components") {
+        // A map of components: each entry sits in the map.
+        if (isPlainObject(child)) {
+          for (const [name, entry] of Object.entries(child)) go(entry, `${childPath}.${name}`, childPath);
+        }
+      } else {
+        go(child, childPath, childPath);
+      }
     }
   }
   go(parsed, "$", "$");
@@ -662,11 +701,18 @@ export type StepToolDeclaration =
   | { kind: "declared"; tools: string[] }
   | { kind: "invalid"; reason: string };
 
-// A model step is an ApiNode whose url ENDS at the bridge route (the predicate of
-// the llm-bridge wiring scan in validate-agent-json). An ordinary ApiNode such as
-// `/api/llm-bridge/status` is not one.
+// A model step is an ApiNode whose url PATH ends at the bridge route: the
+// predicate of the llm-bridge wiring scan in validate-agent-json, read on the url
+// without its query, fragment and trailing slash (WayFlow signs a step's call by
+// the url it requests, and the bridge answers it whatever follows the path).
+// `/api/llm-bridge?x=1`, `/api/llm-bridge#a` and `/api/llm-bridge/` are model
+// steps; an ordinary ApiNode such as `/api/llm-bridge/status` is not one.
 function isModelBridgeApiNode(node: Record<string, unknown>): boolean {
-  return node.component_type === "ApiNode" && isLlmBridgeUrl(node.url);
+  return (
+    node.component_type === "ApiNode" &&
+    typeof node.url === "string" &&
+    isLlmBridgeUrl(node.url.replace(/[?#][\s\S]*$/, "").replace(/\/+$/, ""))
+  );
 }
 
 function carriesStepToolKey(node: Record<string, unknown>): boolean {

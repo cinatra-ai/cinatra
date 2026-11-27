@@ -139,9 +139,134 @@ describe("OAS-RUNTIME-016: a model step sits where the run reads steps (cinatra#
     expect(unread(flow({}, [{ ...status, url: "/api/llm-bridge" }]))).toHaveLength(1);
   });
 
+  it.each(["{{CINATRA_BASE_URL}}", "", "https://app.example.test"])(
+    "decides on the url's path: a query, a fragment or a trailing slash does not hide a model step (%j)",
+    (base) => {
+      for (const tail of ["?x=1", "#a", "/", "/?x=1", "?next=/other#a"]) {
+        const doc = flow({}, [{ ...modelStep("draft"), url: `${base}/api/llm-bridge${tail}` }]);
+        expect(unread(doc), `${base}/api/llm-bridge${tail}`).toHaveLength(1);
+      }
+    },
+  );
+
+  it.each(["{{CINATRA_BASE_URL}}", "", "https://app.example.test"])(
+    "does not take another route for a model step, with or without a query (%j)",
+    (base) => {
+      const urls = ["/status", "/status?x=1", "-other", "-other?x=1", "-other/"].map((tail) => `${base}/api/llm-bridge${tail}`);
+      // The bridge route named only in another route's query is not the route called.
+      urls.push(`${base}/status?next=/api/llm-bridge`);
+      for (const url of urls) {
+        expect(unread(flow({}, [{ ...modelStep("draft"), url }])), url).toEqual([]);
+      }
+    },
+  );
+
+  it("reads a model step with a query the same way in rule 015 (no 'not a model-bridge step' finding)", () => {
+    const step = { ...modelStep("draft"), url: "/api/llm-bridge?x=1", metadata: { cinatra: { tools: ["objects_read"] } } };
+    const findings = scanOasForRuntimeInvariantFindings(flow({ draft: step }, [{ $component_ref: "draft" }]));
+    expect(findings.filter((f) => f.code === "OAS-RUNTIME-015")).toEqual([]);
+  });
+
   it("does not search a node's payload for steps", () => {
     const api = { ...modelStep("call"), data: { example: modelStep("quoted") } };
     expect(unread(flow({ call: api }, [{ $component_ref: "call" }]))).toEqual([]);
+  });
+
+  it("does not take a step-shaped object in a request body, config or headers for a step", () => {
+    const shaped = modelStep("quoted");
+    const api = {
+      ...modelStep("call"),
+      body: shaped,
+      config: { example: shaped, list: [shaped] },
+      headers: { example: shaped },
+      query_params: [shaped],
+      // The payload names the keys that nest components in a document; none of them is entered.
+      data: { nodes: [shaped], tools: [shaped], flow: shaped, $referenced_components: { quoted: shaped } },
+    };
+    const doc = flow({ call: api }, [{ $component_ref: "call" }]);
+    expect(unread(doc)).toEqual([]);
+    // The same step written where the document nests components is still refused.
+    expect(unread(flow({ call: api }, [{ $component_ref: "call" }, shaped]))).toHaveLength(1);
+  });
+
+  it("does not take a step-shaped object in a payload for a step in an unread holder either", () => {
+    const shaped = modelStep("quoted");
+    const toolFlow = flow({ call: { ...modelStep("call"), body: shaped, config: shaped } }, [{ $component_ref: "call" }]);
+    const writer = {
+      component_type: "AgentNode",
+      id: "writer",
+      name: "writer",
+      agent: { component_type: "Agent", id: "a", name: "a", tools: [{ component_type: "FlowTool", id: "t", name: "t", flow: toolFlow }] },
+    };
+    const findings = unread(flow({ writer }, [{ $component_ref: "writer" }]));
+    // The tool flow's own model step is unread; the payloads inside it add nothing.
+    expect(findings.map((f) => f.location)).toEqual([
+      "$.$referenced_components.writer.agent.tools[0].flow.$referenced_components.call",
+    ]);
+  });
+
+  // Every key through which the document nests components: a model step reached only
+  // through it, from a node the run reads, is refused. (`$referenced_components`,
+  // `subflow` and `subflows` are read holders; they are covered below, inside a flow the run does not read.)
+  const holderKeys: Array<[string, boolean]> = [
+    ["start_node", false],
+    ["nodes", true],
+    ["control_flow_connections", true],
+    ["data_flow_connections", true],
+    ["from_node", false],
+    ["to_node", false],
+    ["source_node", false],
+    ["destination_node", false],
+    ["flow", false],
+    ["agent", false],
+    ["agents", true],
+    ["tools", true],
+    ["toolboxes", true],
+    ["tool", false],
+    ["workers", true],
+    ["group_manager", false],
+    ["first_agent", false],
+    ["relationships", true],
+  ];
+  it.each(holderKeys)("refuses a model step reached through the key %s (a list: %s)", (key, isList) => {
+    const holder = { component_type: "AgentNode", id: "holder", name: "holder", [key]: isList ? [modelStep("draft")] : modelStep("draft") };
+    const findings = unread(flow({ holder }, [{ $component_ref: "holder" }]));
+    expect(findings.map((f) => f.location)).toEqual([`$.$referenced_components.holder.${key}${isList ? "[0]" : ""}`]);
+    expect(findings[0].message).toContain(`sits in $.$referenced_components.holder.${key}`);
+  });
+
+  it("refuses a model step reached through a nested list of lists (relationships)", () => {
+    const holder = { component_type: "AgentNode", id: "holder", name: "holder", relationships: [[modelStep("draft")]] };
+    const findings = unread(flow({ holder }, [{ $component_ref: "holder" }]));
+    expect(findings.map((f) => f.location)).toEqual(["$.$referenced_components.holder.relationships[0][0]"]);
+  });
+
+  it("refuses a model step reached through $referenced_components, subflow and subflows inside a flow the run does not read", () => {
+    const innerSub = flow({ viaSubflow: modelStep("viaSubflow") }, [{ $component_ref: "viaSubflow" }]);
+    const innerPar = flow({ viaSubflows: modelStep("viaSubflows") }, [{ $component_ref: "viaSubflows" }]);
+    const toolFlow = flow(
+      {
+        viaRefs: modelStep("viaRefs"),
+        sub: { component_type: "FlowNode", id: "sub", name: "sub", subflow: innerSub },
+        fan: { component_type: "ParallelFlowNode", id: "fan", name: "fan", subflows: [innerPar] },
+      },
+      [{ $component_ref: "viaRefs" }, { $component_ref: "sub" }, { $component_ref: "fan" }],
+    );
+    const writer = {
+      component_type: "AgentNode",
+      id: "writer",
+      name: "writer",
+      agent: { component_type: "Agent", id: "a", name: "a", tools: [{ component_type: "FlowTool", id: "t", name: "t", flow: toolFlow }] },
+    };
+    const base = "$.$referenced_components.writer.agent.tools[0].flow.$referenced_components";
+    const locations = unread(flow({ writer }, [{ $component_ref: "writer" }])).map((f) => f.location).sort();
+    expect(locations).toEqual(
+      [
+        `${base}.viaRefs`,
+        `${base}.sub.subflow.$referenced_components.viaSubflow`,
+        `${base}.fan.subflows[0].$referenced_components.viaSubflows`,
+      ].sort(),
+    );
   });
 
   it("yields each read step with its holder", () => {
