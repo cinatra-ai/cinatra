@@ -28,14 +28,19 @@
 import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
-const BASELINE_PATH = path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
+// The old config/ path is read only so this file still loads on the base tree of
+// the move, where the list has not moved yet.
+const NEW_BASELINE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
+const BASELINE_PATH = existsSync(NEW_BASELINE_PATH)
+  ? NEW_BASELINE_PATH
+  : path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
 
 type Finding = {
   rule: string;
@@ -635,7 +640,8 @@ const floorFixture: FloorFixture = (await import(
 )) as unknown as FloorFixture;
 
 describe("core/extension border — the floor is compared with the base branch", () => {
-  const FLOOR = "config/core-extension-border-baseline.json";
+  // The gate's own ledger path (the old config/ path on the base tree of the move).
+  const FLOOR = gate.FLOOR_FILE;
   const KEY = "src/lib/example-module.ts::@cinatra-ai/web-research-agent:finding";
   const REASON = "a crossing recorded in a fixture ledger, with its reason";
   const typeEntry = () => ({ rule: "pack-type-id-in-core", key: KEY, reason: REASON });
@@ -686,6 +692,38 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(r.status).toBe("unreadable");
     expect(r.lines[0]).toContain("cannot be compared with the base");
     expect(r.lines[0]).toContain(reason);
+  });
+
+  // The ledger moved from config/ to beside its script. A base commit that
+  // predates the move holds it at the old path; it is read there, never skipped.
+  const NEW_FLOOR = "scripts/ci/core-extension-border-baseline.json";
+  const LEGACY_FLOOR = "config/core-extension-border-baseline.json";
+
+  it("a base that still holds the ledger at its old path is compared there: growth FAILS", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3)]) }, { [NEW_FLOOR]: ledger([domainEntry(3), typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("grew");
+    expect(r.growth).toEqual([`new entry: pack-type-id-in-core::${KEY}`]);
+  });
+
+  it("a base that still holds the ledger at its old path is compared there: a shrink PASSES", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [NEW_FLOOR]: ledger([domainEntry(3)]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("held");
+    expect(r.lines.join("\n")).toContain(`${NEW_FLOOR} does not grow against`);
+  });
+
+  it("a base with the ledger at neither path still FAILS closed", () => {
+    const root = repo(
+      { "README.md": "a base without a ledger\n" },
+      { [NEW_FLOOR]: ledger([typeEntry()]), [LEGACY_FLOOR]: ledger([typeEntry()]) },
+    );
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toContain(`${NEW_FLOOR} is not on the base`);
   });
 
   it("a stale entry FAILS, and no stale entry passes", () => {
@@ -810,6 +848,62 @@ describe("core/extension border — a port member does not take an untyped input
     ).toEqual(["A.run(input)"]);
   });
 
+  it("reads a constructor like a call, behind a `new ` prefix in the key", () => {
+    expect(portDetails("type JobsPort = { Factory: new (input: unknown) => object };")).toEqual([
+      "JobsPort.Factory(new input)",
+    ]);
+    expect(
+      portDetails("type JobsPort = { make: { (a: unknown): void; new (b: any, c: string): void; new (d: string): void } };"),
+    ).toEqual(["JobsPort.make(a|new b)"]);
+    expect(portDetails("type JobsPort = { Factory: new (input: string) => object };")).toEqual([]);
+  });
+
+  describe("what a port is: a member declared in the SDK, never a lib member", () => {
+    const FIELDS = "readonly labels: readonly string[]; id: string; meta: Map<string, string>";
+    const root = (jobs: string) => `export type ExtensionHostContext = { ${FIELDS}; ${jobs} };`;
+
+    it("gives no finding for the identity fields of the root", () => {
+      expect(portFindings("type JobsPort = { run(input: string): void };", root("jobs: JobsPort")).map((f) => f.detail)).toEqual([]);
+    });
+
+    it("still reports the port beside them, and only the port", () => {
+      expect(
+        portFindings("type JobsPort = { run(input: unknown): void };", root("jobs: JobsPort")).map((f) => f.detail),
+      ).toEqual(["JobsPort.run(input)"]);
+    });
+
+    it("never walks a lib type behind a port: an intersection with Map, an array", () => {
+      expect(
+        portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs: JobsPort & Map<string, string>; tags: string[] };").map(
+          (f) => f.detail,
+        ),
+      ).toEqual(["jobs.run(input)"]);
+    });
+
+    it("reads a port wrapped in a utility type through its members", () => {
+      expect(
+        portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs: Partial<JobsPort> };").map(
+          (f) => f.detail,
+        ),
+      ).toEqual(["jobs.run(input)"]);
+    });
+
+    it("reads an optional port, and an accessor that returns a function", () => {
+      expect(
+        portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs?: JobsPort };").map(
+          (f) => f.detail,
+        ),
+      ).toEqual(["JobsPort.run(input)"]);
+      expect(
+        portDetails("interface JobsPort { get run(): (input: unknown) => void }"),
+      ).toEqual(["JobsPort.run(input)"]);
+    });
+
+    it("states its limit: a port made of an index signature is not read", () => {
+      expect(portDetails("type JobsPort = { [name: string]: (input: unknown) => void };")).toEqual([]);
+    });
+  });
+
   it("reports a root that is itself untyped, so no port can vanish into it", () => {
     expect(portFindings("", "export type ExtensionHostContext = any;").map((f) => f.detail)).toEqual([
       "ExtensionHostContext",
@@ -874,7 +968,7 @@ describe("core/extension border — a port member does not take an untyped input
   // only on a base list that does not carry the rule's installed marker, with
   // the marker at the head and exactly that set. The marker can never be removed.
   describe("the first recording is a closed seed", () => {
-    const FLOOR = "config/core-extension-border-baseline.json";
+    const FLOOR = path.relative(REPO_ROOT, BASELINE_PATH).split(path.sep).join("/");
     const entry = (key: string) => ({
       rule: PORT_RULE,
       key,

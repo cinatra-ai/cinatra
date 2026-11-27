@@ -28,7 +28,7 @@
 // preserved). A comment that names a pack to explain a gap states knowledge; it
 // does not encode it.
 //
-// THE BASELINE (config/core-extension-border-baseline.json) is SHRINK-ONLY. It
+// THE BASELINE (scripts/ci/core-extension-border-baseline.json) is SHRINK-ONLY. It
 // records the crossings that stood on main the day this gate landed, each with
 // the file, the rule and a one-line reason. It carries no wildcard: an entry
 // names one file and one detail. A finding outside it fails immediately, and a
@@ -58,7 +58,7 @@
 // without a useful constraint. See the contract document for its stated limits.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
@@ -66,13 +66,18 @@ import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
-const DEFAULT_BASELINE = join(DEFAULT_REPO_ROOT, "config", "core-extension-border-baseline.json");
+const DEFAULT_BASELINE = join(DEFAULT_REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
 
 /** The variable a workflow names the base reference in (cinatra#3831). */
 export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
-export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+export const FLOOR_FILE = "scripts/ci/core-extension-border-baseline.json";
+
+/** Where the ledger stood before it moved beside its script. A base commit that
+ *  predates the move holds it here; the base guard reads this path when the
+ *  base has none at FLOOR_FILE, so the move itself is still compared. */
+export const LEGACY_FLOOR_FILE = "config/core-extension-border-baseline.json";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -453,14 +458,19 @@ const partsOf = (checker, type) => {
   return t.isUnion() ? t.types : [t];
 };
 
-/** Every port member (inherited ones included) whose call signature takes an
- *  untyped parameter, one finding per member. A member typed untyped is the
- *  finding itself, and so is a port, and so is the root. The key of a member
- *  carries each call signature that has an untyped parameter, in declaration
- *  order, its parameter names sorted and comma-joined, the signatures joined
- *  with `|`: `Port.run(input)`, and `Port.run(input|input)` for two overloads.
- *  A rest parameter is read by its element type. Reads the checkout from disk
- *  and nothing from git. A missing root throws. */
+/** Every port member (inherited ones included) whose call or construct
+ *  signature takes an untyped parameter, one finding per member. A member typed
+ *  untyped is the finding itself, and so is a port, and so is the root. Only a
+ *  member DECLARED in the SDK's own source directory (the root file's) is read,
+ *  never one of a lib or node_modules type, so the identity fields of the root
+ *  (`id: string`, `labels: readonly string[]`, `meta: Map<…>`) read as nothing.
+ *  The key of a member carries each signature that has an untyped parameter,
+ *  calls first and then constructors, each in declaration order: its parameter
+ *  names sorted and comma-joined, a constructor's behind `new `, the signatures
+ *  joined with `|`: `Port.run(input)`, `Port.run(input|input)` for two overloads,
+ *  `Port.Factory(new input)` for a constructor. A rest parameter is read by its
+ *  element type. Reads the checkout from disk and nothing from git. A missing
+ *  root throws. */
 export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
   const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
   host.realpath = (p) => p;
@@ -476,6 +486,13 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
     );
   }
   const untyped = (t) => isUntypedType(checker, t);
+  const sdkDir = dirname(rootPath);
+  const inSdk = (decl) => {
+    const r = relative(sdkDir, decl.getSourceFile().fileName);
+    return !r.startsWith("..") && !isAbsolute(r) && !r.split(sep).includes("node_modules");
+  };
+  // A symbol with a declaration outside the SDK's source is a lib or package type's.
+  const fromSdk = (symbol) => !symbol.declarations?.length || symbol.declarations.every(inSdk);
   const out = [];
   const counts = new Map();
   const add = (decl, detail, what) => {
@@ -502,9 +519,13 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
       continue;
     }
     for (const part of partsOf(checker, portType)) {
-      const named = part.aliasSymbol?.name ?? part.getSymbol()?.name;
-      const port = named && !named.startsWith("__") ? named : portProp.name;
+      // The port is named by the SDK declaration that names it, else by its property.
+      const named = [part.aliasSymbol, part.getSymbol()].find(
+        (sym) => sym?.declarations?.length && fromSdk(sym) && !sym.name.startsWith("__"),
+      );
+      const port = named?.name ?? portProp.name;
       for (const member of checker.getPropertiesOfType(part)) {
+        if (!fromSdk(member)) continue;
         const memberType = checker.getTypeOfSymbol(member);
         // A member that is itself untyped has no signature to read: it is the finding.
         if (untyped(memberType)) {
@@ -512,9 +533,13 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
           continue;
         }
         const signatures = partsOf(checker, memberType)
-          .flatMap((c) => c.getCallSignatures())
-          .map((sig) => sig.getParameters().filter((p) => untyped(parameterType(p))).map((p) => p.name).sort().join(","))
-          .filter((names) => names !== "");
+          .flatMap((c) => [
+            ...c.getCallSignatures().map((sig) => ["", sig]),
+            ...c.getConstructSignatures().map((sig) => ["new ", sig]),
+          ])
+          .map(([prefix, sig]) => [prefix, sig.getParameters().filter((p) => untyped(parameterType(p))).map((p) => p.name).sort().join(",")])
+          .filter(([, names]) => names !== "")
+          .map(([prefix, names]) => `${prefix}${names}`);
         if (signatures.length === 0) continue;
         // Every untyped signature is in the key, so one more untyped parameter,
         // or one more overload with one, is a new key and never the listed one.
@@ -829,6 +854,7 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     gate: "core-extension-border",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
+    baseFallbackPath: LEGACY_FLOOR_FILE,
     headFloor: head,
     parse: (text) => JSON.parse(text),
     grown: (base, headDoc) => baselineGrowth(base, headDoc),

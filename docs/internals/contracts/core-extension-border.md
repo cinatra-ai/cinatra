@@ -24,7 +24,7 @@ map is the materializer crossing. Comments are masked before every scan, so a co
 that names a pack to explain a gap states knowledge without encoding it. The
 materialized `extensions/` tree is never walked; it is a pack's own source at a pin.
 
-`config/core-extension-border-baseline.json` is the shrink-only ledger of the
+`scripts/ci/core-extension-border-baseline.json` is the shrink-only ledger of the
 crossings that stood when the gate landed. Each entry names one file and one detail
 and states in one line why it stands; there is no wildcard, and an entry without a
 stated reason fails the gate. A crossing outside the ledger fails immediately. A
@@ -55,10 +55,15 @@ The rule `untyped-port-input` (cinatra#4872) reads the types a pack is handed, n
 and it has no matcher of its own: it builds a TypeScript program over
 `packages/sdk-extensions/src/host-context.ts` (and what it imports) and asks the type
 checker, reading the checkout from disk and nothing from git. Each property of
-`ExtensionHostContext` is a port. For each property of a port (the checker lists the
-members it inherits too), the call signatures of its type with `null` and `undefined`
-removed are read, one function at a time when the type is a union of functions. This
-covers a method and a nullable function property alike. One test decides "untyped" for a
+`ExtensionHostContext` is looked at; its type, with `null` and `undefined` removed, is
+walked member by member (the checker lists the members it inherits too), but only a member
+declared in the SDK's own source directory is read, never one of a TypeScript lib type or a
+package, so an identity field (`id: string`, `labels: readonly string[]`, `meta: Map<…>`)
+reads as nothing. A port wrapped in a utility type (`Partial<…>`) or an intersection is read
+through its SDK members. For each member the call signatures and the construct signatures of
+its type are read, one function at a time when the type is a union of functions. This covers
+a method, a constructor and a nullable function property alike; an accessor is read by its
+declared type. One test decides "untyped" for a
 port, a member and every parameter: the type, or the type without `null` and `undefined`,
 is `any`, `unknown`, the non-primitive `object`, or a type parameter whose constraint is
 absent or untyped, or a union with such a constituent (`input?: object`, `input: object | null`
@@ -68,11 +73,13 @@ rest parameter is read by its element type (`...args: unknown[]` is untyped).
 A member is one finding when a parameter of one of its signatures is untyped; whether it
 also takes a name does not matter. Its key carries each call signature that has an untyped
 parameter, in declaration order: the parameter names of a signature sorted and comma-joined,
-the signatures joined with `|` (`HostJobsPort.enqueue(payload)` for one, `X.run(input|input)`
-for two overloads). One more untyped parameter, or one more overload with one, of a listed
+the signatures joined with `|`, calls first and then constructors, whose names stand behind
+`new ` (`HostJobsPort.enqueue(payload)` for one, `X.run(input|input)` for two overloads,
+`X.Factory(new input)` for a constructor). One more untyped parameter, or one more overload with one, of a listed
 member is therefore a new key. A port, a member or the root `ExtensionHostContext` that is
 itself untyped has nothing to read and is the finding: keyed by the port property (`jobs`),
-by `<port type>.<member>`, or by the root's name.
+by `<port type>.<member>`, or by the root's name. A port is named by the SDK declaration
+that names it, else by its property (`jobs.run(input)`).
 
 The six members that stood on main when the rule landed are ledger entries with their
 reasons, and the constant `PORT_SEED` in the gate script lists exactly their keys. The seed
@@ -88,7 +95,8 @@ object literal, a `Record<string, unknown>`, an array or an intersection that th
 does not reduce to an untyped type is not looked into (`input: { data: unknown }` and
 `input: unknown[]` pass; `unknown & { id: string }` and `keyof Record<string, unknown>`
 reduce to typed forms and pass). A member typed `Function` has no signature and is not
-reported. A parameter of a callback that a member receives is not an input the member takes. Only the members of `ExtensionHostContext` are read: the port set of
+reported, and neither is a member of a port that is an index signature
+(`{ [name: string]: (input: unknown) => void }`). A parameter of a callback that a member receives is not an input the member takes. Only the members of `ExtensionHostContext` are read: the port set of
 a declared tool module is not. A way around the check that needs a disguise on purpose is left
 to review.
 
