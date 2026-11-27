@@ -7,8 +7,9 @@
  * scripts/audit/_lib/skill-packaging-verdict.mjs); skills are out of this
  * check's scope, like connectors.
  *
- * LIMITS. A file kept outside the shipped set (a test, a check script) is not
- * looked at. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
+ * LIMITS. A test file (by path, `isTestPath`) is not counted, so program code
+ * placed under a test path and loaded by nothing the check reads is not
+ * counted. The check RECORDS ITEMS; it does not judge what a file does. A new file of a
  * content kind (a `.json`, a `.md`) is not counted even if something executes
  * it. Code inside a connector and code in core are out of its scope.
  *
@@ -18,7 +19,8 @@
  * index, and records, per key, the items of four classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
- * by `isContent` and that the pack ships by its `files` list, `isShipped`),
+ * by `isContent`, that the product's walker publishes, `isWalkerSkipped`, and
+ * that are not test files, `isTestPath`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
@@ -96,38 +98,50 @@ export function isContent(rel) {
   return dot > 0 && CONTENT.extensions.has(name.slice(dot).toLowerCase());
 }
 
-const GLOB_RE = /[*?[\]{}()]/;
-const plainPath = (v) => v.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
-/** The manifest paths npm always packs besides `files`: `main` and every `bin` target. */
-const manifestPaths = (pkg) => [pkg?.main, ...(typeof pkg?.bin === "string" ? [pkg.bin] : isPlainObject(pkg?.bin) ? Object.values(pkg.bin) : [])].filter((v) => typeof v === "string" && v).map(plainPath);
-
 /**
- * True when the extension SHIPS `rel` (cinatra#4885): per the pack's
- * `package.json` `files` list, read as npm reads plain file and directory
- * entries (an entry names that file or everything below that folder; a `!`
- * entry takes a path out again; the last entry that matches decides), plus
- * `main` and the `bin` targets. A pack with no `files` list ships everything,
- * and so does a list the check cannot read as plain paths (a glob entry, a
- * non-string entry): when unknown, the file counts.
+ * WHAT THE PRODUCT PUBLISHES. The product's publisher does not read a `files`
+ * list: `publishAgentPackageFromGitDir` (packages/agents/src/verdaccio/client.ts)
+ * copies every file `walkPackageFiles` returns
+ * (packages/agents/src/scan-package-siblings.ts), minus the synthesized root
+ * `package.json` and `agent.json` and the blocked `.env*` files. The walker
+ * skips symbolic links and every directory whose NAME is in its `SKIP_DIRS`
+ * (at any depth). This is a mirror of those name rules; a test reads the
+ * source file and fails when the lists differ. A symbolic link is still
+ * counted here (the product skips it; counting more is the safe side).
  */
-export function isShipped(rel, pkg) {
-  const list = pkg?.files;
-  if (!Array.isArray(list)) return true;
-  if (list.some((e) => typeof e !== "string" || GLOB_RE.test(e.replace(/^!/, "")))) return true;
-  const under = (path, dir) => path === dir || path.startsWith(`${dir}/`);
-  if (manifestPaths(pkg).some((m) => under(rel, m))) return true;
-  let shipped = false;
-  for (const e of list) {
-    const neg = e.startsWith("!");
-    const path = plainPath(neg ? e.slice(1) : e);
-    if (path && under(rel, path)) shipped = !neg;
-  }
-  return shipped;
+export const WALKER_SKIP_DIRS = Object.freeze([
+  "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", ".next", ".turbo", ".cache", ".pnpm", "coverage", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv",
+]);
+const WALKER_SKIP_SET = new Set(WALKER_SKIP_DIRS);
+/** Mirror of `isBlockedEnvFile` in scan-package-siblings.ts. */
+function isBlockedEnvFile(basename) {
+  if (!basename.startsWith(".env")) return false;
+  const lower = basename.toLowerCase();
+  if (lower === ".env.example" || lower.endsWith(".example") || lower.endsWith(".sample") || lower.endsWith(".template")) return false;
+  return true;
+}
+/** True when the product's walker never publishes `rel`: a skipped directory name above it, or a blocked `.env*` name. */
+export function isWalkerSkipped(rel) {
+  const parts = rel.split("/");
+  return parts.slice(0, -1).some((d) => WALKER_SKIP_SET.has(d)) || isBlockedEnvFile(parts[parts.length - 1]);
 }
 
-/** The non-content files among `files` (`{ rel, link }`) that the extension ships (`pkg`: its parsed package.json), sorted. */
-export function nonContentFiles(files, pkg) {
-  return files.filter((f) => isShipped(f.rel, pkg) && (f.link || !isContent(f.rel))).map((f) => f.rel).sort();
+/**
+ * A test file, by path: a directory segment `test`, `tests`, `__tests__` or
+ * `__fixtures__`, or a file name with `.test.` or `.spec.` before its ending.
+ * The product never loads a test file; a flow step or manifest declaration that
+ * names any file, a test path included, is caught by the other two classes.
+ */
+const TEST_DIRS = new Set(["test", "tests", "__tests__", "__fixtures__"]);
+const TEST_NAME_RE = /\.(?:test|spec)\.[^./]+$/;
+export function isTestPath(rel) {
+  const parts = rel.split("/");
+  return parts.slice(0, -1).some((d) => TEST_DIRS.has(d)) || TEST_NAME_RE.test(parts[parts.length - 1]);
+}
+
+/** The non-content files among `files` (`{ rel, link }`) that the product publishes and that are not test files, sorted. */
+export function nonContentFiles(files) {
+  return files.filter((f) => !isWalkerSkipped(f.rel) && !isTestPath(f.rel) && (f.link || !isContent(f.rel))).map((f) => f.rel).sort();
 }
 
 /**
@@ -345,7 +359,7 @@ export function scan(root) {
       if (unreadable.length) findings.unreadableSteps[`${name} :: ${e.rel}`] = { count: unreadable.length, items: unreadable };
     }
     if (isAgentPack(kind, entries)) {
-      const files = nonContentFiles(entries, pkg);
+      const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
   }

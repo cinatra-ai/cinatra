@@ -18,7 +18,9 @@ import {
   flowSteps,
   isAgentPack,
   isContent,
-  isShipped,
+  isTestPath,
+  isWalkerSkipped,
+  WALKER_SKIP_DIRS,
   listGrowth,
   missingItems,
   nonContentFiles,
@@ -97,7 +99,7 @@ const packs = () => ({
       "cinatra/oas.json": JSON.stringify(callFlow("read_text")),
       "cinatra/tools/read.mjs": "export {};\n",
       "skills/pick/SKILL.md": "# pick\n",
-      "test/read.test.mjs": "\n",
+      "tools/run.mjs": "\n",
     },
   },
   "mail-connector": {
@@ -109,7 +111,7 @@ const packs = () => ({
 const READ = "@example-org/read-agent";
 const FLOW_KEY = `${READ} :: cinatra/oas.json`;
 const recorded = () => ({
-  nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "test/read.test.mjs"] } },
+  nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "tools/run.mjs"] } },
   toolDeclarations: { [READ]: { count: 1, items: ["read"] } },
   extensionToolSteps: { [FLOW_KEY]: { count: 1, items: ["read_text -> read"] } },
   unreadableSteps: {},
@@ -223,7 +225,7 @@ test("the ratchet compares items as a multiset: a same-count substitution fails 
   found.extensionToolSteps[FLOW_KEY] = { count: 1, items: ["read_text -> other"] };
   found.unreadableSteps[FLOW_KEY] = { count: 1, items: ["x: data.tool is not a plain name"] };
   const d = diffWithList(found, list);
-  assert.deepEqual(d.nonContentFiles, { fresh: [`${READ}: src/runtime.ts`], stale: [`${READ}: test/read.test.mjs`] });
+  assert.deepEqual(d.nonContentFiles, { fresh: [`${READ}: src/runtime.ts`], stale: [`${READ}: tools/run.mjs`] });
   assert.deepEqual(d.toolDeclarations, { fresh: [`${READ}: renamed`], stale: [`${READ}: read`] });
   assert.deepEqual(d.extensionToolSteps, { fresh: [`${FLOW_KEY}: read_text -> other`], stale: [`${FLOW_KEY}: read_text -> read`] });
   assert.deepEqual(d.unreadableSteps, { fresh: [`${FLOW_KEY}: x: data.tool is not a plain name`], stale: [] });
@@ -303,7 +305,7 @@ test("live: a committed same-count substitution fails in every class once the pi
   withRoot({ packs: before, list }, (root) => {
     assert.equal(runGate(root).status, 0, runGate(root).out);
     const pack = packDir(root, "read-agent");
-    rmSync(join(pack, "test"), { recursive: true });
+    rmSync(join(pack, "tools"), { recursive: true });
     writeFile(join(pack, "src", "runtime.ts"), "export {};\n");
     writeJson(join(pack, "package.json"), { name: READ, cinatra: { kind: "agent", tools: [{ name: "write" }] } });
     writeFile(join(pack, "cinatra", "oas.json"), JSON.stringify({ nodes: [step("read_text", { tool: "extension_tool", input: { name: "write" } }), step("other", { tool: "{{ t }}" })] }));
@@ -341,11 +343,11 @@ test("live: the recorded list passes; one more committed and pinned file fails; 
     assert.equal(grown.status, 1);
     assert.match(grown.out, /\[nonContentFiles\] items the list does not hold[\s\S]*\+ @example-org\/read-agent: bin\/run/);
     rmSync(join(pack, "bin"), { recursive: true });
-    rmSync(join(pack, "test"), { recursive: true });
+    rmSync(join(pack, "tools"), { recursive: true });
     repin(root, "read-agent", READ);
     const stale = runGate(root);
     assert.equal(stale.status, 1);
-    assert.match(stale.out, /\[nonContentFiles\] recorded items that are gone[\s\S]*- @example-org\/read-agent: test\/read\.test\.mjs/);
+    assert.match(stale.out, /\[nonContentFiles\] recorded items that are gone[\s\S]*- @example-org\/read-agent: tools\/run\.mjs/);
   });
 });
 
@@ -365,69 +367,84 @@ test("live: a file in the working tree or the index but not in the pinned commit
 test("live: a file removed from the index but present at the pinned commit is still counted (no offset of a new file)", () => {
   withRoot({ packs: packs(), list: recorded() }, (root) => {
     const pack = packDir(root, "read-agent");
-    git(pack, "rm", "-q", "--cached", "test/read.test.mjs");
+    git(pack, "rm", "-q", "--cached", "tools/run.mjs");
     writeFile(join(pack, "src", "new.ts"), "export {};\n");
     git(pack, "add", "src/new.ts");
     const res = runGate(root, ["--report"]);
     assert.equal(res.status, 0, res.out);
-    assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    test\/read\.test\.mjs\n/);
+    assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    tools\/run\.mjs\n/);
     assert.equal(runGate(root).status, 0);
   });
 });
 
-const SHIPS = ["cinatra", "src", "!src/__tests__"];
-const shippingPacks = () => ({
-  "ship-agent": {
-    packageJson: { name: "@example-org/ship-agent", files: SHIPS, cinatra: { kind: "agent" } },
-    files: { "cinatra/oas.json": "{}\n", "cinatra/tools/read.mjs": "export {};\n", "src/view.tsx": "export {};\n", ".npmrc": "x\n" },
+const WALKER_SOURCE = fileURLToPath(new URL("../../../packages/agents/src/scan-package-siblings.ts", import.meta.url));
+
+const COUNTED = "@example-org/count-agent";
+const countPacks = () => ({
+  "count-agent": {
+    packageJson: { name: COUNTED, files: ["cinatra"], cinatra: { kind: "agent" } },
+    files: { "cinatra/oas.json": "{}\n", "cinatra/tools/read.mjs": "export {};\n" },
   },
 });
-const SHIP = "@example-org/ship-agent";
-const shipRecorded = () => ({
-  nonContentFiles: { [SHIP]: { count: 2, items: ["cinatra/tools/read.mjs", "src/view.tsx"] } },
+const countRecorded = () => ({
+  nonContentFiles: { [COUNTED]: { count: 1, items: ["cinatra/tools/read.mjs"] } },
   toolDeclarations: {},
   extensionToolSteps: {},
   unreadableSteps: {},
 });
 
-test("shipped files: the package.json files list as npm reads it for plain entries; without a list everything ships", () => {
-  const all = plain("cinatra/tools/a.mjs", "src/a.ts", "src/__tests__/a.test.ts", "tests/a.test.mjs", "test/a.test.mjs", "extension-kind-gate.mjs", ".npmrc", "main.js", "bin/run");
-  assert.deepEqual(nonContentFiles(all, { files: SHIPS }), ["cinatra/tools/a.mjs", "src/a.ts"]);
-  assert.deepEqual(nonContentFiles(all, { files: ["./cinatra/", "main.js", "tests/a.test.mjs"] }), ["cinatra/tools/a.mjs", "main.js", "tests/a.test.mjs"]);
-  assert.deepEqual(nonContentFiles(all, { files: ["src", "!src/__tests__", "src/__tests__/a.test.ts"] }), ["src/__tests__/a.test.ts", "src/a.ts"]);
-  assert.deepEqual(nonContentFiles(all, { main: "./main.js", bin: { x: "bin/run" }, files: [] }), ["bin/run", "main.js"]);
-  assert.equal(nonContentFiles(all, {}).length, all.length);
-  assert.deepEqual(nonContentFiles(all, { files: [] }), []);
-  assert.equal(nonContentFiles(all).length, all.length);
-  // a link in the shipped set counts; an entry the check cannot read as a plain path ships everything
-  assert.deepEqual(nonContentFiles([{ rel: "cinatra/data.json", link: true }, { rel: "tests/x.json", link: true }], { files: ["cinatra"] }), ["cinatra/data.json"]);
-  assert.equal(nonContentFiles(all, { files: ["cinatra", "src/**/*.ts"] }).length, all.length);
-  assert.equal(nonContentFiles(all, { files: "cinatra" }).length, all.length);
-  assert.equal(isShipped("tests/a.test.mjs", { files: SHIPS }), false);
+test("test paths: a test folder segment or a .test. / .spec. name before its ending; nothing else", () => {
+  for (const rel of ["test/a.mjs", "tests/a.mjs", "src/__tests__/a.ts", "__fixtures__/x.js", "a/b/tests/deep/c.sh", "src/a.test.ts", "a.spec.mjs", "x/y.test.js"]) assert.equal(isTestPath(rel), true, rel);
+  for (const rel of ["src/runtime.ts", "cinatra/tools/read.mjs", "extension-kind-gate.mjs", "vitest.config.ts", "latest/a.mjs", "src/test", "src/contest.ts", "a.test", "a.tests.mjs"]) assert.equal(isTestPath(rel), false, rel);
 });
 
-test("live: an unshipped test or check file added at the pin is not counted; a shipped code file still fails; a pack without a files list counts everything", () => {
-  withRoot({ packs: shippingPacks(), list: shipRecorded() }, (root) => {
+test("test files are not counted; every other non-content file is, wherever it lies", () => {
+  const all = plain("tests/a.test.mjs", "test/b.mjs", "src/__tests__/c.ts", "__fixtures__/d.js", "src/e.spec.ts", "src/runtime.ts", "extension-kind-gate.mjs", ".npmrc", "cinatra/tools/read.mjs", "vitest.config.ts");
+  assert.deepEqual(nonContentFiles(all), [".npmrc", "cinatra/tools/read.mjs", "extension-kind-gate.mjs", "src/runtime.ts", "vitest.config.ts"]);
+  // a link under a test path is not counted either; a link elsewhere is
+  assert.deepEqual(nonContentFiles([{ rel: "tests/x.json", link: true }, { rel: "src/y.json", link: true }]), ["src/y.json"]);
+});
+
+test("the product's walker skips are mirrored: a file it never publishes is not counted", () => {
+  const all = plain("dist/run.js", "node_modules/p/i.js", "src/build/gen.js", ".git/hook.sh", "venv/bin/x", ".env", ".env.local", ".env.example", "cinatra/tools/read.mjs");
+  assert.deepEqual(nonContentFiles(all), [".env.example", "cinatra/tools/read.mjs"]);
+  assert.equal(isWalkerSkipped("a/dist/b.js"), true);
+  assert.equal(isWalkerSkipped("dist"), false);
+  assert.equal(isWalkerSkipped("distant/b.js"), false);
+});
+
+test("the mirrored walker rules equal the source: SKIP_DIRS and the .env name rule cannot drift silently", () => {
+  const src = readFileSync(WALKER_SOURCE, "utf8");
+  const dirs = /export const SKIP_DIRS[^=]*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(src);
+  assert.ok(dirs, "SKIP_DIRS not found in the walker source");
+  assert.deepEqual([...WALKER_SKIP_DIRS].sort(), [...dirs[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort());
+  const env = /export function isBlockedEnvFile\(basename: string\): boolean \{([\s\S]*?)\n\}/.exec(src);
+  assert.ok(env, "isBlockedEnvFile not found in the walker source");
+  assert.deepEqual([...env[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]), [".env", ".env.example", ".example", ".sample", ".template"]);
+  assert.match(src, /if \(entry\.isDirectory\(\)\) \{\s*if \(SKIP_DIRS\.has\(entry\.name\)\) continue;/);
+});
+
+test("live: a test file added at the pin is not counted; code under src/ with files: [cinatra] fails; a root check script fails", () => {
+  withRoot({ packs: countPacks(), list: countRecorded() }, (root) => {
     assert.equal(runGate(root).status, 0);
-    const pack = packDir(root, "ship-agent");
-    writeFile(join(pack, "tests", "flow.test.mjs"), "\n");
-    writeFile(join(pack, "src", "__tests__", "view.test.ts"), "\n");
-    writeFile(join(pack, "extension-kind-gate.mjs"), "\n");
-    repin(root, "ship-agent", SHIP);
+    const pack = packDir(root, "count-agent");
+    writeFile(join(pack, "tests", "x.test.mjs"), "\n");
+    writeFile(join(pack, "src", "__tests__", "y.ts"), "\n");
+    repin(root, "count-agent", COUNTED);
     assert.equal(runGate(root).status, 0);
-    writeFile(join(pack, "src", "more.ts"), "export {};\n");
-    repin(root, "ship-agent", SHIP);
+    writeFile(join(pack, "src", "runtime.ts"), "export {};\n");
+    repin(root, "count-agent", COUNTED);
     const grown = runGate(root);
     assert.equal(grown.status, 1);
-    assert.match(grown.out, /\+ @example-org\/ship-agent: src\/more\.ts/);
-    assert.doesNotMatch(grown.out, /flow\.test|view\.test|extension-kind-gate/);
+    assert.match(grown.out, /\+ @example-org\/count-agent: src\/runtime\.ts/);
+    assert.doesNotMatch(grown.out, /x\.test|y\.ts/);
   });
-  const open = shippingPacks();
-  delete open["ship-agent"].packageJson.files;
-  withRoot({ packs: open, list: shipRecorded() }, (root) => {
+  withRoot({ packs: countPacks(), list: countRecorded() }, (root) => {
+    writeFile(join(packDir(root, "count-agent"), "extension-kind-gate.mjs"), "\n");
+    repin(root, "count-agent", COUNTED);
     const out = runGate(root);
     assert.equal(out.status, 1);
-    assert.match(out.out, /\+ @example-org\/ship-agent: \.npmrc/);
+    assert.match(out.out, /\+ @example-org\/count-agent: extension-kind-gate\.mjs/);
   });
 });
 
@@ -516,9 +533,9 @@ test("live: the writer refuses a missing list and growth (a substituted item too
   withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "src/gone.ts"] } } } }, (root) => {
     const refused = runGate(root, ["--write-baseline"]);
     assert.equal(refused.status, 1);
-    assert.match(refused.out, /the list only shrinks:\n  \+ \[nonContentFiles\] @example-org\/read-agent: test\/read\.test\.mjs/);
+    assert.match(refused.out, /the list only shrinks:\n  \+ \[nonContentFiles\] @example-org\/read-agent: tools\/run\.mjs/);
   });
-  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/gone.ts", "test/read.test.mjs"] } } } }, (root) => {
+  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/gone.ts", "tools/run.mjs"] } } } }, (root) => {
     assert.equal(runGate(root).status, 1);
     assert.equal(runGate(root, ["--write-baseline"]).status, 0);
     assert.equal(runGate(root).status, 0);
@@ -540,12 +557,12 @@ test("live base guard: seeds once, an added item fails (a same-count substitutio
     const pack = packDir(root, "read-agent");
     writeFile(join(pack, "src", "more.ts"), "export {};\n");
     repin(root, "read-agent", READ);
-    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/more.ts", "test/read.test.mjs"] } } });
+    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/more.ts", "tools/run.mjs"] } } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1);
     assert.match(grew.out, /GREW against the base[\s\S]*\[nonContentFiles\] @example-org\/read-agent: src\/more\.ts \(the base does not hold it\)/);
 
-    rmSync(join(pack, "test"), { recursive: true });
+    rmSync(join(pack, "tools"), { recursive: true });
     repin(root, "read-agent", READ);
     writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "src/more.ts"] } } });
     const swapped = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });

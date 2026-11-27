@@ -748,8 +748,9 @@ repositories are cloned and BEFORE `pnpm install`, followed by its
 `node --test` step: an install can run lifecycle scripts of companion
 packages, and the check imports only node built-ins and its own library
 files. It needs no judgement about a
-file: no "test" or "build" reading. It classifies nothing beyond one closed
-content rule, one shipped rule and one agent rule, and records items.
+file: no "build" reading. It classifies nothing beyond one closed content
+rule, one test-path rule, the product's walker skips and one agent rule, and
+records items.
 
 **The universe** is the pinned extensions: every `packageName` of both
 extension locks plus every key of `cinatra.devExtensions`. **Each pack is
@@ -783,24 +784,39 @@ connector's code is not judged here).
 **The four classes**, each a set of items that may only shrink:
 
 1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree
-   that the extension SHIPS, EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
+   EXCEPT test files and files the product never publishes (below), and
+   EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
    extension is one of `.json .md .txt .yaml .yml .svg .png .jpg .jpeg .gif
    .webp .ico .csv`, whose exact name is `LICENSE`, `NOTICE`, `.gitignore`,
    `.gitattributes`, `.npmignore` or `.editorconfig`, or that lies under the
    pack's top-level `.github/` (the CI of the pack's own repository).
 
-   A shipped symbolic link (mode 120000) or gitlink (160000) always counts.
+   A symbolic link (mode 120000) or gitlink (160000) always counts.
    Everything else counts: source of any language, extension-less files,
    files under a `skills/` folder, config scripts.
 
-   A file counts only if the extension ships it (`isShipped`): the pack's
-   `package.json` `files` list is read as npm reads plain file and directory
-   entries (a `!` entry takes a path out; the last matching entry decides),
-   plus `main` and the `bin` targets. A pack with no `files` list ships
-   everything, so there everything counts, tests included. Known limit: a
-   file kept outside the shipped set (a test, a repository check script) is
-   not looked at; and a `files` list with a glob or a non-string entry is not
-   read, so there everything counts.
+   The border is what the product PUBLISHES, not the `files` list of the
+   package.json: the publisher (`publishAgentPackageFromGitDir`,
+   `packages/agents/src/verdaccio/client.ts`) does not read `files`; it copies
+   every file `walkPackageFiles` returns
+   (`packages/agents/src/scan-package-siblings.ts`), minus the synthesized root
+   `package.json` and `agent.json` and the blocked `.env*` files. So an agent
+   with `files: ["cinatra"]` and a `src/runtime.ts` is published with that
+   code, and the check counts it. The walker skips symbolic links and every
+   directory named in its `SKIP_DIRS` (`node_modules .git .hg .svn dist build
+   out .next .turbo .cache .pnpm coverage __pycache__ .pytest_cache
+   .mypy_cache .venv venv`, at any depth); the check mirrors the directory
+   names (`WALKER_SKIP_DIRS`) and the `.env*` name rule (`isBlockedEnvFile`),
+   and a test reads the source file and fails when they differ. A symbolic
+   link is still counted here (the product skips it; counting more is the
+   safe side).
+
+   Test files are not counted, by path (`isTestPath`): a directory segment
+   `test`, `tests`, `__tests__` or `__fixtures__`, or a file name with `.test.`
+   or `.spec.` before its ending. The product never loads a test file; a flow
+   step or a manifest declaration that names any file, a test path included,
+   is still caught by classes 2 to 4. Known limit: program code placed under
+   a test path and loaded by nothing the check reads is not counted.
 2. `toolDeclarations` (per pack) — every value of `cinatra.tools`, whether
    the product (`parseDeclaredTools` in
    `packages/sdk-extensions/src/manifest.ts`) accepts it or not; only an
@@ -848,7 +864,8 @@ pinned tree has a `skills/` folder, so counting such files changed none of
 these numbers. The agent rule (kind `agent`, or a pinned tree with
 `cinatra/oas.json` or `cinatra/agent.json`) adds no pack on these pins: every
 pinned pack with such a file is of kind `agent` (117 pinned packs: 30 agent,
-30 connector, 30 artifact, 27 skill), so the 254 files stay.
+30 connector, 30 artifact, 27 skill), so the 254 files stay. The test-path rule
+then leaves out the 167 test files: the list holds 87.
 
 ## Floors compared with the base branch (cinatra#3832)
 
