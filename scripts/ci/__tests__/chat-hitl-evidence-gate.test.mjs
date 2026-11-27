@@ -439,6 +439,34 @@ describe("chat-hitl-evidence-gate — floor compared with the base", () => {
     expect(bad.lines[0]).toMatch(/not a readable floor \(grandfatheredBranches is not a list of names\)/);
   });
 
+  it("a malformed rollout file FAILS closed with the field named, on the head and on the base", () => {
+    const cases = [
+      ["enforcement", { enforcement: ["warn-first"] }],
+      ["enforcement", { enforcement: 1 }],
+      ["enforcement", { enforcement: null }],
+      ["enforcement", { enforcement: "strict" }],
+      ["enforcement", { enforcement: "toString" }],
+      ["grandfatheredBranches", { grandfatheredBranches: "feat/x" }],
+      ["grandfatheredBranches", { grandfatheredBranches: ["feat/x", 3] }],
+      ["knownFindings", { knownFindings: { a: 1 } }],
+      ["knownFindings", { knownFindings: [null] }],
+      ["gateLandedAt", { gateLandedAt: "not a date" }],
+      ["gateLandedAt", { gateLandedAt: 1787000000000 }],
+      ["gateLandedAt", { gateLandedAt: null }],
+      ["trunkBranch", { trunkBranch: "" }],
+      ["trunkBranch", { trunkBranch: null }],
+      ["trunkBranch", { trunkBranch: ["main"] }],
+    ];
+    for (const [field, over] of cases) {
+      const head = guard(rollout({ enforcement: "enforce-all" }), rollout(over));
+      expect(head.ok, JSON.stringify(over)).toBe(false);
+      expect(head.lines.join("\n"), JSON.stringify(over)).toContain(field);
+      const base = guard(rollout(over), rollout());
+      expect(base.ok, JSON.stringify(over)).toBe(false);
+      expect(base.lines.join("\n"), JSON.stringify(over)).toContain(field);
+    }
+  });
+
   it("a run that is no pull request says so and passes", () => {
     const r = guard(rollout(), rollout(), { env: NO_PULL_REQUEST_RUN });
     expect(r).toMatchObject({ ok: true, status: "no-base" });

@@ -82,29 +82,44 @@ export const FLOOR_BASE_VAR = "CHAT_HITL_EVIDENCE_BASE";
 
 // How strongly each enforcement mode holds; an unknown mode only warns.
 const MODE_RANK = { off: 0, "warn-first": 1, "enforce-all": 2 };
-const modeRank = (mode) => MODE_RANK[mode] ?? 0;
+const modeRank = (mode) => (Object.hasOwn(MODE_RANK, mode) ? MODE_RANK[mode] : 0);
 
 /**
  * A rollout file's text -> the parts of it that decide what is enforced;
- * throws when the text is not a rollout file.
+ * throws, naming the field, when the text is not a rollout file.
+ *
+ * Every field the comparison reads is checked for its SHAPE with strict type
+ * checks, because the runtime (`lib/evidence-gate-rollout.mjs`) compares with
+ * `===` and reads `includes`/`Set`: a value of another shape (an array holding
+ * the mode, a number, a null) is "unknown" there and DISABLES enforcement, yet
+ * can rank like the real value when it is used as a property key. A field that
+ * is absent takes the runtime's own default; any other shape is refused.
  */
 export function parseRolloutFloor(text) {
   const doc = JSON.parse(text);
   if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a rollout object");
   const names = (key) => {
-    const list = doc[key] ?? [];
+    const list = doc[key] === undefined ? [] : doc[key];
     if (!Array.isArray(list) || !list.every((k) => typeof k === "string")) {
       throw new Error(`${key} is not a list of names`);
     }
     return list;
   };
-  return {
-    enforcement: doc.enforcement ?? "warn-first",
-    trunkBranch: doc.trunkBranch ?? "main",
-    gateLandedAt: doc.gateLandedAt ?? null,
-    grandfatheredBranches: names("grandfatheredBranches"),
-    knownFindings: names("knownFindings"),
-  };
+  const grandfatheredBranches = names("grandfatheredBranches");
+  const knownFindings = names("knownFindings");
+  const enforcement = doc.enforcement === undefined ? "warn-first" : doc.enforcement;
+  if (typeof enforcement !== "string" || !Object.hasOwn(MODE_RANK, enforcement)) {
+    throw new Error(`enforcement is not one of ${Object.keys(MODE_RANK).join(", ")}`);
+  }
+  const trunkBranch = doc.trunkBranch === undefined ? "main" : doc.trunkBranch;
+  if (typeof trunkBranch !== "string" || trunkBranch.trim() === "") {
+    throw new Error("trunkBranch is not a non-empty branch name");
+  }
+  const gateLandedAt = doc.gateLandedAt;
+  if (typeof gateLandedAt !== "string" || !Number.isFinite(Date.parse(gateLandedAt))) {
+    throw new Error("gateLandedAt is not a date string");
+  }
+  return { enforcement, trunkBranch, gateLandedAt, grandfatheredBranches, knownFindings };
 }
 
 /** One line per loosening of the rollout file against the base. */
@@ -130,11 +145,23 @@ export function loosenings(base, head) {
  * compared with the copy on the base branch.
  */
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env } = {}) {
+  let headFloor;
+  try {
+    headFloor = parseRolloutFloor(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  } catch (err) {
+    // A malformed head cannot count as "not looser": the runtime would treat it
+    // as unknown and disable enforcement.
+    return {
+      status: "malformed",
+      ok: false,
+      lines: [`[chat-hitl-evidence-gate] FAIL - the floor ${FLOOR_FILE} is not a readable rollout file (${err.message}). Failing closed.`],
+    };
+  }
   return compareFloorWithBase({
     gate: "chat-hitl-evidence-gate",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
-    headFloor: parseRolloutFloor(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
+    headFloor,
     parse: parseRolloutFloor,
     grown: loosenings,
     repoRoot,
