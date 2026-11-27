@@ -66,10 +66,10 @@
  * and thus never walked).
  */
 
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 
 // The pure detectors (the searchParams-flash-driven banner heuristic) live in a
 // shared module so the standalone connector scanner (scripts/audit/
@@ -86,6 +86,14 @@ import {
   isBannerFile,
   isExcludedFromScan,
 } from "../../../scripts/audit/lib/toast-banner-detect.mjs";
+
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  fixtureGit,
+  makeFloorRepo,
+} from "../../../scripts/audit/__tests__/floor-base-fixture.mjs";
 
 // Re-exported for callers that want the raw detectors (kept from when they were
 // defined inline here); the vitest fixtures exercise `isBannerFile` end-to-end.
@@ -285,5 +293,152 @@ describe("toast-banner detector", () => {
   it("IGNORES a banner + flash-read that appear ONLY inside comments (comments are stripped)", () => {
     const src = `// legacy: <Alert variant="destructive"> gated on searchParams.get("error")\nexport const x = 1;`;
     expect(isBannerFile(src)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The baseline may not grow against the base branch (cinatra#3832). The scanner
+// (scripts/audit/toast-banner-scan.mjs) is only spawned here, never imported,
+// and every spawn gets a test-owned environment (`runScan`), never the CI run's.
+// ---------------------------------------------------------------------------
+
+describe("toast-banner-scan - the baseline may not grow against the base", () => {
+  const SCAN = path.join(REPO_ROOT, "scripts/audit/toast-banner-scan.mjs");
+  const FLOOR = "src/lib/toast-banner-guard.baseline.json";
+  const entry = (file: string) => ({ file, class: "pending-migration", reason: "a fixture entry" });
+  const list = (...files: string[]) => ({ entries: files.map(entry) });
+  const cleanups: Array<() => void> = [];
+  afterAll(() => cleanups.forEach((c) => c()));
+
+  // Every variable the script or the shared guard reads is named here: nothing
+  // else of the outer environment reaches the spawned script.
+  const OWNED = ["GITHUB_EVENT_NAME", "GITHUB_BASE_REF", "TOAST_BANNER_BASE", "FLOOR_BASE_FETCH", "GITHUB_HEAD_REF", "GITHUB_REF_NAME"];
+  function runScan(root: string, run: Record<string, string>) {
+    const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" };
+    for (const k of OWNED) delete env[k];
+    const r = spawnSync(
+      process.execPath,
+      [SCAN, "--package", root, "--baseline", path.join(root, FLOOR), "--scan-root", "src"],
+      { cwd: root, encoding: "utf8", env: { ...env, ...run } },
+    );
+    return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
+  }
+  function fixture(base: unknown, head: unknown) {
+    const f = makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+    cleanups.push(f.cleanup);
+    return f.root as string;
+  }
+
+  it("an added entry FAILS on a pull request, naming the file", () => {
+    const r = runScan(fixture(list("src/a.tsx"), list("src/a.tsx", "src/new.tsx")), PULL_REQUEST_RUN);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/GREW against/);
+    expect(r.out).toContain("entries file src/new.tsx");
+  });
+
+  it("an added entry FAILS on a merge group with a pinned base", () => {
+    const root = fixture(list("src/a.tsx"), list("src/a.tsx", "src/new.tsx"));
+    const pinned = fixtureGit(root, ["rev-parse", "HEAD~1"]).trim();
+    const r = runScan(root, { GITHUB_EVENT_NAME: "merge_group", TOAST_BANNER_BASE: pinned });
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("entries file src/new.tsx");
+  });
+
+  it("a removal passes", () => {
+    const some = runScan(fixture(list("src/a.tsx", "src/b.tsx"), list("src/a.tsx")), PULL_REQUEST_RUN);
+    expect(some.out).toMatch(/does not grow against/);
+    const all = runScan(fixture(list("src/a.tsx"), list()), PULL_REQUEST_RUN);
+    expect(all.status, all.out).toBe(0);
+    expect(all.out).toMatch(/does not grow against/);
+  });
+
+  it("a null or absent entries list is the empty list, on both sides", () => {
+    for (const form of [{}, { entries: null }]) {
+      expect(runScan(fixture(list("src/a.tsx"), form), PULL_REQUEST_RUN).out).toMatch(/does not grow against/);
+      const base = runScan(fixture(form, list("src/a.tsx")), PULL_REQUEST_RUN);
+      expect(base.status).toBe(1);
+      expect(base.out).toContain("entries file src/a.tsx");
+    }
+  });
+
+  it("a wrong shape FAILS on the head naming the field, and on the base", () => {
+    const cases: Array<[unknown, string]> = [
+      [{ entries: "src/a.tsx" }, "entries is not a list"],
+      [{ entries: { a: 1 } }, "entries is not a list"],
+      [{ entries: [{ class: "pending-migration" }] }, "entries[0].file is not a string"],
+      [{ entries: [entry("src/a.tsx"), 5] }, "entries[1].file is not a string"],
+    ];
+    for (const [bad, field] of cases) {
+      const head = runScan(fixture(list("src/a.tsx"), bad), PULL_REQUEST_RUN);
+      expect(head.status, field).toBe(1);
+      expect(head.out).toMatch(/not a readable baseline/);
+      expect(head.out, `head: ${field}`).toContain(field);
+      const base = runScan(fixture(bad, list("src/a.tsx")), PULL_REQUEST_RUN);
+      expect(base.status, field).toBe(1);
+      expect(base.out).toMatch(/not a readable floor/);
+      expect(base.out, `base: ${field}`).toContain(field);
+    }
+  });
+
+  it("an unparsable head, an unparsable base and an unreadable base fail closed", () => {
+    for (const text of ["not json", "[]", "null", "5"]) {
+      const head = runScan(fixture(list("src/a.tsx"), text), PULL_REQUEST_RUN);
+      expect(head.status, `head ${text}`).toBe(1);
+      expect(head.out).toMatch(/not a readable baseline/);
+      const base = runScan(fixture(text, list("src/a.tsx")), PULL_REQUEST_RUN);
+      expect(base.status, `base ${text}`).toBe(1);
+      expect(base.out).toMatch(/not a readable floor/);
+    }
+    const r = runScan(fixture(list("src/a.tsx"), list("src/a.tsx")), UNREADABLE_BASE_RUN);
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+  });
+
+  it("a run that is no pull request says so and passes the comparison", () => {
+    const r = runScan(fixture(list(), list()), NO_PULL_REQUEST_RUN);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toMatch(/not compared with a base on this run/);
+  });
+
+  it("an unchanged head passes against a pinned base that holds an entry live main has since removed", () => {
+    // The event's base SHA holds src/old.tsx; live origin/main has moved on without it.
+    const root = fixture(list("src/old.tsx"), list("src/old.tsx"));
+    const headSha = fixtureGit(root, ["rev-parse", "HEAD"]).trim();
+    const pinned = fixtureGit(root, ["rev-parse", "HEAD~1"]).trim();
+    fixtureGit(root, ["checkout", "-q", "--detach", pinned]);
+    writeFileSync(path.join(root, FLOOR), JSON.stringify(list(), null, 2) + "\n");
+    fixtureGit(root, ["commit", "-q", "-a", "--allow-empty", "-m", "live main moved on"]);
+    fixtureGit(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fixtureGit(root, ["checkout", "-q", "--detach", headSha]);
+    expect(runScan(root, { ...PULL_REQUEST_RUN, TOAST_BANNER_BASE: pinned }).out).toMatch(/does not grow against/);
+    expect(runScan(root, { GITHUB_EVENT_NAME: "merge_group", TOAST_BANNER_BASE: pinned }).out).toMatch(/does not grow against/);
+    // Without the event's base the live tip is read: the unchanged entry looks like growth.
+    const live = runScan(root, PULL_REQUEST_RUN);
+    expect(live.status).toBe(1);
+    expect(live.out).toMatch(/GREW against/);
+  });
+
+  it("a merge group with no base named fails closed instead of passing as no-base", () => {
+    const r = runScan(fixture(list(), list("src/new.tsx")), { GITHUB_EVENT_NAME: "merge_group" });
+    expect(r.status).toBe(1);
+    expect(r.out).toMatch(/merge group's but TOAST_BANNER_BASE is empty/);
+  });
+
+  it("a run with no baseline file has nothing to compare and passes the comparison", () => {
+    const root = fixture(list(), list());
+    fixtureGit(root, ["rm", "-q", "-f", FLOOR]);
+    expect(runScan(root, PULL_REQUEST_RUN).out).toMatch(/no baseline file, so no entry can be added/);
+  });
+
+  it("the reusable workflow step sets TOAST_BANNER_BASE from the merge group's or the pull request's base SHA", () => {
+    const lines = readFileSync(path.join(REPO_ROOT, ".github/workflows/toast-banner-gate-reusable.yml"), "utf8").split("\n");
+    const at = lines.findIndex((l) => l === "      - name: Run the toast-banner conformance gate");
+    expect(at, "the step is missing").toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > at && /^ {6}(- |#)/.test(l));
+    const step = lines.slice(at, end === -1 ? undefined : end).join("\n");
+    expect(step).toContain(
+      "        env:\n          TOAST_BANNER_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}\n",
+    );
+    expect(step).toContain('node "$SCAN"');
   });
 });
