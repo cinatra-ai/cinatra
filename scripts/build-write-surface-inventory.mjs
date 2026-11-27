@@ -61,24 +61,12 @@ const CLASSIFICATION = {
   // not <form action>. If the handlers are ever un-archived to perform real writes,
   // these MUST be reclassified PENDING/MIGRATED (the source-pin test enforces the
   // stub fact).
-  "packages/agents/src/email-outreach-stage-actions.ts::confirmCampaignRecipients":
-    { status: "EXCLUDED", reason: "archived stub — email_outreach_recipients_confirm returns {ok:true}, no object mutation" },
-  "packages/agents/src/email-outreach-stage-actions.ts::removeEmailOutreachRecipient":
-    { status: "EXCLUDED", reason: "archived stub — email_outreach_recipients_clear returns {ok:true}, no object mutation" },
   "packages/agents/src/email-outreach-stage-actions.ts::removeEmailOutreachRecipients":
     { status: "EXCLUDED", reason: "archived stub — email_outreach_recipients_clear returns {ok:true}, no object mutation" },
   "packages/agents/src/email-outreach-stage-actions.ts::fetchInitialDrafts":
     { status: "EXCLUDED", reason: "read-only" },
   "packages/agents/src/email-outreach-stage-actions.ts::updateInitialDraft":
     { status: "EXCLUDED", reason: "archived stub — email_outreach_initial_drafts_update returns {ok:true}, no object mutation" },
-  "packages/agents/src/email-outreach-stage-actions.ts::runReviewCheck":
-    { status: "EXCLUDED", reason: "read-only review computation" },
-  "packages/agents/src/email-outreach-stage-actions.ts::getReviewCheckState":
-    { status: "EXCLUDED", reason: "read-only" },
-  "packages/agents/src/email-outreach-stage-actions.ts::dismissReviewRecommendation":
-    { status: "EXCLUDED", reason: "archived stub — email_outreach_review_recommendation_dismiss returns {ok:true}, no object mutation" },
-  "packages/agents/src/email-outreach-stage-actions.ts::applyReviewRecommendation":
-    { status: "EXCLUDED", reason: "archived stub — email_outreach_review_recommendation_apply_start returns {ok:true}, no object mutation" },
 
   // ── data-safety (already MutationResult — the object-history vertical slice) ──
   "src/components/data-safety/restore-object-version-action.ts::restoreObjectToVersionAction":
