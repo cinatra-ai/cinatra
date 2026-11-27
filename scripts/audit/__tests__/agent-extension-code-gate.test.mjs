@@ -42,7 +42,7 @@ const writeJson = (path, value) => writeFile(path, JSON.stringify(value, null, 2
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 const commitAll = (cwd, msg) => {
   git(cwd, "add", "-A");
-  git(cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", msg, "--allow-empty");
+  git(cwd, "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "core.hooksPath=/dev/null", "commit", "-qm", msg, "--allow-empty");
   return git(cwd, "rev-parse", "HEAD").trim();
 };
 const plain = (...rels) => rels.map((rel) => ({ rel, link: false }));
@@ -156,13 +156,13 @@ test("every file outside the content rule counts: source of any language, extens
   assert.equal(isContent("nested/.github/x.mjs"), false);
 });
 
-test("a file is left out as a test only by its base name (*.test.<ext>, *.spec.<ext>); no folder name decides, node_modules and .git aside", () => {
+test("a file is left out as a test only by its base name (*.test.<ext>, *.spec.<ext>); no folder name decides, .git aside", () => {
   for (const rel of ["src/a.test.ts", "a.spec.mjs", "test/x.test.mjs", "cinatra/tools/test/z.spec.sh"]) assert.equal(isTestFile(rel), true, rel);
   for (const rel of ["test/helper.mjs", "tests/a.mjs", "src/__tests__/a.ts", "cinatra/tools/test/delivery.mjs", "src/contest.ts", "a.test", "a.tests.mjs", "test.mjs"]) assert.equal(isTestFile(rel), false, rel);
-  for (const rel of ["node_modules/p/i.js", "a/node_modules/b.js", "a/.git/hook.sh"]) assert.equal(isSkippedDir(rel), true, rel);
-  for (const rel of ["node_modules", "src/build/selection.ts", "dist/run.js", "out/x.js", "coverage/c.js", "venv/bin/x", ".env"]) assert.equal(isSkippedDir(rel), false, rel);
-  const all = plain("test/x.test.mjs", "tests/a.spec.ts", "test/helper.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts", "dist/run.js", "node_modules/p/i.js", "a/.git/hook.sh");
-  assert.deepEqual(nonContentFiles(all), ["cinatra/tools/test/delivery.mjs", "dist/run.js", "src/build/selection.ts", "test/helper.mjs"]);
+  for (const rel of ["a/.git/hook.sh", ".git/x"]) assert.equal(isSkippedDir(rel), true, rel);
+  for (const rel of ["node_modules/dep/index.js", "a/node_modules/b.js", ".git", "src/build/selection.ts", "dist/run.js", "out/x.js", "coverage/c.js", "venv/bin/x", ".env"]) assert.equal(isSkippedDir(rel), false, rel);
+  const all = plain("test/x.test.mjs", "tests/a.spec.ts", "test/helper.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts", "dist/run.js", "node_modules/dep/index.js", "a/.git/hook.sh");
+  assert.deepEqual(nonContentFiles(all), ["cinatra/tools/test/delivery.mjs", "dist/run.js", "node_modules/dep/index.js", "src/build/selection.ts", "test/helper.mjs"]);
 });
 
 test("a symbolic link or a gitlink always counts, even with a content extension", () => {
@@ -385,15 +385,16 @@ test("live: a file removed from the index but present at the pinned commit is st
   });
 });
 
-test("live: a *.test.mjs file is not counted; test/helper.mjs, cinatra/tools/test/delivery.mjs and src/build/selection.ts each are", () => {
+test("live: a *.test.mjs file is not counted; test/helper.mjs, cinatra/tools/test/delivery.mjs, src/build/selection.ts and a committed node_modules/dep/index.js each are", () => {
   withRoot({ packs: packs(), list: recorded() }, (root) => {
     writeFile(join(packDir(root, "read-agent"), "test", "x.test.mjs"), "\n");
     repin(root, "read-agent", READ);
     assert.equal(runGate(root).status, 0);
   });
-  for (const rel of ["test/other.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts"]) {
+  for (const rel of ["test/other.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts", "node_modules/dep/index.js"]) {
     withRoot({ packs: packs(), list: recorded() }, (root) => {
       writeFile(join(packDir(root, "read-agent"), ...rel.split("/")), "export {};\n");
+      git(packDir(root, "read-agent"), "add", "-f", "--", rel); // a global ignore file may list node_modules; the fixture commits it on purpose
       repin(root, "read-agent", READ);
       const grown = runGate(root);
       assert.equal(grown.status, 1, rel);

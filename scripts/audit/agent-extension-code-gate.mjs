@@ -19,7 +19,7 @@
  * index, and records, per key, the items of four classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
- * by `isContent`, not under a `node_modules` or `.git` folder, `isSkippedDir`,
+ * by `isContent`, not under a `.git` folder, `isSkippedDir`,
  * and not named `*.test.<ext>` or `*.spec.<ext>`, `isTestFile`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
@@ -98,9 +98,9 @@ export function isContent(rel) {
   return dot > 0 && CONTENT.extensions.has(name.slice(dot).toLowerCase());
 }
 
-/** True when `rel` lies under a folder named `node_modules` or `.git`; no other folder name leaves a file out. */
+/** True when `rel` lies under a folder named `.git`; no other folder name leaves a file out (a committed `node_modules` is counted: the product requires runtime dependencies bundled). */
 export function isSkippedDir(rel) {
-  return rel.split("/").slice(0, -1).some((d) => d === "node_modules" || d === ".git");
+  return rel.split("/").slice(0, -1).some((d) => d === ".git");
 }
 
 /** True when the BASE NAME of `rel` is `*.test.<ext>` or `*.spec.<ext>`; a folder never decides (a `test/` folder holds helpers and runtime code too). */
@@ -108,7 +108,7 @@ export function isTestFile(rel) {
   return /\.(?:test|spec)\.[^./]+$/.test(rel.slice(rel.lastIndexOf("/") + 1));
 }
 
-/** The non-content files among `files` (`{ rel, link }`) outside `node_modules`/`.git` that are not `*.test.*`/`*.spec.*` files, sorted. */
+/** The non-content files among `files` (`{ rel, link }`) outside `.git` that are not `*.test.*`/`*.spec.*` files, sorted. */
 export function nonContentFiles(files) {
   return files.filter((f) => !isSkippedDir(f.rel) && !isTestFile(f.rel) && (f.link || !isContent(f.rel))).map((f) => f.rel).sort();
 }
