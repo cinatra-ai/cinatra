@@ -82,6 +82,8 @@ jobs:
               # border gate reads every product file under src/ and packages/,
               # so a change under src/app/** must run it too.
               - 'src/**'
+              # the gate's committed-pack-file rule lists the tracked extensions/ files
+              - 'extensions/**'
               - 'scripts/audit/**'
               - 'vitest.config.ts'
               - 'tsconfig.json'

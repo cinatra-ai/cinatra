@@ -149,7 +149,7 @@ const OAS = JSON.stringify({
 
 function zip(oas = OAS): string {
   return createZipBuffer([
-    { name: "agent.json", content: oas },
+    { name: "cinatra/oas.json", content: oas },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
     {
       name: "package.json",
@@ -352,7 +352,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
     await expect(
       importAgentTemplateCore(
         createZipBuffer([
-          { name: "agent.json", content: OAS },
+          { name: "cinatra/oas.json", content: OAS },
           { name: "package.json", content: JSON.stringify({ name: PKG, version: "0.3.1", license: "Apache-2.0" }) },
           { name: "README.md", content: "# Blog Drafter" },
           { name: "skills/drafting.md", content: "how to draft" },
@@ -372,7 +372,7 @@ describe("cinatra#3493 — the supplied-install road materializes and mounts wha
     await expect(
       importAgentTemplateCore(
         createZipBuffer([
-          { name: "agent.json", content: OAS },
+          { name: "cinatra/oas.json", content: OAS },
           { name: "package.json", content: JSON.stringify({ name: PKG, version: "0.3.1", license: "Apache-2.0" }) },
           { name: "../escaped.txt", content: "nope" },
         ]).toString("base64"),
@@ -449,10 +449,8 @@ it("refuses a model step the run does not read before ZIP import writes or mater
 });
 
 describe("cinatra#4897 — the install scan reads the source the compile is handed (the canonical staged file)", () => {
-  /** An archive whose root `agent.json` and `cinatra/oas.json` differ: staging lets the second replace the first. */
-  function zipWithOwnOas(rootOas: string, cinatraOas: string): string {
+  function zipWithOwnOas(cinatraOas: string): string {
     return createZipBuffer([
-      { name: "agent.json", content: rootOas },
       { name: "cinatra/oas.json", content: cinatraOas },
       { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
       {
@@ -464,33 +462,59 @@ describe("cinatra#4897 — the install scan reads the source the compile is hand
   const install = (archive: string) =>
     importAgentTemplateCore(archive, undefined, { redirect: false, requireRuntimeMount: true });
 
-  it("refuses a clean root agent.json whose cinatra/oas.json holds a model step the run does not read, with no write", async () => {
-    const unreadStep = JSON.stringify(withUnreadModelStep(JSON.parse(OAS)));
-    await expect(install(zipWithOwnOas(OAS, unreadStep))).rejects.toThrow(
-      `Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`,
-    );
-    expect(createTemplate).not.toHaveBeenCalled();
-    expect(updateTemplate).not.toHaveBeenCalled();
-    expect(reload).not.toHaveBeenCalled();
-    await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("installs an archive whose cinatra/oas.json holds the same step only in a registry entry nothing refers to", async () => {
     const unreferenced = JSON.stringify(withUnreadModelStep(JSON.parse(OAS), false));
-    await expect(install(zipWithOwnOas(OAS, unreferenced))).resolves.toMatchObject({ upserted: false });
+    await expect(install(zipWithOwnOas(unreferenced))).resolves.toMatchObject({ upserted: false });
     expect(createTemplate).toHaveBeenCalledTimes(1);
     expect(await readFile(join(agentDir, "cinatra", "oas.json"), "utf8")).toBe(unreferenced);
   });
 
   it("hands the compile the bytes of the canonical file, and mounts exactly those", async () => {
     const own = JSON.stringify({ ...JSON.parse(OAS), description: "the archive's own cinatra/oas.json" });
-    await install(zipWithOwnOas(OAS, own));
+    await install(zipWithOwnOas(own));
     expect(COMPILED.source).toBe(own);
     expect(await readFile(join(agentDir, "cinatra", "oas.json"), "utf8")).toBe(own);
   });
+});
 
-  it("hands the compile the root agent.json when the archive has no cinatra/oas.json", async () => {
-    await suppliedInstall();
+describe("cinatra#4920 — cinatra/oas.json is the one definition file of an archive", () => {
+  const PACKAGE_JSON = JSON.stringify({ name: PKG, version: "0.3.1", license: "Apache-2.0" });
+  const install = (files: { name: string; content: string }[]) =>
+    importAgentTemplateCore(createZipBuffer(files).toString("base64"), undefined, {
+      redirect: false,
+      requireRuntimeMount: true,
+    });
+
+  it("refuses an archive that has only a root agent.json, names cinatra/oas.json, and writes nothing", async () => {
+    const oldLayout = [
+      { name: "agent.json", content: OAS },
+      { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
+      { name: "package.json", content: PACKAGE_JSON },
+    ];
+    // red-first-expect: promise resolved
+    await expect(install(oldLayout)).rejects.toThrow(
+      "this archive has only a root agent.json, which is no longer read. Put the agent definition in cinatra/oas.json.",
+    );
+    expect(createTemplate).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses an archive that has no definition file at all, naming cinatra/oas.json", async () => {
+    const noDefinition = [{ name: "package.json", content: PACKAGE_JSON }];
+    await expect(install(noDefinition)).rejects.toThrow("Invalid archive: cinatra/oas.json not found.");
+    expect(createTemplate).not.toHaveBeenCalled();
+  });
+
+  it("reads the definition from cinatra/oas.json only: a root agent.json beside it decides nothing and is not mounted", async () => {
+    const stale = JSON.stringify({ ...JSON.parse(OAS), name: "Stale Root Name" });
+    await install([
+      { name: "agent.json", content: stale },
+      { name: "cinatra/oas.json", content: OAS },
+      { name: "package.json", content: PACKAGE_JSON },
+    ]);
     expect(COMPILED.source).toBe(OAS);
+    expect((createTemplate.mock.calls[0]?.[0] as { name?: string }).name).toBe("Blog Drafter");
+    await expect(stat(join(agentDir, "agent.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
