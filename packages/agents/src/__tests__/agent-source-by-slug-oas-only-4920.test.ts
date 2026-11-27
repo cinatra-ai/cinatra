@@ -21,6 +21,7 @@ import * as os from "node:os";
 // ---------------------------------------------------------------------------
 
 const {
+  readLog,
   mockPublishAgentPackageFromGitDir,
   mockPublishAgentPackage,
   mockCompileOasAgentJson,
@@ -29,6 +30,8 @@ const {
   mockCreateZipBuffer,
   identity,
 } = vi.hoisted(() => ({
+  // Every path read through node:fs/promises readFile, in order.
+  readLog: [] as string[],
   mockPublishAgentPackageFromGitDir: vi.fn(),
   mockPublishAgentPackage: vi.fn(),
   mockCompileOasAgentJson: vi.fn(),
@@ -38,6 +41,16 @@ const {
   // The operator's vendor directory; null = identity unset (first-party only).
   identity: { vendor: null as string | null },
 }));
+
+// Observe which definition file a handler really opens: record each readFile path.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    readLog.push(String(args[0]));
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
 
 vi.mock("../verdaccio/client", () => ({
   deleteAgentPackageVersion: vi.fn(),
@@ -240,6 +253,10 @@ function oas(marker: string): string {
 // An old-layout file: valid JSON that every handler would visibly mishandle
 // (a blocker in review/compile/publish, invalid in validate, shown by read).
 const OLD_ONLY = JSON.stringify({ name: "OLD FILE MUST NOT BE READ" });
+// An old-layout file beside a canonical one: a well-formed definition carrying
+// a marker, so a handler that wrongly read it would show the marker in its own
+// result (read, export) while the path log shows the wrong file either way.
+const OLD_MARKED = JSON.stringify({ ...JSON.parse(oas("OLD FILE MUST NOT BE READ")) });
 
 /** The canonical definition of `vendor`'s package: written, and described. */
 async function putCanonical(vendor: string): Promise<Canon> {
@@ -332,7 +349,7 @@ const HANDLERS: Handler[] = [
       expect(r.error).toBeUndefined();
       expect(r.fileName).toMatch(/\.zip$/);
       const entries = mockCreateZipBuffer.mock.calls[0][0] as Array<{ name: string; content: string }>;
-      const exported = JSON.parse(entries.find((e) => e.name === "agent.json")!.content);
+      const exported = JSON.parse(entries.find((e) => e.name === "cinatra/oas.json")!.content);
       expect(exported.description).toBe(c.marker);
     },
   },
@@ -392,11 +409,16 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
 
       it("processes cinatra/oas.json and ignores the old files when both are there", async () => {
         const canon = await putCanonical(FIRST_PARTY);
-        await put(`${FIRST_PARTY}/${SLUG}/cinatra/agent.json`, OLD_ONLY);
-        await put(`${SLUG}/agent.json`, OLD_ONLY);
+        const oldBeside = `${FIRST_PARTY}/${SLUG}/cinatra/agent.json`;
+        await put(oldBeside, OLD_MARKED);
+        await put(`${SLUG}/agent.json`, OLD_MARKED);
+        readLog.length = 0;
         const result = await run(h.name, h.input);
         h.processed(result, canon);
         expect(JSON.stringify(result)).not.toContain("OLD FILE MUST NOT BE READ");
+        // Direct observation: the canonical file was opened, no old file was.
+        expect(readLog).toContain(canon.abs);
+        expect(readLog.filter((p) => /[\\/]agent\.json$/.test(p))).toEqual([]);
       });
 
       // Two vendors: the operator's directory is the first candidate, the

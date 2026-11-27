@@ -18,6 +18,17 @@ const identity = vi.hoisted(() => ({ namespace: null as string | null }));
 vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(() => (identity.namespace ? { instanceNamespace: identity.namespace } : null)),
 }));
+// Observe which definition file the compiler really opens: record each path
+// it reads through node:fs/promises readFile.
+const reads = vi.hoisted(() => [] as string[]);
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    reads.push(String(args[0]));
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
 vi.mock("../agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: vi.fn(() => process.cwd()),
   resolveDevExtensionSourceRoot: vi.fn(() => process.cwd()),
@@ -91,11 +102,19 @@ describe("compileOasAgentJson by package name reads cinatra/oas.json only (cinat
   });
 
   it("ignores the old file when cinatra/oas.json is there too", async () => {
-    await put(`cinatra-ai/${SLUG}/cinatra/oas.json`, "{ not json");
-    await put(`cinatra-ai/${SLUG}/cinatra/agent.json`, JSON.stringify({ component_type: "Flow" }));
-    await put(`${SLUG}/agent.json`, JSON.stringify({ component_type: "Flow" }));
+    const canonical = `cinatra-ai/${SLUG}/cinatra/oas.json`;
+    await put(canonical, "{ not json CANONICAL");
+    await put(`cinatra-ai/${SLUG}/cinatra/agent.json`, "{ not json OLD FILE MUST NOT BE READ");
+    await put(`${SLUG}/agent.json`, "{ not json OLD FILE MUST NOT BE READ");
+    reads.length = 0;
     const result = await compileOasAgentJson({ packageName: PKG });
-    expect((result as { error: string }).error).toMatch(/malformed JSON/);
+    const error = (result as { error: string }).error;
+    // The error names the file that was parsed: the canonical one.
+    expect(error).toContain(path.join(fsRealpathSync(tmpRoot), canonical));
+    expect(error).not.toContain("agent.json");
+    // Direct observation: the canonical file was opened, no old file was.
+    expect(reads).toContain(path.join(fsRealpathSync(tmpRoot), canonical));
+    expect(reads.filter((p) => /agent\.json$/.test(p))).toEqual([]);
   });
 
   it("still reports a plain not-found when no definition file exists", async () => {
