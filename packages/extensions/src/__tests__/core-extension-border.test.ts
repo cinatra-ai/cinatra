@@ -772,7 +772,7 @@ describe("core/extension border — pack-step-kind-in-core", () => {
   const STEP_PACKS = new Set([
     "@cinatra-ai/acme-invoice-agent",
     "@cinatra-ai/zephyr-connector",
-    "@cinatra-ai/text-artifact",
+    "@example-org/note-artifact",
   ]);
   const TABLE_FILE = "packages/agents/src/synthetic-kind-table.ts";
   const table = (keys: string[]) =>
@@ -802,7 +802,7 @@ describe("core/extension border — pack-step-kind-in-core", () => {
   });
 
   it("passes a generic kind named for the screen's shape, and an artifact's type word", () => {
-    expect(scanKinds(["list-picker", "form", "artifact-review", "confirmation", "text-input"]).findings).toEqual([]);
+    expect(scanKinds(["list-picker", "form", "artifact-review", "confirmation", "note-input"]).findings).toEqual([]);
   });
 
   it("derives the word runs from the pack names, not from a list", () => {
@@ -810,7 +810,7 @@ describe("core/extension border — pack-step-kind-in-core", () => {
     expect(runs.has("acme-invoice")).toBe(true);
     expect(runs.has("zephyr")).toBe(true);
     expect(runs.has("acme")).toBe(false);
-    expect(runs.has("text")).toBe(false);
+    expect(runs.has("note")).toBe(false);
     expect(gate.kindCrossesBorder("acme-invoice-review", runs)).toBe("acme-invoice");
   });
 
@@ -1074,8 +1074,8 @@ describe("core/extension border — pack-step-kind-in-core reads the syntax tree
   });
 
   it("names the pinned package(s) each kind matched", () => {
-    const packs = new Set([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector", "@cinatra-ai/text-artifact"]);
-    const r = gate.scanStepScreenKindTables({ file: FILE, text: tableOf('  "zephyr-sender": 1,\n  "text-input": 2,'), packs });
+    const packs = new Set([...STEP_PACKS, "@cinatra-ai/zephyr-mail-connector", "@example-org/note-artifact"]);
+    const r = gate.scanStepScreenKindTables({ file: FILE, text: tableOf('  "zephyr-sender": 1,\n  "note-input": 2,'), packs });
     expect(r.findings.map((f) => f.detail)).toEqual([
       "zephyr-sender (@cinatra-ai/zephyr-connector, @cinatra-ai/zephyr-mail-connector)",
     ]);
