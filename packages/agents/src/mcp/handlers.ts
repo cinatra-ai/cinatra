@@ -73,13 +73,14 @@ import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
-  LEGACY_SLUG_MAP,
+  oldLayoutAgentErrorForSlug,
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
   resolveAgentJsonPathForRead,
   resolveAgentRootDirForRead,
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
+import { isOldLayoutAgentDir } from "../old-agent-layout";
 import { createZipBuffer } from "../zip-helpers";
 import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 // read the chat-side projectContext frame
@@ -2735,9 +2736,10 @@ async function handleAgentBuilderVersionDiff(
 async function handleAgentBuilderGitList(
   _request: PrimitiveRequest,
 ): Promise<unknown> {
-  // agents now live under <installDir>/<vendor>/<slug>/. Walk the operator's
-  // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537), then
-  // fall back to legacy <installDir>/<slug>/ for older installs.
+  // agents live under <installDir>/<vendor>/<slug>/. Walk the operator's
+  // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537). A source
+  // directory in the old layout (agent.json, no cinatra/oas.json) is not an
+  // agent any more: it is named in `warnings`, and the other agents still list.
   const root = resolveDevExtensionSourceRoot();
   const slugSet = new Set<string>();
 
@@ -2759,7 +2761,7 @@ async function handleAgentBuilderGitList(
     }
   }
 
-  // Legacy layout: <installDir>/<slug>/ (only entries that look like agent dirs).
+  // Top-level <installDir>/<slug>/ directories: only an old-layout one is looked at.
   let topEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
   try {
     topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
@@ -2772,19 +2774,18 @@ async function handleAgentBuilderGitList(
   for (const entry of topEntries) {
     if (!entry.isDirectory()) continue;
     if (entry.name === "cinatra") continue; // Vendor dir already walked above
-    // Probe legacy paths to filter non-agent dirs.
-    if (
-      existsSync(join(root, entry.name, "cinatra", "agent.json"))
-      || existsSync(join(root, entry.name, "agent.json"))
-) {
-      slugSet.add(entry.name);
-    }
+    if (isOldLayoutAgentDir(join(root, entry.name))) slugSet.add(entry.name);
   }
 
   const items: unknown[] = [];
+  const warnings: string[] = [];
   for (const slug of slugSet) {
     const resolved = resolveAgentJsonPathForRead(slug);
-    if (!resolved) continue;
+    if (!resolved) {
+      const oldLayout = oldLayoutAgentErrorForSlug(slug, true);
+      if (oldLayout) warnings.push(oldLayout);
+      continue;
+    }
     try {
       const raw = (await readFile(resolved.path, "utf8")) as string;
       const content = JSON.parse(raw) as Record<string, unknown>;
@@ -2796,19 +2797,11 @@ async function handleAgentBuilderGitList(
       let description = (content.description as string | null | undefined) ?? null;
       let siblingPkgName: string | null = null;
       let siblingPkgVersion: string | null = null;
-      const candidatePkgPaths = [
-        // New layout sibling: resolve against the SAME root dir the OAS
-        // resolver picked, so the sibling read tracks the actual vendor
-        // segment (instance vendor or first-party) instead of a hardcoded
-        // "cinatra-ai" (cinatra#537).
-        join(resolved.rootDir, "package.json"),
-        // Legacy layout sibling: <installDir>/<legacySlug>/package.json
-        join(
-          root,
-          (LEGACY_SLUG_MAP[slug] ?? slug),
-          "package.json",
-),
-      ];
+      // The sibling package.json: resolve against the SAME root dir the OAS
+      // resolver picked, so the sibling read tracks the actual vendor segment
+      // (instance vendor or first-party) instead of a hardcoded "cinatra-ai"
+      // (cinatra#537).
+      const candidatePkgPaths = [join(resolved.rootDir, "package.json")];
       for (const pkgPath of candidatePkgPaths) {
         try {
           const siblingPkg = JSON.parse((await readFile(pkgPath, "utf8")) as string) as { name?: unknown; version?: unknown; description?: unknown };
@@ -2835,7 +2828,7 @@ async function handleAgentBuilderGitList(
       // Skip unreadable or invalid files — do not fail the entire list
     }
   }
-  return { items, total: items.length };
+  return warnings.length > 0 ? { items, total: items.length, warnings } : { items, total: items.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -2853,10 +2846,9 @@ async function handleAgentBuilderGitRead(
   if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
     return { error: "packageSlug must not contain path separators or '..'." };
   }
-  // prefer agents/{slug}/cinatra/agent.json; fall back to legacy flat path.
   const resolved = resolveAgentJsonPathForRead(packageSlug);
   if (!resolved) {
-    return { error: `Agent file not found: agents/${packageSlug}/cinatra/agent.json` };
+    return { error: oldLayoutAgentErrorForSlug(packageSlug) ?? `Agent file not found: agents/${packageSlug}/cinatra/oas.json` };
   }
   let raw: string;
   try {
@@ -3040,9 +3032,7 @@ async function handleAgentBuilderGitWrite(
       delete metaCinatraForWrite[legacy];
     }
   }
-  // write to agents/{slug}/cinatra/agent.json by default; if a legacy
-  // flat agents/{slug}/agent.json already exists, overwrite
-  // in place to avoid creating a divergent second copy.
+  // write to <vendor>/{slug}/cinatra/oas.json (resolveAgentJsonPathForWrite).
   // writing_files milestone (preflight passed + inputs validated;
   // no-op unless progressContext threaded + HumanUser actor).
   await emitWritingFilesIfThreaded(
@@ -3066,11 +3056,9 @@ async function handleAgentBuilderGitWrite(
   // atomically replaces the whole slug dir, which removes this marker.
   //
   // Slug-dir resolution: the canonical layout writes to
-  // `<root>/cinatra/<slug>/cinatra/oas.json` (target.dir ends in `/cinatra`),
-  // so `dirname(target.dir)` is the slug dir. The legacy-flat layout
-  // writes to `<root>/<legacy-slug>/agent.json`, where
-  // `target.dir` IS the slug dir — `dirname` would wrongly point at the
-  // install root. Detect by checking the trailing `cinatra/` segment.
+  // `<root>/<vendor>/<slug>/cinatra/oas.json` (target.dir ends in `/cinatra`),
+  // so `dirname(target.dir)` is the slug dir; the trailing `cinatra/` segment
+  // is checked in case a target ever is the slug dir itself.
   // (
   // by reload discovery, but we want the marker placement correct in case
   // they ever are, AND to keep the file alongside the agent's own dir.)
@@ -3356,7 +3344,8 @@ async function handleAgentBuilderGitValidate(
       return {
         valid: false,
         errors: [
-          `Agent file not found for slug "${packageSlug}". Use agent_source_write first, or pass content directly.`,
+          oldLayoutAgentErrorForSlug(packageSlug) ??
+            `Agent file not found for slug "${packageSlug}". Use agent_source_write first, or pass content directly.`,
         ],
       };
     }
@@ -3465,7 +3454,9 @@ async function handleAgentSourceReview(
           {
             code: "agent_not_found",
             severity: "blocker",
-            message: `Agent file not found for slug "${packageSlug}". Use agent_source_write first, or pass content directly.`,
+            message:
+              oldLayoutAgentErrorForSlug(packageSlug) ??
+              `Agent file not found for slug "${packageSlug}". Use agent_source_write first, or pass content directly.`,
             source: "deterministic",
           },
         ],
@@ -3674,11 +3665,12 @@ async function handleAgentBuilderGitCompileAndWrite(
     return { error: "packageSlug must not contain path separators or '..'." };
   }
 
-  // prefer agents/{slug}/cinatra/agent.json; fall back to legacy flat path.
   const resolved = resolveAgentJsonPathForRead(packageSlug);
   if (!resolved) {
     return {
-      error: `Agent file not found: agents/${packageSlug}/cinatra/oas.json. Use agent_source_write to create it first.`,
+      error:
+        oldLayoutAgentErrorForSlug(packageSlug) ??
+        `Agent file not found: agents/${packageSlug}/cinatra/oas.json. Use agent_source_write to create it first.`,
     };
   }
   const oasSourcePath = resolved.path;
@@ -3749,7 +3741,6 @@ async function handleAgentBuilderGitCompileAndWrite(
   let manifestName: string | null = null;
   let manifestLifecycle: unknown = undefined;
   let pkgRaw: string | null = null;
-  // probe new canonical, then legacy via resolveAgentRootDirForRead.
   const agentRootForCompile = resolveAgentRootDirForRead(packageSlug);
   if (agentRootForCompile) {
     // One that EXISTS but cannot be read or parsed refuses (cinatra#4264 A1b,
@@ -3918,8 +3909,7 @@ async function handleAgentBuilderGitCompileAndWrite(
   // Register agent skills in the skills catalog so they are discoverable via skill_ids.
   const registeredSkillIds: string[] = [];
   try {
-    // skills dir lives next to the agent root (handles both new
-    // canonical and legacy layouts via resolveAgentRootDirForRead).
+    // skills dir lives next to the agent root (resolveAgentRootDirForRead).
     const agentRootForSkills = resolveAgentRootDirForRead(packageSlug);
     const skillsDir = agentRootForSkills ? join(agentRootForSkills, "skills") : null;
     let skillEntries: { isDirectory(): boolean; name: string }[] = [];
@@ -4161,10 +4151,9 @@ async function handleAgentBuilderGitPublish(
     return { error: "packageSlug must not contain path separators or '..'." };
   }
 
-  // probe new canonical, then legacy via resolveAgentRootDirForRead.
   const agentDir = resolveAgentRootDirForRead(packageSlug);
   if (!agentDir) {
-    return { error: `Agent directory not found for slug: ${packageSlug}` };
+    return { error: oldLayoutAgentErrorForSlug(packageSlug) ?? `Agent directory not found for slug: ${packageSlug}` };
   }
   try {
     await readdir(agentDir);

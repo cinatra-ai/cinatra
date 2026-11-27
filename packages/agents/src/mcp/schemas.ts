@@ -380,12 +380,12 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_list": {
     description:
-      "Exploration tool — use before starting the source-authoring pipeline. Lists all agent JSON files in the agents/ directory at the repo root. Returns items[], total. Each item includes path, packageName, packageVersion, name, and description.",
+      "Exploration tool — use before starting the source-authoring pipeline. Lists all agent definition files (cinatra/oas.json) in the extension source directory. Returns items[], total. Each item includes path, packageName, packageVersion, name, and description. A source directory in the old layout (an agent.json and no cinatra/oas.json) is not listed; a warnings[] entry names it and says to move it to cinatra/oas.json.",
     inputSchema: z.object({}),
   },
   "agent_source_read": {
     description:
-      "Exploration tool — use before agent_source_write to inspect the current definition. Reads the OAS Flow file from the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). Reads transparently fall back to legacy locations (cinatra/agent.json, then flat agents/<slug>/cinatra/agent.json, then agents/<slug>/agent.json). Returns the parsed content and file path.",
+      "Exploration tool — use before agent_source_write to inspect the current definition. Reads the OAS Flow file from the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). cinatra/oas.json is the only definition file read: a source directory in the old layout (an agent.json and no cinatra/oas.json) is refused with an error that names the directory and says to move it to cinatra/oas.json. Returns the parsed content and file path.",
     inputSchema: z.object({
       packageSlug: z
         .string()
@@ -396,7 +396,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_write": {
     description:
-      "ADMIN-ONLY (platform_admin). Live source mutation: write an OAS Flow 26.1.0 agent definition to the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). When a legacy file (agents/<packageSlug>/cinatra/agent.json or agents/<packageSlug>/agent.json) already exists it is overwritten in place. Creates directories and files as needed. The caller is responsible for bumping packageVersion before writing. Source-authoring pipeline step 1 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected by both the delegated-chat tool policy and the handler's admin gate; the non-admin proposal→approval workflow runs through a separate `agent_creation_request` store — never these live tools.",
+      "ADMIN-ONLY (platform_admin). Live source mutation: write an OAS Flow 26.1.0 agent definition to the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). Creates directories and files as needed. The caller is responsible for bumping packageVersion before writing. Source-authoring pipeline step 1 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected by both the delegated-chat tool policy and the handler's admin gate; the non-admin proposal→approval workflow runs through a separate `agent_creation_request` store — never these live tools.",
     inputSchema: z.object({
       packageSlug: z
         .string()
@@ -483,7 +483,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_compile": {
     description:
-      "ADMIN-ONLY (platform_admin). Live source mutation: recompile the prompt (legacy: taskSpec) of an existing OAS Flow agent at extensions/cinatra-ai/<packageSlug>/cinatra/oas.json (the canonical source-package directory; reads transparently fall back to legacy locations) and write the result back. Updates prompt and type only — all other fields are preserved. Also scans extensions/cinatra-ai/<packageSlug>/skills/ and registers each SKILL.md in the skills catalog via upsertSkill — returns registeredSkillIds with the IDs of all upserted skills. Source-authoring pipeline step 3 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected at both the delegated-chat policy and the handler's admin gate (compile syncs into the live agent_templates row by package name); non-admin proposal→approval is a separate, later capability.",
+      "ADMIN-ONLY (platform_admin). Live source mutation: recompile the prompt (legacy: taskSpec) of an existing OAS Flow agent at extensions/cinatra-ai/<packageSlug>/cinatra/oas.json (the canonical source-package directory; a source directory in the old layout, an agent.json and no cinatra/oas.json, is refused with an error that says to move it to cinatra/oas.json) and write the result back. Updates prompt and type only — all other fields are preserved. Also scans extensions/cinatra-ai/<packageSlug>/skills/ and registers each SKILL.md in the skills catalog via upsertSkill — returns registeredSkillIds with the IDs of all upserted skills. Source-authoring pipeline step 3 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected at both the delegated-chat policy and the handler's admin gate (compile syncs into the live agent_templates row by package name); non-admin proposal→approval is a separate, later capability.",
     inputSchema: z.object({
       packageSlug: z
         .string()

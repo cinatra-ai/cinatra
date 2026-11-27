@@ -44,6 +44,7 @@ import {
 // Installed-agent reads use `readInstalledAgentTemplates`, which filters
 // status to active/published and excludes drafts.
 import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
+import { isOldLayoutAgentDir, warnOldLayoutAgentDir } from "@cinatra-ai/agents/old-agent-layout";
 // Provider-declared agents live under `<installDir>/cinatra/<slug>/`
 // and are NOT in `agent_templates`. The matcher's "agents" axis must union the
 // DB-installed templates with the filesystem-provided agents so users see
@@ -415,13 +416,6 @@ export async function syncInstalledAgentsToDatabase() {
  * downstream `adaptAgentForMatching()` and existing call sites work
  * unchanged.
  */
-// Slugs whose on-disk directory name differs from the slug.
-// Mirrors `LEGACY_SLUG_MAP` in packages/agents/src/mcp/handlers.ts.
-const PROVIDER_AGENT_LEGACY_SLUG_MAP: Record<string, string> = {
-  "drupal-agent": "drupal-content-editor",
-  "wordpress-agent": "wordpress-content-editor",
-};
-
 // First-party on-disk vendor segment (the `@cinatra-ai` scope WITHOUT npm's
 // leading "@"). Mirrors `DEFAULT_VENDOR_SEGMENT` in
 // packages/agents/src/mcp/agent-source-paths.ts.
@@ -461,43 +455,23 @@ function safeProviderVendorSegments(): string[] {
 }
 
 // Agent-definition path resolution. Mirrors `resolveAgentJsonPathForRead` in
-// packages/agents/src/mcp/handlers.ts so agents authored with supported on-disk
-// layouts all surface in the matcher's "agents" axis.
+// packages/agents/src/mcp/agent-source-paths.ts: an agent is defined by
+// `<installDir>/<vendor>/<slug>/cinatra/oas.json` and by nothing else
+// (cinatra#4920).
 //
 // cinatra#538: resolution is VENDOR-SCOPED, not "first match across vendors".
-// The new-layout rungs (1–2) resolve under ONE specific vendor segment so a
-// same-slug agent under the operator vendor and under first-party "cinatra-ai"
-// BOTH surface as distinct packageIds — instead of the operator dir shadowing
-// the first-party one (the previous "operator-first, return on first hit"
-// behavior hid a same-slug first-party agent from /agents).
+// It resolves under ONE specific vendor segment so a same-slug agent under the
+// operator vendor and under first-party "cinatra-ai" BOTH surface as distinct
+// packageIds — instead of the operator dir shadowing the first-party one (the
+// previous "operator-first, return on first hit" behavior hid a same-slug
+// first-party agent from /agents).
 function resolveProviderAgentJsonPathUnderVendor(
   installRoot: string,
   vendor: string,
   packageSlug: string,
 ): string | null {
-  // Rung 1 — canonical layout
-  const rung1 = path.join(installRoot, vendor, packageSlug, "cinatra", "oas.json");
-  if (existsSync(rung1)) return rung1;
-  // Rung 2 — same directory, alternate filename
-  const rung2 = path.join(installRoot, vendor, packageSlug, "cinatra", "agent.json");
-  if (existsSync(rung2)) return rung2;
-  return null;
-}
-
-// Legacy/flat top-level layout (rungs 3–4): <installDir>/<legacySlug>/[cinatra/]agent.json.
-// These dirs are NOT vendor-scoped; they predate the `<vendor>/<slug>/` layout.
-function resolveLegacyProviderAgentJsonPath(
-  installRoot: string,
-  packageSlug: string,
-): string | null {
-  const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  // Rung 3 — alternate directory via explicit slug map
-  const rung3 = path.join(installRoot, legacySlug, "cinatra", "agent.json");
-  if (existsSync(rung3)) return rung3;
-  // Rung 4 — flat package layout
-  const rung4 = path.join(installRoot, legacySlug, "agent.json");
-  if (existsSync(rung4)) return rung4;
-  return null;
+  const oasPath = path.join(installRoot, vendor, packageSlug, "cinatra", "oas.json");
+  return existsSync(oasPath) ? oasPath : null;
 }
 
 /**
@@ -530,9 +504,8 @@ export function readProviderDeclaredAgents(
 
   // cinatra#538: collect one candidate per on-disk location where an agent
   // actually exists — the operator's OWN vendor dir AND the first-party
-  // "cinatra-ai" dir for the new `<vendor>/<slug>/` layout, plus the legacy/flat
-  // top-level layout. Resolution is PER-VENDOR (not "operator-first, first
-  // hit"), so a same-slug agent under the operator vendor and under "cinatra-ai"
+  // "cinatra-ai" dir (`<vendor>/<slug>/`). Resolution is PER-VENDOR (not
+  // "operator-first, first hit"), so a same-slug agent under the operator vendor and under "cinatra-ai"
   // BOTH surface as distinct packageIds — the operator dir no longer shadows a
   // same-slug first-party agent. Without enumerating the operator vendor dir at
   // all, an approved user agent materialized under
@@ -540,7 +513,10 @@ export function readProviderDeclaredAgents(
   const candidates: Array<{ oasSourcePath: string; siblingPkgPaths: string[] }> = [];
   const vendorSegments = safeProviderVendorSegments();
 
-  // New layout: <installDir>/<vendor>/<slug>/cinatra/{oas,agent}.json
+  // <installDir>/<vendor>/<slug>/cinatra/oas.json. A slug directory in the old
+  // layout (agent.json, no oas.json) is not an agent: it is named in a warning
+  // and left out, never an error, so one stale directory cannot hide the rest
+  // (cinatra#4920). `throwOnError` is about unreadable files, not about this.
   for (const vendor of vendorSegments) {
     const vendorDir = path.join(installRoot, vendor);
     if (!existsSync(vendorDir)) continue;
@@ -553,6 +529,8 @@ export function readProviderDeclaredAgents(
             oasSourcePath: jsonPath,
             siblingPkgPaths: [path.join(installRoot, vendor, sub.name, "package.json")],
           });
+        } else if (isOldLayoutAgentDir(path.join(installRoot, vendor, sub.name))) {
+          warnOldLayoutAgentDir(path.join(installRoot, vendor, sub.name));
         }
       }
     } catch (err) {
@@ -561,7 +539,8 @@ export function readProviderDeclaredAgents(
     }
   }
 
-  // Alternate/legacy layout: <installDir>/<slug>/ that is NOT a walked vendor dir.
+  // A top-level <installDir>/<slug>/ that is NOT a walked vendor dir holds no
+  // agent; one in the old layout is named in a warning (cinatra#4920).
   type DirEntry = { name: string; isDirectory: () => boolean };
   let topEntries: DirEntry[] = [];
   try {
@@ -574,13 +553,8 @@ export function readProviderDeclaredAgents(
   for (const entry of topEntries) {
     if (!entry.isDirectory()) continue;
     if (walkedVendorSegments.has(entry.name)) continue; // already walked above
-    const jsonPath = resolveLegacyProviderAgentJsonPath(installRoot, entry.name);
-    if (jsonPath) {
-      const legacySlug = PROVIDER_AGENT_LEGACY_SLUG_MAP[entry.name] ?? entry.name;
-      candidates.push({
-        oasSourcePath: jsonPath,
-        siblingPkgPaths: [path.join(installRoot, legacySlug, "package.json")],
-      });
+    if (isOldLayoutAgentDir(path.join(installRoot, entry.name))) {
+      warnOldLayoutAgentDir(path.join(installRoot, entry.name));
     }
   }
 

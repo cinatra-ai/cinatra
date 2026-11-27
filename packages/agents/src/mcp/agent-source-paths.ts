@@ -11,17 +11,17 @@ import { join, relative } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
+import { findOldLayoutAgentDir, oldLayoutAgentMessage, warnOldLayoutAgentDir } from "../old-agent-layout";
 
 // ---------------------------------------------------------------------------
-// 4-rung agent definition path resolution.
-// New canonical layout: <installDir>/cinatra/<slug>-agent/cinatra/oas.json
-// the resolver introduces a 4-rung probe so legacy installs still resolve
-// while we migrate forward:
-//   1. <installDir>/cinatra/<slug>/cinatra/oas.json    — NEW canonical
-//   2. <installDir>/cinatra/<slug>/cinatra/agent.json  — transitional (same dir, old filename)
-//   3. <installDir>/<legacySlug>/cinatra/agent.json    — legacy
-//   4. <installDir>/<legacySlug>/agent.json            — legacy (older layout)
-// LEGACY_SLUG_MAP handles the two slugs whose legacy directory names differed from the slug.
+// Agent definition path resolution (cinatra#4920).
+// An agent's definition file is `<installDir>/<vendor>/<slug>/cinatra/oas.json`,
+// probed under the operator's own vendor segment first and the first-party one
+// second. Nothing else is read: a source tree in the old layout (an `agent.json`
+// and no `cinatra/oas.json`) resolves to null, and `oldLayoutAgentErrorForSlug`
+// names the directory and the move for the handlers that report the miss.
+// LEGACY_SLUG_MAP only lets that lookup find the two old directory names that
+// differed from their slug.
 // ---------------------------------------------------------------------------
 
 export const LEGACY_SLUG_MAP: Record<string, string> = {
@@ -94,38 +94,55 @@ export function safeVendorSegmentsForRead(): string[] {
 export function resolveAgentJsonPathForRead(packageSlug: string): {
   path: string;
   relPath: string;
-  /** Agent package root dir (parent of cinatra/ for rungs 1–3; the file's own
-   *  dir for the flat rung-4 layout). Sibling reads (package.json, LICENSE,
-   *  skills/) resolve against this so they cannot disagree with `path`. */
+  /** Agent package root dir (the parent of `cinatra/`). Sibling reads
+   *  (package.json, LICENSE, skills/) resolve against this so they cannot
+   *  disagree with `path`. */
   rootDir: string;
 } | null {
   const root = resolveDevExtensionSourceRoot();
   // Fail-closed: never probe with a slug that isn't a single safe segment
   // (cinatra#537 hardening — a `..`/separator slug must not reach path.join).
   if (!isSafePathSegment(packageSlug)) return null;
-  // Rungs 1–2 probe the NEW canonical `<root>/<vendor>/<slug>/cinatra/` layout.
-  // We probe the operator's OWN vendor segment FIRST (where agents authored on
-  // this instance are now written — cinatra#537), then fall back to the
-  // first-party "cinatra-ai" segment so bundled/installed first-party agents
-  // still resolve. Only filesystem-safe vendor segments are probed.
+  // Probe `<root>/<vendor>/<slug>/cinatra/oas.json`: the operator's OWN vendor
+  // segment FIRST (where agents authored on this instance are written —
+  // cinatra#537), then the first-party "cinatra-ai" segment so bundled/installed
+  // first-party agents still resolve. Only filesystem-safe vendor segments are
+  // probed. This file is the only definition an agent has (cinatra#4920).
   for (const vendor of safeVendorSegmentsForRead()) {
     const newRoot = join(root, vendor, packageSlug);
-    // Rung 1 — NEW canonical
-    const rung1 = join(newRoot, "cinatra", "oas.json");
-    if (existsSync(rung1)) return { path: rung1, relPath: relative(process.cwd(), rung1), rootDir: newRoot };
-    // Rung 2 — transitional (same dir, old filename)
-    const rung2 = join(newRoot, "cinatra", "agent.json");
-    if (existsSync(rung2)) return { path: rung2, relPath: relative(process.cwd(), rung2), rootDir: newRoot };
+    const oasPath = join(newRoot, "cinatra", "oas.json");
+    if (existsSync(oasPath)) return { path: oasPath, relPath: relative(process.cwd(), oasPath), rootDir: newRoot };
   }
-  // Rung 3 — legacy: explicit map for renamed slugs, otherwise keep slug as-is
-  const legacySlug = LEGACY_SLUG_MAP[packageSlug] ?? packageSlug;
-  const legacyRoot = join(/* turbopackIgnore: true */ root, legacySlug);
-  const rung3 = join(legacyRoot, "cinatra", "agent.json");
-  if (existsSync(rung3)) return { path: rung3, relPath: relative(process.cwd(), rung3), rootDir: legacyRoot };
-  // Rung 4 — legacy (older layout)
-  const rung4 = join(legacyRoot, "agent.json");
-  if (existsSync(rung4)) return { path: rung4, relPath: relative(process.cwd(), rung4), rootDir: legacyRoot };
   return null;
+}
+
+/**
+ * The directory of this slug's agent in the OLD layout (an `agent.json`, no
+ * `cinatra/oas.json`), or null. Probes where the retired read ladder looked: the
+ * vendor directories and the flat `<root>/<slug>` (or its old directory name).
+ */
+export function findOldLayoutAgentDirForSlug(packageSlug: string): string | null {
+  if (!isSafePathSegment(packageSlug)) return null;
+  return findOldLayoutAgentDir(
+    resolveDevExtensionSourceRoot(),
+    safeVendorSegmentsForRead(),
+    packageSlug,
+    LEGACY_SLUG_MAP[packageSlug] ?? packageSlug,
+  );
+}
+
+/**
+ * The sentence a handler returns when it cannot find this slug's agent because
+ * the source tree is in the old layout: it names the directory and says to move
+ * it to `cinatra/oas.json`. Null when the slug has no old-layout directory, so
+ * a handler keeps its own "not found" text. `alsoLog` also logs it (once per
+ * directory) for a reader, like the listing, that carries on without it.
+ */
+export function oldLayoutAgentErrorForSlug(packageSlug: string, alsoLog = false): string | null {
+  const dir = findOldLayoutAgentDirForSlug(packageSlug);
+  if (dir === null) return null;
+  if (alsoLog) warnOldLayoutAgentDir(dir);
+  return oldLayoutAgentMessage(relative(process.cwd(), dir));
 }
 
 // Resolves the on-disk directory that contains the agent (for sibling reads
@@ -151,8 +168,8 @@ export function resolveAgentJsonPathForWrite(packageSlug: string): {
   // NOT honor a pre-existing legacy-flat `<installDir>/<legacySlug>/agent.json`
   // for WRITES: doing so split the agent's identity (oas.json under the legacy
   // root, package.json under the canonical vendor root) and broke the read-side
-  // sibling lookup, which is exactly what #602 removes. Legacy installs stay
-  // READABLE via resolveAgentJsonPathForRead's rungs 3–4; only writes converge.
+  // sibling lookup, which is exactly what #602 removes. The old layout is no
+  // longer read either (cinatra#4920).
   const root = resolveDevExtensionSourceRoot();
   const canonicalDir = join(root, resolveInstanceVendorSegment(), packageSlug, "cinatra");
   const canonicalPath = join(canonicalDir, "oas.json");

@@ -317,10 +317,14 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     expect(packageIds).toEqual(["@cinatra-ai/email-drafting-agent"]);
   });
 
-  it("walks transitional and legacy layouts (4-rung resolver parity with handleAgentBuilderGitList)", () => {
+  it("cinatra#4920: an old-layout agent (agent.json, no oas.json) is not read; it is named and the others still surface", () => {
+    // The shapes the retired 4-rung ladder read: a transitional agent.json in a
+    // vendor slug dir, a flat cinatra/agent.json under an old directory name,
+    // and a flat root agent.json. None is an agent any more.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     makeProviderAgentDir(tmpRoot, "agent-a", {
       layout: "new-agent",
-      packageName: "@cinatra/agent-a",
+      packageName: "@example-org/agent-a",
       name: "Agent A",
       description: "Transitional layout",
     });
@@ -329,23 +333,41 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
       legacyDirName: "drupal-content-editor",
       packageName: "@cinatra-ai/drupal-agent",
       name: "Drupal Agent",
-      description: "Legacy cinatra layout + legacy slug map",
+      description: "Legacy cinatra layout",
     });
     makeProviderAgentDir(tmpRoot, "agent-c", {
       layout: "legacy-flat",
-      packageName: "@cinatra/agent-c",
+      packageName: "@example-org/agent-c",
       name: "Agent C",
       description: "Legacy flat layout",
     });
+    makeProviderAgentDir(tmpRoot, "agent-d", {
+      layout: "new-oas",
+      packageName: "@example-org/agent-d",
+      name: "Agent D",
+      description: "Current layout",
+    });
 
-    const packageIds = readProviderDeclaredAgents()
-      .map((a) => a.packageId)
-      .sort();
-    expect(packageIds).toEqual([
-      "@cinatra-ai/drupal-agent",
-      "@cinatra/agent-a",
-      "@cinatra/agent-c",
-    ]);
+    // throwOnError is about unreadable files: an old-layout directory is a
+    // warning in both modes and never stops the other agents.
+    for (const options of [{}, { throwOnError: true }]) {
+      const packageIds = readProviderDeclaredAgents(options).map((a) => a.packageId);
+      expect(packageIds).toEqual(["@example-org/agent-d"]);
+      expect(packageIds).not.toContain("@cinatra-ai/drupal-agent");
+    }
+
+    const messages = warn.mock.calls.map((call) => String(call[0]));
+    for (const dir of [
+      path.join(tmpRoot, "cinatra-ai", "agent-a"),
+      path.join(tmpRoot, "drupal-content-editor"),
+      path.join(tmpRoot, "agent-c"),
+    ]) {
+      const named = messages.filter((m) => m.includes(`${dir} is an agent in the old layout`));
+      // Named once, with the move, however many times the picker runs.
+      expect(named).toHaveLength(1);
+      expect(named[0]).toContain("move it to cinatra/oas.json");
+    }
+    warn.mockRestore();
   });
 
   it("falls back to sibling package.json for packageName + description", () => {

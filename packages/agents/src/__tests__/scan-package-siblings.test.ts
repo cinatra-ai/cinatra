@@ -110,10 +110,11 @@ describe("walkPackageFiles — traversal policy", () => {
   });
 
   it("tags only the canonical OAS path as isCanonicalOasFile", async () => {
-    // Canonical OAS files at the well-known cinatra/oas.json or cinatra/agent.json
-    // path are exempted (the OAS scanner covers them). Any other location with
-    // the same basename — examples, fixtures, nested copies — MUST still be
-    // scanned for credentials. This prevents path-matching regressions.
+    // The canonical OAS file at the well-known cinatra/oas.json path is exempted
+    // (the OAS scanner covers it). Any other location with the same basename —
+    // examples, fixtures, nested copies — and any agent.json, cinatra/agent.json
+    // included (an agent has no such definition file, cinatra#4920), MUST still
+    // be scanned for credentials. This prevents path-matching regressions.
     await write("cinatra/oas.json", "{}");
     await write("cinatra/agent.json", "{}");
     await write("examples/agent.json", "{}");
@@ -122,7 +123,7 @@ describe("walkPackageFiles — traversal policy", () => {
     await write("regular.json", "{}");
     const out = await walkPackageFiles(tmpRoot);
     expect(out.find((f) => f.relPath === "cinatra/oas.json")?.isCanonicalOasFile).toBe(true);
-    expect(out.find((f) => f.relPath === "cinatra/agent.json")?.isCanonicalOasFile).toBe(true);
+    expect(out.find((f) => f.relPath === "cinatra/agent.json")?.isCanonicalOasFile).toBe(false);
     // Nested basename-matches MUST NOT be exempt — they would otherwise ship
     // unscanned credentials past the gate.
     expect(out.find((f) => f.relPath === "examples/agent.json")?.isCanonicalOasFile).toBe(false);
@@ -144,6 +145,21 @@ describe("walkPackageFiles — traversal policy", () => {
         (f) =>
           f.code === "literal_credential_in_sibling_file" &&
           f.location?.startsWith("examples/agent.json:"),
+      ),
+    ).toBe(true);
+  });
+
+  it("scans a stale cinatra/agent.json for credentials (no OAS scanner reads it)", async () => {
+    // cinatra#4920: an agent is defined by cinatra/oas.json alone. A leftover
+    // cinatra/agent.json is an ordinary file, so a credential in it is found
+    // instead of shipping past both scanners.
+    await write("cinatra/agent.json", '"apiKey": "sk-test1234567890abcdef1234567890ABCDEF12"');
+    const findings = await scanPackageSiblingFilesForLiteralSecrets(tmpRoot);
+    expect(
+      findings.some(
+        (f) =>
+          f.code === "literal_credential_in_sibling_file" &&
+          f.location?.startsWith("cinatra/agent.json:"),
       ),
     ).toBe(true);
   });
@@ -266,7 +282,7 @@ describe("scanPackageSiblingFilesForLiteralSecrets — negative cases", () => {
     expect(findings.filter((f) => f.code === "literal_credential_in_sibling_file")).toEqual([]);
   });
 
-  it("does NOT scan oas.json or agent.json (covered by OAS scanner)", async () => {
+  it("does NOT scan cinatra/oas.json (covered by OAS scanner)", async () => {
     await write(
       "cinatra/oas.json",
       '{"system": "Use sk-test1234567890abcdef1234567890ABCDEF12 here"}',

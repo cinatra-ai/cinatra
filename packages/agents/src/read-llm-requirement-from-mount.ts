@@ -43,7 +43,7 @@ import { OasCinatraLlmSchema, type OasCinatraLlm } from "./llm-provider-policy";
 // no-new-rot dev-perf ratchet). The SECURITY trust root (the context routes,
 // slice 1) uses the full shared resolver; this is a best-effort probe over an
 // already-install-validated package name. `cinatra/oas.json` only (the
-// materializer requires it; no agent.json / legacy-flat fallback).
+// materializer requires it; it is the one definition file).
 function resolveInstalledOasMountPath(packageName: string): string | null {
   const m = /^@([^/]+)\/([^/]+)$/.exec(packageName);
   if (!m) return null;

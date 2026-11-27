@@ -2,8 +2,9 @@
  * THE GIT-NATIVE AGENT INGEST — the walk, over a real tree.
  *
  * The walk is what the development boot's awaited agent-ingest phase runs, so
- * its claims are the ones that phase rests on: the layouts it recognises, the
- * order it probes them in, the three answers it counts apart (which is how the
+ * its claims are the ones that phase rests on: the one layout it reads
+ * (`<vendor>/<slug>/cinatra/oas.json`), the old layouts it names instead of
+ * passing over (cinatra#4920), the three answers it counts apart (which is how the
  * phase says "nothing to do" truthfully), the budget that keeps a stuck loader
  * from becoming a boot the watchdog exits, and that one definition the loader
  * cannot read is named and does not cost the tree its other definitions.
@@ -62,19 +63,19 @@ afterEach(async () => {
 });
 
 describe("ingestGitNativeAgentDefinitions", () => {
-  it("finds every layout the boot scan recognises, and hands each one to the loader", async () => {
+  it("reads the vendor layout, hands each definition to the loader, and ignores what is no definition", async () => {
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
-    await writeDefinition(path.join("cinatra-ai", "scrape-agent", "cinatra", "agent.json"));
-    await writeDefinition(path.join("legacy-nested", "cinatra", "agent.json"));
-    await writeDefinition(path.join("legacy-flat", "agent.json"));
+    await writeDefinition(path.join("example-org", "scrape-agent", "cinatra", "oas.json"));
     // Neither a definition nor a directory: nothing to find here.
     await writeFile(path.join(root, "README.md"), "not a definition", "utf8");
+    // A directory with no agent file at all is no definition and no old layout.
+    await mkdir(path.join(root, "example-org", "docs-only"), { recursive: true });
 
     const loadDefinition = loaderImporting();
     const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
 
-    expect(report.found).toBe(4);
-    expect(report.imported).toBe(4);
+    expect(report.found).toBe(2);
+    expect(report.imported).toBe(2);
     expect(report.alreadyOnFile).toBe(0);
     expect(report.declined).toBe(0);
     expect(report.pending).toEqual([]);
@@ -83,11 +84,85 @@ describe("ingestGitNativeAgentDefinitions", () => {
     expect([...loadDefinition.paths].sort()).toEqual(
       [
         path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"),
-        path.join("cinatra-ai", "scrape-agent", "cinatra", "agent.json"),
-        path.join("legacy-flat", "agent.json"),
-        path.join("legacy-nested", "cinatra", "agent.json"),
+        path.join("example-org", "scrape-agent", "cinatra", "oas.json"),
       ].sort(),
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#4920: an agent's definition file is cinatra/oas.json. A directory
+  // with an agent.json and no oas.json is not read, and it is not skipped
+  // silently either: it is named, with the move, and the rest of the tree still
+  // ingests.
+  // -------------------------------------------------------------------------
+
+  it("does not read an old-layout directory; names it with the move, and still reads the rest", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const current = path.join("cinatra-ai", "research-agent", "cinatra", "oas.json");
+    await writeDefinition(current);
+    // The three shapes the retired probes read: a transitional agent.json in a
+    // vendor slug directory, a flat cinatra/agent.json, a flat root agent.json.
+    await writeDefinition(path.join("cinatra-ai", "scrape-agent", "cinatra", "agent.json"));
+    await writeDefinition(path.join("legacy-nested", "cinatra", "agent.json"));
+    await writeDefinition(path.join("legacy-flat", "agent.json"));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    // The loader is handed the oas.json only; the old layouts never reach it.
+    expect(report.found).toBe(1);
+    expect(report.imported).toBe(1);
+    expect(loadDefinition.paths).toEqual([current]);
+
+    const oldDirs = [
+      path.join("cinatra-ai", "scrape-agent"),
+      "legacy-nested",
+      "legacy-flat",
+    ];
+    expect(report.failures.map((f) => f.definitionPath).sort()).toEqual([...oldDirs].sort());
+    for (const failure of report.failures) {
+      expect(failure.reason).toContain(failure.definitionPath);
+      expect(failure.reason).toContain("move it to cinatra/oas.json");
+    }
+    // Logged too, with the directory, once each.
+    for (const dir of oldDirs) {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`${path.join(root, dir)} is an agent in the old layout`),
+      );
+    }
+  });
+
+  it("a directory that has both files is read from its oas.json and is not an old layout", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
+    await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "agent.json"));
+    await writeDefinition(path.join("legacy-both", "cinatra", "oas.json"));
+    await writeDefinition(path.join("legacy-both", "cinatra", "agent.json"));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    expect(report.found).toBe(1);
+    expect(loadDefinition.paths).toEqual([
+      path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"),
+    ]);
+    expect(report.failures).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("an old-layout directory alone ingests nothing and does not throw", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeDefinition(path.join("legacy-flat", "agent.json"));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    expect(report.found).toBe(0);
+    expect(loadDefinition.paths).toEqual([]);
+    expect(report.pending).toEqual([]);
+    expect(report.failures).toEqual([
+      expect.objectContaining({ definitionPath: "legacy-flat" }),
+    ]);
   });
 
   it("counts a definition reaching the database for the FIRST time as read in", async () => {
@@ -129,19 +204,6 @@ describe("ingestGitNativeAgentDefinitions", () => {
     expect(report.failures).toEqual([]);
   });
 
-  it("prefers oas.json over the transitional agent.json beside it", async () => {
-    await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
-    await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "agent.json"));
-
-    const loadDefinition = loaderImporting();
-    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
-
-    expect(report.found).toBe(1);
-    expect(loadDefinition.paths).toEqual([
-      path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"),
-    ]);
-  });
-
   it("does not fall back to the flat layouts inside a vendor directory that yielded a definition", async () => {
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
     // Would match the fallback layout if the vendor probe had not already hit.
@@ -154,6 +216,7 @@ describe("ingestGitNativeAgentDefinitions", () => {
     expect(loadDefinition.paths).toEqual([
       path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"),
     ]);
+    expect(report.failures).toEqual([]);
   });
 
   it("counts an already-current definition apart, so a second run has nothing to report", async () => {
