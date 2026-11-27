@@ -50,11 +50,18 @@
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
+//
+// UNTYPED PORT INPUT (cinatra#4872): the rule `untyped-port-input` reads the
+// TYPES a pack is handed, with the TypeScript type checker and no matcher of
+// its own: every member of every port of PORT_ROOT whose call signature has a
+// parameter that resolves to `any`, `unknown`, `object` or a type parameter
+// without a useful constraint. See the contract document for its stated limits.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import ts from "typescript";
 import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -403,6 +410,116 @@ export function scanScopedToolAdmissions({ file, text, packs }) {
   return out;
 }
 
+/** The aggregate whose properties ARE the port types an extension is handed:
+ *  the object `register(ctx)` receives. The rule names no port and no member
+ *  itself; a root that cannot be found fails closed. */
+export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" };
+
+export const PORT_RULE = "untyped-port-input";
+
+const PORT_COMPILER_OPTIONS = {
+  noEmit: true,
+  strict: true,
+  skipLibCheck: true,
+  types: [],
+  target: ts.ScriptTarget.ES2022,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+};
+
+/** A compiler host that reads the repository's own files at a git revision. */
+function hostAtRef(repoRoot, ref) {
+  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+  const outside = { ...host };
+  const cache = new Map();
+  const rel = (f) => {
+    const r = relative(repoRoot, f);
+    return r.startsWith("..") || isAbsolute(r) ? null : r.split(sep).join("/");
+  };
+  const show = (r) => {
+    if (!cache.has(r)) {
+      try {
+        const text = execFileSync("git", ["cat-file", "blob", `${ref}:${r}`], {
+          cwd: repoRoot,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "ignore"],
+          maxBuffer: 64 * 1024 * 1024,
+        });
+        cache.set(r, text);
+      } catch {
+        cache.set(r, undefined);
+      }
+    }
+    return cache.get(r);
+  };
+  host.fileExists = (f) => (rel(f) === null ? outside.fileExists(f) : show(rel(f)) !== undefined);
+  host.readFile = (f) => (rel(f) === null ? outside.readFile(f) : show(rel(f)));
+  host.directoryExists = (d) => (rel(d) === null ? outside.directoryExists(d) : true);
+  host.getSourceFile = (f, ...rest) => {
+    if (rel(f) === null) return outside.getSourceFile(f, ...rest);
+    const text = show(rel(f));
+    return text === undefined ? undefined : ts.createSourceFile(f, text, rest[0]);
+  };
+  return host;
+}
+
+/** A parameter's resolved type is untyped: `any`, `unknown`, `object`, or a
+ *  type parameter whose constraint is absent or one of those. The checker has
+ *  already reduced the rest (`unknown & { id: string }`, `keyof Record<…>`);
+ *  nothing inside an object, record, union or intersection is read. */
+function isUntypedType(t, seen = new Set()) {
+  if (t.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.NonPrimitive)) return true;
+  if (!(t.flags & ts.TypeFlags.TypeParameter) || seen.has(t)) return false;
+  seen.add(t);
+  const constraint = t.getConstraint();
+  return !constraint || isUntypedType(constraint, seen);
+}
+
+/** Every port member (inherited ones included) whose call signature takes an
+ *  untyped parameter, one finding per member. `ref` reads the tree at that git
+ *  revision instead of the checkout. A missing root throws. */
+export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type, ref } = {}) {
+  const host = ref ? hostAtRef(repoRoot, ref) : ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+  host.realpath = (p) => p;
+  const rootPath = join(repoRoot, file);
+  const program = ts.createProgram({ rootNames: [rootPath], options: PORT_COMPILER_OPTIONS, host });
+  const checker = program.getTypeChecker();
+  const sourceFile = program.getSourceFile(rootPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  const rootSymbol = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === type);
+  if (!rootSymbol) {
+    throw new Error(
+      `[core-extension-border] the port root ${type} is not exported by ${file}${ref ? ` at ${ref}` : ""} — the rule fails closed rather than reading no port`,
+    );
+  }
+  const typeOf = (symbol) => checker.getNonNullableType(checker.getTypeOfSymbol(symbol));
+  const out = [];
+  const counts = new Map();
+  for (const portProp of checker.getPropertiesOfType(checker.getDeclaredTypeOfSymbol(rootSymbol))) {
+    const portType = typeOf(portProp);
+    const named = portType.aliasSymbol?.name ?? portType.getSymbol()?.name;
+    const port = named && !named.startsWith("__") ? named : portProp.name;
+    for (const member of checker.getPropertiesOfType(portType)) {
+      const untyped = typeOf(member)
+        .getCallSignatures()
+        .flatMap((sig) => sig.getParameters().filter((p) => isUntypedType(checker.getTypeOfSymbol(p))).map((p) => p.name));
+      if (untyped.length === 0) continue;
+      const decl = member.declarations?.[0];
+      const declFile = decl ? relative(repoRoot, decl.getSourceFile().fileName).split(sep).join("/") : file;
+      out.push(
+        finding(
+          PORT_RULE,
+          declFile.startsWith("..") ? file : declFile,
+          decl ? decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1 : 1,
+          occurrenceDetail(counts, PORT_RULE, `${port}.${member.name}`),
+          `a host port member takes an untyped input (${[...new Set(untyped)].join(", ")}: any, unknown, object or an unconstrained type parameter); the port bounds nothing a manifest declares (cinatra#4872)`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -574,6 +691,7 @@ export const KNOWN_RULES = new Set([
   "skill-legacy-exception",
   "materialized-extension-file",
   "pack-shaped-core-domain",
+  "untyped-port-input",
 ]);
 
 /** Everything structurally wrong with a ledger, as messages. An unreadable or
@@ -673,7 +791,7 @@ export function baselineGrowth(previousDoc, currentDoc) {
  *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
  *  base that cannot be read fails closed. */
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
-  return compareFloorWithBase({
+  const result = compareFloorWithBase({
     gate: "core-extension-border",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
@@ -683,6 +801,31 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     repoRoot,
     env,
   });
+  if (result.status !== "grew") return result;
+  // The first recording of a rule that reads the TYPES of a tree: its entry is
+  // not growth when its declaration already stood on the base. The head script
+  // reads the base tree, so only a declaration of the base can be listed; one
+  // added in the same change is growth as for every other rule.
+  const prefix = `new entry: ${PORT_RULE}::`;
+  if (!result.growth.some((g) => g.startsWith(prefix))) return result;
+  let onBase = new Set();
+  try {
+    onBase = new Set(portMemberFindings({ repoRoot, ref: result.ref }).map((f) => `${f.file}::${f.detail}`));
+  } catch {
+    /* nothing readable stood on the base: every such entry stays growth */
+  }
+  const remaining = result.growth.filter((g) => !(g.startsWith(prefix) && onBase.has(g.slice(prefix.length))));
+  if (remaining.length > 0) {
+    return { ...result, growth: remaining, lines: [result.lines[0], ...remaining.map((g) => `  + ${g}`)] };
+  }
+  return {
+    status: "held",
+    ok: true,
+    ref: result.ref,
+    baseFloor: result.baseFloor,
+    growth: [],
+    lines: [`[core-extension-border] floor base guard: ${FLOOR_FILE} does not grow against the base "${result.ref}" (the ${PORT_RULE} entries it adds stood there already).`],
+  };
 }
 
 /** The verdict on the ledger entries whose crossing is gone: a stale entry
@@ -731,6 +874,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
 
   findings.push(...trackedExtensionFileFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
+  findings.push(...portMemberFindings({ repoRoot }));
 
   const present = new Set(findings.map(keyOf));
   const stale = [...baseline.keys]

@@ -49,6 +49,35 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+## A port member takes a typed input
+
+The rule `untyped-port-input` (cinatra#4872) reads the types a pack is handed, not text,
+and it has no matcher of its own: it builds a TypeScript program over
+`packages/sdk-extensions/src/host-context.ts` (and what it imports) and asks the type
+checker. Each property of `ExtensionHostContext` is a port. For each property of a port
+(the checker lists the members it inherits too), the call signatures of its type with
+`null` and `undefined` removed are read, which covers a method and a nullable function
+property alike. A member is one finding when a parameter of one of its signatures
+resolves to `any`, `unknown`, the non-primitive `object`, or a type parameter whose
+constraint is absent or is one of those. Whether the member also takes a name does not
+matter. The finding is the member, `<port type>.<member>`, once, however many overloads it has.
+
+The members that stood on main when the rule landed are ledger entries with their
+reasons, written once by `--write-baseline`; afterwards the rule is shrink-only like
+the others. The base guard admits a new entry of this rule only when its member is a
+finding on the BASE tree: the head script reads the files of the base revision from git
+and lists what it finds there, so a declaration added in the same change cannot be
+listed. A base that cannot be read, or one without the root, admits nothing.
+
+Stated limits. The rule reads what the checker resolves and nothing inside it: an object
+literal, a `Record<string, unknown>`, an array, a union or an intersection that the checker
+does not reduce to `any`, `unknown` or `object` is not looked into (`input: { data: unknown }`
+and `input: unknown[]` pass; `unknown & { id: string }` and `keyof Record<string, unknown>`
+reduce to typed forms and pass). A parameter of a callback that a member receives is not an
+input the member takes. Only the members of `ExtensionHostContext` are read: the port set of
+a declared tool module is not. A way around the check that needs a disguise on purpose is left
+to review.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the

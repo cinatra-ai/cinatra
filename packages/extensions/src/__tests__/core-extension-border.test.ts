@@ -94,6 +94,8 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  PORT_RULE: string;
+  portMemberFindings: (input?: { repoRoot?: string; file?: string; type?: string; ref?: string }) => Finding[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -717,4 +719,118 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('does not grow against the base "HEAD"');
   }, 120_000);
+});
+
+// cinatra#4872: a host port member does not take an untyped input. The rule
+// reads resolved types with the TypeScript checker, so each case below writes
+// a declaration and asks what the checker makes of it.
+describe("core/extension border — a port member does not take an untyped input", () => {
+  function portDetails(declarations: string): string[] {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      writeFileSync(
+        path.join(dir, "host-context.ts"),
+        `${declarations}\nexport type ExtensionHostContext = { jobs: JobsPort };\n`,
+      );
+      return gate.portMemberFindings({ repoRoot: dir, file: "host-context.ts" }).map((f) => f.detail);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("reports a method that takes an unknown input, name or no name", () => {
+    expect(portDetails("type JobsPort = { run(jobName: string, input: unknown): void; ping(input: any): void };")).toEqual([
+      "JobsPort.run",
+      "JobsPort.ping",
+    ]);
+  });
+
+  it("reports a nullable function property", () => {
+    expect(portDetails("type JobsPort = { run: ((jobName: string, input: unknown) => void) | null };")).toEqual([
+      "JobsPort.run",
+    ]);
+  });
+
+  it("reports a member the port inherits", () => {
+    expect(
+      portDetails(
+        "interface UnsafePort { run(input: object): void }\ninterface JobsPort extends UnsafePort {}",
+      ),
+    ).toEqual(["JobsPort.run"]);
+  });
+
+  it("reports an unconstrained type parameter, and one constrained to unknown", () => {
+    expect(
+      portDetails(
+        "type JobsPort = { set<T = unknown>(key: string, value: T): void; put<T extends unknown>(value: T): void };",
+      ),
+    ).toEqual(["JobsPort.set", "JobsPort.put"]);
+  });
+
+  it("leaves a typed parameter, a constrained type parameter and a reduced type alone", () => {
+    expect(
+      portDetails(
+        [
+          "type JobsPort = {",
+          "  typed(jobName: string, input: { id: string }): void;",
+          "  constrained<T extends { id: string }>(value: T): void;",
+          "  reduced(input: unknown & { id: string }): void;",
+          "  keyed(field: keyof Record<string, unknown>): void;",
+          "  record(input: Record<string, number>): void;",
+          "};",
+        ].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("finds the standing members of the real port declarations", () => {
+    expect(gate.portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set");
+  });
+
+  // The first recording: an entry of this rule is not growth when its member
+  // already stood on the base tree. A member added in the same change is.
+  describe("the first recording reads the base tree", () => {
+    const FLOOR = "config/core-extension-border-baseline.json";
+    const ROOT = "packages/sdk-extensions/src/host-context.ts";
+    const PORTS = (members: string) =>
+      `type JobsPort = { ${members} };\nexport type ExtensionHostContext = { jobs: JobsPort };\n`;
+    const entry = (member: string) => ({
+      rule: gate.PORT_RULE,
+      key: `${ROOT}::JobsPort.${member}`,
+      reason: "a member of a fixture port, with its reason",
+    });
+    const fixtures: { cleanup: () => void }[] = [];
+    afterEach(() => {
+      while (fixtures.length) fixtures.pop()?.cleanup();
+    });
+    function check(baseMembers: string, headMembers: string, entries: unknown[]) {
+      const f = floorFixture.makeFloorRepo({
+        base: { [FLOOR]: { entries: [] }, [ROOT]: PORTS(baseMembers) },
+        head: { [FLOOR]: { entries }, [ROOT]: PORTS(headMembers) },
+      });
+      fixtures.push(f);
+      return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+    }
+
+    it("admits an entry whose member stood on the base", () => {
+      const r = check("run(input: unknown): void;", "run(input: unknown): void;", [entry("run")]);
+      expect(r.ok).toBe(true);
+      expect(r.status).toBe("held");
+    });
+
+    it("refuses an entry whose member the same change adds", () => {
+      const r = check("run(input: unknown): void;", "run(input: unknown): void; add(input: unknown): void;", [
+        entry("run"),
+        entry("add"),
+      ]);
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.add`]);
+    });
+
+    it("refuses an entry of a member the base never had", () => {
+      const r = check("", "", [entry("run")]);
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.run`]);
+    });
+  });
 });
