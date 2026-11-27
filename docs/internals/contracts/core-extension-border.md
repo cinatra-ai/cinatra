@@ -49,6 +49,47 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+## A port member bounds what it takes
+
+The rule `unbounded-port-member` (cinatra#4872) reads the types a pack is handed rather
+than text. Two declared aggregates list the pack-facing port types by their properties:
+`ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts` (what
+`register(ctx)` receives) and `ExtensionToolPorts` in `src/lib/extension-tool-dispatch.ts`
+(what a declared tool module receives). Each listed port type is parsed with the
+TypeScript compiler and every member declaration is read. A declaration is refused when
+it takes a free name together with an untyped input: the port then bounds nothing a
+manifest declares. A free name is a parameter whose name ends in `name` or `key` and whose
+type is `string` or a union or optional form containing `string`. An untyped input is a
+parameter whose type is `unknown`, `any`, `object`, `Record<string, unknown|any>` or a type
+literal of index signatures only, or a union, intersection, parenthesised type, array,
+`readonly` array, `| null` / `| undefined` form or `Promise<…>`, `Partial<…>`,
+`Readonly<…>`, `Array<…>` wrapper that contains one at any depth. A name typed by a literal
+union or by a named alias — such as one the manifest schema exports — passes. Each
+offending declaration is one finding: an overload of a member carries its ordinal
+(`(occurrence 2)`), as every repeated crossing of the gate does. A root aggregate that
+cannot be found fails the gate.
+
+The members that stood on main when the rule landed are ledger entries with their
+reasons. They were seeded once through the ledger's `seededRules`: a listed rule is seeded
+only when the base copy of the gate script does not know it (it is not in the base's
+`KNOWN_RULES`; with no such list, its id does not occur in the base text), and a base copy
+that cannot be read seeds nothing. A rule the base check knows is never seeded, so a new
+entry of it is growth against the base, and taking a rule off `seededRules` is growth too.
+
+The second half the issue asked for, a member whose signature names a raw handle (a type
+imported from outside the SDK), is not built: it had no finding on main.
+
+Stated limits. The rule reads what an ordinary change writes; a disguise is left to
+review. A type alias is not followed: a name typed by an alias of `string`, or an input
+typed by an alias of `unknown` or of a `Record`, passes. Only the port types the two
+aggregates list by a plain type name are read, as type literals (or intersections of type
+literals) declared in the same file; a port type built by a mapped or conditional type,
+re-exported from another file, or reached through `Omit<…>` is not read. The name test is
+the parameter's name, so a free string under a name that does not end in `name` or `key`
+(`capability`, `channel`) is not a name parameter. An overload is counted by its ordinal,
+so replacing one offending overload by another in the same place keeps the same key and
+is not seen as new.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the

@@ -50,12 +50,31 @@
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
+//
+// UNBOUNDED PORT MEMBERS (cinatra#4872): the rule `unbounded-port-member`
+// reads the TYPES a pack is handed, not text. The two declared aggregates in
+// PORT_ROOTS (the host context of the SDK and the tool-port set of a declared
+// module) list the port types by their properties; each port type is parsed
+// with the TypeScript compiler and every member declaration is read. A
+// declaration is refused when it takes a free name (a parameter named
+// `*name`/`*key` whose type is or contains `string`) together with an untyped
+// input (a parameter whose type is or contains `unknown`, `any`, `object`,
+// `Record<string, unknown|any>` or an index-signature-only type literal). A
+// name typed by a literal union or a named alias passes.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
+import ts from "typescript";
+import {
+  FETCHED_REF_PREFIX,
+  PULL_REQUEST_BASE_VAR,
+  compareFloorWithBase,
+  readFileAtBase,
+  reportFloorGuard,
+  resolveFloorBase,
+} from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -66,6 +85,9 @@ export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
 export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+
+/** This script, repo-relative, as the seed rule reads its base copy. */
+export const GATE_FILE = "scripts/ci/core-extension-border-gate.mjs";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -403,6 +425,156 @@ export function scanScopedToolAdmissions({ file, text, packs }) {
   return out;
 }
 
+/** The declared aggregates whose properties ARE the pack-facing port types:
+ *  the host context an extension's register(ctx) receives, and the port set a
+ *  declared tool module receives. The rule reads the types these list; it names
+ *  no port and no member itself. A root that cannot be found fails closed. */
+export const PORT_ROOTS = [
+  { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" },
+  { file: "src/lib/extension-tool-dispatch.ts", type: "ExtensionToolPorts" },
+];
+
+const NAME_PARAM_RE = /(?:name|key)$/i;
+
+/** The wrappers a type is read through: `Promise<…>`, `Partial<…>`, … */
+const WRAPPER_TYPES = new Set(["Promise", "Partial", "Readonly", "Array", "ReadonlyArray"]);
+
+/** True when the type node is `leaf`, or a union, intersection, parenthesised
+ *  type, array, `readonly` array, optional type or a WRAPPER_TYPES reference
+ *  that contains such a node at any depth (so `X | null`, `X[]`,
+ *  `Promise<X>` read as X). */
+export function typeContains(node, isLeaf) {
+  if (!node) return false;
+  if (isLeaf(node)) return true;
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) return node.types.some((t) => typeContains(t, isLeaf));
+  if (ts.isParenthesizedTypeNode(node) || ts.isTypeOperatorNode(node) || ts.isOptionalTypeNode(node)) {
+    return typeContains(node.type, isLeaf);
+  }
+  if (ts.isArrayTypeNode(node)) return typeContains(node.elementType, isLeaf);
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && WRAPPER_TYPES.has(node.typeName.text)) {
+    return (node.typeArguments ?? []).some((t) => typeContains(t, isLeaf));
+  }
+  return false;
+}
+
+const isAnyLike = (n) => n.kind === ts.SyntaxKind.UnknownKeyword || n.kind === ts.SyntaxKind.AnyKeyword;
+
+/** An untyped leaf: `unknown`, `any`, `object`, `Record<string, unknown|any>`,
+ *  or a type literal that holds index signatures only. */
+export function isUntypedLeaf(n) {
+  if (isAnyLike(n) || n.kind === ts.SyntaxKind.ObjectKeyword) return true;
+  if (
+    ts.isTypeReferenceNode(n) &&
+    ts.isIdentifier(n.typeName) &&
+    n.typeName.text === "Record" &&
+    n.typeArguments?.length === 2 &&
+    n.typeArguments[0].kind === ts.SyntaxKind.StringKeyword &&
+    isAnyLike(n.typeArguments[1])
+  ) {
+    return true;
+  }
+  return ts.isTypeLiteralNode(n) && n.members.length > 0 && n.members.every((m) => ts.isIndexSignatureDeclaration(m));
+}
+
+/** A parameter's type is an untyped input (an unannotated parameter is `any`). */
+export function isUntypedInput(type) {
+  return !type || typeContains(type, isUntypedLeaf);
+}
+
+/** A parameter's type is a free name: `string`, or a form containing it. */
+export function isFreeNameType(type) {
+  return typeContains(type, (n) => n.kind === ts.SyntaxKind.StringKeyword);
+}
+
+/** The members of a type node: a type literal, or each type literal of an
+ *  intersection. */
+function typeLiteralMembers(node) {
+  if (!node) return [];
+  if (ts.isTypeLiteralNode(node)) return [...node.members];
+  if (ts.isIntersectionTypeNode(node)) return node.types.flatMap(typeLiteralMembers);
+  if (ts.isParenthesizedTypeNode(node)) return typeLiteralMembers(node.type);
+  return [];
+}
+
+/** The declared members of a named type alias or interface in one file, or null. */
+function declaredMembers(sf, name) {
+  for (const st of sf.statements) {
+    if (ts.isTypeAliasDeclaration(st) && st.name.text === name) return typeLiteralMembers(st.type);
+    if (ts.isInterfaceDeclaration(st) && st.name.text === name) return [...st.members];
+  }
+  return null;
+}
+
+function memberName(sf, m) {
+  return m.name ? m.name.getText(sf) : null;
+}
+
+/** The parameters of a member: a method, or a property typed by a function. */
+function memberParameters(m) {
+  if (ts.isMethodSignature(m)) return m.parameters;
+  if (ts.isPropertySignature(m) && m.type && ts.isFunctionTypeNode(m.type)) return m.type.parameters;
+  return null;
+}
+
+/** The `unbounded-port-member` findings of one file, for the root aggregate
+ *  `rootType` declared in it. Returns null when the root is not declared. */
+export function scanPortMembers({ file, text, rootType }) {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const rootMembers = declaredMembers(sf, rootType);
+  if (rootMembers === null) return null;
+  const out = [];
+  const seen = new Set();
+  // Every offending DECLARATION is one finding: an overload of a recorded
+  // member carries its ordinal, as every repeated crossing of this gate does.
+  const counts = new Map();
+  for (const prop of rootMembers) {
+    if (!ts.isPropertySignature(prop) || !prop.type || !ts.isTypeReferenceNode(prop.type)) continue;
+    if (!ts.isIdentifier(prop.type.typeName)) continue;
+    const portType = prop.type.typeName.text;
+    if (seen.has(portType)) continue;
+    seen.add(portType);
+    const members = declaredMembers(sf, portType);
+    if (!members) continue;
+    for (const m of members) {
+      const name = memberName(sf, m);
+      if (!name) continue;
+      const params = memberParameters(m);
+      if (!params) continue;
+      const freeName = params.find((p) => ts.isIdentifier(p.name) && NAME_PARAM_RE.test(p.name.text) && isFreeNameType(p.type));
+      const untyped = freeName && params.find((p) => p !== freeName && isUntypedInput(p.type));
+      if (!untyped) continue;
+      out.push(
+        finding(
+          "unbounded-port-member",
+          file,
+          sf.getLineAndCharacterOfPosition(m.getStart(sf)).line + 1,
+          occurrenceDetail(counts, "unbounded-port-member", `${portType}.${name}`),
+          `a pack-facing port member takes the free name \`${freeName.name.text}\` with the untyped input \`${untyped.name.getText(sf)}\`; a port member is bounded by what the manifest declares (a literal union or a manifest-exported alias)`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+/** Every `unbounded-port-member` finding of the declared port roots. Fails
+ *  closed when a root file or a root type is missing: a renamed aggregate would
+ *  otherwise turn the rule off without saying so. */
+export function portMemberFindings(repoRoot, roots = PORT_ROOTS) {
+  const out = [];
+  for (const { file, type } of roots) {
+    const abs = join(repoRoot, file);
+    const found = existsSync(abs) ? scanPortMembers({ file, text: readFileSync(abs, "utf8"), rootType: type }) : null;
+    if (found === null) {
+      throw new Error(
+        `[core-extension-border] cannot read the port root ${type} in ${file} — the gate fails closed rather than skipping the port-member rule`,
+      );
+    }
+    out.push(...found);
+  }
+  return out;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -574,6 +746,7 @@ export const KNOWN_RULES = new Set([
   "skill-legacy-exception",
   "materialized-extension-file",
   "pack-shaped-core-domain",
+  "unbounded-port-member",
 ]);
 
 /** Everything structurally wrong with a ledger, as messages. An unreadable or
@@ -583,6 +756,9 @@ export function baselineDefects(doc) {
   const bad = [];
   const entries = doc?.entries;
   if (!Array.isArray(entries)) return ["the ledger has no `entries` array"];
+  const seeded = doc?.seededRules ?? [];
+  if (!Array.isArray(seeded)) bad.push("`seededRules` is not an array");
+  else for (const r of seeded) if (!KNOWN_RULES.has(r)) bad.push(`unknown seeded rule: ${r}`);
   const seen = new Set();
   for (const e of entries) {
     const id = `${e?.rule}::${e?.key}`;
@@ -649,14 +825,58 @@ export function wildcardBaselineEntries(doc) {
  *  ledger is shrink-only: a crossing may leave it, none may enter. A domain
  *  entry that recorded a HIGHER line count, or a file it did not record, is
  *  growth too. */
-export function baselineGrowth(previousDoc, currentDoc) {
+//
+// THE ONE-TIME SEED OF A NEW RULE. A rule added to this gate after the ledger
+// landed records the findings that stand on the day it lands. Its introducing
+// change lists the rule in the ledger's `seededRules`. A listed rule is seeded
+// only when the BASE copy of this script does not know it at all (it is not in
+// the base's KNOWN_RULES list; a base copy with no such list: the rule id does
+// not occur in its text). A rule the base check knows is never seeded, whatever
+// `seededRules` says, and a base copy that cannot be read seeds nothing. Taking
+// a rule off `seededRules` is growth, so the list only grows.
+
+/** The predicate "the base check knows this rule", read from the text of the
+ *  base copy of this script, or null when that copy could not be read. */
+export function baseKnowsRuleFrom(baseScriptText) {
+  if (typeof baseScriptText !== "string") return null;
+  const list = baseScriptText.match(/export const KNOWN_RULES = new Set\(\[([\s\S]*?)\]\)/);
+  if (list) {
+    const ids = new Set([...list[1].matchAll(/["'`]([^"'`]+)["'`]/g)].map((m) => m[1]));
+    return (rule) => ids.has(rule);
+  }
+  return (rule) => baseScriptText.includes(rule);
+}
+
+/** The rules the checkout's ledger seeds against the base: listed in
+ *  `seededRules` and unknown to the base check. Nothing when the base check
+ *  could not be read (`baseKnows` null or absent). */
+export function seedingRules(currentDoc, baseKnows) {
+  if (typeof baseKnows !== "function") return new Set();
+  return new Set((currentDoc?.seededRules ?? []).filter((r) => !baseKnows(r)));
+}
+
+export function baselineGrowth(previousDoc, currentDoc, { baseKnows = null } = {}) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
   const grown = [];
+  const seeding = seedingRules(currentDoc, baseKnows);
+  const headSeeded = new Set(currentDoc?.seededRules ?? []);
+  for (const r of previousDoc?.seededRules ?? []) {
+    if (!headSeeded.has(r)) grown.push(`seeded rule taken off the list: ${r} (a rule is seeded once)`);
+  }
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
+      if (seeding.has(e.rule)) continue;
+      if (headSeeded.has(e.rule)) {
+        const why =
+          typeof baseKnows === "function"
+            ? `the base check already knows the rule ${e.rule}; only a rule new to the check is seeded`
+            : `the base copy of the check could not be read; nothing is seeded`;
+        grown.push(`new entry: ${id} (listed in seededRules, but ${why})`);
+        continue;
+      }
       grown.push(`new entry: ${id}`);
       continue;
     }
@@ -672,6 +892,21 @@ export function baselineGrowth(previousDoc, currentDoc) {
 /** The ledger compared with its copy on the base branch (cinatra#3831). Growth
  *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
  *  base that cannot be read fails closed. */
+/** The base copy of this script, read where the base guard reads the ledger:
+ *  the named base, else the reference the guard fetched the pull request's base
+ *  branch into. Null when neither can be read. */
+export function readBaseGateText(repoRoot, env) {
+  const where = resolveFloorBase(FLOOR_BASE_VAR, env);
+  if (where.kind !== "ref") return null;
+  const refs = [where.ref];
+  if (where.source === PULL_REQUEST_BASE_VAR) refs.push(`${FETCHED_REF_PREFIX}${env[PULL_REQUEST_BASE_VAR]}`);
+  for (const ref of refs) {
+    const read = readFileAtBase(repoRoot, ref, GATE_FILE);
+    if (read.ok) return read.text;
+  }
+  return null;
+}
+
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
   return compareFloorWithBase({
     gate: "core-extension-border",
@@ -679,7 +914,8 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     floorPath: FLOOR_FILE,
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
     parse: (text) => JSON.parse(text),
-    grown: (base, head) => baselineGrowth(base, head),
+    grown: (base, head) =>
+      baselineGrowth(base, head, { baseKnows: baseKnowsRuleFrom(readBaseGateText(repoRoot, env)) }),
     repoRoot,
     env,
   });
@@ -730,6 +966,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
   }
 
   findings.push(...trackedExtensionFileFindings(repoRoot));
+  findings.push(...portMemberFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
 
   const present = new Set(findings.map(keyOf));
