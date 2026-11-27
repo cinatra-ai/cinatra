@@ -466,8 +466,7 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
   const rootDecl = program
     .getSourceFile(rootPath)
     ?.statements.find((n) => (ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n)) && n.name.text === type);
-  const rootMembers = ts.isInterfaceDeclaration(rootDecl ?? {}) ? rootDecl.members : ts.isTypeLiteralNode(rootDecl?.type ?? {}) ? rootDecl.type.members : undefined;
-  if (!rootMembers) throw new Error(`[core-extension-border] the port root ${type} is no interface or type literal in ${file} — the rule fails closed rather than reading no port`);
+  if (!rootDecl) throw new Error(`[core-extension-border] the port root ${type} is no interface or type alias in ${file} — the rule fails closed rather than reading no port`);
   const inSdk = (n) => {
     const r = relative(dirname(rootPath), n.getSourceFile().fileName);
     return !r.startsWith("..") && !isAbsolute(r) && !r.split(sep).includes("node_modules");
@@ -490,7 +489,7 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
   };
   const F = ts.TypeFlags;
   const plain = (t) =>
-    !!(t.flags & (F.StringLike | F.NumberLike | F.BooleanLike | F.BigIntLike | F.Null | F.Undefined)) ||
+    !!(t.flags & (F.StringLike | F.NumberLike | F.BigIntLike | F.BooleanLike | F.ESSymbolLike | F.EnumLike | F.Void | F.Null | F.Undefined)) ||
     (t.isUnion() ? t.types.every(plain) : (checker.isArrayType(t) || checker.isTupleType(t)) && checker.getTypeArguments(t).every(plain));
   const declarationOf = (n) => {
     const name = ts.isTypeReferenceNode(n) ? n.typeName : ts.isExpressionWithTypeArguments(n) ? n.expression : undefined;
@@ -507,9 +506,10 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
         const t = checker.getTypeAtLocation(p);
         return isUntypedType(checker, p.dotDotDotToken ? checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t : t) ? [i + 1] : [];
       });
+  // Can a value of this type be called: `any`, a `Function`, or a call or construct signature, in any union constituent.
   const callable = (annotation) => {
     const t = checker.getNonNullableType(checker.getTypeFromTypeNode(annotation));
-    return t.getCallSignatures().length + t.getConstructSignatures().length > 0;
+    return (t.isUnion() ? t.types : [t]).some((c) => c.flags & F.Any || c.getSymbol()?.name === "Function" || c.getCallSignatures().length + c.getConstructSignatures().length > 0);
   };
   const seen = new Set();
   const readPort = (decl) => {
@@ -529,7 +529,7 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
       const fn = annotation && unwrap(annotation);
       const output = ts.isGetAccessorDeclaration(m) || (ts.isPropertySignature(m) && m.modifiers?.some((x) => x.kind === ts.SyntaxKind.ReadonlyKeyword));
       if (ts.isMethodSignature(m) || (fn && ts.isFunctionTypeNode(fn))) signatures.set(key, [...(signatures.get(key) ?? []), ts.isMethodSignature(m) ? m : fn]);
-      else if (!output || (annotation && callable(annotation))) shape(m, key, `the member ${key} is no method, function-typed property or output-only member`);
+      else if (!output || !annotation || callable(annotation)) shape(m, key, `the member ${key} is no method, function-typed property or output-only member`);
     }
     for (const [key, sigs] of signatures) {
       const hits = sigs.map(positions).filter((at) => at.length > 0);
@@ -537,12 +537,17 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
       if (hits.length > 0) report(PORT_RULE, sigs[0], detail, "a host port member takes an untyped input (any, unknown, object or an unconstrained type parameter); it bounds nothing a manifest declares (cinatra#4872)");
     }
   };
-  for (const m of rootMembers) {
-    const annotation = ts.isPropertySignature(m) ? m.type : undefined;
+  // The root's properties come from the checker, so inherited and intersected ones are read too;
+  // a property that is not declared once as a property signature in the SDK is `port-shape`.
+  const rootType = checker.getDeclaredTypeOfSymbol(checker.getSymbolAtLocation(rootDecl.name));
+  if (isUntypedType(checker, rootType)) shape(rootDecl, type, `the port root ${type} is itself untyped`);
+  for (const prop of checker.getPropertiesOfType(rootType)) {
+    const [d, ...more] = prop.declarations ?? [];
+    const annotation = d && !more.length && ts.isPropertySignature(d) && inSdk(d) ? d.type : undefined;
     const ref = annotation && unwrap(annotation);
     const decl = ref && ts.isTypeReferenceNode(ref) && !ref.typeArguments?.length ? declarationOf(ref) : undefined;
     if (isPort(decl)) readPort(decl);
-    else if (!annotation || !plain(checker.getTypeFromTypeNode(annotation))) shape(m, nameOf(m), `the root property ${nameOf(m)} is neither a port nor an identity field`);
+    else if (!annotation || !plain(checker.getTypeFromTypeNode(annotation))) shape(d && inSdk(d) ? d : rootDecl, prop.name, `the root property ${prop.name} is neither a port nor an identity field`);
   }
   return out;
 }

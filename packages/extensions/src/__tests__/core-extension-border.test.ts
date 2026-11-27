@@ -770,10 +770,10 @@ describe("core/extension border — the floor is compared with the base branch",
 // refuse every shape they do not read. Each case writes a declaration and asks
 // which findings it gives.
 describe("core/extension border — the ports are a closed shape with typed inputs", () => {
-  function ports(declarations: string, fields = "jobs: JobsPort"): string[] {
+  function ports(declarations: string, fields = "jobs: JobsPort", root?: string): string[] {
     const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
     try {
-      writeFileSync(path.join(dir, "host-context.ts"), `${declarations}\nexport type ExtensionHostContext = { ${fields} };\n`);
+      writeFileSync(path.join(dir, "host-context.ts"), `${declarations}\n${root ?? `export type ExtensionHostContext = { ${fields} };`}\n`);
       return portFindings({ repoRoot: dir, file: "host-context.ts" }).map((f) => `${f.rule} ${f.detail}`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -784,7 +784,7 @@ describe("core/extension border — the ports are a closed shape with typed inpu
   it.each([
     ["methods, optional ones too", "interface JobsPort { run(input: string): void; stop?(): void }"],
     ["function-typed properties, nullable and optional", "interface JobsPort { run: ((input: string) => void) | null; stop?: () => void }"],
-    ["readonly properties and getters of any type", "interface JobsPort { readonly state: unknown; get mode(): string; get data(): unknown }"],
+    ["readonly properties and getters that cannot be called", "interface JobsPort { readonly state: unknown; readonly shape: object; get mode(): string; get data(): unknown }"],
     ["a type alias of one type literal", "type JobsPort = { run(input: string): void }"],
     ["a base that is an SDK interface", "interface Base { run(input: string): void }\ninterface JobsPort extends Base {}"],
     ["an optional and a nullable port", "interface JobsPort { run(): void }", "jobs?: JobsPort | null"],
@@ -792,6 +792,11 @@ describe("core/extension border — the ports are a closed shape with typed inpu
       "identity fields",
       'type Mode = "a" | "b";\ninterface JobsPort { run(): void }',
       "jobs: JobsPort; id: string; n?: number; on: boolean | null; labels: readonly string[]; pair: [string, number]; mode: Mode",
+    ],
+    [
+      "identity fields of every primitive kind",
+      "enum Kind { A, B }\ninterface JobsPort { run(): void }",
+      "jobs: JobsPort; sym: symbol; readonly tag: unique symbol; kind: Kind; nothing: void; big: bigint; nil: null; tpl: `a${string}`",
     ],
   ])("allows %s", (_name, declarations, fields) => {
     expect(ports(declarations, fields)).toEqual([]);
@@ -821,6 +826,12 @@ describe("core/extension border — the ports are a closed shape with typed inpu
     ["a constructor-typed property", "interface JobsPort { Factory: new (input: string) => object }", undefined, "JobsPort.Factory"],
     ["a union of functions", "interface JobsPort { run: ((a: string) => void) | ((b: string) => void) }", undefined, "JobsPort.run"],
     ["a readonly property that can be called", "type Handler = (a: string) => void;\ninterface JobsPort { readonly run: Handler }", undefined, "JobsPort.run"],
+    ["a readonly property typed any", "interface JobsPort { readonly run: any }", undefined, "JobsPort.run"],
+    ["a getter typed any", "interface JobsPort { get run(): any }", undefined, "JobsPort.run"],
+    ["a getter with no type", "interface JobsPort { get run() }", undefined, "JobsPort.run"],
+    ["a readonly property typed Function", "interface JobsPort { readonly run: Function }", undefined, "JobsPort.run"],
+    ["a readonly union with a function", "interface JobsPort { readonly run: string | (() => void) }", undefined, "JobsPort.run"],
+    ["a root property typed never", "interface JobsPort { run(): void }", "jobs: JobsPort; n: never", "n"],
   ])("refuses %s as port-shape", (_name, declarations, fields, detail) => {
     expect(ports(declarations, fields)).toEqual([`port-shape ${detail}`]);
   });
@@ -840,6 +851,20 @@ describe("core/extension border — the ports are a closed shape with typed inpu
     ["overloads, each with its own positions", "run(a: unknown): void; run(b: string): void; run(c: any, d: any): void", ["JobsPort.run(#1|#1,#2)"]],
   ])("reports %s", (_name, member, keys) => {
     expect(ports(`interface JobsPort { ${member} }`)).toEqual(keys.map((k) => `untyped-port-input ${k}`));
+  });
+
+  it("reads the root through the checker: inherited, intersected and merged properties", () => {
+    const port = "interface JobsPort { run(input: unknown): void }\ninterface BaseContext { jobs: JobsPort }";
+    const typed = [`untyped-port-input JobsPort.run(#1)`];
+    expect(ports(port, "", "export interface ExtensionHostContext extends BaseContext { id: string }")).toEqual(typed);
+    expect(ports(port, "", "export type ExtensionHostContext = BaseContext & { id: string };")).toEqual(typed);
+    // a base outside the SDK: its properties are declared outside it
+    const lib = ports("", "", "export interface ExtensionHostContext extends Map<string, string> {}");
+    expect(lib.length).toBeGreaterThan(0);
+    expect(lib.every((f) => f.startsWith("port-shape "))).toBe(true);
+    expect(lib).toContain("port-shape size");
+    // a property declared twice by merging has no single declaration
+    expect(ports("interface JobsPort { run(): void }\ninterface ExtensionHostContext { jobs: JobsPort }", "", "interface ExtensionHostContext { jobs: JobsPort }")).toEqual(["port-shape jobs"]);
   });
 
   it("reports an untyped input of a base under the base's name", () => {
