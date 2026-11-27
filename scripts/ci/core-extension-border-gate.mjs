@@ -59,7 +59,7 @@
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -731,15 +731,11 @@ export function keepRecordedKindDetails(findings, baselineEntries) {
   return findings;
 }
 
-/** The aggregate whose properties ARE the ports an extension is handed: the
- *  object `register(ctx)` receives (cinatra#4872). */
-export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" };
-
-/** The registration contract: the `ctx` parameter of `ExtensionServerEntry.register` is the
- *  type the product hands every extension, so it is the type the rule walks (cinatra#4872).
- *  Its type is read AT THAT PARAMETER, where the checker has applied every default type
- *  argument, never from the declaration of the root. */
-export const PORT_CONTRACT = { file: "packages/sdk-extensions/src/register.ts", type: "ExtensionServerEntry", member: "register", parameter: 0 };
+/** The registration contract (cinatra#4872): the SDK's registration module exports the
+ *  entry type `ExtensionServerEntry`, whose `register` takes the context the product hands every
+ *  extension. The rule finds it through the checker alone: the module's exports, the aliases
+ *  followed, the type's `register` property, the first parameter of each of its call signatures. */
+export const PORT_CONTRACT = { file: "packages/sdk-extensions/src/register.ts", type: "ExtensionServerEntry", member: "register" };
 
 /** The product's own compiler options, read from the nearest `tsconfig.json` at or above
  *  `fromDir` (never above `repoRoot`), `extends` followed: lib, target, moduleResolution and
@@ -812,69 +808,100 @@ function isUntypedType(checker, type, place, seen = new Set()) {
 }
 
 /** `untyped-port-input`: a host port call whose input carries no type constraint
- *  (cinatra#4872). Read ONLY from the checker's types, never from how a type is written:
- *  the root context's members are the ports, a port's members are its calls, and each
- *  parameter of each call signature is asked `isUntypedType`. A member of type `any` is one
- *  finding. Keyed `<Port>.<member>(#positions)`, positions comma-joined and one group per
- *  signature joined with `|`. A tree without the SDK package has no ports; one with it and
- *  without the root fails closed. */
-export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type, contractFile = PORT_CONTRACT.file } = {}) {
-  const rootPath = join(repoRoot, file);
-  const contractPath = join(repoRoot, contractFile);
-  if (!existsSync(rootPath) && !existsSync(dirname(dirname(rootPath)))) return [];
-  const options = productCompilerOptions(repoRoot, dirname(rootPath));
+ *  (cinatra#4872). Read ONLY from the checker, never from how a type is written or where a
+ *  declaration stands. The anchor: the registration module's exported `ExtensionServerEntry`
+ *  (a declaration, a re-export, a type-only or renamed re-export, `export *`: aliases followed),
+ *  its `register` property (own, inherited, a method or a function-typed property, optional or
+ *  not), the first parameter of each call signature of it (several signatures are all read). The
+ *  type of that parameter, defaults applied, is the context: its members are the ports, a port's
+ *  members are its calls, and each parameter of each call signature is asked `isUntypedType`.
+ *  A member of type `any` is one finding. Members an extension cannot call (private, protected,
+ *  `#private`) are not judged. Keyed `<Port>.<member>(#positions)`, positions comma-joined and one
+ *  group per signature joined with `|`. A tree without the SDK package has no ports; one with it
+ *  and without the entry, its `register`, a call signature or a first parameter fails closed. */
+export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, contractFile = PORT_CONTRACT.file } = {}) {
+  // The checker names files by their real path (a workspace package linked into node_modules is the package's own source), so the root is the real one.
+  const realRoot = realpathSync(repoRoot);
+  const contractPath = join(realRoot, contractFile);
+  if (!existsSync(contractPath) && !existsSync(dirname(dirname(contractPath)))) return [];
+  const options = productCompilerOptions(realRoot, dirname(contractPath));
   const host = ts.createCompilerHost(options, true);
-  host.realpath = (p) => p;
-  const program = ts.createProgram({ rootNames: [rootPath, ...(existsSync(contractPath) ? [contractPath] : [])], options, host });
+  const program = ts.createProgram({ rootNames: existsSync(contractPath) ? [contractPath] : [], options, host });
   const checker = program.getTypeChecker();
-  const sourceFile = program.getSourceFile(rootPath);
-  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
-  const rootSymbol = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === type);
-  if (!rootSymbol || !(rootSymbol.flags & ts.SymbolFlags.Type)) {
-    throw new Error(`[core-extension-border] the port root ${type} is not an exported type of ${file} — the rule fails closed rather than reading no port`);
-  }
   const F = ts.TypeFlags;
-  const rel = (f) => relative(repoRoot, f).split(sep).join("/");
+  const rel = (f) => relative(realRoot, f).split(sep).join("/");
   const where = (d) => `${rel(d.getSourceFile().fileName)}:${d.getSourceFile().getLineAndCharacterOfPosition(d.getStart()).line + 1}`;
   const flat = (t) => (t.isUnion() ? t.types.flatMap(flat) : [t]);
-  // The type the product hands an extension: the `ctx` parameter of the registration contract, as
-  // the checker gives it at that parameter (every default type argument applied).
-  const contractSource = program.getSourceFile(contractPath);
-  const fnTypeParameters = (m) => (ts.isMethodSignature(m) ? m.parameters : m.type && ts.isFunctionTypeNode(m.type) ? m.type.parameters : undefined);
-  let ctxParameter;
-  if (contractSource) {
-    walk(contractSource, (n) => {
-      if (ctxParameter || !(ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n)) || n.name.text !== PORT_CONTRACT.type) return;
-      const members = ts.isInterfaceDeclaration(n) ? n.members : n.type && ts.isTypeLiteralNode(n.type) ? n.type.members : [];
-      const m = members.find((x) => (ts.isMethodSignature(x) || ts.isPropertySignature(x)) && x.name && ts.isIdentifier(x.name) && x.name.text === PORT_CONTRACT.member);
-      ctxParameter = m && fnTypeParameters(m)?.[PORT_CONTRACT.parameter];
-    });
-  }
-  if (!ctxParameter) {
-    throw new Error(`[core-extension-border] the registration contract ${PORT_CONTRACT.type}.${PORT_CONTRACT.member}(…) with its context parameter is not found in ${contractFile} — the rule fails closed rather than reading no port`);
-  }
-  const ctxPlace = where(ctxParameter);
-  const ctxType = checker.getNonNullableType(checker.getTypeAtLocation(ctxParameter));
-  if (isUnresolvedType(ctxType)) throw unresolvedAt(ctxPlace);
-  if ((ctxType.aliasSymbol ?? ctxType.getSymbol())?.name !== type) {
-    throw new Error(`[core-extension-border] the context parameter at ${ctxPlace} is not typed ${type} — the rule fails closed rather than reading another type`);
-  }
+  const fail = (what) => new Error(`[core-extension-border] the registration contract ${PORT_CONTRACT.type}.${PORT_CONTRACT.member}(…) ${what} in ${contractFile} — the rule fails closed rather than reading no port`);
+
+  // The anchor: the entry type, through the module's exports and its aliases.
+  const sourceFile = program.getSourceFile(contractPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  let entry = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === PORT_CONTRACT.type);
+  while (entry && entry.flags & ts.SymbolFlags.Alias) entry = checker.getAliasedSymbol(entry);
+  if (!entry || !entry.declarations?.length) throw fail(`is not an export of its module`);
+  const entryType = checker.getDeclaredTypeOfSymbol(entry);
+  const register = checker.getPropertyOfType(entryType, PORT_CONTRACT.member);
+  if (!register) throw fail(`has no ${PORT_CONTRACT.member} property`);
+  const registerPlace = register.declarations?.[0] ? where(register.declarations[0]) : contractFile;
+  const registerType = checker.getNonNullableType(checker.getTypeOfSymbol(register));
+  if (isUnresolvedType(registerType)) throw unresolvedAt(registerPlace);
+  const signatures = flat(registerType).flatMap((t) => t.getCallSignatures());
+  if (signatures.length === 0) throw fail(`${PORT_CONTRACT.member} has no call signature`);
+
+  // The context type of each signature: its first parameter, as the checker gives it (defaults applied).
+  const contexts = signatures.map((sig) => {
+    const first = sig.getParameters()[0];
+    if (!first) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
+    const place = first.valueDeclaration ? where(first.valueDeclaration) : registerPlace;
+    let t = checker.getTypeOfSymbol(first);
+    // A rest parameter `...args: [ctx: C]` hands over its first element.
+    if (first.valueDeclaration?.dotDotDotToken) {
+      const element = checker.isTupleType(t) ? checker.getTypeArguments(t)[0] : checker.getIndexTypeOfType(t, ts.IndexKind.Number);
+      if (!element) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
+      t = element;
+    }
+    // `null` and `undefined` are no context; a type parameter is the type the checker gives it: its default, else its constraint.
+    const resolve = (c, depth = 0) => {
+      if (isUnresolvedType(c)) throw unresolvedAt(place);
+      if (!(c.flags & F.TypeParameter)) return c;
+      const next = depth < 8 ? checker.getDefaultFromTypeParameter(c) ?? checker.getBaseConstraintOfType(c) : undefined;
+      if (!next) throw fail(`has a ${PORT_CONTRACT.member} context that is an unconstrained type parameter`);
+      return resolve(next, depth + 1);
+    };
+    const types = flat(t).filter((c) => !(c.flags & (F.Null | F.Undefined))).map((c) => resolve(c));
+    // A context typed `any` or `unknown` has no member to read: the rule would read no port at all.
+    if (types.some((c) => c.flags & (F.Any | F.Unknown))) throw fail(`has an untyped ${PORT_CONTRACT.member} context (any or unknown)`);
+    return { types, place };
+  });
+  const ctxPlace = contexts[0].place;
+  const ctxTypes = contexts.flatMap((c) => c.types);
+  // A context's label in a key: the name of its type (a declaration, else the alias that names it), else `ctx`.
+  const labelOf = (t) => {
+    const own = t.getSymbol()?.name;
+    return (own && !own.startsWith("__") ? own : t.aliasSymbol?.name) ?? "ctx";
+  };
   // Every constituent of a union is read; the checker has already flattened intersections and inheritance.
   const membersOf = (t) => flat(t).flatMap((c) => flat(checker.getApparentType(c)).flatMap((a) => checker.getPropertiesOfType(a)));
-  // A member declared only in the TypeScript lib or in node_modules is not ours to judge.
+  // A member declared only in the TypeScript lib or in a package installed under node_modules is not ours to judge.
+  // File names are real paths, so a workspace package linked into node_modules is the repository's own source.
   const isOwn = (prop) =>
     (prop.declarations ?? []).length === 0 ||
     prop.declarations.some((d) => {
       const sf = d.getSourceFile();
       return !program.isSourceFileDefaultLibrary(sf) && !sf.fileName.split("/").includes("node_modules");
     });
+  // A member an extension cannot call: every declaration of it is private, protected or a `#private` name.
+  const isHidden = (prop) =>
+    (prop.declarations ?? []).length > 0 &&
+    prop.declarations.every((d) => (ts.getCombinedModifierFlags(d) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) !== 0 || (d.name && ts.isPrivateIdentifier(d.name)));
   const placeOfProp = (prop) => {
     const d = prop.valueDeclaration ?? prop.declarations?.[0];
     return d ? where(d) : ctxPlace;
   };
   const typeOf = (prop) => {
     const t = checker.getTypeOfSymbol(prop);
-    if (isUnresolvedType(t)) throw unresolvedAt(`${placeOfProp(prop)} (${prop.name})`);
+    if (isUnresolvedType(t)) throw unresolvedAt(`${placeOfProp(prop)} (${checker.symbolToString(prop)})`);
     return t;
   };
   const positions = (sig) =>
@@ -888,33 +915,34 @@ export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = 
   const counts = new Map();
   const judged = new Set();
   const judge = (owner, prop) => {
-    if (judged.has(prop) || !isOwn(prop)) return;
+    if (judged.has(prop) || !isOwn(prop) || isHidden(prop)) return;
     judged.add(prop);
     const parts = flat(checker.getNonNullableType(typeOf(prop)));
     const hits = parts.some((c) => c.flags & F.Any)
       ? ["any"]
       : parts.flatMap((c) => c.getCallSignatures()).map(positions).filter((at) => at.length > 0).map((at) => at.map((n) => `#${n}`).join(","));
     if (hits.length === 0) return;
-    const d = prop.valueDeclaration ?? prop.declarations?.[0] ?? rootSymbol.declarations[0];
+    const d = prop.valueDeclaration ?? prop.declarations?.[0] ?? register.declarations?.[0] ?? entry.declarations[0];
     const at = d.getSourceFile();
     out.push(
       finding(
         "untyped-port-input",
         rel(at.fileName),
         at.getLineAndCharacterOfPosition(d.getStart()).line + 1,
-        occurrenceDetail(counts, "untyped-port-input", `${owner}.${prop.name}(${hits.join("|")})`),
+        occurrenceDetail(counts, "untyped-port-input", `${owner}.${checker.symbolToString(prop)}(${hits.join("|")})`),
         "a host port member takes an untyped input (any, unknown, object, the empty object type or a type parameter without a constraint); it bounds nothing a manifest declares (cinatra#4872)",
       ),
     );
   };
-  for (const prop of membersOf(ctxType)) {
-    judge(type, prop);
+  for (const [prop, rootName] of ctxTypes.flatMap(flat).flatMap((c) => membersOf(c).map((m) => [m, labelOf(c)]))) {
+    if (isHidden(prop)) continue;
+    judge(rootName, prop);
     for (const port of flat(checker.getNonNullableType(typeOf(prop)))) {
       // The port's own name: its symbol, else the alias that names it. A utility alias (`Readonly<P>`) names
       // nothing, so a port without a name of its own takes its property's name.
       const own = port.getSymbol()?.name;
       const name = own && !own.startsWith("__") ? own : port.aliasTypeArguments?.length ? undefined : port.aliasSymbol?.name;
-      const owner = name ?? prop.name;
+      const owner = name ?? checker.symbolToString(prop);
       for (const member of membersOf(port)) judge(owner, member);
     }
   }

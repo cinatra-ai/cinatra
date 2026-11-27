@@ -29,7 +29,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 
@@ -1398,8 +1398,10 @@ describe("core/extension border — a host port call takes typed inputs", () => 
     expect(ctx("interface JobsPort extends Map<string, unknown> { run(this: any, a: string): void }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual([]);
   });
 
-  it("fails closed on a root that is not there, and reads nothing from a tree without the SDK", () => {
-    expect(() => ports({ "host-context.ts": "export type Other = { id: string };\n" })).toThrow(/port root ExtensionHostContext/);
+  it("fails closed on a context type that is not there, and reads nothing from a tree without the SDK", () => {
+    expect(() => ports({ "host-context.ts": "export type Other = { id: string };\n" })).toThrow(
+      "[core-extension-border] the border check could not resolve a type at register.ts:2",
+    );
     const dir = mkdtempSync(path.join(tmpdir(), "border-port-none-"));
     try {
       expect(gate.untypedPortInputFindings?.({ repoRoot: dir }) ?? ["not a function"]).toEqual([]);
@@ -1493,13 +1495,12 @@ describe("core/extension border — a host port call takes typed inputs", () => 
       expect(() => ctx("interface JobsPort { enqueue(name: string, payload: NoSuchType): void }", root)).toThrow(/could not resolve a type/);
     });
 
-    it("fails closed when the contract or its context parameter is not found, or is another type", () => {
+    it("fails closed when the contract, its register or a parameter is not found", () => {
       const root = { "host-context.ts": "export type ExtensionHostContext = { id: string };\n" };
       expect(() => ports({ ...root, "register.ts": "export type ExtensionServerEntry = { other(ctx: number): void };\n" })).toThrow(/registration contract ExtensionServerEntry\.register/);
       expect(() => ports({ ...root, "register.ts": "export type Else = { register(ctx: number): void };\n" })).toThrow(/registration contract ExtensionServerEntry\.register/);
-      expect(() => ports({ ...root, "register.ts": "export type ExtensionServerEntry = { register(ctx: { id: string }): void };\n" })).toThrow(
-        /register\.ts:1 is not typed ExtensionHostContext/,
-      );
+      // The context is whatever the contract's `register` takes: no named root is required.
+      expect(ports({ ...root, "register.ts": "export type ExtensionServerEntry = { register(ctx: { run(x: unknown): void }): void };\n" })).toEqual(["ctx.run(#1)"]);
       const none = mkdtempSync(path.join(tmpdir(), "border-port-nocontract-"));
       try {
         writeFileSync(path.join(none, "tsconfig.json"), FIXTURE_TSCONFIG);
@@ -1507,6 +1508,161 @@ describe("core/extension border — a host port call takes typed inputs", () => 
         expect(() => gate.untypedPortInputFindings?.({ repoRoot: none, file: "host-context.ts", contractFile: "register.ts" })).toThrow(/registration contract/);
       } finally {
         rmSync(none, { recursive: true, force: true });
+      }
+    });
+  });
+
+
+  // A reporting case that cannot be read must fail by a plain assertion on the list, so a throw is shown as a line of it.
+  const seen = (files: Record<string, string>): string[] => {
+    try {
+      return ports(files);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    }
+  };
+  const seenCtx = (declarations: string, root: string) => seen({ "host-context.ts": `${declarations}\n${root}\n` });
+
+  // The registration contract is found through the checker: the module's exports, aliases followed, the
+  // `register` property of the entry type, the first parameter of each call signature. How any of it is
+  // WRITTEN does not matter; each case is valid TypeScript and each hides one untyped input.
+  describe("the registration contract is found through the checker", () => {
+    const HC = `export ${JOBS}\nexport type ExtensionHostContext = { jobs: JobsPort };\n`;
+    const IMPORT = 'import type { ExtensionHostContext } from "./host-context";\n';
+    const entry = (body: string) => ({ "host-context.ts": HC, "register.ts": IMPORT + body });
+    const REG = IMPORT + "export type ExtensionServerEntry = { register(ctx: ExtensionHostContext): void };\n";
+
+    it.each([
+      ["a type-only re-export", { "reg.ts": REG, "register.ts": 'export type { ExtensionServerEntry } from "./reg";\n' }],
+      ["a value-form re-export", { "reg.ts": REG, "register.ts": 'export { ExtensionServerEntry } from "./reg";\n' }],
+      ["a renamed re-export", { "reg.ts": REG.replace("ExtensionServerEntry", "Entry"), "register.ts": 'export type { Entry as ExtensionServerEntry } from "./reg";\n' }],
+      ["export *", { "reg.ts": REG, "register.ts": 'export * from "./reg";\n' }],
+      ["a re-export chain", { "reg.ts": REG, "mid.ts": 'export type { ExtensionServerEntry as Mid } from "./reg";\n', "register.ts": 'export type { Mid as ExtensionServerEntry } from "./mid";\n' }],
+      ["an import re-exported", { "reg.ts": REG, "register.ts": 'import type { ExtensionServerEntry } from "./reg";\nexport type { ExtensionServerEntry };\n' }],
+      ["a default export re-exported by name", { "reg.ts": REG.replace("export type ExtensionServerEntry =", "type E =") + "export default E;\n", "register.ts": 'export type { default as ExtensionServerEntry } from "./reg";\n' }],
+    ])("the entry exported as %s resolves: one finding", (_name, files) => {
+      expect(seen({ "host-context.ts": HC, ...files })).toEqual(HIT);
+    });
+
+    it.each([
+      ["a register property typed by a named function alias", "type RegisterFunction = (ctx: ExtensionHostContext) => void;\nexport type ExtensionServerEntry = { register: RegisterFunction };"],
+      ["a register property typed inline", "export type ExtensionServerEntry = { register: (ctx: ExtensionHostContext) => void };"],
+      ["a readonly register property", "export type ExtensionServerEntry = { readonly register: (ctx: ExtensionHostContext) => void };"],
+      ["an inherited register member", "interface Base { register(ctx: ExtensionHostContext): void }\nexport interface ExtensionServerEntry extends Base { id: string }"],
+      ["a register member of an intersection", "export type ExtensionServerEntry = { id: string } & { register(ctx: ExtensionHostContext): void };"],
+      ["an optional register property", "export type ExtensionServerEntry = { register?: (ctx: ExtensionHostContext) => void };"],
+      ["an optional register method", "export interface ExtensionServerEntry { register?(ctx: ExtensionHostContext): void }"],
+      ["a register of a function type that is nullable", "export type ExtensionServerEntry = { register: ((ctx: ExtensionHostContext) => void) | null };"],
+      ["an overloaded register", "export interface ExtensionServerEntry { register(ctx: ExtensionHostContext): void; register(ctx: ExtensionHostContext, extra: string): void }"],
+      ["a register of an interface with a call signature", "interface Fn { (ctx: ExtensionHostContext): void }\nexport type ExtensionServerEntry = { register: Fn };"],
+      ["a register whose context is Parameters<…>[0]", "type Fn = (ctx: ExtensionHostContext, extra: number) => void;\nexport type ExtensionServerEntry = { register(ctx: Parameters<Fn>[0]): void };"],
+      ["a destructured context", "export type ExtensionServerEntry = { register({ jobs }: ExtensionHostContext): void };"],
+      ["a rest context", "export type ExtensionServerEntry = { register(...args: [ctx: ExtensionHostContext]): void };"],
+      ["an optional context", "export type ExtensionServerEntry = { register(ctx?: ExtensionHostContext): void };"],
+      ["a class that implements an interface", "interface I { register(ctx: ExtensionHostContext): void }\nexport class ExtensionServerEntry implements I { register(ctx: ExtensionHostContext) {} }"],
+      ["an abstract class", "export abstract class ExtensionServerEntry { abstract register(ctx: ExtensionHostContext): void }"],
+      ["a register picked from another type", "interface Base { register(ctx: ExtensionHostContext): void; id: string }\nexport type ExtensionServerEntry = Pick<Base, 'register'>;"],
+      ["a register made required by a utility type", "export type ExtensionServerEntry = Required<{ register?: (ctx: ExtensionHostContext) => void }>;"],
+      ["a register that is an arrow-function property of a class", "export class ExtensionServerEntry { register = (ctx: ExtensionHostContext): void => {}; }"],
+      ["a register that is a getter", "export class ExtensionServerEntry { get register(): (ctx: ExtensionHostContext) => void { return () => {}; } }"],
+      ["a generic entry with a default", "export type ExtensionServerEntry<C = ExtensionHostContext> = { register(ctx: C): void };"],
+      ["a generic register method with a constraint", "export type ExtensionServerEntry = { register<C extends ExtensionHostContext>(ctx: C): void };"],
+    ])("a contract written as %s is read: one finding", (_name, body) => {
+      expect(seen(entry(body))).toEqual(HIT);
+    });
+
+    it("every signature of an overloaded register is walked, and every constituent of a context union", () => {
+      const overloads = "export interface ExtensionServerEntry { register(ctx: ExtensionHostContext): void; register(ctx: { log(line: any): void }): void }";
+      expect(seen(entry(overloads))).toEqual([...HIT, "ctx.log(#1)"]);
+      expect(seen(entry("export type ExtensionServerEntry = { register(ctx: ExtensionHostContext | { log(line: any): void }): void };"))).toEqual([...HIT, "ctx.log(#1)"]);
+      expect(seen(entry("export type ExtensionServerEntry = { register: ((ctx: ExtensionHostContext) => void) | ((ctx: { log(line: any): void }) => void) };"))).toEqual([...HIT, "ctx.log(#1)"]);
+    });
+
+    it("a context typed any or unknown, or an unconstrained type parameter, would read no port: it fails closed", () => {
+      expect(() => ports(entry("export type ExtensionServerEntry = { register(ctx: any): void };"))).toThrow(/untyped register context/);
+      expect(() => ports(entry("export type ExtensionServerEntry = { register(ctx: unknown): void };"))).toThrow(/untyped register context/);
+      expect(() => ports(entry("export type ExtensionServerEntry<C> = { register(ctx: C): void };"))).toThrow(/unconstrained type parameter/);
+    });
+
+    it("fails closed with a plain line when the entry, its register, a call signature or a first parameter is not there", () => {
+      const at = (body: string) => () => ports(entry(body));
+      expect(at("type ExtensionServerEntry = { register(ctx: ExtensionHostContext): void };")).toThrow(/ExtensionServerEntry\.register\(…\) is not an export of its module in register\.ts/);
+      expect(at("export type ExtensionServerEntry = { id: string };")).toThrow(/has no register property in register\.ts/);
+      expect(at("export const ExtensionServerEntry = { register(ctx: ExtensionHostContext) {} };")).toThrow(/has no register property in register\.ts/);
+      expect(at("export type ExtensionServerEntry = { register: number };")).toThrow(/register has no call signature in register\.ts/);
+      expect(at("export type ExtensionServerEntry = { register(): void };")).toThrow(/has a register signature without a first parameter in register\.ts/);
+      expect(at("export type ExtensionServerEntry = { register(...args: []): void };")).toThrow(/has a register signature without a first parameter in register\.ts/);
+      expect(() => ports({ "host-context.ts": HC, "register.ts": 'export type { ExtensionServerEntry } from "./nowhere";\n' })).toThrow(/is not an export of its module/);
+    });
+  });
+
+  // A member an extension cannot call is not judged: private, protected and `#private` are not part of a port's surface.
+  describe("members an extension cannot call", () => {
+    const root = "export type ExtensionHostContext = { jobs: JobsPort };";
+    it("a private, protected or #private member with an untyped input is not reported; the public ones still are", () => {
+      expect(seenCtx("class JobsPort { private parse(value: any) {} protected read(value: unknown) {} #hidden(value: object) {} enqueue(name: string, payload: { id: string }) {} }", root)).toEqual([]);
+      expect(seenCtx("class JobsPort { private parse(value: any) {} enqueue(name: string, payload: unknown) {} }", root)).toEqual(HIT);
+    });
+    it("a private property of type any, a private function property and a private parameter property are not reported", () => {
+      expect(seenCtx("class JobsPort { private raw: any; private run = (x: any) => {}; constructor(private readonly send: (x: unknown) => void, protected opts: any) {} stop(): void {} }", root)).toEqual([]);
+    });
+    it("a public parameter property is a member and is read", () => {
+      expect(seenCtx("class JobsPort { constructor(public run: (x: any) => void) {} }", root)).toEqual(["JobsPort.run(#1)"]);
+    });
+    it("a private member of the root is not a port", () => {
+      expect(seen({ "host-context.ts": "export class ExtensionHostContext { private secret(x: any) {} jobs!: { enqueue(n: string, p: { id: string }): void } }\n" })).toEqual([]);
+    });
+    it("a static member is not a member of the port an extension is handed", () => {
+      expect(seenCtx("class JobsPort { static make(x: any) {} enqueue(name: string, payload: { id: string }) {} }", root)).toEqual([]);
+    });
+  });
+
+  // Forms of a port the walk must read the same way, however TypeScript lets them be written.
+  describe("a port written in other forms", () => {
+    const root = "export type ExtensionHostContext = { jobs: JobsPort };";
+    it("symbol keys, accessors, a mapped type and a callable getter are read", () => {
+      expect(seenCtx("interface JobsPort { [Symbol.iterator](x: any): void; run(x: string): void }", root)).toEqual(["JobsPort.[Symbol.iterator](#1)"]);
+      expect(seenCtx("declare const key: unique symbol;\ninterface JobsPort { [key](x: unknown): void }", root)).toEqual(["JobsPort.[key](#1)"]);
+      expect(seenCtx("class JobsPort { get enqueue(): (x: unknown) => void { return () => {}; } set mode(v: any) {} get label(): string { return ''; } }", root)).toEqual(["JobsPort.enqueue(#1)", "JobsPort.mode(any)"]);
+      expect(seenCtx("class JobsPort { get anything(): any { return 1; } }", root)).toEqual(["JobsPort.anything(any)"]);
+      expect(seenCtx("type Names = 'enqueue' | 'stop';\ntype JobsPort = { [K in Names]: (x: unknown) => void };", root)).toEqual(["JobsPort.enqueue(#1)", "JobsPort.stop(#1)"]);
+      expect(seenCtx("", "export type ExtensionHostContext = { jobs: Record<'enqueue', (x: unknown) => void> };")).toEqual(["jobs.enqueue(#1)"]);
+    });
+    it("a port that is a class value reads its static members, not the lib's Function members", () => {
+      expect(seenCtx("class Impl { static run(x: unknown) {} stop(x: any) {} }", "export type ExtensionHostContext = { jobs: typeof Impl };")).toEqual(["Impl.run(#1)"]);
+    });
+    it("an abstract class port, a readonly optional port and a class context are read", () => {
+      expect(seenCtx("abstract class JobsPort { abstract run(x: unknown): void; abstract go(x: { id: string }): void }", root)).toEqual(["JobsPort.run(#1)"]);
+      expect(seenCtx("interface JobsPort { readonly enqueue?: (n: string, p: unknown) => void }", "export type ExtensionHostContext = { readonly jobs?: Readonly<JobsPort> };")).toEqual(["jobs.enqueue(#2)"]);
+      expect(seen({ "host-context.ts": "interface I { jobs: { run(x: string): void } }\nexport class ExtensionHostContext implements I { jobs = { run(x: string) {} }; log(a: any) {} }\n" })).toEqual(["ExtensionHostContext.log(#1)"]);
+    });
+    it("a port declared in another package is read: a workspace link is the package's own source, a copy in node_modules is not ours to judge", () => {
+      const reg = 'import type { Ctx } from "@example-org/ports";\nexport type ExtensionServerEntry = { register(ctx: Ctx): void };\n';
+      const lib = "export interface JobsPort { enqueue(name: string, payload: unknown): void }\nexport type Ctx = { jobs: JobsPort };\n";
+      const inDir = (repoRoot: string) => {
+        try {
+          return (gate.untypedPortInputFindings?.({ repoRoot, contractFile: "register.ts" }) ?? []).map((f) => `${f.file}::${f.detail}`);
+        } catch (e) {
+          return [`threw: ${(e as Error).message}`];
+        }
+      };
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-pkg-"));
+      try {
+        writeFileSync(path.join(dir, "tsconfig.json"), FIXTURE_TSCONFIG);
+        writeFileSync(path.join(dir, "register.ts"), reg);
+        mkdirSync(path.join(dir, "pkgs", "ports"), { recursive: true });
+        writeFileSync(path.join(dir, "pkgs", "ports", "package.json"), '{"name":"@example-org/ports","version":"1.0.0","types":"index.ts"}');
+        writeFileSync(path.join(dir, "pkgs", "ports", "index.ts"), lib);
+        mkdirSync(path.join(dir, "node_modules", "@example-org"), { recursive: true });
+        symlinkSync(path.join(dir, "pkgs", "ports"), path.join(dir, "node_modules", "@example-org", "ports"), "dir");
+        expect(inDir(dir)).toEqual(["pkgs/ports/index.ts::JobsPort.enqueue(#2)"]);
+        rmSync(path.join(dir, "node_modules"), { recursive: true, force: true });
+        mkdirSync(path.join(dir, "node_modules", "@example-org", "ports"), { recursive: true });
+        writeFileSync(path.join(dir, "node_modules", "@example-org", "ports", "package.json"), '{"name":"@example-org/ports","version":"1.0.0","types":"index.d.ts"}');
+        writeFileSync(path.join(dir, "node_modules", "@example-org", "ports", "index.d.ts"), lib);
+        expect(inDir(dir)).toEqual([]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
     });
   });
