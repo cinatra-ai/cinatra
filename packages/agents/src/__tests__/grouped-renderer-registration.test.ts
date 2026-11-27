@@ -28,9 +28,14 @@ vi.mock("../skill-actions", () => ({
 }));
 vi.mock("../email-outreach-stage-actions", () => ({
   fetchCampaignRecipients: vi.fn(async () => ({ items: [], total: 0 })),
+  confirmCampaignRecipients: vi.fn(async () => undefined),
   checkEmailOutreachAsyncStatus: vi.fn(async () => ({ status: "idle" })),
   fetchInitialDrafts: vi.fn(async () => []),
   updateInitialDraft: vi.fn(async () => undefined),
+  getReviewCheckState: vi.fn(async () => null),
+  runReviewCheck: vi.fn(async () => null),
+  dismissReviewRecommendation: vi.fn(async () => undefined),
+  applyReviewRecommendation: vi.fn(async () => undefined),
 }));
 
 // Some renderers import @cinatra-ai/sdk-ui for LoadingSpinner etc. Provide a
