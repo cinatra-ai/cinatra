@@ -77,6 +77,12 @@
  *                     and one of them declares (a declaration is read by the
  *                     step's id). A flow that declares nothing yields no
  *                     finding of this code.
+ *   OAS-RUNTIME-016 — a model-bridge step in a holder the run does not read
+ *                     steps from (cinatra#4897): an inline `nodes` entry, an
+ *                     agent's tools, a tool's flow. The run knows steps only
+ *                     through `forEachRunStep` ($referenced_components, a
+ *                     subflow, a ParallelFlowNode's subflows), by their id, and
+ *                     refuses calls of any other step (step_tool_step_unknown).
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -212,6 +218,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanForInternalA2aAgentMisuse(parsed));
   findings.push(...scanInputMessageGateMountability(parsed));
   findings.push(...scanReviewStepTargets(parsed));
+  findings.push(...scanModelStepsOutsideRunSteps(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
   // all walk the per-Flow graph, so we compose them per-Flow component.
   for (const flow of iterFlowComponents(parsed)) {
@@ -463,9 +470,32 @@ function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
 ): void {
-  walkFlowComponents(parsed, (node, path) => {
+  forEachRunStep(parsed, ({ node, path }) => {
     if (node.component_type === "ApiNode") visit(node, path);
   });
+}
+
+/** A component the run reads as a step: where it sits, its holder and its identity. */
+export type RunStep = {
+  node: Record<string, unknown>;
+  path: string;
+  /** The path of the holder the step sits in ($referenced_components, subflow, subflows), "$" for the root. */
+  holder: string;
+  /** The step's identity at run time: its `id`. Steps that share an id are one step to the run. */
+  id: string | null;
+};
+
+/**
+ * cinatra#4897: the one traversal of the steps the run reads. The run decides
+ * whether a step exists (hasApiNodeStep) and what tools it declares
+ * (findStepToolDeclaration) over these components only, by their id; a model
+ * step anywhere else is unknown to the run (step_tool_step_unknown).
+ */
+export function forEachRunStep(document: unknown, visit: (step: RunStep) => void): void {
+  if (!isPlainObject(document)) return;
+  walkFlowComponents(document, (node, path, holder) =>
+    visit({ node, path, holder, id: typeof node.id === "string" && node.id !== "" ? node.id : null }),
+  );
 }
 
 /**
@@ -476,34 +506,89 @@ function walkApiNodes(
  */
 function walkFlowComponents(
   parsed: Record<string, unknown>,
-  visit: (node: Record<string, unknown>, path: string) => void,
+  visit: (node: Record<string, unknown>, path: string, holder: string) => void,
 ): void {
-  function go(node: unknown, path: string): void {
+  function go(node: unknown, path: string, holder: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
     if (typeof o.component_type === "string") {
-      visit(o, path);
+      visit(o, path, holder);
     }
     const refs = o.$referenced_components;
     if (isPlainObject(refs)) {
       for (const [k, v] of Object.entries(refs as Record<string, unknown>)) {
-        go(v, `${path}.$referenced_components.${k}`);
+        go(v, `${path}.$referenced_components.${k}`, `${path}.$referenced_components`);
       }
     }
     // Subflow on a FlowNode
     const subflow = o.subflow;
     if (isPlainObject(subflow)) {
-      go(subflow, `${path}.subflow`);
+      go(subflow, `${path}.subflow`, `${path}.subflow`);
     }
     // Supported parallel flows may inline Flow objects instead of referencing
     // them from $referenced_components. Keep their indexed paths in findings.
     if (o.component_type === "ParallelFlowNode" && Array.isArray(o.subflows)) {
       o.subflows.forEach((inlineFlow, index) => {
-        go(inlineFlow, `${path}.subflows[${index}]`);
+        go(inlineFlow, `${path}.subflows[${index}]`, `${path}.subflows`);
       });
     }
   }
-  go(parsed, "$");
+  go(parsed, "$", "$");
+}
+
+// ---------------------------------------------------------------------------
+// Invariant 16 — a model step in a holder the run does not read steps from
+// (OAS-RUNTIME-016, cinatra#4897). The run knows a step only through
+// forEachRunStep; a model-bridge ApiNode written anywhere else (an inline
+// `nodes` entry, an agent's tools, a tool's flow) has its calls refused at run
+// time with step_tool_step_unknown, or, when a read step carries the same id,
+// answered with that step's declaration. A node's payload (data, metadata,
+// inputs, outputs) holds no steps and is not searched. Bounded work: one walk
+// of the run's traversal and one walk of the document.
+// ---------------------------------------------------------------------------
+
+const PAYLOAD_KEYS = new Set(["data", "metadata", "inputs", "outputs"]);
+
+function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewFinding[] {
+  const read = new Set<object>();
+  const readIds = new Map<string, string>();
+  forEachRunStep(parsed, ({ node, path, id }) => {
+    read.add(node);
+    if (id !== null && isModelBridgeApiNode(node) && !readIds.has(id)) readIds.set(id, path);
+  });
+  const findings: ReviewFinding[] = [];
+  function go(value: unknown, path: string, holder: string): void {
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => go(v, `${path}[${i}]`, holder));
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    const isComponent = typeof value.component_type === "string";
+    if (isComponent && isModelBridgeApiNode(value) && !read.has(value)) {
+      const id = typeof value.id === "string" && value.id !== "" ? value.id : null;
+      const twin = id !== null ? readIds.get(id) : undefined;
+      findings.push({
+        code: "OAS-RUNTIME-016",
+        severity: "blocker",
+        message:
+          `Model step "${gateLabel(value)}" at ${path} sits in ${holder}, which the run ` +
+          `does not read steps from (the run reads steps only from $referenced_components, ` +
+          `a subflow and a ParallelFlowNode's subflows). ` +
+          (twin
+            ? `Its id is also carried by the step at ${twin}, so its calls would be answered with that step's declaration. `
+            : `Its calls are refused at run time (step_tool_step_unknown). `) +
+          `Move the step into $referenced_components and reference it with $component_ref.`,
+        location: path,
+        source: "deterministic",
+      });
+    }
+    for (const [k, v] of Object.entries(value)) {
+      if (isComponent && PAYLOAD_KEYS.has(k)) continue;
+      go(v, `${path}.${k}`, `${path}.${k}`);
+    }
+  }
+  go(parsed, "$", "$");
+  return findings;
 }
 
 // ---------------------------------------------------------------------------
