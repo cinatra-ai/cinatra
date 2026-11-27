@@ -9,7 +9,8 @@
     "pack-step-kind-in-core",
     "pack-table-literal",
     "pack-type-id-in-core",
-    "skill-legacy-exception"
+    "skill-legacy-exception",
+    "unbounded-port-member"
   ],
   "entries": [
     {
@@ -290,6 +291,26 @@
       "rule": "skill-legacy-exception",
       "key": "config/skill-packaging-legacy-exceptions.json::embeddedSkills :: @cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
       "reason": "The one embedded skill that shipped before the packaging separation rule. The list is a ratchet for that pre-existing debt and empties as the skill is extracted into its own package."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue",
+      "reason": "The jobs port takes any host job name as a free string with an untyped payload; the host casts the name to its job-name type and enqueues it. It stood in the SDK when this rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive",
+      "reason": "The MCP port takes any host primitive name as a free string with an untyped input; the call is authorized per call but the port bounds nothing the manifest declares. It stood in the SDK when this rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write",
+      "reason": "The objects port writes a value of a caller-chosen generic type under a free type-id string. It stood in the SDK when this rule landed (cinatra#4872)."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set",
+      "reason": "The settings port stores a value of a caller-chosen generic type under a free key string. It stood in the SDK when this rule landed (cinatra#4872)."
     }
   ]
 }

@@ -1229,3 +1229,172 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     expect(blank.lines.join("\n")).toContain("names no rule list");
   });
 });
+
+// cinatra#4872: `unbounded-port-member`. A host port member that takes a FREE NAME (a plain
+// `string` parameter) together with an UNTYPED PAYLOAD (an `any` or `unknown` parameter) is a
+// generic tunnel. Every case compares the WHOLE list of findings; a reporting case that cannot be
+// read shows its throw as a line of the list, so on a tree without the rule it fails by assertion.
+describe("core/extension border — unbounded-port-member", () => {
+  const HIT = ["JobsPort.run"];
+  const TSCONFIG = JSON.stringify({
+    compilerOptions: {
+      strict: true,
+      skipLibCheck: true,
+      lib: ["esnext"],
+      module: "esnext",
+      moduleResolution: "bundler",
+      types: [],
+      paths: { "@example-org/ports": ["./ports.ts"] },
+    },
+  });
+  const REGISTER =
+    'import type { ExtensionHostContext } from "./host-context";\nexport type ExtensionServerEntry = { register(ctx: ExtensionHostContext): void };\n';
+  const CTX = "export type ExtensionHostContext = { jobs: JobsPort };";
+  const jobs = (members: string) => `interface JobsPort { ${members} }\n${CTX}\n`;
+  type GateWithPorts = GateModule & {
+    unboundedPortMemberFindings?: (input: { repoRoot?: string; contractFile?: string }) => Finding[];
+  };
+  const ports = gate as GateWithPorts;
+  function seen(files: Record<string, string>): string[] {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      for (const [name, text] of Object.entries({ "tsconfig.json": TSCONFIG, "register.ts": REGISTER, ...files })) {
+        writeFileSync(path.join(dir, name), text);
+      }
+      return (ports.unboundedPortMemberFindings?.({ repoRoot: dir, contractFile: "register.ts" }) ?? ["not a function"]).map((f) => f.detail);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const members = (m: string) => seen({ "host-context.ts": jobs(m) });
+
+  it("the issue's fixture: run(name: string, input: unknown) is reported; a literal-union name passes", () => {
+    expect(members("run(name: string, input: unknown): void")).toEqual(HIT);
+    expect(members('run(name: "a" | "b", input: unknown): void')).toEqual([]);
+  });
+
+  it.each([
+    ["an any payload", "run(name: string, input: any): void"],
+    ["a generic payload without a constraint", "run<T>(name: string, input: T): void"],
+    ["a generic payload constrained to unknown", "run<T extends unknown>(name: string, input: T): void"],
+    ["an optional payload", "run(name: string, input?: unknown): void"],
+    ["a name that is string | undefined", "run(name: string | undefined, input: unknown): void"],
+    ["a name constrained to string", "run<N extends string>(name: N, input: unknown): void"],
+    ["a name that is a union holding plain string", 'run(name: "a" | string, input: unknown): void'],
+    ["a name with an open end, a | (string & {})", 'run(name: "a" | (string & {}), input: unknown): void'],
+    ["the payload first", "run(input: unknown, name: string): void"],
+    ["a rest tuple", "run(...args: [name: string, input: unknown]): void"],
+    ["a function-typed property", "run: (name: string, input: unknown) => void"],
+    ["an overload of which one has the shape", 'run(name: "a", input: unknown): void; run(name: string, input: unknown): void'],
+  ])("%s is reported", (_name, member) => {
+    expect(members(member)).toEqual(HIT);
+  });
+
+  it.each([
+    ["a name constrained to a literal union", 'run<N extends "a" | "b">(name: N, input: unknown): void'],
+    ["a name that is a union of literals", 'run(name: "a" | "b" | undefined, input: unknown): void'],
+    ["a name only", "run(name: string): void"],
+    ["a payload only", "run(input: unknown): void"],
+    ["a typed payload", "run(name: string, input: { id: string }): void"],
+    ["a record payload", "run(name: string, input: Record<string, unknown>): void"],
+    ["an object payload", "run(name: string, input: object): void"],
+    ["a callback payload", "run(name: string, handler: (payload: unknown) => void): void"],
+    ["a member typed any", "run: any"],
+    ["a member typed Function", "run: Function"],
+  ])("%s passes", (_name, member) => {
+    expect(members(member)).toEqual([]);
+  });
+
+  it("a literal union bounds the name however it is declared", () => {
+    expect(seen({ "host-context.ts": `type Job = "a" | "b";\n${jobs("run(name: Job, input: unknown): void")}` })).toEqual([]);
+    expect(seen({ "host-context.ts": `const JOBS = ["a", "b"] as const;\ntype Job = (typeof JOBS)[number];\n${jobs("run(name: Job, input: unknown): void")}` })).toEqual([]);
+  });
+
+  describe("how the member is reached does not matter", () => {
+    const RUN = "run(name: string, input: unknown): void";
+    it("through an alias", () => {
+      expect(seen({ "host-context.ts": `interface JobsPort { ${RUN} }\ntype Jobs = JobsPort;\nexport type ExtensionHostContext = { jobs: Jobs };\n` })).toEqual(HIT);
+    });
+    it("through a re-export and a package path", () => {
+      expect(
+        seen({
+          "ports.ts": `export interface JobsPort { ${RUN} }\n`,
+          "mid.ts": 'export type { JobsPort as Renamed } from "@example-org/ports";\n',
+          "host-context.ts": 'import type { Renamed } from "./mid";\nexport type ExtensionHostContext = { jobs: Renamed };\n',
+        }),
+      ).toEqual(HIT);
+    });
+    it("through an inherited port", () => {
+      expect(seen({ "host-context.ts": `interface Base { ${RUN} }\ninterface JobsPort extends Base { id: string }\n${CTX}\n` })).toEqual(HIT);
+    });
+    it("through a union context", () => {
+      expect(seen({ "host-context.ts": `interface JobsPort { ${RUN} }\nexport type ExtensionHostContext = { jobs: JobsPort } | { id: string };\n` })).toEqual(HIT);
+    });
+    it("through a port that is itself a function of the context", () => {
+      expect(seen({ "host-context.ts": "export type ExtensionHostContext = { jobs: (name: string, input: unknown) => void };\n" })).toEqual(["ExtensionHostContext.jobs"]);
+    });
+    it("a private member is not part of the surface", () => {
+      expect(seen({ "host-context.ts": `class JobsPort { private run(name: string, input: unknown): void {} }\n${CTX}\n` })).toEqual([]);
+    });
+  });
+
+  it("an unresolved type, a missing anchor and an untyped context fail closed with a plain line", () => {
+    expect(members("run(name: string, input: Missing): void")).toEqual([
+      "threw: [core-extension-border] the border check could not resolve a type of input in register.ts",
+    ]);
+    expect(seen({ "host-context.ts": jobs("run(name: string): void"), "register.ts": "export type Other = {};\n" })).toEqual([
+      "threw: [core-extension-border] the registration contract ExtensionServerEntry.register(…) is not an export of its module in register.ts — the rule fails closed rather than reading no port",
+    ]);
+    expect(seen({ "host-context.ts": jobs("run(name: string): void"), "register.ts": "export type ExtensionServerEntry = { register(ctx: any): void };\n" })).toEqual([
+      "threw: [core-extension-border] the registration contract ExtensionServerEntry.register(…) has an untyped register context in register.ts — the rule fails closed rather than reading no port",
+    ]);
+  });
+
+  describe("the ledger of this rule", () => {
+    const RULE = "unbounded-port-member";
+    const KEY = "packages/sdk-extensions/src/host-context.ts::HostExampleOnePort.run";
+    const e = (key: string) => ({ rule: RULE, key, reason: "a standing member recorded in a fixture ledger" });
+    const ledger = (entries: unknown[]) => ({ rules: [...gate.KNOWN_RULES], entries });
+    const growth = (base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({ base: { [gate.FLOOR_FILE]: ledger(base) }, head: { [gate.FLOOR_FILE]: ledger(head) } });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+
+    it("the base guard refuses a new entry of the rule and lets a shrink pass", () => {
+      const grew = growth([e(KEY)], [e(KEY), e(`${KEY}2`)]);
+      expect(grew.ok).toBe(false);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY}2`]);
+      expect(growth([e(KEY), e(`${KEY}2`)], [e(KEY)]).ok).toBe(true);
+    });
+
+    it("an entry whose member no longer has the shape is stale and fails", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-ledger-"));
+      try {
+        const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+        doc.entries.push(e("packages/sdk-extensions/src/host-context.ts::HostJobsPort.gone"));
+        const baselinePath = path.join(dir, "ledger.json");
+        writeFileSync(baselinePath, JSON.stringify(doc));
+        const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath });
+        expect(r.stale).toEqual([`${RULE}::packages/sdk-extensions/src/host-context.ts::HostJobsPort.gone`]);
+        expect(gate.staleVerdict(r.stale).ok).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }, 60_000);
+
+    it("the real tree: the members that stand on main, whole list, each recorded", () => {
+      const file = "packages/sdk-extensions/src/host-context.ts";
+      const found = (ports.unboundedPortMemberFindings?.({ repoRoot: REPO_ROOT }) ?? []).map((f) => `${f.file}::${f.detail}`).sort();
+      expect(found).toEqual(["HostJobsPort.enqueue", "HostMcpPort.callPrimitive", "HostObjectsPort.write", "HostSettingsPort.set"].map((d) => `${file}::${d}`));
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.rules).toContain(RULE);
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { rule: string; key: string }) => x.key).sort()).toEqual(found);
+    }, 60_000);
+  });
+});

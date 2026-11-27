@@ -49,6 +49,34 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+### `unbounded-port-member` (cinatra#4872)
+
+A host port member that takes a FREE NAME together with an UNTYPED PAYLOAD, the shape
+`run(name: string, input: unknown)`, is a generic tunnel through which any core
+behaviour can be reached. The rule reports a member when one of its call signatures
+has a parameter of the plain `string` type and another parameter of type `any` or
+`unknown`. It reads the type checker's resolved types, never how a type is written:
+a union holding plain `string` (also `"a" | (string & {})`) is free, a union of string
+literals is bounded; a type parameter counts by its constraint (none or `unknown` is
+untyped, `string` is a free name). Every union constituent and every overload is read.
+The finding is keyed `<Port>.<member>`.
+
+The anchor is the only place the rule names anything: the SDK registration module
+`packages/sdk-extensions/src/register.ts`, its export `ExtensionServerEntry` and that
+type's `register` member. The first parameter of `register` (aliases and re-exports
+followed) is the context; its members are the ports, and their own, non-private members
+are read. The program uses the product's `tsconfig.json`. An unresolved type, or a
+missing anchor, fails the check with a plain line.
+
+Stated limits. A member typed `any` or `Function` is not this rule's business; port
+shapes are issue #4932. A name typed `any`, a template literal (`` `job:${string}` ``)
+or an index signature (`[name: string]: (input: unknown) => void`) is not a plain
+`string` parameter and is not reported. A payload typed `object`, `{}` or
+`Record<string, unknown>` is not untyped for this rule. Ports are read two levels deep
+(context member, then its members); a port returned by a member or held in an array is
+not walked. The rule cannot tell a tunnel from a logging sink or a key-value store: a
+member such as `set<T>(key: string, value: T)` is reported and is recorded in the ledger.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the

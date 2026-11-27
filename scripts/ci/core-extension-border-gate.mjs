@@ -56,7 +56,7 @@
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -728,6 +728,146 @@ export function keepRecordedKindDetails(findings, baselineEntries) {
   return findings;
 }
 
+/** The registration contract (cinatra#4872): the SDK's registration module exports the entry
+ *  type `ExtensionServerEntry`, whose `register` takes the context the product hands every
+ *  extension. These three names and the module's path are the only names this rule knows. */
+export const PORT_CONTRACT = { file: "packages/sdk-extensions/src/register.ts", type: "ExtensionServerEntry", member: "register" };
+
+/** The compiler options of the product's own tsconfig.json at the repository root. */
+function productCompilerOptions(repoRoot) {
+  const config = join(repoRoot, "tsconfig.json");
+  const fail = (d) => {
+    throw new Error(`[core-extension-border] the compiler options in tsconfig.json cannot be read (${compact(ts.flattenDiagnosticMessageText(d.messageText, " "))}) — the port rule fails closed`);
+  };
+  if (!existsSync(config)) fail({ messageText: "no such file" });
+  const parsed = ts.getParsedCommandLineOfConfigFile(config, {}, { ...ts.sys, readDirectory: () => [], onUnRecoverableConfigFileDiagnostic: fail });
+  for (const d of parsed?.errors ?? []) if (d.code !== 18003) fail(d); // 18003: no inputs found, the include list is not expanded
+  return { ...parsed.options, noEmit: true, incremental: false, composite: false, tsBuildInfoFile: undefined };
+}
+
+/** `unbounded-port-member` (cinatra#4872): a host port member with a call signature that takes a
+ *  FREE NAME (a parameter of the plain `string` type) together with an UNTYPED PAYLOAD (another
+ *  parameter of type `any` or `unknown`), the shape `run(name: string, input: unknown)`. Decided on
+ *  the checker's resolved types, never on how a type is written: a union counts as free when one
+ *  constituent is plain `string` (a union of string literals is bounded), a type parameter counts
+ *  by its constraint (none, or `unknown`, is untyped; `string` is a free name). The anchor is the
+ *  registration contract: the module's exports, aliases followed, the entry type's `register`
+ *  property, the first parameter of each call signature (the context); its members are the ports,
+ *  and each own, non-private member of a port is read, every union constituent and every overload.
+ *  Keyed `<Port>.<member>`. A type the checker cannot resolve, or a missing anchor, fails closed. */
+export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, contractFile = PORT_CONTRACT.file } = {}) {
+  const realRoot = realpathSync(repoRoot);
+  const contractPath = join(realRoot, contractFile);
+  if (!existsSync(contractPath) && !existsSync(dirname(dirname(contractPath)))) return []; // a tree without the SDK package has no ports
+  const program = ts.createProgram({ rootNames: existsSync(contractPath) ? [contractPath] : [], options: productCompilerOptions(realRoot) });
+  const checker = program.getTypeChecker();
+  const F = ts.TypeFlags;
+  const rel = (f) => relative(realRoot, f).split(sep).join("/");
+  const flat = (t) => (t.isUnion() ? t.types.flatMap(flat) : [t]);
+  const fail = (what) => new Error(`[core-extension-border] the registration contract ${PORT_CONTRACT.type}.${PORT_CONTRACT.member}(…) ${what} in ${contractFile} — the rule fails closed rather than reading no port`);
+  const typeOf = (sym) => {
+    const t = checker.getTypeOfSymbol(sym);
+    if (t.flags & F.Any && (t.intrinsicName === "error" || t.intrinsicName === "unresolved")) {
+      throw new Error(`[core-extension-border] the border check could not resolve a type of ${checker.symbolToString(sym)} in ${contractFile}`);
+    }
+    return t;
+  };
+
+  // The anchor: the entry type through the module's exports, then its `register`, then the context.
+  const sourceFile = program.getSourceFile(contractPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  let entry = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === PORT_CONTRACT.type);
+  while (entry && entry.flags & ts.SymbolFlags.Alias) entry = checker.getAliasedSymbol(entry);
+  if (!entry || !entry.declarations?.length) throw fail("is not an export of its module");
+  const register = checker.getPropertyOfType(checker.getDeclaredTypeOfSymbol(entry), PORT_CONTRACT.member);
+  if (!register) throw fail(`has no ${PORT_CONTRACT.member} property`);
+  const signatures = flat(checker.getNonNullableType(typeOf(register))).flatMap((t) => t.getCallSignatures());
+  if (signatures.length === 0) throw fail(`${PORT_CONTRACT.member} has no call signature`);
+  const contexts = signatures.flatMap((sig) => {
+    const first = sig.getParameters()[0];
+    if (!first) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
+    const t = typeOf(first);
+    // A rest parameter `...args: [ctx: C]` hands over its first element.
+    const own = first.valueDeclaration?.dotDotDotToken ? (checker.isTupleType(t) ? checker.getTypeArguments(t)[0] : checker.getIndexTypeOfType(t, ts.IndexKind.Number)) : t;
+    if (!own) throw fail(`has a ${PORT_CONTRACT.member} signature without a first parameter`);
+    // `null` and `undefined` are no context; a type parameter is its default, else its constraint.
+    return flat(own).filter((c) => !(c.flags & (F.Null | F.Undefined))).map((c) => (c.flags & F.TypeParameter ? checker.getDefaultFromTypeParameter(c) ?? checker.getBaseConstraintOfType(c) : c));
+  });
+  if (contexts.some((c) => !c || c.flags & (F.Any | F.Unknown))) throw fail(`has an untyped ${PORT_CONTRACT.member} context`);
+
+  // The two questions asked of a RESOLVED parameter type.
+  const freeString = (t, seen = new Set()) => {
+    if (t.flags & F.String) return true;
+    if (t.flags & F.TypeParameter && !seen.has(t)) {
+      const c = checker.getBaseConstraintOfType(t);
+      return !!c && freeString(c, seen.add(t));
+    }
+    // `string & {}` (the open half of a "literal union with an open end") is still a free string.
+    if (t.isIntersection()) return t.types.some((c) => c.flags & F.String) && t.types.every((c) => c.flags & F.String || (c.flags & F.Object && checker.getPropertiesOfType(c).length === 0));
+    return t.isUnion() && t.types.some((c) => freeString(c, seen));
+  };
+  const untyped = (t, seen = new Set()) => {
+    if (t.flags & (F.Any | F.Unknown)) return true;
+    if (t.flags & F.TypeParameter && !seen.has(t)) {
+      const c = checker.getBaseConstraintOfType(t);
+      return !c || untyped(c, seen.add(t));
+    }
+    return t.isUnion() && t.types.some((c) => untyped(c, seen));
+  };
+  // A rest parameter contributes its element types, a tuple one per position.
+  const parameterTypes = (sig) =>
+    sig.getParameters().flatMap((p) => {
+      const t = typeOf(p);
+      if (!p.valueDeclaration?.dotDotDotToken) return [t];
+      return checker.isTupleType(t) ? checker.getTypeArguments(t) : [checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t];
+    });
+  const hasShape = (sig) => {
+    const types = parameterTypes(sig);
+    return types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
+  };
+
+  // Members: own (not from the TypeScript lib or node_modules) and callable by an extension (not private or protected).
+  const isOwn = (prop) =>
+    (prop.declarations ?? []).length === 0 ||
+    prop.declarations.some((d) => !program.isSourceFileDefaultLibrary(d.getSourceFile()) && !d.getSourceFile().fileName.split("/").includes("node_modules"));
+  const isHidden = (prop) =>
+    (prop.declarations ?? []).length > 0 &&
+    prop.declarations.every((d) => (ts.getCombinedModifierFlags(d) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) !== 0 || (d.name && ts.isPrivateIdentifier(d.name)));
+  const membersOf = (t) => flat(t).flatMap((c) => flat(checker.getApparentType(c)).flatMap((a) => checker.getPropertiesOfType(a))).filter((p) => isOwn(p) && !isHidden(p));
+  const nameOf = (t, fallback) => {
+    const own = t.getSymbol()?.name;
+    return (own && !own.startsWith("__") ? own : t.aliasTypeArguments?.length ? undefined : t.aliasSymbol?.name) ?? fallback;
+  };
+
+  const out = [];
+  const counts = new Map();
+  const judged = new Set();
+  const judge = (owner, prop) => {
+    if (judged.has(prop)) return;
+    judged.add(prop);
+    if (!flat(checker.getNonNullableType(typeOf(prop))).flatMap((c) => c.getCallSignatures()).some(hasShape)) return;
+    const d = prop.valueDeclaration ?? prop.declarations?.[0] ?? register.declarations?.[0] ?? entry.declarations[0];
+    out.push(
+      finding(
+        "unbounded-port-member",
+        rel(d.getSourceFile().fileName),
+        d.getSourceFile().getLineAndCharacterOfPosition(d.getStart()).line + 1,
+        occurrenceDetail(counts, "unbounded-port-member", `${owner}.${checker.symbolToString(prop)}`),
+        "a host port member takes a free name (a plain string) together with an untyped payload (any or unknown): a generic tunnel to any core behaviour; declare the names as a literal union the manifest bounds (cinatra#4872)",
+      ),
+    );
+  };
+  for (const ctx of contexts) {
+    for (const prop of membersOf(ctx)) {
+      judge(nameOf(ctx, "ctx"), prop);
+      for (const port of flat(checker.getNonNullableType(typeOf(prop)))) {
+        for (const member of membersOf(port)) judge(nameOf(port, checker.symbolToString(prop)), member);
+      }
+    }
+  }
+  return out;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -900,6 +1040,7 @@ export const KNOWN_RULES = new Set([
   "materialized-extension-file",
   "pack-shaped-core-domain",
   "pack-step-kind-in-core",
+  "unbounded-port-member",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1130,6 +1271,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     );
   }
 
+  findings.push(...unboundedPortMemberFindings({ repoRoot }));
   findings.push(...trackedExtensionFileFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
 
