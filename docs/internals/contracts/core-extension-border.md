@@ -61,7 +61,8 @@ parameter whose name ends in `name` or `key` typed `string` together with a para
 typed `unknown`, `any` or `Record<string, unknown>` (a free name and an untyped input:
 the port bounds nothing a manifest declares), or when its signature names a type that
 its file imports from outside the SDK (a raw handle: a database client, a queue, a
-framework object). A name parameter typed by a literal union or by a named alias — such
+framework object). Each offending declaration is one finding: an overload of a member
+carries its ordinal (`(occurrence 2)`), as every repeated crossing of the gate does. A name parameter typed by a literal union or by a named alias — such
 as one the manifest schema exports — passes. The members that stood on main when the
 rule landed are ledger entries with their reasons. They were seeded once through the
 ledger's `seededRules`: a listed rule is seeded only when the base copy of the gate script

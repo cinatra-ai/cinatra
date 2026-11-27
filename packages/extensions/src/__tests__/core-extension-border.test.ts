@@ -492,13 +492,67 @@ describe("core/extension border — a port member bounds what it takes", () => {
     expect(keys).toContain("unbounded-port-member::packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue");
   });
 
+  // A copy of the committed ledger with extra entries, for the stale tests.
+  const ledgerWith = (extra: { rule: string; key: string; reason: string }[]) => {
+    const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    doc.entries.push(...extra);
+    const dir = mkdtempSync(path.join(tmpdir(), "port-ledger-"));
+    const file = path.join(dir, "baseline.json");
+    writeFileSync(file, JSON.stringify(doc));
+    return { dir, file };
+  };
+  const REASON = "a recorded member whose declaration is no longer in the tree";
+  const HOST_FILE = "packages/sdk-extensions/src/host-context.ts";
+
   it("fails on a ledger entry whose member no longer has the shape", () => {
-    const result = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
-    const present = new Set(result.findings.map(gate.keyOf));
-    expect(present.has("unbounded-port-member::packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive")).toBe(true);
-    const stale = "unbounded-port-member::packages/sdk-extensions/src/host-context.ts::ExamplePort.gone";
-    expect(present.has(stale)).toBe(false);
-    expect(gate.staleVerdict([stale]).ok).toBe(false);
+    const { dir, file } = ledgerWith([{ rule: "unbounded-port-member", key: `${HOST_FILE}::ExamplePort.gone`, reason: REASON }]);
+    try {
+      const result = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: file });
+      expect(result.stale).toEqual([`unbounded-port-member::${HOST_FILE}::ExamplePort.gone`]);
+      expect(gate.staleVerdict(result.stale).ok).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("makes every offending overload its own finding, and growth against the base", () => {
+    const one = portFile("run(name: string, input: unknown): Promise<unknown>;");
+    const two = portFile(
+      'run(name: string, input: unknown): Promise<unknown>;\n  run(name: string, input: unknown, extra: "x"): Promise<unknown>;',
+    );
+    expect(ports(one)).toEqual(["unbounded-port-member ExamplePort.run"]);
+    expect(ports(two)).toEqual([
+      "unbounded-port-member ExamplePort.run",
+      "unbounded-port-member ExamplePort.run (occurrence 2)",
+    ]);
+    const entry = (detail: string) => ({ rule: "unbounded-port-member", key: `${SDK_FILE}::${detail}`, reason: REASON });
+    expect(
+      gate.baselineGrowth(
+        { seededRules: ["unbounded-port-member"], entries: [entry("ExamplePort.run")] },
+        { seededRules: ["unbounded-port-member"], entries: [entry("ExamplePort.run"), entry("ExamplePort.run (occurrence 2)")] },
+        { baseKnows: () => true },
+      ),
+    ).toEqual([
+      `new entry: unbounded-port-member::${SDK_FILE}::ExamplePort.run (occurrence 2) (listed in seededRules, but the base check already knows the rule unbounded-port-member; only a rule new to the check is seeded)`,
+    ]);
+  });
+
+  it("finds nothing for an overload that is fine", () => {
+    const text = portFile(
+      'run(name: string, input: unknown): Promise<unknown>;\n  run(name: "first" | "second", input: unknown): Promise<unknown>;',
+    );
+    expect(ports(text)).toEqual(["unbounded-port-member ExamplePort.run"]);
+  });
+
+  it("reads a recorded overload that was removed as stale", () => {
+    const key = `${HOST_FILE}::HostMcpPort.callPrimitive (occurrence 2)`;
+    const { dir, file } = ledgerWith([{ rule: "unbounded-port-member", key, reason: REASON }]);
+    try {
+      const result = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: file });
+      expect(result.stale).toEqual([`unbounded-port-member::${key}`]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -533,6 +533,9 @@ export function scanPortMembers({ file, text, rootType }) {
   const foreign = foreignTypeImports(sf, file);
   const out = [];
   const seen = new Set();
+  // Every offending DECLARATION is one finding: an overload of a recorded
+  // member carries its ordinal, as every repeated crossing of this gate does.
+  const counts = new Map();
   for (const prop of rootMembers) {
     if (!ts.isPropertySignature(prop) || !prop.type || !ts.isTypeReferenceNode(prop.type)) continue;
     if (!ts.isIdentifier(prop.type.typeName)) continue;
@@ -567,7 +570,7 @@ export function scanPortMembers({ file, text, rootType }) {
           "unbounded-port-member",
           file,
           sf.getLineAndCharacterOfPosition(m.getStart(sf)).line + 1,
-          `${portType}.${name}`,
+          occurrenceDetail(counts, "unbounded-port-member", `${portType}.${name}`),
           `a pack-facing port member ${reasons.join(" and ")}; a port member is bounded by what the manifest declares (a literal union or a manifest-exported alias) and hands out no host internals`,
         ),
       );
