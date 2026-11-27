@@ -3538,7 +3538,7 @@ function emitClient() {
 // and server code (role resolution, a2ui translator wiring). Validated
 // fail-closed at generation by the shared validator
 // (scripts/extensions/agent-binding-kinds.mjs).
-function emitAgentBindings(fieldRendererBindings, roleBindings) {
+export function emitAgentBindings(fieldRendererBindings, roleBindings) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const entryLines = fieldRendererBindings
     .map((b) => {
@@ -3550,6 +3550,7 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
       if (b.midRunHitl === true) parts.push("midRunHitl: true");
       if (b.a2uiTranslator !== undefined) parts.push(`a2uiTranslator: ${JSON.stringify(b.a2uiTranslator)}`);
       if (b.params !== undefined) parts.push(`params: ${JSON.stringify(b.params)}`);
+      if (b.screen !== undefined) parts.push(`screen: ${JSON.stringify(b.screen)}`);
       parts.push(`declaredBy: ${JSON.stringify(b.declaredBy)}`);
       return `  { ${parts.join(", ")} },`;
     })
@@ -3576,6 +3577,7 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
     `  readonly midRunHitl?: true;\n` +
     `  readonly a2uiTranslator?: string;\n` +
     `  readonly params?: Readonly<Record<string, unknown>>;\n` +
+    `  readonly screen?: Readonly<Record<string, unknown>>;\n` +
     `  readonly declaredBy: string;\n` +
     `};\n\n` +
     `export const GENERATED_FIELD_RENDERER_BINDINGS: ReadonlyArray<GeneratedFieldRendererBinding> = [\n` +

@@ -77,6 +77,7 @@ import {
   scheduleFormValues,
 } from "@/lib/lifecycle/schedule-form-screen";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
+import { DECLARED_SCREEN_KEY } from "@cinatra-ai/agents/hitl-gate-submit";
 
 // ---------------------------------------------------------------------------
 // THE ARMED FORM'S OWN TWO FACTS, from the two functions that already own them
@@ -720,7 +721,8 @@ async function resolveScheduleProposal(
  *   · the SCHEDULER FORM lends Fill ALONE (cinatra#2934, repaired after the
  *     picture leg): the assistant fills the form's own rows and "the person
  *     presses the form's own button", so no grant can name a press on it;
- *   · a HITL SCREEN lends Fill and Submit — the plan's "fill and submit where
+ *   · a HITL SCREEN lends Fill and Submit (a step a declared card draws lends
+ *     none, cinatra#3470) — the plan's "fill and submit where
  *     fields wait" (cinatra#2934, lifecycle-b W5c). They are two different
  *     roads and are kept apart everywhere: FILL places values in the fields in
  *     front of the person and presses nothing, so it consumes no grant; SUBMIT
@@ -743,7 +745,13 @@ export function controlsLentBy(
   resolution: BoundReferenceResolution,
 ): readonly LentCardControl[] {
   if (resolution.kind === "review") return ["comment", "regenerate", "approve"];
-  if (resolution.kind === "hitl_screen") return ["fill", "submit"];
+  // A STEP A DECLARED CARD DRAWS LENDS NOTHING (cinatra#3470): the assistant's
+  // fill and submit do not write a card's answer, so the person answers it on
+  // the card itself. The card is the one the step paused with, stored in its
+  // schema; anything stored there counts.
+  if (resolution.kind === "hitl_screen") {
+    return Object.hasOwn(resolution.form?.schema ?? {}, DECLARED_SCREEN_KEY) ? [] : ["fill", "submit"];
+  }
   if (resolution.kind === "schedule_form") return ["fill"];
   if (resolution.kind === "recommendation_hold") return ["confirm", "skip"];
   if (resolution.kind === "schedule_proposal")

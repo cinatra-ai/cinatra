@@ -32,13 +32,20 @@ import {
 } from "./store";
 import { claimPause } from "./run-pause-claim";
 import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
-import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
+import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest, declaredScreenDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import {
+  declaredHitlCheckedAnswer,
+  readStepGate,
+  storedDeclaredCardOf,
+  type DeclaredHitlCard,
+  type StepGateRead,
+} from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -68,6 +75,30 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
   "stepNumber",
   "approvalNote",
 ]);
+
+/**
+ * THE DECLARED CARD OF THE STEP AN ANSWER GOES TO (cinatra#3470): the card the
+ * step PAUSED WITH, stored in its gate row's schema (`storedDeclaredCardOf`),
+ * never the build's current bindings, so a build deployed while the run waits
+ * cannot change or drop what the step asks for. The row read's three outcomes
+ * (`StepGateRead`) stay apart: a row that stored no card, or no row at all, is
+ * no card, as before this was recorded; a read that FAILED is `"unknown"` and
+ * the answer is refused (fail closed), as is a stored value that is not a card
+ * or whose digest does not match.
+ */
+export function declaredCardOfStep(
+  step: StepGateRead<{ xRenderer: string; inputSchema?: Record<string, unknown> }>,
+): DeclaredHitlCard | "unknown" | null {
+  if (step.read === "failed") return "unknown";
+  if (step.read === "none") return null;
+  const stored = storedDeclaredCardOf(step.gate.inputSchema, step.gate.xRenderer);
+  if (stored === null) return null;
+  return stored === "invalid" || declaredScreenDigest(stored.card) !== stored.digest ? "unknown" : stored.card;
+}
+
+/** The refusal of an answer whose step's screen could not be read (cinatra#3470). */
+export const DECLARED_CARD_STEP_UNREADABLE_REFUSAL =
+  "This step's screen could not be read, so nothing was sent. Reload the page and answer the step on its card.";
 
 /**
  * Reject a setup value that violates its input's DECLARED type (cinatra#2484).
@@ -1053,7 +1084,7 @@ export async function approveReviewTaskInternal(
       values && typeof values === "object" && !Array.isArray(values)
         ? (values as { userResponse?: unknown; approvalNote?: unknown })
         : null;
-    const userResponseRaw = valuesObj?.userResponse;
+    let userResponseRaw = valuesObj?.userResponse;
     const approvalNoteRaw = valuesObj?.approvalNote;
     const trimmedNote = typeof approvalNoteRaw === "string" ? approvalNoteRaw.trim() : "";
 
@@ -1069,7 +1100,7 @@ export async function approveReviewTaskInternal(
     // Extract structured submission payload: a named single text answer under
     // its field (cinatra#4244), else parsed userResponse JSON, else values minus
     // userResponse, else null. The resume text above is unchanged by this.
-    const submittedValues = readWayflowSubmittedValues(values);
+    let submittedValues = readWayflowSubmittedValues(values);
 
     // THE CLAIM IS RELEASED WHEN THE ANSWER NEVER LEAVES (cinatra#3423).
     //
@@ -1084,18 +1115,38 @@ export async function approveReviewTaskInternal(
     // the message, and re-opening the gate there is the double resume this whole
     // section exists to prevent.
     // Read only THIS pre-dispatch materialization, never the latest gate later.
-    let gateSnapshot: Awaited<ReturnType<typeof readDurableHitlGateForContinue>> = null;
-    try { gateSnapshot = await readDurableHitlGateForContinue(run.id,reviewTaskId); } catch { /* Missing durable evidence stays unconfirmed. */ }
+    // Its three outcomes stay apart (cinatra#3470): a failed read is not "no row".
+    const stepGate = await readStepGate(() => readDurableHitlGateForContinue(run.id, reviewTaskId));
+    // Missing durable evidence stays unconfirmed for the Continue receipt.
+    const gateSnapshot = stepGate.read === "row" ? stepGate.gate : null;
     let dispatchStarted = false;
     let fencedAt = 0;
     let settled = false;
     let capturedPromptId: string | null = null;
+    // The schema recorded with a declared card's answer is the step's own stored
+    // one (it carries the card the step paused with), never the client's copy, so
+    // the read-only replay draws the card the step was answered on.
+    let recordedSchema = schemaSnapshot ?? null;
     try {
       // cinatra#4150: a run held at a publish decision goes on only by that decision. Read under
       // the pause claim and before the fence (cinatra#4245), so a decision parked before the claim is
       // seen and nothing is sent; a refusal gives the claim back. A hold that cannot be read answers one
       // fixed text that names no run and carries no store error.
       await assertNoOpenPublishDecision(run.id).catch((err: unknown) => { throw publishHoldFault(err); });
+      // cinatra#3470: THE SERVER ENFORCES A DECLARED CARD. An answer to a step a
+      // declared card draws holds exactly the card's fields; it is rebuilt from the
+      // step's stored values, and that one object is what is sent and recorded. A
+      // refusal is thrown before the fence, so the claim is given back.
+      const declaredCard = declaredCardOfStep(stepGate);
+      if (declaredCard === "unknown") throw new Error(DECLARED_CARD_STEP_UNREADABLE_REFUSAL);
+      if (declaredCard !== null) {
+        const checked = declaredHitlCheckedAnswer(declaredCard, gateSnapshot?.values ?? {}, values);
+        if ("refusal" in checked) throw new Error(checked.refusal);
+        userResponseRaw = checked.values.userResponse;
+        resumeText = checked.values.userResponse as string;
+        submittedValues = readWayflowSubmittedValues(checked.values);
+        recordedSchema = gateSnapshot?.inputSchema ?? null;
+      }
       // The shared WayFlow resume (cinatra#4150) is prepared before the fence and
       // sent after it (cinatra#4245): the client with its 24h ceiling and the
       // runtime's long header/body timeouts, this leg's credential and the message.
@@ -1234,7 +1285,7 @@ export async function approveReviewTaskInternal(
         stepKey: taskId,
         message: trimmedNote,                          // empty string when bare approval — never null (Pitfall 2)
         submittedValues,                                // null when no structured payload at all
-        schemaSnapshot: schemaSnapshot ?? null,
+        schemaSnapshot: recordedSchema,
         excluded: trimmedNote.length === 0,             // Pattern 4(b): autosave skips bare-approval rows
       }).catch((e) => {
         // The first argument of a console call is a CONSTANT: a caller-derived

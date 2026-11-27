@@ -50,7 +50,31 @@
 // Fully dependency-injected and free of DB / Redis / transport imports: the
 // seam is a pure decision function over four effects, so the invariant is unit
 // testable without a store, a queue, or a running runtime.
+//
+// A MID-RUN STEP THAT PAUSES WITH A DECLARED CARD (cinatra#3470) is recorded
+// in the other order:
+//
+//     build → stamp card → WRITE ROW + READ IT BACK → emit STORED → read back → park
+//                        ↘ fail with a name, nothing emitted
+//
+// Its answer is checked against the card its ROW stored, and the row keeps the
+// first card of a pause (two workers can park one pause on two builds). So the
+// row is written first, the same statement returns what it stored, and the one
+// frame emitted carries exactly that card: what a person is shown is what the
+// answer is checked against. Such a step depends on its row, so here the write
+// is retried within the read-back bounds and is FATAL: a step is never parked
+// on a card it cannot be answered with. A re-emission of the pause by a build
+// that declares a card takes this order too, and so emits the card its row
+// kept from the first park.
+//
+// Every other gate, a mid-run step whose build declares no card included,
+// keeps the order above, for the reasons above: its row is written only for a
+// gate a human was really shown, and a failed write is not fatal (cinatra#2748;
+// the mid-run and re-emission suites hold a writer that returns nothing).
 // ---------------------------------------------------------------------------
+
+import { withDeclaredScreenOfBuild, withStoredDeclaredScreen } from "./field-renderer-bindings.server";
+import { DECLARED_SCREEN_KEY } from "./hitl-gate-submit";
 
 /**
  * Stable prefix of the named failure recorded on `agent_runs.error` when a gate
@@ -109,7 +133,18 @@ export type ParkRunOnHumanGateOptions = {
    * Optional so callers with no durable store (tests, and any future gate whose
    * artifact already lives in a table) stay unchanged.
    */
-  readonly persistArtifact?: (artifact: HumanGateArtifact) => Promise<void>;
+  readonly persistArtifact?: (artifact: HumanGateArtifact) => Promise<unknown>;
+  /**
+   * A MID-RUN step (cinatra#3470). Given only by the mid-run gate; a setup step
+   * passes none and is never stamped with a declared card. `recordStep` writes
+   * the step's gate row and returns the row AS STORED by that same write (the
+   * store keeps the first card of a pause), or null when it returned none.
+   */
+  readonly midRunStep?: {
+    readonly recordStep: (
+      artifact: HumanGateArtifact,
+    ) => Promise<{ readonly xRenderer: string; readonly inputSchema: Record<string, unknown> } | null>;
+  };
   /** `from -> pending_approval`. Only ever called after a verified read-back. */
   readonly parkRun: () => Promise<void>;
   /** `from -> failed`, carrying the named error. */
@@ -214,6 +249,39 @@ export async function parkRunOnHumanGate(
     return fail(`the gate payload could not be built (${describe(err)})`);
   }
 
+  // THE CARD A MID-RUN STEP PAUSES WITH IS STORED BEFORE IT IS SHOWN
+  // (cinatra#3470): see the header. One write that returns the stored row; the
+  // frame below then carries the stored card, and is emitted once.
+  const midRunStep = options.midRunStep;
+  try {
+    artifact = await withDeclaredScreenOfBuild(artifact, midRunStep !== undefined);
+  } catch (err) {
+    return fail(`the step's declared card could not be read (${describe(err)})`);
+  }
+  const writeFirst = midRunStep !== undefined && Object.hasOwn(artifact.schema, DECLARED_SCREEN_KEY);
+  if (writeFirst) {
+    let stored: Awaited<ReturnType<typeof midRunStep.recordStep>> = null;
+    let writeError = "the gate row write returned no row";
+    for (let tries = 0; tries < attempts && stored === null; tries += 1) {
+      if (tries > 0 && delayMs > 0) await sleep(delayMs);
+      try {
+        stored = (await midRunStep.recordStep(artifact)) ?? null;
+        if (stored === null) writeError = "the gate row write returned no row";
+      } catch (err) {
+        writeError = describe(err ?? new Error("unknown error"));
+      }
+    }
+    if (stored === null) {
+      return fail(`the step's card could not be recorded with it (${writeError})`);
+    }
+    if (stored.xRenderer !== artifact.xRenderer) {
+      return fail(
+        `the step's gate row holds another renderer ('${stored.xRenderer}'), so its card cannot be told`,
+      );
+    }
+    artifact = withStoredDeclaredScreen(artifact, stored.inputSchema);
+  }
+
   try {
     await emitInterrupt(artifact);
   } catch (err) {
@@ -259,7 +327,8 @@ export async function parkRunOnHumanGate(
     // proves the artifact reached the event log, and before the run is parked —
     // so the row and the frame carry the SAME verified gate. A re-emit writes
     // too: its row is idempotent on the gate identity and monotonic on time.
-    if (persistArtifact) {
+    // A step whose row was written first (cinatra#3470) is not written again.
+    if (persistArtifact && !writeFirst) {
       try {
         await persistArtifact(artifact);
       } catch (err) {

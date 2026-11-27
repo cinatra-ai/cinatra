@@ -70,6 +70,11 @@ export type FieldRendererBindingInput = {
   readonly midRunHitl?: boolean;
   readonly a2uiTranslator?: string;
   readonly params?: Readonly<Record<string, unknown>>;
+  /** A bundled binding's declared HITL screen (cinatra#3470); the runtime
+   *  collector drops it for a package installed at runtime. Never read here:
+   *  a step draws the card it paused with (`declaredCardEntryOf`), and a binding
+   *  registers through its kind as if it declared none. */
+  readonly screen?: Readonly<Record<string, unknown>>;
 };
 
 // ---------------------------------------------------------------------------

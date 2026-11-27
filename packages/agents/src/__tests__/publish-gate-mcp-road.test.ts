@@ -5,6 +5,11 @@
 // before the claim and, on a publishing template or for a run with a decision, again
 // under the claim and before the fence.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+// The step's gate row read finds no row (a failed read refuses or fails the park, cinatra#3470).
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+}));
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
 // cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
