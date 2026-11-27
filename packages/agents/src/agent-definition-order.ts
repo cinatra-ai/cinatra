@@ -8,7 +8,7 @@
 // pulling in the instance-identity store (agent-source-paths imports it hard;
 // the compiler reads it lazily on purpose).
 //
-// Order, the same as the four-rung probe on main (resolveAgentJsonPathForRead):
+// Order, the one the retired four-rung probe had:
 //   1. for each vendor, in the order given (operator first, then first-party):
 //      <root>/<vendor>/<slug>/            (cinatra/oas.json; old: cinatra/agent.json)
 //   2. the legacy directory <root>/<legacySlug>/

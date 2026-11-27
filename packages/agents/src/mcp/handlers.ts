@@ -73,14 +73,18 @@ import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
-  LEGACY_SLUG_MAP,
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
-  resolveAgentJsonPathForRead,
   resolveAgentOasPathForRead,
   resolveAgentRootDirForRead,
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
+import {
+  agentSourceMessage,
+  enumerateAgentSourceDirs,
+  reportedAgentSources,
+  type AgentSourceDir,
+} from "../agent-source-dirs";
 import { createZipBuffer } from "../zip-helpers";
 import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 // read the chat-side projectContext frame
@@ -2723,11 +2727,11 @@ async function handleAgentBuilderVersionDiff(
 }
 
 // ---------------------------------------------------------------------------
-// 4-rung agent definition path resolution + vendor-segment derivation.
+// Agent definition path resolution + vendor-segment derivation.
 // Definitions live in ./agent-source-paths (extracted to keep this file under
 // the file-size ratchet; behavior is identical). The path-safety guard CALLS
 // remain at every join site BELOW in this file — only the helper definitions
-// moved. See that module for the full layout/rung documentation.
+// moved. See that module for the full layout documentation.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -2737,58 +2741,25 @@ async function handleAgentBuilderVersionDiff(
 async function handleAgentBuilderGitList(
   _request: PrimitiveRequest,
 ): Promise<unknown> {
-  // agents now live under <installDir>/<vendor>/<slug>/. Walk the operator's
-  // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537), then
-  // fall back to legacy <installDir>/<slug>/ for older installs.
+  // Every agent source directory under the source root is in one of two states
+  // (cinatra#4920, ./agent-source-dirs): READ (<vendor>/<slug>/cinatra/oas.json,
+  // for the operator's OWN vendor dir and the first-party "cinatra-ai" dir,
+  // cinatra#537) is listed; REPORTED (an old-layout or flat directory) is named
+  // in warnings[] with the directory, the file found and the place to move it.
   const root = resolveDevExtensionSourceRoot();
-  const slugSet = new Set<string>();
-
-  // New layout: <installDir>/<vendor>/<slug>/ — probe both the instance vendor
-  // segment and the first-party segment (deduped, filesystem-safe only).
-  for (const vendorSegment of safeVendorSegmentsForRead()) {
-    const vendorDir = join(root, vendorSegment);
-    if (!existsSync(vendorDir)) continue;
-    try {
-      const subEntries = (await readdir(vendorDir, { withFileTypes: true })) as unknown as Array<{
-        name: string;
-        isDirectory: () => boolean;
-      }>;
-      for (const sub of subEntries) {
-        if (sub.isDirectory()) slugSet.add(sub.name);
-      }
-    } catch {
-      /* skip if unreadable */
-    }
-  }
-
-  // Legacy layout: <installDir>/<slug>/ (only entries that look like agent dirs).
-  let topEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
+  let sources: AgentSourceDir[] = [];
   try {
-    topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
-      name: string;
-      isDirectory: () => boolean;
-    }>;
+    sources = enumerateAgentSourceDirs(root, safeVendorSegmentsForRead());
   } catch {
-    /* root unreadable — items collected so far still returned */
+    /* root unreadable — nothing to list */
   }
-  for (const entry of topEntries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === "cinatra") continue; // Vendor dir already walked above
-    // Probe legacy paths to filter non-agent dirs.
-    if (
-      existsSync(join(root, entry.name, "cinatra", "agent.json"))
-      || existsSync(join(root, entry.name, "agent.json"))
-) {
-      slugSet.add(entry.name);
-    }
-  }
+  const warnings = reportedAgentSources(sources).map((state) => agentSourceMessage(state));
 
   const items: unknown[] = [];
-  for (const slug of slugSet) {
-    const resolved = resolveAgentJsonPathForRead(slug);
-    if (!resolved) continue;
+  for (const source of sources) {
+    if (source.state !== "read") continue;
     try {
-      const raw = (await readFile(resolved.path, "utf8")) as string;
+      const raw = (await readFile(source.definitionPath, "utf8")) as string;
       const content = JSON.parse(raw) as Record<string, unknown>;
       // packageName + packageVersion live under metadata.cinatra.
       const cinatra = (content.metadata as Record<string, unknown> | undefined)?.cinatra as Record<string, unknown> | undefined;
@@ -2798,36 +2769,16 @@ async function handleAgentBuilderGitList(
       let description = (content.description as string | null | undefined) ?? null;
       let siblingPkgName: string | null = null;
       let siblingPkgVersion: string | null = null;
-      const candidatePkgPaths = [
-        // New layout sibling: resolve against the SAME root dir the OAS
-        // resolver picked, so the sibling read tracks the actual vendor
-        // segment (instance vendor or first-party) instead of a hardcoded
-        // "cinatra-ai" (cinatra#537).
-        join(resolved.rootDir, "package.json"),
-        // Legacy layout sibling: <installDir>/<legacySlug>/package.json
-        join(
-          root,
-          (LEGACY_SLUG_MAP[slug] ?? slug),
-          "package.json",
-),
-      ];
-      for (const pkgPath of candidatePkgPaths) {
-        try {
-          const siblingPkg = JSON.parse((await readFile(pkgPath, "utf8")) as string) as { name?: unknown; version?: unknown; description?: unknown };
-          if (!description && typeof siblingPkg.description === "string" && siblingPkg.description) {
-            description = siblingPkg.description;
-          }
-          if (!siblingPkgName && typeof siblingPkg.name === "string" && siblingPkg.name) {
-            siblingPkgName = siblingPkg.name;
-          }
-          if (!siblingPkgVersion && typeof siblingPkg.version === "string" && siblingPkg.version) {
-            siblingPkgVersion = siblingPkg.version;
-          }
-          if (description && siblingPkgName && siblingPkgVersion) break;
-        } catch { /* try next candidate */ }
-      }
+      try {
+        const siblingPkg = JSON.parse((await readFile(join(source.dir, "package.json"), "utf8")) as string) as { name?: unknown; version?: unknown; description?: unknown };
+        if (!description && typeof siblingPkg.description === "string" && siblingPkg.description) {
+          description = siblingPkg.description;
+        }
+        if (typeof siblingPkg.name === "string" && siblingPkg.name) siblingPkgName = siblingPkg.name;
+        if (typeof siblingPkg.version === "string" && siblingPkg.version) siblingPkgVersion = siblingPkg.version;
+      } catch { /* no usable sibling package.json */ }
       items.push({
-        path: resolved.relPath,
+        path: relative(process.cwd(), source.definitionPath),
         packageName: cinatra?.packageName ?? content.packageName ?? siblingPkgName ?? null,
         packageVersion: cinatra?.packageVersion ?? content.packageVersion ?? siblingPkgVersion ?? null,
         name: content.name ?? null,
@@ -2837,7 +2788,7 @@ async function handleAgentBuilderGitList(
       // Skip unreadable or invalid files — do not fail the entire list
     }
   }
-  return { items, total: items.length };
+  return { items, total: items.length, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -5913,7 +5864,7 @@ export {
   // path resolvers, so a test can assert the agent-create writers agree.
   resolveInstanceVendorSegment as __resolveInstanceVendorSegment,
   resolveAgentJsonPathForWrite as __resolveAgentJsonPathForWrite,
-  resolveAgentJsonPathForRead as __resolveAgentJsonPathForRead,
+  resolveAgentOasPathForRead as __resolveAgentOasPathForRead,
 };
 
 // ---------------------------------------------------------------------------

@@ -62,19 +62,17 @@ afterEach(async () => {
 });
 
 describe("ingestGitNativeAgentDefinitions", () => {
-  it("finds every layout the boot scan recognises, and hands each one to the loader", async () => {
+  it("hands each cinatra/oas.json under a vendor directory to the loader", async () => {
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
-    await writeDefinition(path.join("cinatra-ai", "scrape-agent", "cinatra", "agent.json"));
-    await writeDefinition(path.join("legacy-nested", "cinatra", "agent.json"));
-    await writeDefinition(path.join("legacy-flat", "agent.json"));
+    await writeDefinition(path.join("acme-ops", "scrape-agent", "cinatra", "oas.json"));
     // Neither a definition nor a directory: nothing to find here.
     await writeFile(path.join(root, "README.md"), "not a definition", "utf8");
 
     const loadDefinition = loaderImporting();
     const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
 
-    expect(report.found).toBe(4);
-    expect(report.imported).toBe(4);
+    expect(report.found).toBe(2);
+    expect(report.imported).toBe(2);
     expect(report.alreadyOnFile).toBe(0);
     expect(report.declined).toBe(0);
     expect(report.pending).toEqual([]);
@@ -82,13 +80,63 @@ describe("ingestGitNativeAgentDefinitions", () => {
     expect(report.sourceRoot).toBe(root);
     expect([...loadDefinition.paths].sort()).toEqual(
       [
+        path.join("acme-ops", "scrape-agent", "cinatra", "oas.json"),
         path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"),
-        path.join("cinatra-ai", "scrape-agent", "cinatra", "agent.json"),
-        path.join("legacy-flat", "agent.json"),
-        path.join("legacy-nested", "cinatra", "agent.json"),
       ].sort(),
     );
   });
+
+  // Every agent source directory is READ (handed to the loader) or REPORTED (a
+  // failure naming the directory, the file found and the exact place the
+  // definition must be), keyed by path, with no directory name skipped
+  // (cinatra#4920). One table; every top-level directory is a vendor here.
+  const S = "acme-agent";
+  const V = "cinatra-ai";
+  const OP = "acme-ops";
+  type Row = {
+    name: string;
+    files: string[];
+    read: string[];
+    reported?: Array<{ dir: string; found: string[]; at: string; also?: string }>;
+  };
+  const ROWS: Row[] = [
+    { name: "scoped canonical", files: [`${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`] },
+    { name: "scoped old-only, cinatra/agent.json", files: [`${V}/${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped old-only, root agent.json", files: [`${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped old-only, both old forms", files: [`${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json", "agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped both", files: [`${V}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [`${V}/${S}`] },
+    { name: "flat canonical", files: [`${S}/cinatra/oas.json`], read: [], reported: [{ dir: S, found: ["cinatra/oas.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "flat old-only, cinatra/agent.json", files: [`${S}/cinatra/agent.json`], read: [], reported: [{ dir: S, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "flat old-only, root agent.json", files: [`${S}/agent.json`], read: [], reported: [{ dir: S, found: ["agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "flat both", files: [`${S}/cinatra/oas.json`, `${S}/cinatra/agent.json`, `${S}/agent.json`], read: [], reported: [{ dir: S, found: ["cinatra/oas.json", "cinatra/agent.json", "agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "slug cinatra, scoped", files: [`${V}/cinatra/cinatra/oas.json`], read: [`${V}/cinatra`] },
+    { name: "a vendor directory that holds its own definition", files: [`${V}/agent.json`, `${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], reported: [{ dir: V, found: ["agent.json"], at: `${V}/${V}/cinatra/oas.json` }] },
+    { name: "two directories with one slug", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/oas.json`, `${S}/cinatra/oas.json`], read: [`${OP}/${S}`, `${V}/${S}`], reported: [{ dir: S, found: ["cinatra/oas.json"], at: `${V}/${S}/cinatra/oas.json`, also: "already holds a definition" }] },
+    { name: "legacy renamed slug", files: ["drupal-content-editor/cinatra/agent.json"], read: [], reported: [{ dir: "drupal-content-editor", found: ["cinatra/agent.json"], at: `${V}/drupal-agent/cinatra/oas.json` }] },
+    { name: "any other vendor directory is walked", files: [`other-vendor/${S}/cinatra/oas.json`], read: [`other-vendor/${S}`] },
+  ];
+
+  for (const row of ROWS) {
+    it(`table: ${row.name}`, async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      for (const f of row.files) await writeDefinition(f);
+      const loadDefinition = loaderImporting();
+      const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+      const canonical = (d: string) => path.join(d, "cinatra", "oas.json");
+      expect([...loadDefinition.paths].sort()).toEqual(row.read.map(canonical).sort());
+      expect(loadDefinition.paths.filter((p) => path.basename(p) === "agent.json")).toEqual([]);
+      expect(report.found).toBe(row.read.length);
+
+      const reported = row.reported ?? [];
+      expect(report.failures).toHaveLength(reported.length);
+      for (const r of reported) {
+        const failure = report.failures.find((f) => f.definitionPath === path.normalize(r.dir));
+        expect(failure).toBeDefined();
+        for (const text of [...r.found, path.normalize(r.at), ...(r.also ? [r.also] : [])]) expect(failure!.reason).toContain(text);
+      }
+    });
+  }
 
   it("counts a definition reaching the database for the FIRST time as read in", async () => {
     // The loader's create road answers `upserted: false` (nothing was updated —
