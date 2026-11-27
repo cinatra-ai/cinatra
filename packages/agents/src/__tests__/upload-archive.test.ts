@@ -5,13 +5,14 @@
  *   - Standardized package layout: package.json `cinatra.entrypoint`
  *     (cinatra/oas.json) names the OAS Flow document — with and without the
  *     single top-level <slug>/ folder the export wraps everything in.
- *   - Legacy flat layout: root agent.json still resolves (fallback).
+ *   - Old flat layout: a root agent.json is refused with the file to ship
+ *     (cinatra/oas.json), whatever else the archive holds (cinatra#4920).
  *   - Deflate-compressed entries inflate (real-world zip tools default to
  *     deflate; the previous reader decoded compressed bytes as text).
  *   - Malformed archives fail with a REAL reason (not a ZIP, unsupported
  *     method, missing entrypoint target, junk-only, wrong extension kind).
  *   - The canonical repack is readable by the SERVER's own reader
- *     (zip-helpers.readZipFiles) and carries agent.json + the sidecars
+ *     (zip-helpers.readZipFiles) and carries cinatra/oas.json + the sidecars
  *     importAgentTemplateCore stages — the client/server bridge.
  *
  * Fixtures are built with the REAL server-side writer (createZipBuffer) for
@@ -211,36 +212,32 @@ describe("resolveAgentArchive — standardized package layout", () => {
 // Legacy layout
 // ---------------------------------------------------------------------------
 
-describe("resolveAgentArchive — legacy flat layout", () => {
-  it("falls back to a root agent.json", async () => {
-    const resolved = await resolve(
-      storedZip([
-        { name: "agent.json", content: OAS_FLOW },
-        { name: "manifest.json", content: '{"version":1}' },
-      ]),
-    );
-    expect(resolved.layout).toBe("legacy");
-    expect(resolved.manifestJson).toBe('{"version":1}');
+describe("resolveAgentArchive — old flat layout is refused", () => {
+  const needsOas = /root agent\.json, which is no longer read\. Put the agent definition in cinatra\/oas\.json/;
+
+  it("refuses a root agent.json and names cinatra/oas.json", async () => {
+    const archive = storedZip([
+      { name: "agent.json", content: OAS_FLOW },
+      { name: "manifest.json", content: '{"version":1}' },
+    ]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(needsOas);
   });
 
-  it("falls back to agent.json when package.json has no cinatra.entrypoint", async () => {
-    const pkg = JSON.stringify({ name: "@cinatra-ai/legacy-agent", version: "0.1.0" });
-    const resolved = await resolve(
-      storedZip([
-        { name: "agent.json", content: OAS_FLOW },
-        { name: "package.json", content: pkg },
-      ]),
-    );
-    expect(resolved.layout).toBe("legacy");
-    expect(resolved.packageJson).toBe(pkg);
+  it("refuses a root agent.json when package.json has no cinatra.entrypoint", async () => {
+    const pkg = JSON.stringify({ name: "@example-org/legacy-agent", version: "0.1.0" });
+    const archive = storedZip([
+      { name: "agent.json", content: OAS_FLOW },
+      { name: "package.json", content: pkg },
+    ]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(needsOas);
   });
 
-  it("accepts the legacy layout under a single folder prefix too", async () => {
-    const resolved = await resolve(
-      storedZip([{ name: "export/agent.json", content: OAS_FLOW }]),
-    );
-    expect(resolved.layout).toBe("legacy");
-    expect(resolved.strippedPrefix).toBe("export");
+  it("refuses the old layout under a single folder prefix too", async () => {
+    const archive = storedZip([{ name: "export/agent.json", content: OAS_FLOW }]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(needsOas);
   });
 });
 
@@ -260,11 +257,10 @@ describe("readZipEntries — deflate-compressed archives", () => {
     expect(JSON.parse(resolved.agentJson).agentspec_version).toBe("26.1.0");
   });
 
-  it("inflates method-8 legacy archives", async () => {
-    const resolved = await resolve(
-      deflateZip([{ name: "agent.json", content: OAS_FLOW }]),
-    );
-    expect(resolved.layout).toBe("legacy");
+  it("inflates method-8 archives before the old-layout refusal", async () => {
+    const archive = deflateZip([{ name: "agent.json", content: OAS_FLOW }]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(/Put the agent definition in cinatra\/oas\.json/);
   });
 });
 
@@ -315,7 +311,7 @@ describe("malformed archives", () => {
     ).rejects.toThrow(/resolveSuppliedArchive/);
   });
 
-  it("rejects an archive with neither entrypoint nor agent.json", async () => {
+  it("rejects an archive with neither entrypoint nor cinatra/oas.json", async () => {
     await expect(
       resolve(storedZip([{ name: "README.md", content: "hi" }])),
     ).rejects.toThrow(/no agent definition found/);
@@ -324,8 +320,8 @@ describe("malformed archives", () => {
   it("rejects an archive with multiple top-level folders and no root markers", async () => {
     await expect(
       resolve(storedZip([
-        { name: "a/agent.json", content: OAS_FLOW },
-        { name: "b/agent.json", content: OAS_FLOW },
+        { name: "a/cinatra/oas.json", content: OAS_FLOW },
+        { name: "b/cinatra/oas.json", content: OAS_FLOW },
       ])),
     ).rejects.toThrow(/no agent definition found/);
   });
@@ -362,7 +358,7 @@ describe("malformed archives", () => {
 // ---------------------------------------------------------------------------
 
 describe("buildCanonicalAgentZip", () => {
-  it("produces a flat stored ZIP the SERVER reader parses (agent.json + sidecars)", async () => {
+  it("produces a flat stored ZIP the SERVER reader parses (cinatra/oas.json + sidecars)", async () => {
     const resolved = await resolve(
       deflateZip([
         { name: "slug/package.json", content: PACKAGE_JSON },
@@ -374,7 +370,8 @@ describe("buildCanonicalAgentZip", () => {
     const canonical = buildCanonicalAgentZip(resolved);
     // Parse with the real server-side reader (import-agent-core's).
     const serverView = readZipFiles(Buffer.from(canonical));
-    expect(serverView.get("agent.json")).toBe(OAS_FLOW);
+    expect(serverView.get("cinatra/oas.json")).toBe(OAS_FLOW);
+    expect(serverView.has("agent.json")).toBe(false);
     expect(serverView.get("package.json")).toBe(PACKAGE_JSON);
     expect(serverView.get("LICENSE")).toBe("MIT License");
     // Non-import files are not carried into the canonical archive.
@@ -395,7 +392,7 @@ describe("buildCanonicalAgentZip", () => {
     );
     expect([...entries.keys()].sort()).toEqual([
       "LICENSE",
-      "agent.json",
+      "cinatra/oas.json",
       "manifest.json",
       "package.json",
     ]);

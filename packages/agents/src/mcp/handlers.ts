@@ -2556,9 +2556,9 @@ async function handleAgentBuilderExport(
     // agent_import's SPDX license gate (detectSpdxLicense) passes and a
     // restore upserts by packageName. Only files that actually exist on disk
     // are included — never synthesized. The name list mirrors exactly what
-    // importAgentTemplateCore stages alongside agent.json.
+    // importAgentTemplateCore stages alongside cinatra/oas.json.
     const zipEntries: { name: string; content: string }[] = [
-      { name: "agent.json", content: agentJson },
+      { name: "cinatra/oas.json", content: agentJson },
       { name: "manifest.json", content: manifestJson },
     ];
     for (const sidecar of ["package.json", "LICENSE", "LICENSE.md", "COPYING", ".spdx"]) {

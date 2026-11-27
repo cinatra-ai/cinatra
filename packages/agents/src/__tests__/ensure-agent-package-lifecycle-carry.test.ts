@@ -449,7 +449,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
     // so handing that to the importer as authoritative would clear a populated
     // lifecycle_config on any version mismatch (i.e. every upgrade).
     DOWNLOAD_ZIP = createZipBuffer([
-      { name: "agent.json", content: OAS_CONTENT },
+      { name: "cinatra/oas.json", content: OAS_CONTENT },
       { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
     ]);
     readAgentTemplateByPackageNameMock.mockResolvedValue({
@@ -469,7 +469,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
 
   it("ensureAgentPackage: an UNPARSEABLE manifest (replaced by the synthesis) is non-authoritative", async () => {
     DOWNLOAD_ZIP = createZipBuffer([
-      { name: "agent.json", content: OAS_CONTENT },
+      { name: "cinatra/oas.json", content: OAS_CONTENT },
       { name: "package.json", content: "{ not json" },
     ]);
     readAgentTemplateByPackageNameMock.mockResolvedValue({
@@ -492,7 +492,7 @@ describe("cinatra#2044 GAP 2 — an ABSENT sibling manifest never clears an inst
     // so a version that legitimately DROPS the lifecycle block must still clear
     // the column — the opt-out must not blanket-disable the explicit-clear rule.
     DOWNLOAD_ZIP = createZipBuffer([
-      { name: "agent.json", content: OAS_CONTENT },
+      { name: "cinatra/oas.json", content: OAS_CONTENT },
       { name: "package.json", content: PKG_WITH_LIFECYCLE },
     ]);
     readAgentTemplateByPackageNameMock.mockResolvedValue({

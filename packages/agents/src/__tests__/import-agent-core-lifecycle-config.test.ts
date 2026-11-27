@@ -143,7 +143,7 @@ const OAS = JSON.stringify({
  * declares no block; omitting `pkg` entirely models a manifest-less ZIP. */
 function zip(opts: { pkg?: boolean; lifecycle?: unknown; oas?: string } = {}): string {
   const files = [
-    { name: "agent.json", content: opts.oas ?? OAS },
+    { name: "cinatra/oas.json", content: opts.oas ?? OAS },
     { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
   ];
   if (opts.pkg !== false) {
@@ -310,7 +310,7 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
     // manifest read), never as the explicit `null` of a "declares no block".
     readTemplate.mockResolvedValue({ id: "tpl-existing" });
     const files = [
-      { name: "agent.json", content: OAS },
+      { name: "cinatra/oas.json", content: OAS },
       { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
       { name: "package.json", content: "{ not json" },
     ];
@@ -428,7 +428,7 @@ describe("cinatra#4264 A1b — the import revalidates a retained regenerate list
   it("unparseable manifest: no package identity either, so the stored row is never written", async () => {
     readTemplate.mockResolvedValue(row(STALE) as never);
     const files = [
-      { name: "agent.json", content: GEMINI },
+      { name: "cinatra/oas.json", content: GEMINI },
       { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
       { name: "package.json", content: "{ not json" },
     ];

@@ -748,7 +748,8 @@ export const SUPPLIED_REPOSITORY_SUBJECT: SuppliedTreeSubject = {
  * halfway through an install:
  *
  *   agent     — the OAS Flow document: `cinatra.entrypoint`, else the
- *               conventional `cinatra/oas.json`, else a legacy root `agent.json`.
+ *               conventional `cinatra/oas.json`. A root `agent.json` is not read
+ *               (cinatra#4920).
  *   skill     — at least one `SKILL.md` (the catalog is built from these).
  *   connector — the declared `cinatra.serverEntry` (the module the pipeline
  *               later hot-loads; its presence is checkable, and checking it is
@@ -784,13 +785,9 @@ export function resolveSuppliedKindPayload(
       payload.set("cinatra/oas.json", conventional);
       return { payload };
     }
-    const legacy = get("agent.json");
-    if (legacy !== undefined) {
-      payload.set("agent.json", legacy);
-      return { payload };
-    }
     return {
-      missing: 'an OAS Flow document (a package.json "cinatra.entrypoint", a cinatra/oas.json, or a root agent.json)',
+      missing:
+        'an OAS Flow document: put the agent definition in cinatra/oas.json (or name it in a package.json "cinatra.entrypoint"); a root agent.json is no longer read',
     };
   }
 

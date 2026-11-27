@@ -7,15 +7,15 @@
 // layout — package.json whose `cinatra.entrypoint` names the OAS Flow
 // document (cinatra/oas.json), usually under a single top-level <slug>/
 // folder — while the server-side importer (importAgentTemplateCore) consumes
-// the legacy flat shape (agent.json at the archive root, documented in
+// the flat shape (cinatra/oas.json at the archive root, documented in
 // import-export-actions.ts). This module bridges the two AT THE UPLOAD
 // BOUNDARY:
 //   1. readZipEntries        — reads real-world ZIPs (stored AND
 //                              deflate-compressed entries; the previous
 //                              reader silently returned garbage for deflate).
 //   2. resolveAgentArchive   — accepts the standardized layout (entrypoint
-//                              from package.json), falls back to the legacy
-//                              root agent.json, tolerates one top-level
+//                              from package.json) or cinatra/oas.json, refuses
+//                              a root agent.json, tolerates one top-level
 //                              folder prefix and macOS zip junk.
 //   3. buildCanonicalAgentZip— repacks the resolved files into the flat,
 //                              STORED-method archive the server importer
@@ -61,7 +61,7 @@ const EOCD_SIG = 0x06054b50;
 const CENTRAL_SIG = 0x02014b50;
 
 /** License sidecars staged for the SPDX gate — MUST mirror the name list
- *  importAgentTemplateCore stages alongside agent.json. */
+ *  importAgentTemplateCore stages alongside cinatra/oas.json. */
 const LICENSE_SIDECAR_NAMES = ["LICENSE", "LICENSE.md", "COPYING", ".spdx"] as const;
 
 // ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
  * Supports compression method 0 (stored) and 8 (deflate). Directory entries
  * are skipped. Throws on a buffer that is not a ZIP archive and on
  * unsupported compression methods, so the form shows a real reason instead
- * of a downstream "agent.json not found".
+ * of a downstream "cinatra/oas.json not found".
  */
 export async function readZipEntries(buf: ArrayBuffer): Promise<Map<string, Uint8Array>> {
   const view = new DataView(buf);
@@ -259,7 +259,7 @@ export function readZipArchiveComment(buf: ArrayBuffer): string | null {
 // ---------------------------------------------------------------------------
 
 export type ResolvedAgentArchive = {
-  /** The OAS Flow document text (entrypoint file or legacy root agent.json). */
+  /** The OAS Flow document text (the entrypoint file or cinatra/oas.json). */
   agentJson: string;
   /** manifest.json text when the archive carries one (legacy exports). */
   manifestJson: string | null;
@@ -267,8 +267,8 @@ export type ResolvedAgentArchive = {
   packageJson: string | null;
   /** License sidecars present at the package root, by canonical name. */
   licenseFiles: Map<string, string>;
-  /** "standard" = package.json cinatra.entrypoint; "legacy" = root agent.json. */
-  layout: "standard" | "legacy";
+  /** Always "standard": a root agent.json is refused (cinatra#4920). */
+  layout: "standard";
   /** The single top-level folder that was stripped, or null. */
   strippedPrefix: string | null;
 };
@@ -334,21 +334,22 @@ function resolveAtRoot(files: Map<string, string>, prefix: string): RootResoluti
       return { agentJson, manifestJson, packageJson, licenseFiles, layout: "standard" };
     }
     // package.json without a cinatra.entrypoint — fall through to the
-    // CONVENTIONAL payload path, then the legacy root agent.json.
+    // CONVENTIONAL payload path.
   }
 
   // Conventional payload path: the format every published @cinatra-ai/*-agent
   // package ships. Same resolution order as the marketplace read
   // (readAgentPayloadFromExtractedPackage in packages/registries):
-  // cinatra/oas.json first, root agent.json as the legacy fallback.
+  // cinatra/oas.json. A root agent.json is no longer read (cinatra#4920).
   const conventional = get("cinatra/oas.json");
   if (conventional !== undefined) {
     return { agentJson: conventional, manifestJson, packageJson, licenseFiles, layout: "standard" };
   }
 
-  const agentJson = get("agent.json");
-  if (agentJson !== undefined) {
-    return { agentJson, manifestJson, packageJson, licenseFiles, layout: "legacy" };
+  if (get("agent.json") !== undefined) {
+    throw new Error(
+      "Invalid archive: this archive has only a root agent.json, which is no longer read. Put the agent definition in cinatra/oas.json.",
+    );
   }
   return null;
 }
@@ -362,8 +363,8 @@ function resolveAtRoot(files: Map<string, string>, prefix: string): RootResoluti
  *   2. Conventional payload path — cinatra/oas.json, the format every
  *      published @cinatra-ai/*-agent package ships (mirrors the marketplace
  *      read order in packages/registries).
- *   3. Legacy flat layout — agent.json at the root.
- * All are also accepted under a SINGLE top-level folder prefix (the export
+ * A root agent.json (the old flat layout) is refused, naming cinatra/oas.json.
+ * Both are also accepted under a SINGLE top-level folder prefix (the export
  * wraps everything in <slug>/), with macOS zip junk ignored.
  */
 export function resolveAgentArchive(entries: Map<string, Uint8Array>): ResolvedAgentArchive {
@@ -391,7 +392,7 @@ export function resolveAgentArchive(entries: Map<string, Uint8Array>): ResolvedA
   }
 
   throw new Error(
-    "Invalid archive: no agent definition found. Expected a package.json with cinatra.entrypoint or a cinatra/oas.json payload (standard agent package), or a root agent.json (legacy export).",
+    "Invalid archive: no agent definition found. Expected a package.json with cinatra.entrypoint or a cinatra/oas.json payload (standard agent package).",
   );
 }
 
@@ -528,13 +529,13 @@ export function buildStoredZip(files: { name: string; content: string }[]): Uint
 
 /**
  * Repack a resolved archive into the flat shape importAgentTemplateCore
- * consumes: agent.json at the root plus the manifest / package.json / license
+ * consumes: cinatra/oas.json plus the manifest / package.json / license
  * sidecars it stages. Always stored-method, so the server's reader needs no
  * inflate support.
  */
 export function buildCanonicalAgentZip(resolved: ResolvedAgentArchive): Uint8Array {
   const files: { name: string; content: string }[] = [
-    { name: "agent.json", content: resolved.agentJson },
+    { name: "cinatra/oas.json", content: resolved.agentJson },
   ];
   if (resolved.manifestJson !== null) {
     files.push({ name: "manifest.json", content: resolved.manifestJson });

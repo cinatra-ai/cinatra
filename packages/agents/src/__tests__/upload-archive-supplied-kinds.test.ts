@@ -170,6 +170,15 @@ describe("resolveSuppliedArchive refuses by name", () => {
     ).rejects.toThrow(/"workflow" is a retired extension kind/);
   });
 
+  it("refuses an agent archive that has only a root agent.json, naming cinatra/oas.json (cinatra#4920)", async () => {
+    const oldLayout = [
+      { name: "package.json", content: pkgJson({ name: "@example-org/old-agent", cinatra: { kind: "agent" } }) },
+      { name: "agent.json", content: OAS_FLOW },
+    ];
+    // red-first-expect: promise resolved
+    await expect(resolveFixture(oldLayout)).rejects.toThrow(/put the agent definition in cinatra\/oas\.json .*a root agent\.json is no longer read/);
+  });
+
   it("refuses an archive with no package.json at all", async () => {
     await expect(resolveFixture([{ name: "README.md", content: "hi" }])).rejects.toThrow(
       /no package\.json found/,
