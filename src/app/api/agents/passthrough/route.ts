@@ -10,6 +10,8 @@ import { bindBridgeRunId } from "@/lib/authz/bridge-run-binding";
 import {
   verifyRunStepAttestation,
   verifySourceBoundRunStep,
+  verifyRunStepPublishDecision,
+  RUN_PUBLISH_DECISION_HEADER, RUN_PUBLISH_DECISION_ATTESTATION_HEADER,
   RUN_RAW_SOURCE_HEADER, RUN_EXECUTED_SOURCE_HEADER, RUN_DECLARATION_SOURCE_HEADER, RUN_EXECUTION_ATTEMPT_HEADER,
   RUN_STEP_NODE_HEADER,
   RUN_STEP_ATTESTATION_HEADER,
@@ -56,6 +58,7 @@ import { EXTENSION_SCOPED_TOOLS } from "@/lib/extension-scoped-tools";
 import { EXTENSION_TOOL_REVIEW_TARGETS_KEY } from "@/lib/extension-tool-dispatch";
 import { EXTENSION_TOOL_STEP_UNPROVEN } from "@/lib/extension-scoped-tools-refusals";
 import { RUN_FOLDER_TOOLS } from "@/lib/run-folder-tools";
+import { declaresPublishingStepTool } from "@/lib/passthrough-publishing-step-send";
 import {
   PASSTHROUGH_ACTOR_CONTEXT_ERROR,
   passthroughFailureText,
@@ -422,7 +425,10 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   if (!tool) {
     return NextResponse.json({ error: "`tool` is required" }, { status: 400 });
   }
-  if (!ALLOWED_TOOLS.has(tool)) {
+  // cinatra#3745: a tool off the list is admitted only by its owning package's publishing-step declaration, and then
+  // only as the call of a released publishing step (checked below, once the run and the step are proven).
+  const publishingStepTool = !ALLOWED_TOOLS.has(tool) && declaresPublishingStepTool(tool);
+  if (!ALLOWED_TOOLS.has(tool) && !publishingStepTool) {
     return NextResponse.json(
       {
         error: `Tool "${tool}" is not on the deterministic-passthrough allowlist. ` +
@@ -478,6 +484,7 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
     }) ?? undefined;
 
   let verifiedExecutedSource: VerifiedExecutedRunSource | undefined;
+  let verifiedPublishDecisionId: string | undefined;
   if (req.headers.get(RUN_RAW_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTED_SOURCE_HEADER) !== null ||
       req.headers.get(RUN_DECLARATION_SOURCE_HEADER) !== null || req.headers.get(RUN_EXECUTION_ATTEMPT_HEADER) !== null) {
     const attestation = verifySourceBoundRunStep({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
@@ -491,7 +498,21 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       if (!attestation || !sourceRun?.orgId) throw new Error("source_binding_invalid");
       verifiedExecutedSource = await verifyRunExecutedSource(agentRunId, sourceRun.orgId, attestation);
       verifiedStepId = verifiedExecutedSource.stepId;
+      // cinatra#3745: the publish decision of this visit, signed beside the source-bound pair (s3), verified as the
+      // model-bridge road does; a call that names one must carry its valid signature over this same pair.
+      if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null || req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+        const decision = verifyRunStepPublishDecision({ key: attestKey && attestKey.trim() !== "" ? attestKey : null,
+          proof: attestation, publishDecisionId: req.headers.get(RUN_PUBLISH_DECISION_HEADER),
+          attestation: req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER),
+          stepAttestation: req.headers.get(RUN_STEP_ATTESTATION_HEADER) });
+        if (decision === null) throw new Error("publish_decision_invalid");
+        verifiedPublishDecisionId = decision;
+      }
     } catch { return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 }); }
+  } else if (req.headers.get(RUN_PUBLISH_DECISION_HEADER) !== null ||
+      req.headers.get(RUN_PUBLISH_DECISION_ATTESTATION_HEADER) !== null) {
+    // A decision is signed only beside a source-bound pair; one named without that pair is refused as a bad signature.
+    return NextResponse.json({ error: "Executing source could not be verified" }, { status: 403 });
   }
 
   const shaper = TOOL_INPUT_SHAPERS[tool];
@@ -527,6 +548,14 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
   }))) {
     return NextResponse.json(
       { error: "This call waits for a publish decision.", code: "publish_not_released" },
+      { status: 403 },
+    );
+  }
+  // cinatra#3745: a publishing-step tool is served only to a verified step with its executing-source proof whose
+  // released decision the check above claimed; a step that no released decision governs never reaches it.
+  if (publishingStepTool && (!verifiedExecutedSource || !publishCallClaim)) {
+    return NextResponse.json(
+      { error: "This tool is served only as a released publishing step's call.", code: "publishing_step_required" },
       { status: 403 },
     );
   }
@@ -611,6 +640,7 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
       ...(run.oboCeiling ? { oboCeiling: run.oboCeiling } : {}),
       ...(verifiedStepId ? { verifiedStepId } : {}),
       ...(verifiedExecutedSource ? { verifiedExecutedSource } : {}),
+      ...(verifiedExecutedSource && verifiedPublishDecisionId ? { verifiedPublishDecisionId } : {}),
       ...(orgWriteAuthority ? { orgWriteAuthority } : {}),
       ...(publishCallClaim ? { publishCallClaim } : {}),
     }, async () => {
@@ -879,6 +909,21 @@ async function handlePassthrough(req: Request, holdRelease: (release: () => Prom
         );
       }
       result = outcome.result;
+    } else if (publishingStepTool) {
+      // cinatra#3745: the step's released decision is used once, right before the effect, with the call's arguments
+      // bound to the values it surfaced; a refusal throws the consumption's class (the fixed 403 below).
+      const { loadPublishingStepHandler, usePublishingStepDecision } = await import(
+        "@/lib/passthrough-publishing-step-send"
+      );
+      const frame = mcpRequestContextStorage.getStore();
+      const callArguments = input;
+      const handler = await loadPublishingStepHandler(tool, () => usePublishingStepDecision(frame, tool, callArguments));
+      if (typeof handler !== "function") {
+        return NextResponse.json({ error: `Tool "${tool}" has no registered handler.` }, { status: 404 });
+      }
+      result = await withActorContext(alsActorContext, () =>
+        handler({ primitiveName: tool, input, actor, mode: "agentic" }),
+      );
     } else {
       const handlers = await collectAllPrimitiveHandlers();
       const handler = handlers[tool];
