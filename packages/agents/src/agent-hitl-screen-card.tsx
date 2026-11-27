@@ -148,6 +148,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  listStepRefreshFor,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -728,6 +729,7 @@ export function AgentHitlScreenFields({
   hideRendererSubmit,
   registerFlush,
   gateKey,
+  onRequestRefresh,
 }: {
   runId: string;
   /** THE HOST THIS REGION IS DRAWN ON — §I's hierarchy is a fact about the
@@ -762,6 +764,9 @@ export function AgentHitlScreenFields({
   registerFlush?: (key: string, fn: () => Promise<void>) => void;
   /** The gate identity a registration is tagged with. */
   gateKey?: string;
+  /** A list step's new read (cinatra#3562), handed to the renderer through the
+   *  shared props contract; see `listStepRefreshFor`. */
+  onRequestRefresh?: () => Promise<unknown>;
 }): ReactElement {
   const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
@@ -899,6 +904,7 @@ export function AgentHitlScreenFields({
             midRunBooleanFieldHidesSubmit({ isMidRun, isGroupedSetup, fieldSchema: renderSchema })
           }
           registerFlush={registerRendererFlush}
+          onRequestRefresh={onRequestRefresh}
         />
       )}
     </div>
@@ -1491,6 +1497,21 @@ export function AgentHitlScreenCard({
           hideRendererSubmit={cardOwnsSetupSend}
           registerFlush={cardOwnsSetupSend ? registerRendererFlush : undefined}
           gateKey={gateKey ?? ""}
+          // The list step's Try again (cinatra#3562): only for the gate the card
+          // asks now, drawn with the reader's own session.
+          onRequestRefresh={listStepRefreshFor(
+            {
+              xRenderer: gate.xRenderer,
+              reviewTaskId: gate.reviewTaskId,
+              isCurrentWaitingStep: cookieSession === true && !withholdRenderer,
+              mode: "edit",
+            },
+            (reviewTaskId) =>
+              // Loaded on the press only: a surface without a list step loads no server read for it.
+              import("./list-picker-actions").then((actions) =>
+                actions.readListStepContent(runId, reviewTaskId),
+              ),
+          )}
         />
         </RendererFloorReportContext.Provider>
         {isMidRun && !isGroupedSetup ? (

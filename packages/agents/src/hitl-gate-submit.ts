@@ -362,6 +362,17 @@ export function withContextSelectorEnvelope(
 // ---------------------------------------------------------------------------
 
 /**
+ * Whether a gate's screen id is the list step's: the namespaced `<id>:list-picker`
+ * or the bare `list-picker` the renderer registry also accepts for stored steps
+ * (register-default-renderers.ts, the kind's `bareAliases`). The one reading the
+ * client (Try again offered, approval note lifted) and the server read
+ * (list-picker-actions.ts) share (cinatra#3562).
+ */
+export function isListStepRendererId(xRenderer: string): boolean {
+  return xRenderer === "list-picker" || xRenderer.endsWith(":list-picker");
+}
+
+/**
  * THE RUN PANEL'S MID-RUN LIST STEP (cinatra#3562): a `:list-picker` gate that
  * is not a setup gate. The run panel draws it as a mid-run gate (its picks
  * buffer for the outer Continue) and lifts its picks into the approval note;
@@ -370,7 +381,80 @@ export function withContextSelectorEnvelope(
  * field name.
  */
 export function isMidRunListStepGate(xRenderer: string, reviewTaskId: string): boolean {
-  return xRenderer.endsWith(":list-picker") && !isSetupGateTaskId(reviewTaskId);
+  return isListStepRendererId(xRenderer) && !isSetupGateTaskId(reviewTaskId);
+}
+
+/**
+ * What a list step holds and what its new read answers (cinatra#3562): the
+ * lists by id and name, and whether the read worked. The same shape as the
+ * server's `ListStepContent` (list-picker-actions.ts), restated here because
+ * this module imports no server file.
+ */
+export type ListStepReadValue = {
+  lists: Array<{ id: string; name: string }>;
+  listsRead: "ok" | "failed";
+};
+
+function failedListStepRead(): ListStepReadValue {
+  return { lists: [], listsRead: "failed" };
+}
+
+/**
+ * The answer of a new read as the step may draw it: an `ok` answer keeps only
+ * lists with a non-blank id and name, a repeated id once; anything else is the
+ * failed shape.
+ */
+function toListStepReadValue(answer: unknown): ListStepReadValue {
+  if (!answer || typeof answer !== "object") return failedListStepRead();
+  const { lists, listsRead } = answer as { lists?: unknown; listsRead?: unknown };
+  if (listsRead !== "ok" || !Array.isArray(lists)) return failedListStepRead();
+  const seen = new Set<string>();
+  const out: ListStepReadValue["lists"] = [];
+  for (const list of lists) {
+    if (!list || typeof list !== "object") continue;
+    const { id, name } = list as { id?: unknown; name?: unknown };
+    if (!isUsableListId(id) || typeof name !== "string" || name.trim() === "") continue;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({ id, name });
+  }
+  return { lists: out, listsRead: "ok" };
+}
+
+/**
+ * THE LIST STEP'S TRY AGAIN (cinatra#3562). The `onRequestRefresh` prop a run
+ * surface hands a list step's renderer, or `undefined` when the step offers no
+ * new read. It is handed only when ALL hold:
+ *   - the gate is a mid-run list step (`isMidRunListStepGate`: the renderer id
+ *     is the list step's (`isListStepRendererId`) and it is not a setup gate; the server reads
+ *     again only for a flow gate the run waits at);
+ *   - the gate is the step the run waits at now (the surface says so);
+ *   - the renderer is drawn in edit mode;
+ *   - the step is not disabled.
+ * A call reads the lists again for this gate's review task through `readAgain`
+ * (the host passes the server read) and resolves with the step's shape. It
+ * never rejects: a refusal or a fault resolves with the failed shape. It sends
+ * no answer to the gate and does not resume the run.
+ */
+export function listStepRefreshFor(
+  gate: {
+    xRenderer: string;
+    reviewTaskId: string;
+    isCurrentWaitingStep: boolean;
+    mode?: "edit" | "view";
+    disabled?: boolean;
+  },
+  readAgain: (reviewTaskId: string) => Promise<unknown>,
+): (() => Promise<ListStepReadValue>) | undefined {
+  if (!isMidRunListStepGate(gate.xRenderer, gate.reviewTaskId)) return undefined;
+  if (gate.isCurrentWaitingStep !== true) return undefined;
+  if ((gate.mode ?? "edit") !== "edit") return undefined;
+  if (gate.disabled === true) return undefined;
+  const reviewTaskId = gate.reviewTaskId;
+  return () =>
+    Promise.resolve()
+      .then(() => readAgain(reviewTaskId))
+      .then(toListStepReadValue, failedListStepRead);
 }
 
 /** A list id that names a pick: a string that is not blank (whitespace only). */
@@ -407,7 +491,7 @@ export function liftRendererApprovalNote(
   buffered: Record<string, unknown>,
   now: string = new Date().toISOString(),
 ): { approvalNote: string } | null {
-  if (xRenderer.endsWith(":list-picker")) {
+  if (isListStepRendererId(xRenderer)) {
     // SEVERAL PICKS (cinatra#3562): a list step declared to take several picks
     // buffers `listIds` (and `listNames`, in the same order). The snapshot then
     // carries every ticked id in the order ticked, each once, with its name.
@@ -528,7 +612,7 @@ export function applyRendererApprovalNote(
 ): Record<string, unknown> {
   if (!lift) return payload;
   const merged: Record<string, unknown> = { ...payload, ...lift };
-  if (!xRenderer.endsWith(":list-picker")) return merged;
+  if (!isListStepRendererId(xRenderer)) return merged;
   delete merged.userResponse;
   return merged;
 }

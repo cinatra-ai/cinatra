@@ -103,6 +103,7 @@ import {
   isMidRunListStepGate,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  listStepRefreshFor,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1786,6 +1787,33 @@ export function AgenticRunPanel({
     (forGate: string) => liveHitlGateKeyRef.current === forGate,
     [],
   );
+  // THE LIST STEP'S TRY AGAIN (cinatra#3562): a new read of the lists for the
+  // list step the run waits at, drawn in place by the renderer. It answers no
+  // gate and resumes nothing; see `listStepRefreshFor`.
+  const listStepXRenderer = effectiveHitlContext?.xRenderer ?? null;
+  const listStepReviewTaskId = effectiveHitlContext?.reviewTaskId ?? null;
+  const listStepRefresh = useMemo(
+    () =>
+      listStepXRenderer !== null && listStepReviewTaskId !== null
+        ? listStepRefreshFor(
+            {
+              xRenderer: listStepXRenderer,
+              reviewTaskId: listStepReviewTaskId,
+              isCurrentWaitingStep:
+                isPendingApproval &&
+                gateBlocked === null &&
+                answeredReviewTaskId !== listStepReviewTaskId,
+              mode: "edit",
+            },
+            (reviewTaskId) =>
+              // Loaded on the press only: a surface without a list step loads no server read for it.
+              import("./list-picker-actions").then((actions) =>
+                actions.readListStepContent(runId, reviewTaskId),
+              ),
+          )
+        : undefined,
+    [listStepXRenderer, listStepReviewTaskId, isPendingApproval, gateBlocked, answeredReviewTaskId, runId],
+  );
 
   // cinatra#3423 — the resume re-read described above, wired where the gate
   // context is known. `parkedWithNoGate` is the run saying it is standing at a
@@ -3430,6 +3458,7 @@ export function AgenticRunPanel({
                       }}
                       context={hitlRendererEntry.context}
                       mode="edit"
+                      onRequestRefresh={listStepRefresh}
                       // A suggestion applied by a replaced renderer is no answer
                       // to the gate on screen either (cinatra#3380).
                       onApply={(suggestions: Record<string, unknown>) => {

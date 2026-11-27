@@ -135,6 +135,7 @@ import {
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  listStepRefreshFor,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
   withContextSelectorEnvelope,
@@ -1466,6 +1467,28 @@ function HitlApprovalCard({
     }
   };
 
+  // THE LIST STEP'S TRY AGAIN (cinatra#3562): a new read of the lists for the
+  // list step this card asks, drawn in place by the renderer. It answers no
+  // gate and resumes nothing; see `listStepRefreshFor`. Above the blocked
+  // reading's return, so the hook is unconditional.
+  const listStepRefresh = useMemo(
+    () =>
+      listStepRefreshFor(
+        {
+          xRenderer: interruptContext.xRenderer ?? "",
+          reviewTaskId: interruptContext.reviewTaskId ?? "",
+          isCurrentWaitingStep: gateBlocked === null && setupSentKey !== setupGateKey,
+          mode: "edit",
+        },
+        (reviewTaskId) =>
+          // Loaded on the press only: a surface without a list step loads no server read for it.
+          import("./list-picker-actions").then((actions) =>
+            actions.readListStepContent(runId, reviewTaskId),
+          ),
+      ),
+    [interruptContext.xRenderer, interruptContext.reviewTaskId, gateBlocked, setupSentKey, setupGateKey, runId],
+  );
+
   // THE SCREEN REGISTERS; THE PAGE OWNS THE WINDOW (cinatra#3487).
   //
   // The ruling of 2026-09-14: "every step screen, the review route and every
@@ -1666,6 +1689,7 @@ function HitlApprovalCard({
             }
             context={context}
             mode="edit"
+            onRequestRefresh={listStepRefresh}
             // A suggestion applied by a replaced renderer is no answer to the
             // gate on screen either (cinatra#3380).
             onApply={(suggestions: Record<string, unknown>) => {
