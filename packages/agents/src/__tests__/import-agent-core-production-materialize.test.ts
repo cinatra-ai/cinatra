@@ -475,6 +475,13 @@ describe("cinatra#4897 — the install scan reads the source the compile is hand
     await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("installs an archive whose cinatra/oas.json holds the same step only in a registry entry nothing refers to", async () => {
+    const unreferenced = JSON.stringify(withUnreadModelStep(JSON.parse(OAS), false));
+    await expect(install(zipWithOwnOas(OAS, unreferenced))).resolves.toMatchObject({ upserted: false });
+    expect(createTemplate).toHaveBeenCalledTimes(1);
+    expect(await readFile(join(agentDir, "cinatra", "oas.json"), "utf8")).toBe(unreferenced);
+  });
+
   it("hands the compile the bytes of the canonical file, and mounts exactly those", async () => {
     const own = JSON.stringify({ ...JSON.parse(OAS), description: "the archive's own cinatra/oas.json" });
     await install(zipWithOwnOas(OAS, own));

@@ -278,4 +278,75 @@ describe("OAS-RUNTIME-016: a model step sits where the run reads steps (cinatra#
     expect(steps).toContainEqual(["$", "$"]);
     expect(steps).toContainEqual(["$.$referenced_components.draft", "$.$referenced_components"]);
   });
+
+  describe("reachability: only a component the graph reaches is a step of a run", () => {
+    /** A tool flow listing a model step inline among its nodes (Agent -> FlowTool -> Flow -> nodes). */
+    const toolFlow = () => flow({}, [modelStep("draft")]);
+    const agentNode = (id = "writer") => ({
+      component_type: "AgentNode",
+      id,
+      name: id,
+      agent: { component_type: "Agent", id: `${id}-agent`, name: id, tools: [{ component_type: "FlowTool", id: "t", name: "t", flow: toolFlow() }] },
+    });
+
+    it("reports the step when the agent node is listed in the flow's nodes", () => {
+      const findings = unread(flow({ writer: agentNode() }, [{ $component_ref: "writer" }]));
+      expect(findings.map((f) => f.location)).toEqual(["$.$referenced_components.writer.agent.tools[0].flow.nodes[1]"]);
+    });
+
+    it("does not report the same step in a registry entry nothing refers to", () => {
+      expect(unread(flow({ writer: agentNode() }))).toEqual([]);
+    });
+
+    it("does not report it when the only reference sits in a request payload", () => {
+      const api = { ...modelStep("call"), body: { $component_ref: "writer" }, data: { $component_ref: "writer" }, config: [{ $component_ref: "writer" }] };
+      const doc = flow({ writer: agentNode(), call: api }, [{ $component_ref: "call" }]);
+      expect(unread(doc)).toEqual([]);
+    });
+
+    it("reaches the step through a chain of references: node -> agent entry -> tool", () => {
+      const holder = { component_type: "AgentNode", id: "holder", name: "holder", agent: { $component_ref: "helper" } };
+      const helper = { component_type: "Agent", id: "helper", name: "helper", tools: [{ $component_ref: "tool" }] };
+      const tool = { component_type: "FlowTool", id: "tool", name: "tool", flow: toolFlow() };
+      const findings = unread(flow({ holder, helper, tool }, [{ $component_ref: "holder" }]));
+      expect(findings.map((f) => f.location)).toEqual(["$.$referenced_components.tool.flow.nodes[1]"]);
+      // The same chain, cut at its first link, is an unreachable definition.
+      expect(unread(flow({ holder, helper, tool }))).toEqual([]);
+    });
+
+    it("reaches a step through a reference written in an edge", () => {
+      const doc = flow({ writer: agentNode() });
+      doc.control_flow_connections = [{ component_type: "ControlFlowEdge", id: "e", name: "e", from_node: { $component_ref: "writer" }, to_node: { $component_ref: "end" } }];
+      expect(unread(doc)).toHaveLength(1);
+    });
+
+    it("ends a reference cycle and reports the step once", () => {
+      const a = { component_type: "AgentNode", id: "a", name: "a", agent: { $component_ref: "b" } };
+      const b = {
+        component_type: "Agent",
+        id: "b",
+        name: "b",
+        tools: [{ component_type: "FlowTool", id: "t", name: "t", flow: flow({}, [{ $component_ref: "a" }, modelStep("draft")]) }],
+      };
+      const findings = unread(flow({ a, b }, [{ $component_ref: "a" }]));
+      expect(findings).toHaveLength(1);
+      expect(findings[0].location).toBe("$.$referenced_components.b.tools[0].flow.nodes[2]");
+    });
+
+    it("does not report a step the run reads, however many unread holders also refer to it", () => {
+      // The run finds a step by its id among the components it reads (hasApiNodeStep):
+      // the registry entry is that step, whoever else lists it.
+      const draft = modelStep("draft");
+      const viaTool = flow({}, [{ $component_ref: "draft" }]);
+      const writer = {
+        component_type: "AgentNode",
+        id: "writer",
+        name: "writer",
+        agent: { component_type: "Agent", id: "w", name: "w", tools: [{ component_type: "FlowTool", id: "t", name: "t", flow: viaTool }] },
+      };
+      const doc = flow({ draft, writer }, [{ $component_ref: "draft" }, { $component_ref: "writer" }]);
+      expect(hasApiNodeStep(doc, "draft")).toBe(true);
+      expect(unread(doc)).toEqual([]);
+    });
+  });
 });

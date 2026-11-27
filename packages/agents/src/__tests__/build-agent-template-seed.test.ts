@@ -337,4 +337,15 @@ describe("a model step the run does not read is refused before an installable se
       }),
     ).rejects.toThrow(`Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`);
   });
+
+  it("installs the same package when its agent node is only a registry entry nothing refers to", async () => {
+    const dir = await stageOasOnlyPackage({
+      oas: JSON.stringify(withUnreadModelStep(JSON.parse(VALID_OAS_FIXTURE), false)),
+    });
+    await expect(
+      buildAgentTemplateInstallSeed({
+        extractedTempDir: dir, packageName: PACKAGE_NAME, packageVersion: "0.1.0", manifest: manifest(),
+      }),
+    ).resolves.toMatchObject({ name: "Synthetic Gemini Agent" });
+  });
 });

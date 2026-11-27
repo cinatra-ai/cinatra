@@ -547,8 +547,12 @@ function walkFlowComponents(
 // answered with that step's declaration. The search follows ONLY the keys
 // through which the specification nests components; a node's request payload
 // (data, body, config, headers, metadata, ...) is never entered, so an object
-// that merely looks like a step inside it is not one. Bounded work: one walk of
-// the run's traversal and one walk of the nesting keys.
+// that merely looks like a step inside it is not one. It reports only a step the
+// graph can reach: from the root, through those keys and through `$component_ref`
+// into `$referenced_components` (every level of which is one registry). An entry
+// nothing reachable refers to is never instantiated, so it is not a step of any
+// run. Bounded work: one walk of the run's traversal, one walk of the nesting
+// keys and one walk of the references, each component once.
 // ---------------------------------------------------------------------------
 
 /**
@@ -589,31 +593,19 @@ function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewF
     read.add(node);
     if (id !== null && isModelBridgeApiNode(node) && !readIds.has(id)) readIds.set(id, path);
   });
-  const findings: ReviewFinding[] = [];
-  function go(value: unknown, path: string, holder: string): void {
+
+  // One walk of the nesting keys: the registry (every `$referenced_components`
+  // entry of every level, by its name) and each model step the run does not read,
+  // with where it is written.
+  const registry = new Map<string, Record<string, unknown>[]>();
+  const unread: Array<{ node: Record<string, unknown>; path: string; holder: string }> = [];
+  function collect(value: unknown, path: string, holder: string): void {
     if (Array.isArray(value)) {
-      value.forEach((v, i) => go(v, `${path}[${i}]`, holder));
+      value.forEach((v, i) => collect(v, `${path}[${i}]`, holder));
       return;
     }
     if (!isPlainObject(value)) return;
-    if (isModelBridgeApiNode(value) && !read.has(value)) {
-      const id = typeof value.id === "string" && value.id !== "" ? value.id : null;
-      const twin = id !== null ? readIds.get(id) : undefined;
-      findings.push({
-        code: "OAS-RUNTIME-016",
-        severity: "blocker",
-        message:
-          `Model step "${gateLabel(value)}" at ${path} sits in ${holder}, which the run ` +
-          `does not read steps from (the run reads steps only from $referenced_components, ` +
-          `a subflow and a ParallelFlowNode's subflows). ` +
-          (twin
-            ? `Its id is also carried by the step at ${twin}, so its calls would be answered with that step's declaration. `
-            : `Its calls are refused at run time (step_tool_step_unknown). `) +
-          `Move the step into $referenced_components and reference it with $component_ref.`,
-        location: path,
-        source: "deterministic",
-      });
-    }
+    if (isModelBridgeApiNode(value) && !read.has(value)) unread.push({ node: value, path, holder });
     for (const key of NESTING_KEYS) {
       if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
       const child = value[key];
@@ -621,14 +613,64 @@ function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewF
       if (key === "$referenced_components") {
         // A map of components: each entry sits in the map.
         if (isPlainObject(child)) {
-          for (const [name, entry] of Object.entries(child)) go(entry, `${childPath}.${name}`, childPath);
+          for (const [name, entry] of Object.entries(child)) {
+            if (isPlainObject(entry)) registry.set(name, [...(registry.get(name) ?? []), entry]);
+            collect(entry, `${childPath}.${name}`, childPath);
+          }
         }
       } else {
-        go(child, childPath, childPath);
+        collect(child, childPath, childPath);
       }
     }
   }
-  go(parsed, "$", "$");
+  collect(parsed, "$", "$");
+  if (unread.length === 0) return [];
+
+  // One walk of the references: from the root, through the nesting keys, and
+  // through a `$component_ref` into the registry. `$referenced_components` itself
+  // is not entered (an entry is reached only by a reference to it), and a payload
+  // key is never followed, so a reference written there reaches nothing. A
+  // component is visited once, which also ends a reference cycle.
+  const reached = new Set<object>();
+  function reach(value: unknown): void {
+    if (Array.isArray(value)) {
+      value.forEach(reach);
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    const ref = value.$component_ref;
+    if (typeof ref === "string") {
+      for (const target of registry.get(ref) ?? []) reach(target);
+      return;
+    }
+    if (reached.has(value)) return;
+    reached.add(value);
+    for (const key of NESTING_KEYS) {
+      if (key !== "$referenced_components" && Object.prototype.hasOwnProperty.call(value, key)) reach(value[key]);
+    }
+  }
+  reach(parsed);
+
+  const findings: ReviewFinding[] = [];
+  for (const { node, path, holder } of unread) {
+    if (!reached.has(node)) continue;
+    const id = typeof node.id === "string" && node.id !== "" ? node.id : null;
+    const twin = id !== null ? readIds.get(id) : undefined;
+    findings.push({
+      code: "OAS-RUNTIME-016",
+      severity: "blocker",
+      message:
+        `Model step "${gateLabel(node)}" at ${path} sits in ${holder}, which the run ` +
+        `does not read steps from (the run reads steps only from $referenced_components, ` +
+        `a subflow and a ParallelFlowNode's subflows). ` +
+        (twin
+          ? `Its id is also carried by the step at ${twin}, so its calls would be answered with that step's declaration. `
+          : `Its calls are refused at run time (step_tool_step_unknown). `) +
+        `Move the step into $referenced_components and reference it with $component_ref.`,
+      location: path,
+      source: "deterministic",
+    });
+  }
   return findings;
 }
 
