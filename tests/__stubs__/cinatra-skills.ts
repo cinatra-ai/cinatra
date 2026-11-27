@@ -10,7 +10,7 @@ export async function listInstalledSkills(): Promise<
   return [];
 }
 
-// src/lib/mcp-instructions.ts + src/lib/openai-builder.ts import these from the
+// src/lib/mcp-instructions.ts imports these from the
 // bare specifier at module-load time (the MCP autodiscovery SKILL.md reader).
 // Faithful minimal re-implementation so dependent modules load in the sandbox.
 export function stripSkillFrontmatter(content: string): string {
