@@ -31,7 +31,8 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { failPreSendStep, givePauseBackOnHoldFault, parkedStepIsRetired, settleSendOrDescribe } from "./run-resume-under-claim";
+import { RETIRED_HITL_STEP_REFUSAL } from "./retired-hitl-steps";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -365,6 +366,12 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
+
+    // cinatra#3471: a setup gate parked under a retired renderer id is answered
+    // by nothing either. The gate's own durable row (keyed `setup-<runId>`, the
+    // renderer id the setup loop stored) decides, never the caller's payload;
+    // refused before the merge, the status flip and the enqueue below.
+    if (await parkedStepIsRetired(runId, reviewTaskId)) throw new Error(RETIRED_HITL_STEP_REFUSAL);
 
     // Build the inputParams JSONB-merge fragment (single-field or grouped
     // variant) up front, so the DB write below stays ONE statement. All
@@ -752,6 +759,9 @@ export async function approveReviewTaskInternal(
       runId,
       inputParamsMerge,
       sessionAuthorityFromResolvedRole(run.orgId, setupRole),
+      // cinatra#3471: bound to the park the retired check above saw (the run
+      // was read before it), so a run re-parked since matches no row.
+      { expectedPauseGeneration: run.pauseGeneration },
     );
 
     // cinatra#3585 — A FRESH JOB ID PER CONFIRMATION, NEVER ONE A RUN CAN
@@ -930,6 +940,9 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
+    // cinatra#3471: a retired step is answered by nothing, refused before the
+    // pause is claimed, so nothing is recorded or sent.
+    if (await parkedStepIsRetired(run.id, reviewTaskId)) throw new Error(RETIRED_HITL_STEP_REFUSAL);
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts
       // persists task.contextId immediately after the initial sendTask succeeds.

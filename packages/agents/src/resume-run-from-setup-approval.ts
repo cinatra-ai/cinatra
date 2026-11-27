@@ -57,7 +57,12 @@ export async function resumeRunFromSetupApproval(
   runId: string,
   inputParamsMerge: SQL | null,
   authority: OrgWriteAuthority | undefined,
-  opts?: { db?: OrgWriteDb<OrgWriteTx> },
+  opts?: {
+    db?: OrgWriteDb<OrgWriteTx>;
+    /** cinatra#3471: the pause generation the caller read before it checked the
+     *  parked gate. A re-park bumps it, so a stale request matches 0 rows. */
+    expectedPauseGeneration?: number;
+  },
 ): Promise<void> {
   // Fail-closed, mirroring transitionRunStatus: the org (lock + CAS scope) is
   // the authority's org; a missing authority refuses at the seam before any tx.
@@ -91,6 +96,9 @@ export async function resumeRunFromSetupApproval(
             eq(agentRuns.id, runId),
             eq(agentRuns.status, "pending_approval"),
             eq(agentRuns.orgId, orgId),
+            ...(typeof opts?.expectedPauseGeneration === "number"
+              ? [eq(agentRuns.pauseGeneration, opts.expectedPauseGeneration)]
+              : []),
             // cinatra#4245: never under another holder of the pause. A live
             // `claimed` or `sending` lease, or a change request's end mark,
             // refuses the resume (0 rows: stale_from_status); an expired lease

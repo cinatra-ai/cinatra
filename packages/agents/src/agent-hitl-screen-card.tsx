@@ -136,6 +136,7 @@ import {
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
 import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
+import { isRetiredHitlStep } from "./retired-hitl-steps";
 import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
@@ -548,7 +549,10 @@ function classifyHitlGate(gate: AgentHitlScreenGate): {
   isGroupedSetup: boolean;
 } {
   return {
-    isMidRun: gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer),
+    // cinatra#3471: a retired step is never mid-run, so no Continue is drawn.
+    isMidRun:
+      !isRetiredHitlStep(gate.xRenderer) &&
+      (gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer)),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
 }

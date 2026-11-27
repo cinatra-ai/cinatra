@@ -1,4 +1,5 @@
 import type { ComponentType } from "react";
+import { isRetiredHitlStep } from "./retired-hitl-steps";
 import type {
   FieldRendererProps,
   FieldRendererContext,
@@ -131,6 +132,10 @@ class FieldRendererRegistryImpl {
     schema: Record<string, unknown>,
     context: FieldRendererContext,
   ): FieldRendererEntry | null {
+    // cinatra#3471: a retired (tombstoned) id resolves to nothing, whatever a
+    // build-time or runtime binding registered for it: every page then shows
+    // "no renderer configured" and draws no Continue.
+    if (isRetiredHitlStep(schema["x-renderer"] as string | undefined) || isRetiredHitlStep(context.xRenderer)) return null;
     for (const entry of this.entries) {
       if (entry.condition(fieldName, schema, context)) return entry;
     }
