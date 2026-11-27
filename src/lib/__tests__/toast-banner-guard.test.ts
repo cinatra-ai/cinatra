@@ -430,6 +430,61 @@ describe("toast-banner-scan - the baseline may not grow against the base", () =>
     expect(runScan(root, PULL_REQUEST_RUN).out).toMatch(/no baseline file, so no entry can be added/);
   });
 
+  // A baseline FILE the base commit does not hold is the empty list on the base;
+  // an unreadable base (an unknown commit) is not.
+  function addedFileFixture(head: unknown) {
+    const f = makeFloorRepo({ base: { "README.md": "base\n" }, head: { [FLOOR]: head } });
+    cleanups.push(f.cleanup);
+    return f.root as string;
+  }
+
+  it("the base lacks the file and the head adds it with no entries: passes", () => {
+    const r = runScan(addedFileFixture(list()), PULL_REQUEST_RUN);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toMatch(/holds no src\/lib\/toast-banner-guard\.baseline\.json: an empty list/);
+    expect(r.out).toMatch(/does not grow against/);
+    // `{}` is an empty list for the comparison (the scan's own check still wants `entries`).
+    expect(runScan(addedFileFixture({}), PULL_REQUEST_RUN).out).toMatch(/does not grow against/);
+  });
+
+  it("the base lacks the file and the head adds one entry: fails naming it, on a pull request and a merge group", () => {
+    const root = addedFileFixture(list("src/new.tsx", "src/other.tsx"));
+    const pr = runScan(root, PULL_REQUEST_RUN);
+    expect(pr.status).toBe(1);
+    expect(pr.out).toMatch(/GREW against/);
+    expect(pr.out).toContain("entries file src/new.tsx");
+    expect(pr.out).toContain("entries file src/other.tsx");
+    const pinned = fixtureGit(root, ["rev-parse", "HEAD~1"]).trim();
+    const group = runScan(root, { GITHUB_EVENT_NAME: "merge_group", TOAST_BANNER_BASE: pinned });
+    expect(group.status).toBe(1);
+    expect(group.out).toContain("entries file src/new.tsx");
+  });
+
+  it("the base lacks the file and the head file is wrongly shaped: still fails closed on the head", () => {
+    const r = runScan(addedFileFixture({ entries: "src/a.tsx" }), PULL_REQUEST_RUN);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("entries is not a list");
+  });
+
+  it("the base holds the file and the head deleted it: passes", () => {
+    const root = fixture(list("src/a.tsx"), list("src/a.tsx"));
+    fixtureGit(root, ["rm", "-q", "-f", FLOOR]);
+    fixtureGit(root, ["commit", "-q", "-m", "delete the baseline"]);
+    const r = runScan(root, PULL_REQUEST_RUN);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toMatch(/no baseline file, so no entry can be added/);
+  });
+
+  it("the base commit is unknown: fails closed, with the head file added or present", () => {
+    const unknown = "0".repeat(40);
+    for (const root of [addedFileFixture(list()), fixture(list("src/a.tsx"), list("src/a.tsx"))]) {
+      const r = runScan(root, { GITHUB_EVENT_NAME: "pull_request", TOAST_BANNER_BASE: unknown });
+      expect(r.status).toBe(1);
+      expect(r.out).toMatch(/cannot be compared with the base/);
+      expect(r.out).toMatch(/did not resolve/);
+    }
+  });
+
   it("the reusable workflow step sets TOAST_BANNER_BASE from the merge group's or the pull request's base SHA", () => {
     const lines = readFileSync(path.join(REPO_ROOT, ".github/workflows/toast-banner-gate-reusable.yml"), "utf8").split("\n");
     const at = lines.findIndex((l) => l === "      - name: Run the toast-banner conformance gate");

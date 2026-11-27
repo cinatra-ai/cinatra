@@ -31,9 +31,10 @@
 // `class` or `reason`, so changing a class is not growth). The workflow names the
 // base from the event itself (TOAST_BANNER_BASE: the pull request's or the merge
 // group's base SHA); a merge group run with no such base fails closed; a push
-// has no base and passes as such. A run whose baseline file is absent has no
-// entries to add and is not compared. Both sides read the list the same way:
-// `entries` absent or `null` is the empty list; any other shape fails closed.
+// has no base and passes as such. A baseline file absent on the head has no
+// entries to add and is not compared; one absent at a readable base is the
+// empty list (an unknown base or a git failure still fails closed). Both sides
+// read the list the same way: `entries` absent or `null` is the empty list; any other shape fails closed.
 //
 // Usage:
 //   node scripts/audit/toast-banner-scan.mjs \
@@ -126,16 +127,54 @@ export function checkFloorAgainstBase({ repoRoot, baselinePath, env = process.en
   if (env.GITHUB_EVENT_NAME === "merge_group" && !env[FLOOR_BASE_VAR]) {
     return closed("unreadable", `cannot be compared with the base: the run is a merge group's but ${FLOOR_BASE_VAR} is empty`);
   }
-  return compareFloorWithBase({
+  const grown = (base, head) => newKeys(base, head).map((f) => `entries file ${f}`);
+  const result = compareFloorWithBase({
     gate,
     envVar: FLOOR_BASE_VAR,
     floorPath,
     headFloor,
     parse: parseBaselineFiles,
-    grown: (base, head) => newKeys(base, head).map((f) => `entries file ${f}`),
+    grown,
     repoRoot,
     env,
   });
+  // The shared guard fails closed on a path that is absent at a readable base
+  // as it does on an unreadable base. Here the two differ: a baseline file the
+  // base commit does not hold is the EMPTY list (a head that adds the file passes
+  // with no entries, and fails naming each entry it adds).
+  if (result.status === "unreadable" && result.ref && baseLacksFile(repoRoot, result.ref, floorPath)) {
+    const growth = grown([], headFloor);
+    const said = `the base "${result.ref}" (which holds no ${floorPath}: an empty list)`;
+    if (growth.length === 0) {
+      return { status: "held", ok: true, ref: result.ref, growth, lines: [`[${gate}] floor base guard: ${floorPath} does not grow against ${said}.`] };
+    }
+    return {
+      status: "grew",
+      ok: false,
+      ref: result.ref,
+      growth,
+      lines: [
+        `[${gate}] FAIL - the floor ${floorPath} GREW against ${said} (a floor only shrinks; no pull request raises it in its own change):`,
+        ...growth.map((g) => `  + ${g}`),
+      ],
+    };
+  }
+  return result;
+}
+
+/**
+ * True when `ref` is a commit that can be read and its tree holds no `path`.
+ * Any other outcome (an unknown commit, a git failure) is false: the base is
+ * then unreadable, not empty.
+ */
+function baseLacksFile(repoRoot, ref, path_) {
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd: repoRoot, stdio: "ignore" });
+    const listed = execFileSync("git", ["ls-tree", "--name-only", ref, "--", path_], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return listed.trim() === "";
+  } catch {
+    return false;
+  }
 }
 
 const VALID_CLASSES = new Set(["pending-migration", "adjudicated-inline"]);
