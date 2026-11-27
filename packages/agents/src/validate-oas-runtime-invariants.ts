@@ -46,6 +46,8 @@
  *                     two mount paths (the agent package mounted STANDALONE and
  *                     the same gate inlined as a subflow of an orchestrator)
  *                     cannot drift apart unnoticed.
+ *                     It also refuses a review step whose targets the run
+ *                     cannot supply (cinatra#4150, scanReviewStepTargets).
  *   OAS-RUNTIME-014 — a HIDDEN Flow input the run can never carry
  *                     (cinatra#3003). Two notions of "must be supplied" meet
  *                     at dispatch: the RUNTIME demands every input without a
@@ -113,6 +115,7 @@ import {
   ARTIFACT_MATERIALIZE_TOOL,
   ARTIFACT_PAGE_CAPTURE_TOOL,
   AGENTS_PASSTHROUGH_URL_MARKER,
+  readArtifactReviewTargetsInput,
 } from "./artifact-binding";
 import { SIDE_EFFECT_PATTERNS } from "./trigger-infer-side-effects";
 import {
@@ -208,6 +211,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanForStepToolDeclarations(parsed));
   findings.push(...scanForInternalA2aAgentMisuse(parsed));
   findings.push(...scanInputMessageGateMountability(parsed));
+  findings.push(...scanReviewStepTargets(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
   // all walk the per-Flow graph, so we compose them per-Flow component.
   for (const flow of iterFlowComponents(parsed)) {
@@ -459,10 +463,25 @@ function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
 ): void {
+  walkFlowComponents(parsed, (node, path) => {
+    if (node.component_type === "ApiNode") visit(node, path);
+  });
+}
+
+/**
+ * Every flow component of a flow document (an object with a string
+ * `component_type`), nested subflows included. The walk follows only the
+ * component links ($referenced_components, subflow, a ParallelFlowNode's
+ * subflows), never a node's payload (data, metadata, inputs, outputs).
+ */
+function walkFlowComponents(
+  parsed: Record<string, unknown>,
+  visit: (node: Record<string, unknown>, path: string) => void,
+): void {
   function go(node: unknown, path: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
-    if (o.component_type === "ApiNode") {
+    if (typeof o.component_type === "string") {
       visit(o, path);
     }
     const refs = o.$referenced_components;
@@ -1153,6 +1172,68 @@ function scanInputMessageGateMountability(
         source: "deterministic",
       });
     }
+  });
+  return findings;
+}
+
+// OAS-RUNTIME-013 (cinatra#4150): a review step marked for artifact review
+// (metadata.cinatra.artifactReview.targetsInput) must be an InputMessageNode
+// listed directly in the root flow, and its named targets input must be one the
+// run can supply. The traces:
+//   - The compiler sets the marker (artifactReviewTargetsInput) only in its
+//     InputMessageNode branch, over the steps it builds from the root flow's
+//     `nodes` (packages/agents/src/oas-compiler.ts); a marked node anywhere else
+//     never becomes a review step.
+//   - The run reads the targets from two places, in this order
+//     (resolveDeclaredReviewTargets, src/lib/artifacts/artifact-review-target.ts):
+//     the step's pause payload, then the run's start parameters. The pause
+//     payload carries the step's declared inputs only when it sets
+//     surfaceGateInputs: true (the compiler's surfaceGateInputKeys, cinatra#4457);
+//     the start parameters carry a start input, a name that both the root flow
+//     and its StartNode declare (as OAS-RUNTIME-004/005 read it).
+// Limits: this rule does not prove that a value actually arrives. A surfaced
+// input that nothing feeds, a producer that runs after the step, or a step the
+// run never reaches is not judged here (cinatra#4897).
+function scanReviewStepTargets(parsed: Record<string, unknown>): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  const refs = isPlainObject(parsed.$referenced_components) ? parsed.$referenced_components : {};
+  const rootSteps = new Set<object>();
+  for (const entry of Array.isArray(parsed.nodes) ? parsed.nodes : []) {
+    const key = resolveComponentRef(entry);
+    if (key !== null && isPlainObject(refs[key])) rootSteps.add(refs[key] as object);
+  }
+  const root = extractFlow(parsed);
+  const startInputs = new Set(
+    (root?.startNode?.inputTitles ?? []).filter((t) => root!.flowInputTitles.includes(t)),
+  );
+  walkFlowComponents(parsed, (node, path) => {
+    const target = readArtifactReviewTargetsInput(node);
+    if (target === undefined) return;
+    let why: string | null = null;
+    if (node.component_type !== "InputMessageNode" || !rootSteps.has(node)) {
+      why = "it is not an InputMessageNode listed in the root flow's nodes, so the compiler never makes it a review step";
+    } else if (!startInputs.has(target)) {
+      const cinatra = (node.metadata as { cinatra?: Record<string, unknown> }).cinatra ?? {};
+      const declared = Array.isArray(node.inputs) && node.inputs.some((i) => isPlainObject(i) && i.title === target);
+      if (cinatra.surfaceGateInputs !== true) {
+        why = `"${target}" is not a start input of the root flow and the step does not set metadata.cinatra.surfaceGateInputs: true`;
+      } else if (!declared) {
+        why = `"${target}" is not a start input of the root flow and not one of the step's declared inputs`;
+      }
+    }
+    if (why === null) return;
+    findings.push({
+      code: "OAS-RUNTIME-013",
+      severity: "blocker",
+      message:
+        `Review step "${gateLabel(node)}" names its targets input "${target}" ` +
+        `(metadata.cinatra.artifactReview.targetsInput), but ${why}. The run then ` +
+        `opens the review with no artifact. Make it a root-flow InputMessageNode and ` +
+        `either declare "${target}" as a start input (root flow and StartNode) or ` +
+        `declare it as a step input and set surfaceGateInputs: true.`,
+      location: path,
+      source: "deterministic",
+    });
   });
   return findings;
 }

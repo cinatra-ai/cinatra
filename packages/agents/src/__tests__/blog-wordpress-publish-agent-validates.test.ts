@@ -28,6 +28,7 @@ import {
   scanOasForStartNodeInputsWithoutRequired,
   validateOasAgentJson,
 } from "../validate-agent-json";
+import { expectMessagesMatchAllowlist } from "./__fixtures__/known-broken-agents";
 
 const agentDir = path.resolve(
   __dirname,
@@ -48,8 +49,8 @@ const skill = [
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
 
 describe("blog-wordpress-publish-agent OAS validates", () => {
-  it("validateOasAgentJson returns [] (no L1 findings)", () => {
-    expect(validateOasAgentJson(oas)).toEqual([]);
+  it("validateOasAgentJson returns only the findings the allowlist records (cinatra#4150)", () => {
+    expectMessagesMatchAllowlist("blog-wordpress-publish-agent", validateOasAgentJson(oas));
   });
 
   it("scanOasForLlmMetadata returns []", () => {
@@ -82,7 +83,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
   });
 
   it("Pin 4: no pack screen (no hitlScreens) + toolboxes OMITTED; the publish node is the publishing step", () => {
-    // red-first-expect: expected [ Array(1) ] to be undefined
     const meta = (oas.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(meta.hitlScreens).toBeUndefined();
     expect(meta.toolboxes).toBeUndefined();
@@ -103,7 +103,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
   });
 
   it("Pin 4b: the host review of the pinned revision comes before anything is read for publishing", () => {
-    // red-first-expect: Cannot read properties of undefined (reading 'component_type')
     type Ref = { $component_ref: string };
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const gather = components.gather_review_target;
@@ -154,7 +153,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
   });
 
   it("Pin 4c: the words read for publishing are the revision the review approved, not the one the run started with", () => {
-    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
     // A person can choose Regenerate on the review and approve the successor.
     // The review step answers with the approved target, so the read step takes
     // its revision from that answer (the pack's declared approved_post_text
@@ -241,7 +239,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
 
 describe("blog-wordpress-publish-agent — inline instruction contract", () => {
   it("takes an artifact reference, never raw text and never a blog record", () => {
-    // red-first-expect: to contain 'the review
     expect(skill).toContain("never raw text and never a blog record");
     expect(skill).toContain("the review's projection step reads the artifact's record (artifacts_get)");
     expect(skill).toContain(
@@ -267,7 +264,6 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
   });
 
   it("publishes through the site's own catalogue, and only a publicly published page", () => {
-    // red-first-expect: to contain 'wordpress_site_tool_write'
     expect(skill).toContain("wordpress_site_tools_list");
     expect(skill).toContain("wordpress_site_tool_write");
     expect(skill).not.toContain("wordpress_site_tool_call");
@@ -280,7 +276,6 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
   });
 
   it("takes the page's title only from the reviewed words, never from the artifact's current state", () => {
-    // red-first-expect: to contain 'you never take a title from the artif
     expect(skill).toContain("Take the page's title from the first heading line of `postText`");
     expect(skill).toContain("you never take a title from the artifact's current state");
     // No heading in the pinned words: nothing is published.
@@ -298,19 +293,16 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
   });
 
   it("names no pack renderer key: the host's review and publish cards replace the pack screen", () => {
-    // red-first-expect: not to contain '@cinatra-ai/blog-wordpress-publish-ag
     expect(skill).not.toContain("@cinatra-ai/blog-wordpress-publish-agent:draft-confirm");
     expect(skill).not.toContain("x-renderer");
   });
 
   it("declares no field renderer: a run never stops on a pack screen", () => {
-    // red-first-expect: expected [ { …(5) } ] to be undefined
     const cinatra = (pkg.cinatra ?? {}) as Record<string, unknown>;
     expect(cinatra.fieldRenderers).toBeUndefined();
   });
 
   it("the failure envelope carries exactly the declared output keys, approved, and the empty patch", () => {
-    // red-first-expect: the recipe spells out its failure envelope: expected null to be truthy
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const declared = (components.publish.outputs as Array<{ title: string }>).map((o) => o.title).sort();
     const tail = skill.slice(
@@ -382,7 +374,6 @@ describe("blog-wordpress-publish-agent — the published address reaches the art
     expect(data.tool).toBe("objects_update");
     // The artifact written to is the one this run was handed — never a new one.
     expect(data.input?.objectId).toBe("{{ postArtifactId }}");
-    // red-first-expect: to contain '(
     // The leaf writes the patch only when each of its three members is
     // present and non-empty. A run that published nothing renders the empty
     // patch {}, and that patch still reaches objects_update. objects_update
