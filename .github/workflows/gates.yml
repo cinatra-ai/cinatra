@@ -261,6 +261,8 @@ jobs:
       # The two anti-fraud checks from cinatra#2821. WARN-FIRST rollout; needs
       # the full history to date a branch's first own commit against main.
       - name: chat-HITL Evidence Gate
+        env:
+          CHAT_HITL_EVIDENCE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           node scripts/ci/chat-hitl-evidence-gate.mjs --github-annotations
 
