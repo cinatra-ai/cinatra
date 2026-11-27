@@ -1,0 +1,374 @@
+{
+  "note": "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.",
+  "nonContentFiles": {
+    "@cinatra-ai/apollo-prospecting-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs",
+        "src/index.ts"
+      ]
+    },
+    "@cinatra-ai/author-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-draft-writer-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/brand-voice-text.mjs",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-idea-generator-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-image-generator-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/brand-voice-text.mjs",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-image-prompt-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-linkedin-publish-agent": {
+      "count": 9,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs",
+        "src/__tests__/fixtures/design-primitives.d.ts",
+        "src/components/ui/label.tsx",
+        "src/components/ui/textarea.tsx",
+        "src/lib/utils.ts",
+        "src/renderers/draft-review.tsx",
+        "test/__tests__/contract-readers.mjs",
+        "vitest.config.ts"
+      ]
+    },
+    "@cinatra-ai/blog-linkedin-writer-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/blog-pipeline-agent": {
+      "count": 8,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/brand-voice-text.mjs",
+        "cinatra/tools/stored-ideas.mjs",
+        "extension-kind-gate.mjs",
+        "renderer-binding-gate.mjs",
+        "src/lib/blog/stored-ideas-gate-runner.ts",
+        "src/lib/blog/stored-ideas-gate.ts",
+        "src/renderers/idea-selection.ts"
+      ]
+    },
+    "@cinatra-ai/blog-wordpress-publish-agent": {
+      "count": 5,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/approved-post-text.mjs",
+        "extension-kind-gate.mjs",
+        "test/__tests__/oas-contract.mjs",
+        "vitest.config.ts"
+      ]
+    },
+    "@cinatra-ai/code-reviewer-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/company-discovery-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/contact-discovery-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/context-selection-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/drupal-agent": {
+      "count": 5,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/review-targets.mjs",
+        "cinatra/tools/settle-outcome.mjs",
+        "extension-kind-gate.mjs",
+        "tests/run.mjs"
+      ]
+    },
+    "@cinatra-ai/email-delivery-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/recipient-records.mjs",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/email-drafting-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/saved-drafts.mjs",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/email-follow-up-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/email-outreach-agent": {
+      "count": 6,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/recipient-records.mjs",
+        "cinatra/tools/saved-drafts.mjs",
+        "extension-kind-gate.mjs",
+        "scripts/embedded-copies.mjs",
+        "tests/run.mjs"
+      ]
+    },
+    "@cinatra-ai/email-recipient-selection-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/email-test-delivery-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/lint-policy-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/list-curator-agent": {
+      "count": 8,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs",
+        "src/__tests__/fixtures/design-primitives.d.ts",
+        "src/__tests__/fixtures/standalone-typecheck.d.ts",
+        "src/list-curator-final-list-renderer.tsx",
+        "src/list-curator-scrape-schema-renderer.tsx",
+        "tests/doubles/design-primitives.tsx",
+        "vitest.config.ts"
+      ]
+    },
+    "@cinatra-ai/media-feed-lister-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/media-transcript-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/planner-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/security-reviewer-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/web-research-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/web-scrape-agent": {
+      "count": 2,
+      "items": [
+        ".npmrc",
+        "extension-kind-gate.mjs"
+      ]
+    },
+    "@cinatra-ai/wordpress-agent": {
+      "count": 3,
+      "items": [
+        ".npmrc",
+        "cinatra/tools/review-targets.mjs",
+        "extension-kind-gate.mjs"
+      ]
+    }
+  },
+  "toolDeclarations": {
+    "@cinatra-ai/blog-draft-writer-agent": {
+      "count": 1,
+      "items": [
+        "brand_voice_text"
+      ]
+    },
+    "@cinatra-ai/blog-image-generator-agent": {
+      "count": 1,
+      "items": [
+        "brand_voice_text"
+      ]
+    },
+    "@cinatra-ai/blog-pipeline-agent": {
+      "count": 2,
+      "items": [
+        "brand_voice_text",
+        "stored_ideas"
+      ]
+    },
+    "@cinatra-ai/blog-wordpress-publish-agent": {
+      "count": 1,
+      "items": [
+        "approved_post_text"
+      ]
+    },
+    "@cinatra-ai/drupal-agent": {
+      "count": 2,
+      "items": [
+        "review_targets",
+        "settle_outcome"
+      ]
+    },
+    "@cinatra-ai/email-delivery-agent": {
+      "count": 1,
+      "items": [
+        "recipient_records"
+      ]
+    },
+    "@cinatra-ai/email-drafting-agent": {
+      "count": 1,
+      "items": [
+        "saved_drafts"
+      ]
+    },
+    "@cinatra-ai/email-outreach-agent": {
+      "count": 2,
+      "items": [
+        "recipient_records",
+        "saved_drafts"
+      ]
+    },
+    "@cinatra-ai/wordpress-agent": {
+      "count": 1,
+      "items": [
+        "review_targets"
+      ]
+    }
+  },
+  "extensionToolSteps": {
+    "@cinatra-ai/blog-draft-writer-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "read_brand_voice -> brand_voice_text"
+      ]
+    },
+    "@cinatra-ai/blog-image-generator-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "read_brand_voice -> brand_voice_text"
+      ]
+    },
+    "@cinatra-ai/blog-pipeline-agent :: cinatra/oas.json": {
+      "count": 7,
+      "items": [
+        "blog-draft-writer-agent__read_brand_voice -> brand_voice_text",
+        "blog-image-generator-agent__read_brand_voice -> brand_voice_text",
+        "complete_relation -> stored_ideas",
+        "gather_linkedin_review -> stored_ideas",
+        "prepare_ideas -> stored_ideas",
+        "read_brand_voice -> brand_voice_text",
+        "reserve_idea -> stored_ideas"
+      ]
+    },
+    "@cinatra-ai/blog-wordpress-publish-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "read_post_text -> approved_post_text"
+      ]
+    },
+    "@cinatra-ai/drupal-agent :: cinatra/oas.json": {
+      "count": 2,
+      "items": [
+        "gather_page_review -> review_targets",
+        "settle_outcome -> settle_outcome"
+      ]
+    },
+    "@cinatra-ai/email-delivery-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "file_recipients -> recipient_records"
+      ]
+    },
+    "@cinatra-ai/email-drafting-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "read_drafts -> saved_drafts"
+      ]
+    },
+    "@cinatra-ai/email-outreach-agent :: cinatra/oas.json": {
+      "count": 2,
+      "items": [
+        "drafts-read_drafts -> saved_drafts",
+        "sender-file_recipients -> recipient_records"
+      ]
+    },
+    "@cinatra-ai/wordpress-agent :: cinatra/oas.json": {
+      "count": 1,
+      "items": [
+        "gather_page_review -> review_targets"
+      ]
+    }
+  },
+  "unreadableSteps": {}
+}

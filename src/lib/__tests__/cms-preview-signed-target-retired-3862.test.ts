@@ -3,7 +3,7 @@
  * lookup leave.
  *
  * Unit l8a1 removed the gate capture pipeline, the only caller of the signed
- * preview target of `cms-preview-capture-policy.ts` (`resolveCaptureTarget`,
+ * preview target of `page-capture-policy.ts` (`resolveCaptureTarget`,
  * `parsePostId`, the per-platform preview routes and their bounds) and of the
  * tuple-scoped preview secret lookup `resolvePreviewSharedSecrets` in
  * `webhook-secret-service.ts`. Both leave now, and the class 3 ceiling of the
@@ -24,7 +24,7 @@ import * as path from "node:path";
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const SELF = path.resolve(__filename);
 
-const POLICY = "src/lib/artifacts/cms-preview-capture-policy.ts";
+const POLICY = "src/lib/artifacts/page-capture-policy.ts";
 const SECRET_SERVICE = "src/lib/webhook-secret-service.ts";
 
 const RETIRED_NAMES = [
@@ -112,13 +112,13 @@ describe("cinatra#3862 leg 8 l8a2: the signed preview target and its secret look
     expect(hits.sort()).toEqual([]);
   });
 
-  it("the class 3 ceiling of the policy module is its two remaining names", () => {
+  it("the policy module carries a generic name, so the application border floor holds no entry of it (cinatra#4851)", () => {
     const floor = JSON.parse(read("scripts/audit/application-border-gate.baseline.json")) as Record<
       string,
       Record<string, { count: number }>
     >;
-    expect(floor.ceilings?.[POLICY]?.count).toBe(2);
-    expect(floor.names?.[`${POLICY} :: name :: cms`]?.count).toBe(1);
+    expect(floor.ceilings?.[POLICY]).toBeUndefined();
+    expect(Object.keys(floor.names ?? {}).filter((key) => key.startsWith(POLICY))).toEqual([]);
   });
 
   it("the page capture and the page render still read what stays", () => {
@@ -128,10 +128,10 @@ describe("cinatra#3862 leg 8 l8a2: the signed preview target and its secret look
     expect(policy).toMatch(/export type CaptureTargetDenial\b/);
     expect(policy).toMatch(/export interface RegisteredCaptureSite\b/);
     expect(read("src/lib/artifacts/registered-page-capture.ts")).toContain(
-      'import { normalizeOrigin } from "./cms-preview-capture-policy"',
+      'import { normalizeOrigin } from "./page-capture-policy"',
     );
     expect(read("src/lib/artifacts/registered-page-render.ts")).toMatch(
-      /captureDenialCopy,[\s\S]*?from "\.\/cms-preview-capture-policy"/,
+      /captureDenialCopy,[\s\S]*?from "\.\/page-capture-policy"/,
     );
   });
 });
