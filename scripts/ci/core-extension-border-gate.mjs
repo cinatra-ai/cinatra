@@ -438,21 +438,31 @@ const PORT_COMPILER_OPTIONS = {
   target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
 };
 
-/** The one question asked of the checker: is the type, without `null` and
- *  `undefined`, or a union constituent, `any`, `unknown`, `object` or a type
- *  parameter without a useful constraint. Nothing inside an object is read. */
+/** The one question asked of the checker, on the RESOLVED type and nowhere else: does an input of this type
+ *  carry no constraint. `any`, `unknown`, `object` and the empty object type (no property, no signature, no
+ *  index signature) carry none. A type parameter carries none when it has no constraint or its constraint
+ *  carries none. A union carries none when any constituent, `null` and `undefined` aside, carries none. An
+ *  intersection carries none when every member carries none, so `T & {}` (what `NonNullable<T>` resolves to)
+ *  is untyped for an unconstrained `T` and `T & { id: string }` is not. Anything else is typed. Nothing inside
+ *  an object, record, array or callback type is read. `seen` holds the type parameters on the current path,
+ *  so a self-referential constraint ends the walk instead of looping. */
 function isUntypedType(checker, type, seen = new Set()) {
-  const nullish = ts.TypeFlags.Null | ts.TypeFlags.Undefined;
-  for (const t of [type, checker.getNonNullableType(type)]) {
-    if (t.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.NonPrimitive)) return true;
-    if (t.flags & ts.TypeFlags.TypeParameter && !seen.has(t)) {
-      seen.add(t);
-      const constraint = t.getConstraint();
-      if (!constraint || isUntypedType(checker, constraint, seen)) return true;
+  const F = ts.TypeFlags;
+  if (type.flags & (F.Any | F.Unknown | F.NonPrimitive)) return true;
+  if (type.flags & F.TypeParameter) {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    try {
+      const constraint = type.getConstraint();
+      return !constraint || isUntypedType(checker, constraint, seen);
+    } finally {
+      seen.delete(type);
     }
-    if (t.isUnion() && t.types.some((c) => !(c.flags & nullish) && isUntypedType(checker, c, seen))) return true;
   }
-  return false;
+  if (type.isUnion()) return type.types.some((c) => !(c.flags & (F.Null | F.Undefined)) && isUntypedType(checker, c, seen));
+  if (type.isIntersection()) return type.types.every((c) => isUntypedType(checker, c, seen));
+  return !!(type.flags & F.Object) && checker.getPropertiesOfType(type).length === 0 && type.getCallSignatures().length === 0
+    && type.getConstructSignatures().length === 0 && checker.getIndexInfosOfType(type).length === 0;
 }
 
 /** The findings of the two port rules, from the declarations of the root (see
@@ -554,7 +564,7 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
     for (const [key, found] of signatures) {
       const hits = found.map(({ sig }) => positions(sig)).filter((at) => at.length > 0);
       const detail = `${key}(${hits.map((at) => at.map((n) => `#${n}`).join(",")).join("|")})`;
-      if (hits.length > 0) report(PORT_RULE, found[0].node, detail, "a host port member takes an untyped input (any, unknown, object or an unconstrained type parameter); it bounds nothing a manifest declares (cinatra#4872)");
+      if (hits.length > 0) report(PORT_RULE, found[0].node, detail, "a host port member takes an untyped input (any, unknown, object, the empty object type or a type parameter without a constraint); it bounds nothing a manifest declares (cinatra#4872)");
     }
   };
   // The root's properties come from the checker, so inherited and intersected ones are read too;

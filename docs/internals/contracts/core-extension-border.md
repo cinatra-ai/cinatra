@@ -55,9 +55,14 @@ The rules `port-shape` and `untyped-port-input` (cinatra#4872) read the declarat
 `ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts` (the TypeScript AST,
 from disk). They do not try to understand every shape TypeScript allows for a port: they
 require a closed one and refuse the rest as `port-shape`, keyed by the property or by
-`<Interface>.<member>`. The type checker answers one question: is a parameter's type `any`,
-`unknown`, `object` or an unconstrained type parameter, after removing `null` and `undefined`,
-in any union constituent, by its element type for a rest parameter. The checker also answers
+`<Interface>.<member>`. The type checker answers one question, on the resolved type and not
+on how it is written, for each parameter (for a rest parameter, its element type): does the
+type carry no constraint. `any`, `unknown`, `object` and the empty object type `{}` (no
+property, no signature, no index signature) carry none. A type parameter carries none when it
+has no constraint or its constraint carries none. A union carries none when any constituent,
+`null` and `undefined` aside, carries none; an intersection carries none when every member
+carries none, so `T & {}` (what `NonNullable<T>` resolves to) is untyped for an unconstrained
+`T` and `T & { id: string }` is not. The checker also answers
 the other questions about a type: a member is a function-typed property when its type has call
 signatures and nothing else (no construct signature, property, index signature or union with
 another type), so a written function type, a named alias of one and a generic alias of one are
