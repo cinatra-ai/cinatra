@@ -537,6 +537,60 @@ describe("core/extension border — a port member bounds what it takes", () => {
     expect(ports(portFile("run(key: string, input): void;"))).toEqual(["unbounded-port-member ExamplePort.run"]);
   });
 
+  it("reads a function-typed property through null, undefined, optional and parentheses", () => {
+    for (const member of [
+      "run: ((jobName: string, input: unknown) => void) | null;",
+      "run: ((jobName: string, input: unknown) => void) | undefined;",
+      "run?: (jobName: string, input: unknown) => void;",
+      "run?: ((jobName: string, input: unknown) => void) | null;",
+      "run: ((jobName: string, input: unknown) => void);",
+      "run: (((jobName: string, input: unknown) => void) | null) | undefined;",
+    ]) {
+      expect(ports(portFile(member))).toEqual(["unbounded-port-member ExamplePort.run"]);
+    }
+    expect(ports(portFile("run: ((jobName: string, input: Shape) => void) | null;"))).toEqual([]);
+    expect(ports(portFile('run: ((jobName: "a" | "b", input: unknown) => void) | null;'))).toEqual([]);
+    // One finding per declaration, even when two constituents offend.
+    expect(
+      ports(portFile("run: ((jobName: string, input: unknown) => void) | ((key: string, v: any) => void);")),
+    ).toEqual(["unbounded-port-member ExamplePort.run"]);
+  });
+
+  it("follows `extends` and same-file references to the members a port inherits", () => {
+    const root = (port: string) => `export type ExampleContext = {\n  example: ${port};\n};\n`;
+    const base = "export interface UnsafePort {\n  run(name: string, input: unknown): void;\n}\n";
+    const clean = "export interface CleanPort {\n  run(name: string, input: Shape): void;\n}\n";
+    expect(ports(base + "export interface NewPort extends UnsafePort {}\n" + root("NewPort"))).toEqual([
+      "unbounded-port-member NewPort.run",
+    ]);
+    // A chain and a base declared after its user are each read.
+    expect(
+      ports("export interface Top extends Mid {}\nexport interface Mid extends UnsafePort {}\n" + base + root("Top")),
+    ).toEqual(["unbounded-port-member Top.run"]);
+    expect(ports(base + "export type AliasPort = UnsafePort & { ping(): void };\n" + root("AliasPort"))).toEqual([
+      "unbounded-port-member AliasPort.run",
+    ]);
+    expect(ports(clean + "export interface NewPort extends CleanPort {}\n" + root("NewPort"))).toEqual([]);
+    // A member the interface redeclares replaces the inherited one.
+    expect(
+      ports(base + "export interface NewPort extends UnsafePort {\n  run(name: string, input: Shape): void;\n}\n" + root("NewPort")),
+    ).toEqual([]);
+    // An unresolvable base is a stated limit, never a failure; a cycle ends.
+    expect(ports("export interface NewPort extends Elsewhere {}\n" + root("NewPort"))).toEqual([]);
+    expect(ports("export interface A extends B {}\nexport interface B extends A {}\n" + root("A"))).toEqual([]);
+  });
+
+  it("judges an index-signature literal by its value type, as Record<string, V> is", () => {
+    expect(ports(portFile("run(jobName: string, payload: { [k: string]: number }): void;"))).toEqual([]);
+    expect(ports(portFile("run(jobName: string, payload: Record<string, number>): void;"))).toEqual([]);
+    expect(ports(portFile("run(jobName: string, payload: { [k: string]: unknown }): void;"))).toEqual([
+      "unbounded-port-member ExamplePort.run",
+    ]);
+    expect(ports(portFile("run(jobName: string, payload: { [k: string]: any }): void;"))).toEqual([
+      "unbounded-port-member ExamplePort.run",
+    ]);
+  });
+
   it("passes a type literal with named properties", () => {
     expect(ports(portFile("run(key: string, input: { id: string; [k: string]: unknown }): void;"))).toEqual([]);
   });

@@ -56,12 +56,18 @@ than text. Two declared aggregates list the pack-facing port types by their prop
 `ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts` (what
 `register(ctx)` receives) and `ExtensionToolPorts` in `src/lib/extension-tool-dispatch.ts`
 (what a declared tool module receives). Each listed port type is parsed with the
-TypeScript compiler and every member declaration is read. A declaration is refused when
+TypeScript compiler and every member declaration is read, including the members a port
+inherits through `extends` (or through an intersection or a reference to another type)
+from a declaration in the same file; a member an interface redeclares replaces the
+inherited one. A property typed by a function is read through parentheses, `| null`,
+`| undefined`, an optional `?` and an intersection of overloads, and every function-typed
+constituent is scanned (one finding per declaration). A declaration is refused when
 it takes a free name together with an untyped input: the port then bounds nothing a
 manifest declares. A free name is a parameter whose name ends in `name` or `key` and whose
 type is `string` or a union or optional form containing `string`. An untyped input is a
 parameter whose type is `unknown`, `any`, `object`, `Record<string, unknown|any>` or a type
-literal of index signatures only, or a union, parenthesised type, array,
+literal of index signatures whose value type is `unknown` or `any` (judged by its value type
+exactly as `Record<string, V>` is, so `{ [k: string]: number }` is typed), or a union, parenthesised type, array,
 `readonly` array, `| null` / `| undefined` form or `Promise<…>`, `Partial<…>`,
 `Readonly<…>`, `Array<…>` wrapper that contains one at any depth. An intersection is
 untyped only when every constituent is (`unknown & { id: string }` reduces to the typed
@@ -89,7 +95,10 @@ review. A type alias is not followed: a name typed by an alias of `string`, or a
 typed by an alias of `unknown` or of a `Record`, passes. Only the port types the two
 aggregates list by a plain type name are read, as type literals (or intersections of type
 literals) declared in the same file; a port type built by a mapped or conditional type,
-re-exported from another file, or reached through `Omit<…>` is not read. The name test is
+re-exported from another file, or reached through `Omit<…>` is not read. Inheritance is
+followed only to declarations in the same file: a base that is imported from another file,
+or built by a generic or utility type, cannot be resolved and is skipped without a
+finding. The name test is
 the parameter's name, so a free string under a name that does not end in `name` or `key`
 (`capability`, `channel`) is not a name parameter. An overload is counted by its ordinal,
 so replacing one offending overload by another in the same place keeps the same key and

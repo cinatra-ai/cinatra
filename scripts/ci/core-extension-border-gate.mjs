@@ -472,7 +472,7 @@ export function typeContains(node, isLeaf, intersectionAll = false) {
 const isAnyLike = (n) => n.kind === ts.SyntaxKind.UnknownKeyword || n.kind === ts.SyntaxKind.AnyKeyword;
 
 /** An untyped leaf: `unknown`, `any`, `object`, `Record<string, unknown|any>`,
- *  or a type literal that holds index signatures only. */
+ *  or a type literal of index signatures whose value type is untyped. */
 export function isUntypedLeaf(n) {
   if (isAnyLike(n) || n.kind === ts.SyntaxKind.ObjectKeyword) return true;
   if (
@@ -485,7 +485,13 @@ export function isUntypedLeaf(n) {
   ) {
     return true;
   }
-  return ts.isTypeLiteralNode(n) && n.members.length > 0 && n.members.every((m) => ts.isIndexSignatureDeclaration(m));
+  // A literal of index signatures only is judged by its value type, exactly as
+  // `Record<string, V>` is: `{ [k: string]: number }` is typed.
+  return (
+    ts.isTypeLiteralNode(n) &&
+    n.members.length > 0 &&
+    n.members.every((m) => ts.isIndexSignatureDeclaration(m) && isAnyLike(m.type))
+  );
 }
 
 /** A parameter's type is an untyped input (an unannotated parameter is `any`). */
@@ -498,21 +504,43 @@ export function isFreeNameType(type) {
   return typeContains(type, (n) => n.kind === ts.SyntaxKind.StringKeyword);
 }
 
-/** The members of a type node: a type literal, or each type literal of an
- *  intersection. */
-function typeLiteralMembers(node) {
+/** The members of a type node: a type literal, each type literal of an
+ *  intersection, or the members of a same-file declaration the node names. */
+function typeLiteralMembers(node, sf, seen) {
   if (!node) return [];
   if (ts.isTypeLiteralNode(node)) return [...node.members];
-  if (ts.isIntersectionTypeNode(node)) return node.types.flatMap(typeLiteralMembers);
-  if (ts.isParenthesizedTypeNode(node)) return typeLiteralMembers(node.type);
+  if (ts.isIntersectionTypeNode(node)) return node.types.flatMap((t) => typeLiteralMembers(t, sf, seen));
+  if (ts.isParenthesizedTypeNode(node)) return typeLiteralMembers(node.type, sf, seen);
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    return declaredMembers(sf, node.typeName.text, seen) ?? [];
+  }
   return [];
 }
 
-/** The declared members of a named type alias or interface in one file, or null. */
-function declaredMembers(sf, name) {
+/** The declared members of a named type alias or interface in one file, or null.
+ *  An interface's `extends` and an alias's intersection or reference are followed
+ *  to declarations in the SAME file; `seen` guards a cycle (and a diamond is read
+ *  once). A base that is not declared in this file is not read. */
+function declaredMembers(sf, name, seen = new Set()) {
+  if (seen.has(name)) return [];
+  seen.add(name);
   for (const st of sf.statements) {
-    if (ts.isTypeAliasDeclaration(st) && st.name.text === name) return typeLiteralMembers(st.type);
-    if (ts.isInterfaceDeclaration(st) && st.name.text === name) return [...st.members];
+    if (ts.isTypeAliasDeclaration(st) && st.name.text === name) return typeLiteralMembers(st.type, sf, seen);
+    if (ts.isInterfaceDeclaration(st) && st.name.text === name) {
+      const own = [...st.members];
+      const ownNames = new Set(own.map((m) => memberName(sf, m)).filter(Boolean));
+      const inherited = [];
+      for (const clause of st.heritageClauses ?? []) {
+        if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+        for (const base of clause.types) {
+          if (!ts.isIdentifier(base.expression)) continue;
+          const found = declaredMembers(sf, base.expression.text, seen) ?? [];
+          // A member the interface redeclares replaces the inherited one.
+          inherited.push(...found.filter((m) => !ownNames.has(memberName(sf, m))));
+        }
+      }
+      return [...own, ...inherited];
+    }
   }
   return null;
 }
@@ -521,11 +549,20 @@ function memberName(sf, m) {
   return m.name ? m.name.getText(sf) : null;
 }
 
-/** The parameters of a member: a method, or a property typed by a function. */
-function memberParameters(m) {
-  if (ts.isMethodSignature(m)) return m.parameters;
-  if (ts.isPropertySignature(m) && m.type && ts.isFunctionTypeNode(m.type)) return m.type.parameters;
-  return null;
+/** The parameter lists of a member: a method, or a property typed by a function
+ *  (also through parentheses, a union such as `| null` / `| undefined`, or an
+ *  intersection of overloads: every function-typed constituent is scanned). */
+function memberParameterLists(m) {
+  if (ts.isMethodSignature(m)) return [m.parameters];
+  if (ts.isPropertySignature(m) && m.type) return functionTypeParameters(m.type);
+  return [];
+}
+
+function functionTypeParameters(node) {
+  if (ts.isFunctionTypeNode(node)) return [node.parameters];
+  if (ts.isParenthesizedTypeNode(node)) return functionTypeParameters(node.type);
+  if (ts.isUnionTypeNode(node) || ts.isIntersectionTypeNode(node)) return node.types.flatMap(functionTypeParameters);
+  return [];
 }
 
 /** The `unbounded-port-member` findings of one file, for the root aggregate
@@ -550,10 +587,13 @@ export function scanPortMembers({ file, text, rootType }) {
     for (const m of members) {
       const name = memberName(sf, m);
       if (!name) continue;
-      const params = memberParameters(m);
-      if (!params) continue;
-      const freeName = params.find((p) => ts.isIdentifier(p.name) && NAME_PARAM_RE.test(p.name.text) && isFreeNameType(p.type));
-      const untyped = freeName && params.find((p) => p !== freeName && isUntypedInput(p.type));
+      let freeName;
+      let untyped;
+      for (const params of memberParameterLists(m)) {
+        freeName = params.find((p) => ts.isIdentifier(p.name) && NAME_PARAM_RE.test(p.name.text) && isFreeNameType(p.type));
+        untyped = freeName && params.find((p) => p !== freeName && isUntypedInput(p.type));
+        if (untyped) break;
+      }
       if (!untyped) continue;
       out.push(
         finding(
