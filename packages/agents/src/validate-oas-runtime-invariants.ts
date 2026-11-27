@@ -77,6 +77,14 @@
  *                     and one of them declares (a declaration is read by the
  *                     step's id). A flow that declares nothing yields no
  *                     finding of this code.
+ *   OAS-RUNTIME-016 — a model-bridge step in a holder the run does not read
+ *                     steps from (cinatra#4897): an inline `nodes` entry, an
+ *                     agent's tools, a tool's flow. The run knows steps only
+ *                     through `forEachRunStep` ($referenced_components, a
+ *                     subflow, a ParallelFlowNode's subflows), by their id, and
+ *                     refuses calls of any other step (step_tool_step_unknown).
+ *                     Also refused at install (`scanOasForInstallFindings`,
+ *                     called by the ZIP import and the registry install).
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -107,7 +115,7 @@
  *                     declarative binding replaces prompt-driven persistence.
  */
 
-import type { ReviewFinding } from "./validate-agent-json";
+import { isLlmBridgeUrl, type ReviewFinding } from "./validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactImageNodesFromOasDocument,
@@ -212,6 +220,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanForInternalA2aAgentMisuse(parsed));
   findings.push(...scanInputMessageGateMountability(parsed));
   findings.push(...scanReviewStepTargets(parsed));
+  findings.push(...scanModelStepsOutsideRunSteps(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
   // all walk the per-Flow graph, so we compose them per-Flow component.
   for (const flow of iterFlowComponents(parsed)) {
@@ -463,9 +472,32 @@ function walkApiNodes(
   parsed: Record<string, unknown>,
   visit: (node: Record<string, unknown>, path: string) => void,
 ): void {
-  walkFlowComponents(parsed, (node, path) => {
+  forEachRunStep(parsed, ({ node, path }) => {
     if (node.component_type === "ApiNode") visit(node, path);
   });
+}
+
+/** A component the run reads as a step: where it sits, its holder and its identity. */
+export type RunStep = {
+  node: Record<string, unknown>;
+  path: string;
+  /** The path of the holder the step sits in ($referenced_components, subflow, subflows), "$" for the root. */
+  holder: string;
+  /** The step's identity at run time: its `id`. Steps that share an id are one step to the run. */
+  id: string | null;
+};
+
+/**
+ * cinatra#4897: the one traversal of the steps the run reads. The run decides
+ * whether a step exists (hasApiNodeStep) and what tools it declares
+ * (findStepToolDeclaration) over these components only, by their id; a model
+ * step anywhere else is unknown to the run (step_tool_step_unknown).
+ */
+export function forEachRunStep(document: unknown, visit: (step: RunStep) => void): void {
+  if (!isPlainObject(document)) return;
+  walkFlowComponents(document, (node, path, holder) =>
+    visit({ node, path, holder, id: typeof node.id === "string" && node.id !== "" ? node.id : null }),
+  );
 }
 
 /**
@@ -476,34 +508,128 @@ function walkApiNodes(
  */
 function walkFlowComponents(
   parsed: Record<string, unknown>,
-  visit: (node: Record<string, unknown>, path: string) => void,
+  visit: (node: Record<string, unknown>, path: string, holder: string) => void,
 ): void {
-  function go(node: unknown, path: string): void {
+  function go(node: unknown, path: string, holder: string): void {
     if (!isPlainObject(node)) return;
     const o = node as Record<string, unknown>;
     if (typeof o.component_type === "string") {
-      visit(o, path);
+      visit(o, path, holder);
     }
     const refs = o.$referenced_components;
     if (isPlainObject(refs)) {
       for (const [k, v] of Object.entries(refs as Record<string, unknown>)) {
-        go(v, `${path}.$referenced_components.${k}`);
+        go(v, `${path}.$referenced_components.${k}`, `${path}.$referenced_components`);
       }
     }
     // Subflow on a FlowNode
     const subflow = o.subflow;
     if (isPlainObject(subflow)) {
-      go(subflow, `${path}.subflow`);
+      go(subflow, `${path}.subflow`, `${path}.subflow`);
     }
     // Supported parallel flows may inline Flow objects instead of referencing
     // them from $referenced_components. Keep their indexed paths in findings.
     if (o.component_type === "ParallelFlowNode" && Array.isArray(o.subflows)) {
       o.subflows.forEach((inlineFlow, index) => {
-        go(inlineFlow, `${path}.subflows[${index}]`);
+        go(inlineFlow, `${path}.subflows[${index}]`, `${path}.subflows`);
       });
     }
   }
-  go(parsed, "$");
+  go(parsed, "$", "$");
+}
+
+// ---------------------------------------------------------------------------
+// Invariant 16 — a model step in a holder the run does not read steps from
+// (OAS-RUNTIME-016, cinatra#4897). The run knows a step only through
+// forEachRunStep; a model-bridge ApiNode written anywhere else (an inline
+// `nodes` entry, an agent's tools, a tool's flow) has its calls refused at run
+// time with step_tool_step_unknown, or, when a read step carries the same id,
+// answered with that step's declaration. The search follows ONLY the keys
+// through which the specification nests components; a node's request payload
+// (data, body, config, headers, metadata, ...) is never entered, so an object
+// that merely looks like a step inside it is not one. Bounded work: one walk of
+// the run's traversal and one walk of the nesting keys.
+// ---------------------------------------------------------------------------
+
+/**
+ * The keys through which a component holds other components (Agent Spec: a
+ * flow's start node, nodes and edges with their end nodes, an AgentNode's agent,
+ * an agent's tools and toolboxes, a FlowNode's subflow, a ParallelFlowNode's
+ * subflows, a ToolNode's tool, a tool's flow, a multi-agent pattern's agents)
+ * and `$referenced_components`. Every other key is payload.
+ */
+const NESTING_KEYS = [
+  "$referenced_components",
+  "start_node",
+  "nodes",
+  "control_flow_connections",
+  "data_flow_connections",
+  "from_node",
+  "to_node",
+  "source_node",
+  "destination_node",
+  "subflow",
+  "subflows",
+  "flow",
+  "agent",
+  "agents",
+  "tools",
+  "toolboxes",
+  "tool",
+  "workers",
+  "group_manager",
+  "first_agent",
+  "relationships",
+] as const;
+
+function scanModelStepsOutsideRunSteps(parsed: Record<string, unknown>): ReviewFinding[] {
+  const read = new Set<object>();
+  const readIds = new Map<string, string>();
+  forEachRunStep(parsed, ({ node, path, id }) => {
+    read.add(node);
+    if (id !== null && isModelBridgeApiNode(node) && !readIds.has(id)) readIds.set(id, path);
+  });
+  const findings: ReviewFinding[] = [];
+  function go(value: unknown, path: string, holder: string): void {
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => go(v, `${path}[${i}]`, holder));
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    if (isModelBridgeApiNode(value) && !read.has(value)) {
+      const id = typeof value.id === "string" && value.id !== "" ? value.id : null;
+      const twin = id !== null ? readIds.get(id) : undefined;
+      findings.push({
+        code: "OAS-RUNTIME-016",
+        severity: "blocker",
+        message:
+          `Model step "${gateLabel(value)}" at ${path} sits in ${holder}, which the run ` +
+          `does not read steps from (the run reads steps only from $referenced_components, ` +
+          `a subflow and a ParallelFlowNode's subflows). ` +
+          (twin
+            ? `Its id is also carried by the step at ${twin}, so its calls would be answered with that step's declaration. `
+            : `Its calls are refused at run time (step_tool_step_unknown). `) +
+          `Move the step into $referenced_components and reference it with $component_ref.`,
+        location: path,
+        source: "deterministic",
+      });
+    }
+    for (const key of NESTING_KEYS) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      const child = value[key];
+      const childPath = `${path}.${key}`;
+      if (key === "$referenced_components") {
+        // A map of components: each entry sits in the map.
+        if (isPlainObject(child)) {
+          for (const [name, entry] of Object.entries(child)) go(entry, `${childPath}.${name}`, childPath);
+        }
+      } else {
+        go(child, childPath, childPath);
+      }
+    }
+  }
+  go(parsed, "$", "$");
+  return findings;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,12 +701,29 @@ export type StepToolDeclaration =
   | { kind: "declared"; tools: string[] }
   | { kind: "invalid"; reason: string };
 
+// A model step is an ApiNode whose url PATH ends at the bridge route: the
+// predicate of the llm-bridge wiring scan in validate-agent-json, read on the url
+// without its query, fragment and trailing slash (WayFlow signs a step's call by
+// the url it requests, and the bridge answers it whatever follows the path).
+// `/api/llm-bridge?x=1`, `/api/llm-bridge#a` and `/api/llm-bridge/` are model
+// steps; an ordinary ApiNode such as `/api/llm-bridge/status` is not one.
 function isModelBridgeApiNode(node: Record<string, unknown>): boolean {
   return (
     node.component_type === "ApiNode" &&
     typeof node.url === "string" &&
-    node.url.includes("/api/llm-bridge")
+    isLlmBridgeUrl(urlPathOf(node.url))
   );
+}
+
+/** The url up to its first `?` or `#`, without trailing slashes. Plain index work, no pattern. */
+function urlPathOf(url: string): string {
+  const query = url.indexOf("?");
+  const fragment = url.indexOf("#");
+  let end = url.length;
+  if (query !== -1) end = query;
+  if (fragment !== -1 && fragment < end) end = fragment;
+  while (end > 0 && url.charCodeAt(end - 1) === 47 /* "/" */) end -= 1;
+  return url.slice(0, end);
 }
 
 function carriesStepToolKey(node: Record<string, unknown>): boolean {
@@ -2332,4 +2475,23 @@ export function scanOasForVisibleInputContractFindings(
     });
   }
   return findings;
+}
+
+/**
+ * The findings that refuse an install (cinatra#4897). The ZIP import
+ * (import-agent-core) and the registry install (build-agent-template-seed) both
+ * call this one function on the package's document, after their compile: the
+ * compile checks the document's structure only, so a flow the run could not
+ * read (OAS-RUNTIME-016) or that setup could not start
+ * (visible_input_setup_omission) would otherwise install and fail later. A rule that must refuse an install joins
+ * this list; every other rule stays with the review and the lint.
+ */
+export function scanOasForInstallFindings(
+  parsed: Record<string, unknown>,
+  packageName = resolvePackageName(parsed),
+): ReviewFinding[] {
+  return [
+    ...scanOasForVisibleInputContractFindings(parsed, packageName),
+    ...scanModelStepsOutsideRunSteps(parsed),
+  ];
 }

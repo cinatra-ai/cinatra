@@ -43,6 +43,8 @@ const MOUNT_LABEL = "acme-agents/blog-drafter-agent";
 const COMPILED = vi.hoisted(() => ({
   packageName: "@acme-agents/blog-drafter-agent",
   packageVersion: "0.3.1",
+  /** The source bytes the last compile was handed (cinatra#4897), as text. */
+  source: null as string | null,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -84,29 +86,32 @@ vi.mock("@cinatra-ai/extensions/license-detection", () => ({
 }));
 
 vi.mock("../oas-compiler", () => ({
-  compileOasAgentJson: async () => ({
-    ok: true,
-    value: {
-      approvalPolicy: { steps: [] },
-      inputSchema: { type: "object", properties: {} },
-      outputSchema: null,
-      prompt: null,
-      packageName: COMPILED.packageName,
-      packageVersion: COMPILED.packageVersion,
-      agentDependencies: {},
-      type: "leaf",
-      compiledPlan: [],
-      hitlScreens: [],
-      llmConfig: null,
-      toolboxes: [],
-      agentSpecVersion: "26.1.0",
-      triggerMode: "full",
-      gatedSteps: [],
-      cinatraConfig: null,
-      hasArtifactBindings: false,
-      artifactBindings: null,
-    },
-  }),
+  compileOasAgentJson: async (opts?: { oasSource?: Buffer }) => {
+    COMPILED.source = opts?.oasSource?.toString("utf8") ?? null;
+    return {
+      ok: true,
+      value: {
+        approvalPolicy: { steps: [] },
+        inputSchema: { type: "object", properties: {} },
+        outputSchema: null,
+        prompt: null,
+        packageName: COMPILED.packageName,
+        packageVersion: COMPILED.packageVersion,
+        agentDependencies: {},
+        type: "leaf",
+        compiledPlan: [],
+        hitlScreens: [],
+        llmConfig: null,
+        toolboxes: [],
+        agentSpecVersion: "26.1.0",
+        triggerMode: "full",
+        gatedSteps: [],
+        cinatraConfig: null,
+        hasArtifactBindings: false,
+        artifactBindings: null,
+      },
+    };
+  },
 }));
 
 const reload = vi.fn();
@@ -132,6 +137,7 @@ vi.mock("../agent-template-identity", async () =>
 import { importAgentTemplateCore } from "../import-agent-core";
 import { createZipBuffer } from "../zip-helpers";
 import { PUBLISHED_MARKER_FILENAME } from "../materialize-agent-package";
+import { UNREAD_MODEL_STEP_PATH, withUnreadModelStep } from "./helpers/unread-model-step-oas-4897";
 
 const OAS = JSON.stringify({
   agentspec_version: "26.1.0",
@@ -189,6 +195,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   COMPILED.packageName = PKG;
   COMPILED.packageVersion = "0.3.1";
+  COMPILED.source = null;
   readTemplate.mockReset();
   readTemplate.mockResolvedValue(null);
   reload.mockReset();
@@ -428,4 +435,55 @@ it("refuses an undeclared visible input before ZIP import writes or materializes
   expect(updateTemplate).not.toHaveBeenCalled();
   expect(reload).not.toHaveBeenCalled();
   await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("refuses a model step the run does not read before ZIP import writes or materializes (cinatra#4897)", async () => {
+  const oas = JSON.stringify(withUnreadModelStep(JSON.parse(OAS)));
+  await expect(importAgentTemplateCore(zip(oas), undefined, { redirect: false, requireRuntimeMount: true })).rejects.toThrow(
+    `Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`,
+  );
+  expect(createTemplate).not.toHaveBeenCalled();
+  expect(updateTemplate).not.toHaveBeenCalled();
+  expect(reload).not.toHaveBeenCalled();
+  await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+describe("cinatra#4897 — the install scan reads the source the compile is handed (the canonical staged file)", () => {
+  /** An archive whose root `agent.json` and `cinatra/oas.json` differ: staging lets the second replace the first. */
+  function zipWithOwnOas(rootOas: string, cinatraOas: string): string {
+    return createZipBuffer([
+      { name: "agent.json", content: rootOas },
+      { name: "cinatra/oas.json", content: cinatraOas },
+      { name: "manifest.json", content: JSON.stringify({ version: 1 }) },
+      {
+        name: "package.json",
+        content: JSON.stringify({ name: PKG, version: "0.3.1", license: "Apache-2.0" }),
+      },
+    ]).toString("base64");
+  }
+  const install = (archive: string) =>
+    importAgentTemplateCore(archive, undefined, { redirect: false, requireRuntimeMount: true });
+
+  it("refuses a clean root agent.json whose cinatra/oas.json holds a model step the run does not read, with no write", async () => {
+    const unreadStep = JSON.stringify(withUnreadModelStep(JSON.parse(OAS)));
+    await expect(install(zipWithOwnOas(OAS, unreadStep))).rejects.toThrow(
+      `Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`,
+    );
+    expect(createTemplate).not.toHaveBeenCalled();
+    expect(updateTemplate).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("hands the compile the bytes of the canonical file, and mounts exactly those", async () => {
+    const own = JSON.stringify({ ...JSON.parse(OAS), description: "the archive's own cinatra/oas.json" });
+    await install(zipWithOwnOas(OAS, own));
+    expect(COMPILED.source).toBe(own);
+    expect(await readFile(join(agentDir, "cinatra", "oas.json"), "utf8")).toBe(own);
+  });
+
+  it("hands the compile the root agent.json when the archive has no cinatra/oas.json", async () => {
+    await suppliedInstall();
+    expect(COMPILED.source).toBe(OAS);
+  });
 });

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { compileOasAgentJson, type PublishRows } from "./oas-compiler";
-import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "./validate-oas-runtime-invariants";
 import {
   readManifestLifecycle,
   serializeLifecycleConfig,
@@ -209,9 +209,15 @@ export async function buildAgentTemplateInstallSeed(input: {
 
   // (2) Compile the OAS Flow doc. ok:false (missing / unreadable / malformed /
   // structurally-invalid) THROWS before any DB write or disk materialize.
+  // cinatra#4897: the one source of the install. The file is read once; the
+  // compile is handed those bytes (`oasSource`), and the scan below reads the
+  // document parsed from the same bytes, so what is scanned is what is compiled
+  // and seeded. A file that cannot be read is left to the compile to report.
+  const oasBytes = await readFile(oasPath).catch(() => undefined);
   const compileResult = await compileOasAgentJson({
     packageName: input.packageName,
     oasSourcePath: oasPath,
+    ...(oasBytes === undefined ? {} : { oasSource: oasBytes }),
     executionProvider: manifestProvider ?? undefined,
     registryPath: input.registryPath,
   });
@@ -222,18 +228,16 @@ export async function buildAgentTemplateInstallSeed(input: {
   }
   const compiled = compileResult.value;
 
-  // (3) Read the OAS doc top-level name/description/sourceNl. compileOasAgentJson
-  // already validated the doc is well-formed JSON + structurally valid, so this
-  // re-read is parse-safe. The OAS name is the human title; the compiler does not
-  // surface it on CompiledAgentOas.
-  let oasDoc: OasDoc & Record<string, unknown>;
-  try {
-    oasDoc = JSON.parse(await readFile(oasPath, "utf8")) as OasDoc & Record<string, unknown>;
-  } catch (error) {
-    throw new Error(`Cannot verify start inputs for ${input.packageName}: ${error instanceof Error ? error.message : String(error)}`);
+  // (3) Read the OAS doc top-level name/description/sourceNl from the bytes the
+  // compile was handed. compileOasAgentJson already validated them as well-formed
+  // JSON + structurally valid, so this parse is safe. The OAS name is the human
+  // title; the compiler does not surface it on CompiledAgentOas.
+  if (oasBytes === undefined) {
+    throw new Error(`Cannot verify start inputs for ${input.packageName}: ${oasPath} could not be read`);
   }
+  const oasDoc = JSON.parse(oasBytes.toString("utf8")) as OasDoc & Record<string, unknown>;
   // Refuse before registry installation or bundled seeding can write a row.
-  const inputFindings = scanOasForVisibleInputContractFindings(oasDoc, input.packageName);
+  const inputFindings = scanOasForInstallFindings(oasDoc, input.packageName);
   if (inputFindings.length > 0) {
     throw new Error(`Cannot install ${input.packageName}: ${inputFindings.map(finding => finding.message).join("\n")}`);
   }
