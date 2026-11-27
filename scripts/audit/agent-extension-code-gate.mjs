@@ -19,7 +19,7 @@
  * index, and records, per key, the items of four classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
- * by `isContent`, that the product's walker publishes, `isWalkerSkipped`, and
+ * by `isContent`, that are not under `node_modules` or `.git` or a blocked `.env*` name, `isWalkerSkipped`, and
  * that are not test files, `isTestPath`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
@@ -105,13 +105,15 @@ export function isContent(rel) {
  * (packages/agents/src/scan-package-siblings.ts), minus the synthesized root
  * `package.json` and `agent.json` and the blocked `.env*` files. The walker
  * skips symbolic links and every directory whose NAME is in its `SKIP_DIRS`
- * (at any depth). This is a mirror of those name rules; a test reads the
- * source file and fails when the lists differ. A symbolic link is still
- * counted here (the product skips it; counting more is the safe side).
+ * (at any depth). The check does NOT mirror that list: the product also
+ * consumes extension SOURCE directly (the host alias points into the checkout
+ * and the product bundles a renderer with its relative imports), so a file
+ * under `build`, `dist` or `out` can be consumed code and is counted. It skips
+ * only directories that can never hold consumed source, `node_modules` and
+ * `.git`, and the blocked `.env*` names. A symbolic link is still counted here
+ * (the product skips it; counting more is the safe side).
  */
-export const WALKER_SKIP_DIRS = Object.freeze([
-  "node_modules", ".git", ".hg", ".svn", "dist", "build", "out", ".next", ".turbo", ".cache", ".pnpm", "coverage", "__pycache__", ".pytest_cache", ".mypy_cache", ".venv", "venv",
-]);
+export const WALKER_SKIP_DIRS = Object.freeze(["node_modules", ".git"]);
 const WALKER_SKIP_SET = new Set(WALKER_SKIP_DIRS);
 /** Mirror of `isBlockedEnvFile` in scan-package-siblings.ts. */
 function isBlockedEnvFile(basename) {

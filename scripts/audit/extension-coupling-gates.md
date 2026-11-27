@@ -803,13 +803,15 @@ connector's code is not judged here).
    `package.json` and `agent.json` and the blocked `.env*` files. So an agent
    with `files: ["cinatra"]` and a `src/runtime.ts` is published with that
    code, and the check counts it. The walker skips symbolic links and every
-   directory named in its `SKIP_DIRS` (`node_modules .git .hg .svn dist build
-   out .next .turbo .cache .pnpm coverage __pycache__ .pytest_cache
-   .mypy_cache .venv venv`, at any depth); the check mirrors the directory
-   names (`WALKER_SKIP_DIRS`) and the `.env*` name rule (`isBlockedEnvFile`),
-   and a test reads the source file and fails when they differ. A symbolic
-   link is still counted here (the product skips it; counting more is the
-   safe side).
+   directory named in its `SKIP_DIRS`, but the check does not mirror that list:
+   the product also consumes extension source directly (the host alias points
+   into the checkout; a renderer is bundled with its relative imports), so a
+   file under `build`, `dist` or `out` can be consumed code and is counted. The
+   check skips only directories that can never hold consumed source,
+   `node_modules` and `.git` (`WALKER_SKIP_DIRS`), and the blocked `.env*`
+   names (`isBlockedEnvFile`, mirrored from the walker; a test reads the source
+   file and fails when they differ). A symbolic link is still counted here (the
+   product skips it; counting more is the safe side).
 
    Test files are not counted, by path (`isTestPath`): a directory segment
    `test`, `tests`, `__tests__` or `__fixtures__`, or a file name with `.test.`

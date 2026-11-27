@@ -405,19 +405,21 @@ test("test files are not counted; every other non-content file is, wherever it l
   assert.deepEqual(nonContentFiles([{ rel: "tests/x.json", link: true }, { rel: "src/y.json", link: true }]), ["src/y.json"]);
 });
 
-test("the product's walker skips are mirrored: a file it never publishes is not counted", () => {
-  const all = plain("dist/run.js", "node_modules/p/i.js", "src/build/gen.js", ".git/hook.sh", "venv/bin/x", ".env", ".env.local", ".env.example", "cinatra/tools/read.mjs");
-  assert.deepEqual(nonContentFiles(all), [".env.example", "cinatra/tools/read.mjs"]);
-  assert.equal(isWalkerSkipped("a/dist/b.js"), true);
-  assert.equal(isWalkerSkipped("dist"), false);
-  assert.equal(isWalkerSkipped("distant/b.js"), false);
+test("only node_modules, .git and blocked .env names are skipped; build, dist and out folders are counted", () => {
+  const all = plain("node_modules/p/i.js", "a/.git/hook.sh", ".env", ".env.local", ".env.example", "cinatra/tools/read.mjs", "src/build/selection.ts", "dist/run.js", "out/x.js", "coverage/c.js");
+  assert.deepEqual(nonContentFiles(all), [".env.example", "cinatra/tools/read.mjs", "coverage/c.js", "dist/run.js", "out/x.js", "src/build/selection.ts"]);
+  assert.equal(isWalkerSkipped("src/build/selection.ts"), false);
+  assert.equal(isWalkerSkipped("a/node_modules/b.js"), true);
+  assert.equal(isWalkerSkipped("node_modules"), false);
 });
 
-test("the mirrored walker rules equal the source: SKIP_DIRS and the .env name rule cannot drift silently", () => {
+test("the mirrored .env name rule equals the source, and the check's skipped folders are a subset of the walker's SKIP_DIRS", () => {
   const src = readFileSync(WALKER_SOURCE, "utf8");
   const dirs = /export const SKIP_DIRS[^=]*=\s*new Set\(\[([\s\S]*?)\]\)/.exec(src);
   assert.ok(dirs, "SKIP_DIRS not found in the walker source");
-  assert.deepEqual([...WALKER_SKIP_DIRS].sort(), [...dirs[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort());
+  const walkerDirs = [...dirs[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepEqual([...WALKER_SKIP_DIRS], ["node_modules", ".git"]);
+  for (const d of WALKER_SKIP_DIRS) assert.ok(walkerDirs.includes(d), d);
   const env = /export function isBlockedEnvFile\(basename: string\): boolean \{([\s\S]*?)\n\}/.exec(src);
   assert.ok(env, "isBlockedEnvFile not found in the walker source");
   assert.deepEqual([...env[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]), [".env", ".env.example", ".example", ".sample", ".template"]);
@@ -445,6 +447,16 @@ test("live: a test file added at the pin is not counted; code under src/ with fi
     const out = runGate(root);
     assert.equal(out.status, 1);
     assert.match(out.out, /\+ @example-org\/count-agent: extension-kind-gate\.mjs/);
+  });
+});
+
+test("live: source under a build folder is counted (the product consumes extension source directly)", () => {
+  withRoot({ packs: countPacks(), list: countRecorded() }, (root) => {
+    writeFile(join(packDir(root, "count-agent"), "src", "build", "selection.ts"), "export {};\n");
+    repin(root, "count-agent", COUNTED);
+    const grown = runGate(root);
+    assert.equal(grown.status, 1);
+    assert.match(grown.out, /\+ @example-org\/count-agent: src\/build\/selection\.ts/);
   });
 });
 
