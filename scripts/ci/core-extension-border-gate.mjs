@@ -28,7 +28,7 @@
 // preserved). A comment that names a pack to explain a gap states knowledge; it
 // does not encode it.
 //
-// THE BASELINE (config/core-extension-border-baseline.json) is SHRINK-ONLY. It
+// THE BASELINE (scripts/ci/core-extension-border-baseline.json) is SHRINK-ONLY. It
 // records the crossings that stood on main the day this gate landed, each with
 // the file, the rule and a one-line reason. It carries no wildcard: an entry
 // names one file and one detail. A finding outside it fails immediately, and a
@@ -59,13 +59,18 @@ import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
-const DEFAULT_BASELINE = join(DEFAULT_REPO_ROOT, "config", "core-extension-border-baseline.json");
+const DEFAULT_BASELINE = join(DEFAULT_REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
 
 /** The variable a workflow names the base reference in (cinatra#3831). */
 export const FLOOR_BASE_VAR = "CORE_EXTENSION_BORDER_BASE";
 
 /** The ledger, repo-relative, as the base guard reads it at the base. */
-export const FLOOR_FILE = "config/core-extension-border-baseline.json";
+export const FLOOR_FILE = "scripts/ci/core-extension-border-baseline.json";
+
+/** Where the ledger stood before it moved beside its script. A base commit that
+ *  predates the move holds it here; the base guard reads this path when the
+ *  base has none at FLOOR_FILE, so the move itself is still compared. */
+export const LEGACY_FLOOR_FILE = "config/core-extension-border-baseline.json";
 
 /** The roots that hold host product code. The materialized `extensions/` tree
  *  is deliberately absent. */
@@ -677,6 +682,7 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     gate: "core-extension-border",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
+    baseFallbackPath: LEGACY_FLOOR_FILE,
     headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
     parse: (text) => JSON.parse(text),
     grown: (base, head) => baselineGrowth(base, head),

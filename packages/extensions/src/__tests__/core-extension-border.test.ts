@@ -35,7 +35,7 @@ import { spawnSync } from "node:child_process";
 
 const REPO_ROOT = path.join(__dirname, "..", "..", "..", "..");
 const GATE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-gate.mjs");
-const BASELINE_PATH = path.join(REPO_ROOT, "config", "core-extension-border-baseline.json");
+const BASELINE_PATH = path.join(REPO_ROOT, "scripts", "ci", "core-extension-border-baseline.json");
 
 type Finding = {
   rule: string;
@@ -624,7 +624,7 @@ const floorFixture: FloorFixture = (await import(
 )) as unknown as FloorFixture;
 
 describe("core/extension border — the floor is compared with the base branch", () => {
-  const FLOOR = "config/core-extension-border-baseline.json";
+  const FLOOR = "scripts/ci/core-extension-border-baseline.json";
   const KEY = "src/lib/example-module.ts::@cinatra-ai/web-research-agent:finding";
   const REASON = "a crossing recorded in a fixture ledger, with its reason";
   const typeEntry = () => ({ rule: "pack-type-id-in-core", key: KEY, reason: REASON });
@@ -675,6 +675,33 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(r.status).toBe("unreadable");
     expect(r.lines[0]).toContain("cannot be compared with the base");
     expect(r.lines[0]).toContain(reason);
+  });
+
+  // The ledger moved from config/ to beside its script. A base commit that
+  // predates the move holds it at the old path; it is read there, never skipped.
+  const LEGACY_FLOOR = "config/core-extension-border-baseline.json";
+
+  it("a base that still holds the ledger at its old path is compared there: growth FAILS", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3)]) }, { [FLOOR]: ledger([domainEntry(3), typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("grew");
+    expect(r.growth).toEqual([`new entry: pack-type-id-in-core::${KEY}`]);
+  });
+
+  it("a base that still holds the ledger at its old path is compared there: a shrink PASSES", () => {
+    const root = repo({ [LEGACY_FLOOR]: ledger([domainEntry(3), typeEntry()]) }, { [FLOOR]: ledger([domainEntry(3)]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("held");
+  });
+
+  it("a base with the ledger at neither path still FAILS closed", () => {
+    const root = repo({ "README.md": "a base without a ledger\n" }, { [FLOOR]: ledger([typeEntry()]) });
+    const r = gate.checkFloorAgainstBase({ repoRoot: root, env: floorFixture.PULL_REQUEST_RUN });
+    expect(r.ok).toBe(false);
+    expect(r.status).toBe("unreadable");
+    expect(r.lines[0]).toContain("is not on the base");
   });
 
   it("a stale entry FAILS, and no stale entry passes", () => {
