@@ -78,8 +78,10 @@ jobs:
               # verdaccio/client and runtime-install-gate, and the dashboards
               # vitest config aliases llm and org-write-kernel).
               - 'packages/**'
-              - 'src/lib/**'
-              - 'src/components/**'
+              # src/** as a whole, not two folders of it: the core/extension
+              # border gate reads every product file under src/ and packages/,
+              # so a change under src/app/** must run it too.
+              - 'src/**'
               - 'scripts/audit/**'
               - 'vitest.config.ts'
               - 'tsconfig.json'
