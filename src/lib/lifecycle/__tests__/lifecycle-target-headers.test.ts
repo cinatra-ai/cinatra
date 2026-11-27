@@ -534,7 +534,7 @@ describe("cinatra#3033 — the display that draws the gate's one target", () => 
     expect((await reading()).onlyTargetDisplay).toBeNull();
   });
 
-  it("names no display, and reads no revision, for a gate that pins several targets", async () => {
+  it("names no display for a gate that pins several targets, and reads each pinned revision once for its own header", async () => {
     readReviewGate.mockResolvedValue(
       gate([
         { artifactId: "art-1", representationRevisionId: "rev_post" },
@@ -544,8 +544,14 @@ describe("cinatra#3033 — the display that draws the gate's one target", () => 
     const result = await reading();
     expect(result.complete).toBe(true);
     expect(result.onlyTargetDisplay).toBeNull();
-    expect(revisionMember).not.toHaveBeenCalled();
-    expect(resolveMount).not.toHaveBeenCalled();
+    // Every header names the renderer of its own pinned revision where that
+    // display declares one (cinatra#3092), so each pin's revision and display
+    // are read once; the one-target display stays the one-target gate's.
+    expect(revisionMember.mock.calls).toEqual([
+      ["art-1", "rev_post"],
+      ["art-2", "rev_picture"],
+    ]);
+    expect(resolveMount).toHaveBeenCalledTimes(2);
   });
 
   it("names no display when the one target cannot be read", async () => {

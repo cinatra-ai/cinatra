@@ -757,6 +757,16 @@ export function reviewTargetHeaderDriver(
         );
         await expect(tag).toHaveText(artifactKindLabelFor(seed.objectType));
         await expect(header).toContainText(seed.objectType);
+        // "… the identity line, which also names the one renderer …"
+        // (lifecycle-cards §XIII.7): drawn only where the display declares
+        // it, and nowhere else.
+        const drawnBy = header.locator("[data-review-target-drawn-by]");
+        if (seed.display) {
+          await expect(drawnBy).toHaveCount(1);
+          await expect(drawnBy).toHaveText(`drawn by ${seed.display.drawnBy} ·`);
+        } else {
+          await expect(drawnBy).toHaveCount(0);
+        }
         // "… the pinned representation revision (shown as a mono revision id
         // with a pinned marker) …". Both readings are derived through the
         // projection section the product draws with: the revision the header
@@ -779,7 +789,7 @@ export function reviewTargetHeaderDriver(
         // `reviewTargetRowFacts` against the harness's fixed instant, so this
         // asserts the shipped chain composer → component and not a fact the
         // fixture handed the component to print back.
-        for (const fact of reviewTargetRowFacts(seed.row, now)) {
+        for (const fact of reviewTargetRowFacts(seed.row, now, seed.display?.facts ?? null)) {
           await expect(header).toContainText(fact);
         }
         // "The header is inert: it exposes no edit control and no revision

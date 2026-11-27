@@ -45,14 +45,14 @@
 // (`ownerName`), never the worded fact: the type word, the colon and the
 // visibility are still worded by the product.
 //
-// ONE DRAWN READING THIS WAVE REPORTS RATHER THAN ASSERTS, because the shipped
-// composer has no reading for it and a drivers wave does not change product
-// code:
-//   • the CMS page's PLATFORM and page ADDRESS. Its drawn identity line carries
-//     both; `reviewTargetRowFacts` composes owner level, visibility, MIME and
-//     updated time and nothing else, for every kind alike. There is no product
-//     slot to bind them to, so this row seeds none and the two facts stay on the
-//     wave's readiness list.
+// WHAT A DISPLAY SAYS OF ITSELF IS ITS OWN DECLARATION, AND A ROW MAY CARRY IT
+// (cinatra#3092). The CMS page's drawn identity line names the renderer that
+// drew it, the PLATFORM after the revision and the page ADDRESS at its close
+// (lifecycle-cards §XIII.7). Those come from the display's module, never from
+// the stored row, and the server composer reads them generically through the
+// artifact page's own identity leaf. So the row seeds what that module would
+// declare (`display`), and the product's own `reviewTargetRowFacts` places the
+// facts on the line; the driver asserts the composed line.
 //
 // THE TYPE ID IS A STAND-IN VENDOR ID, and it has to be. `objectType` is row
 // data an artifact carries, not a registry key: nothing here looks it up, and
@@ -128,6 +128,13 @@ export type LifecycleReviewTargetHeaderSeed = {
   objectType: string;
   revisionId: string;
   row: LifecycleReviewTargetHeaderRow;
+  /** What the display that draws the pinned revision declares of itself, as
+   *  its module's `rendererName` and `identityFacts` would; absent for a
+   *  display that declares nothing. */
+  display?: {
+    drawnBy: string;
+    facts: { revision: string[]; closing: string[] };
+  };
 };
 
 export type LifecycleReviewTargetHeaderFixture = {
@@ -263,12 +270,11 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
     },
     {
       // The CMS page. Its drawn identity line is the one in this family that
-      // carries a PLATFORM and the page ADDRESS among the row facts. The shipped
-      // composer has no reading for either — it composes owner level,
-      // visibility, MIME and updated time for every kind alike — so this row
-      // seeds neither and the driver asserts neither. Both are on the wave's
-      // readiness list, where a missing product reading belongs; approximating
-      // them through a hand-written fact would only hide the gap. The header
+      // names its renderer and carries a PLATFORM and the page ADDRESS: the
+      // display declares them, so the row seeds that declaration under the
+      // stand-in vendor scope, and the product composes the line from it
+      // ("… · drawn by … · revision rev_c410… · pinned · WordPress · Team:
+      // Growth · Private · acme.example/pricing", §XIII.7). The header
       // itself is the same pinned, inert header as every other kind, and what is
       // particular to this one sits below it in the embedded page and the changed
       // excerpts, which is representation and does not ship. Its `open-in-cms`
@@ -286,6 +292,10 @@ export const LIFECYCLE_REVIEW_TARGET_HEADER_FIXTURES: readonly LifecycleReviewTa
             visibility: "private",
             mime: "text/html",
             updatedAt: "2026-09-02T11:52:00.000Z",
+          },
+          display: {
+            drawnBy: "@acme/cms-page:page-diff",
+            facts: { revision: ["WordPress"], closing: ["acme.example/pricing"] },
           },
         },
       ],
