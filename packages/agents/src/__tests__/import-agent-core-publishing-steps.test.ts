@@ -1,3 +1,4 @@
+// red-first-expect: agent.json not found
 import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
  * cinatra#4150: importAgentTemplateCore (the loader and ZIP path) writes the

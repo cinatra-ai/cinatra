@@ -1,3 +1,4 @@
+// red-first-expect: agent.json not found
 /**
  * cinatra#2044 GAP 2, hop 1 of 2 — `ensureAgentPackageFromGitFile` must carry the
  * sibling `package.json#cinatra.lifecycle` block through the synthesized import
