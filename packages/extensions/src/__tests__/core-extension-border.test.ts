@@ -619,6 +619,7 @@ type FloorFixture = {
   PULL_REQUEST_RUN: Record<string, string>;
   UNREADABLE_BASE_RUN: Record<string, string>;
   envWithoutBase: (env?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
+  fixtureGit: (root: string, args: string[]) => string;
 };
 
 const floorFixture: FloorFixture = (await import(
@@ -725,29 +726,30 @@ describe("core/extension border — the floor is compared with the base branch",
 // reads resolved types with the TypeScript checker, so each case below writes
 // a declaration and asks what the checker makes of it.
 describe("core/extension border — a port member does not take an untyped input", () => {
-  function portDetails(declarations: string): string[] {
+  function portFindings(declarations: string): Finding[] {
     const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
     try {
       writeFileSync(
         path.join(dir, "host-context.ts"),
         `${declarations}\nexport type ExtensionHostContext = { jobs: JobsPort };\n`,
       );
-      return gate.portMemberFindings({ repoRoot: dir, file: "host-context.ts" }).map((f) => f.detail);
+      return gate.portMemberFindings({ repoRoot: dir, file: "host-context.ts" });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }
+  const portDetails = (declarations: string) => portFindings(declarations).map((f) => f.detail);
 
   it("reports a method that takes an unknown input, name or no name", () => {
     expect(portDetails("type JobsPort = { run(jobName: string, input: unknown): void; ping(input: any): void };")).toEqual([
-      "JobsPort.run",
-      "JobsPort.ping",
+      "JobsPort.run(input)",
+      "JobsPort.ping(input)",
     ]);
   });
 
   it("reports a nullable function property", () => {
     expect(portDetails("type JobsPort = { run: ((jobName: string, input: unknown) => void) | null };")).toEqual([
-      "JobsPort.run",
+      "JobsPort.run(input)",
     ]);
   });
 
@@ -756,7 +758,7 @@ describe("core/extension border — a port member does not take an untyped input
       portDetails(
         "interface UnsafePort { run(input: object): void }\ninterface JobsPort extends UnsafePort {}",
       ),
-    ).toEqual(["JobsPort.run"]);
+    ).toEqual(["JobsPort.run(input)"]);
   });
 
   it("reports an unconstrained type parameter, and one constrained to unknown", () => {
@@ -764,7 +766,31 @@ describe("core/extension border — a port member does not take an untyped input
       portDetails(
         "type JobsPort = { set<T = unknown>(key: string, value: T): void; put<T extends unknown>(value: T): void };",
       ),
-    ).toEqual(["JobsPort.set", "JobsPort.put"]);
+    ).toEqual(["JobsPort.set(value)", "JobsPort.put(value)"]);
+  });
+
+  it("names every untyped parameter in the key, sorted", () => {
+    expect(portDetails("type JobsPort = { run(payload: any, jobName: string, input: unknown): void };")).toEqual([
+      "JobsPort.run(input,payload)",
+    ]);
+  });
+
+  it("names every untyped parameter in the key, so one more is a violation and not the listed key", () => {
+    const listed = new Set(portFindings("type JobsPort = { run(input: unknown, payload: string): void };").map(gate.keyOf));
+    const widened = portFindings("type JobsPort = { run(input: unknown, payload: any): void };");
+    expect(gate.violationsOf(widened, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input,payload)"]);
+  });
+
+  it("reports a member whose own type is any, unknown or object, keyed without a parameter list", () => {
+    expect(portDetails("type JobsPort = { run: any; data: unknown; opts: object | null; ok: string };")).toEqual([
+      "JobsPort.run",
+      "JobsPort.data",
+      "JobsPort.opts",
+    ]);
+  });
+
+  it.each(["any", "unknown", "object"])("reports a port whose own type is %s, keyed by the port", (own) => {
+    expect(portDetails(`type JobsPort = ${own};`)).toEqual(["jobs"]);
   });
 
   it("leaves a typed parameter, a constrained type parameter and a reduced type alone", () => {
@@ -784,7 +810,7 @@ describe("core/extension border — a port member does not take an untyped input
   });
 
   it("finds the standing members of the real port declarations", () => {
-    expect(gate.portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set");
+    expect(gate.portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set(value)");
   });
 
   // The first recording: an entry of this rule is not growth when its member
@@ -803,9 +829,9 @@ describe("core/extension border — a port member does not take an untyped input
     afterEach(() => {
       while (fixtures.length) fixtures.pop()?.cleanup();
     });
-    function check(baseMembers: string, headMembers: string, entries: unknown[]) {
+    function check(baseMembers: string, headMembers: string, entries: unknown[], baseEntries: unknown[] = []) {
       const f = floorFixture.makeFloorRepo({
-        base: { [FLOOR]: { entries: [] }, [ROOT]: PORTS(baseMembers) },
+        base: { [FLOOR]: { entries: baseEntries }, [ROOT]: PORTS(baseMembers) },
         head: { [FLOOR]: { entries }, [ROOT]: PORTS(headMembers) },
       });
       fixtures.push(f);
@@ -813,24 +839,53 @@ describe("core/extension border — a port member does not take an untyped input
     }
 
     it("admits an entry whose member stood on the base", () => {
-      const r = check("run(input: unknown): void;", "run(input: unknown): void;", [entry("run")]);
+      const r = check("run(input: unknown): void;", "run(input: unknown): void;", [entry("run(input)")]);
       expect(r.ok).toBe(true);
       expect(r.status).toBe("held");
     });
 
     it("refuses an entry whose member the same change adds", () => {
       const r = check("run(input: unknown): void;", "run(input: unknown): void; add(input: unknown): void;", [
-        entry("run"),
-        entry("add"),
+        entry("run(input)"),
+        entry("add(input)"),
       ]);
       expect(r.ok).toBe(false);
-      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.add`]);
+      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.add(input)`]);
     });
 
     it("refuses an entry of a member the base never had", () => {
-      const r = check("", "", [entry("run")]);
+      const r = check("", "", [entry("run(input)")]);
       expect(r.ok).toBe(false);
-      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.run`]);
+      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.run(input)`]);
     });
+
+    it("reads the standard library from disk, so a base member typed Record is not an untyped one", () => {
+      // The real layout: a source tree the base commit tracks, and an untracked
+      // node_modules (the typescript library the checker reads) inside the checkout.
+      // The base commit lives in a fixture repository; its objects are lent to
+      // the checkout through the alternates variable, nothing is written to it.
+      const logger = (fields: string) =>
+        `type LoggerPort = { info(msg: string, fields?: ${fields}): void };\nexport type ExtensionHostContext = { logger: LoggerPort };\n`;
+      const f = floorFixture.makeFloorRepo({
+        base: { [FLOOR]: { entries: [] }, [ROOT]: logger("Record<string, number>") },
+        head: {},
+      });
+      fixtures.push(f);
+      const base = floorFixture.fixtureGit(f.root, ["rev-parse", "refs/remotes/origin/main"]).trim();
+      const saved = process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+      process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = path.join(f.root, ".git", "objects");
+      try {
+        const r = gate.checkFloorAgainstBase({
+          repoRoot: REPO_ROOT,
+          env: { CORE_EXTENSION_BORDER_BASE: base },
+          headFloor: { entries: [{ ...entry("info(fields)"), key: `${ROOT}::LoggerPort.info(fields)` }] },
+        });
+        expect(r.status).toBe("grew");
+        expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::LoggerPort.info(fields)`]);
+      } finally {
+        if (saved === undefined) delete process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
+        else process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = saved;
+      }
+    }, 60_000);
   });
 });

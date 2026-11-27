@@ -250,32 +250,32 @@
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(payload)",
       "reason": "The payload of a job a pack enqueues is an untyped value, and the host casts the job name to its own job-name type; no declaration types either. Stood on main when the rule landed (cinatra#4872)."
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(input)",
       "reason": "The input a pack passes to a host primitive is an untyped value, and the host forwards it to its self-invoker; the port itself types nothing. Stood on main when the rule landed (cinatra#4872)."
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(value)",
       "reason": "The value of a write is an unconstrained type parameter, so the port types no record a pack writes. Stood on main when the rule landed (cinatra#4872)."
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(value)",
       "reason": "The value of a set is an unconstrained type parameter, and the host stores any value under the key; the port types no setting. Stood on main when the rule landed (cinatra#4872)."
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(surface)",
       "reason": "A pack registers a settings surface as an untyped value, and the host stores it as received; the port types no surface. Stood on main when the rule landed (cinatra#4872)."
     },
     {
       "rule": "untyped-port-input",
-      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(surface)",
       "reason": "A pack registers a setup surface as an untyped value, and the host stores it as received; the port types no surface. Stood on main when the rule landed (cinatra#4872)."
     }
   ]

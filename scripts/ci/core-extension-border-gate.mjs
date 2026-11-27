@@ -417,6 +417,9 @@ export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", 
 
 export const PORT_RULE = "untyped-port-input";
 
+/** The checker's "cannot find name / global type" codes. */
+const CANNOT_FIND_CODES = new Set([2304, 2318, 2583, 2584]);
+
 const PORT_COMPILER_OPTIONS = {
   noEmit: true,
   strict: true,
@@ -427,14 +430,18 @@ const PORT_COMPILER_OPTIONS = {
   moduleResolution: ts.ModuleResolutionKind.Bundler,
 };
 
-/** A compiler host that reads the repository's own files at a git revision. */
+/** A compiler host that reads the files the base revision TRACKS from git.
+ *  Everything under a `node_modules` directory is no tracked file (the
+ *  TypeScript library files are in it) and is read from disk. */
 function hostAtRef(repoRoot, ref) {
   const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
   const outside = { ...host };
   const cache = new Map();
   const rel = (f) => {
     const r = relative(repoRoot, f);
-    return r.startsWith("..") || isAbsolute(r) ? null : r.split(sep).join("/");
+    if (r.startsWith("..") || isAbsolute(r)) return null;
+    const parts = r.split(sep);
+    return parts.includes("node_modules") ? null : parts.join("/");
   };
   const show = (r) => {
     if (!cache.has(r)) {
@@ -492,28 +499,53 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
       `[core-extension-border] the port root ${type} is not exported by ${file}${ref ? ` at ${ref}` : ""} — the rule fails closed rather than reading no port`,
     );
   }
+  // FAIL CLOSED. A program that cannot read its standard library resolves
+  // `Record` and `Promise` as `any`, so it would report (or, on a base, admit)
+  // what is not there. Such a program is refused, never read.
+  if (
+    !program.getSourceFiles().some((f) => program.isSourceFileDefaultLibrary(f)) ||
+    program.getGlobalDiagnostics().length > 0 ||
+    program.getSemanticDiagnostics(sourceFile).some((d) => CANNOT_FIND_CODES.has(d.code))
+  ) {
+    throw new Error(
+      `[core-extension-border] the program over ${file}${ref ? ` at ${ref}` : ""} cannot resolve its standard library — the rule fails closed rather than reading unresolved types`,
+    );
+  }
   const typeOf = (symbol) => checker.getNonNullableType(checker.getTypeOfSymbol(symbol));
   const out = [];
   const counts = new Map();
+  const add = (decl, detail, message) => {
+    const declFile = decl ? relative(repoRoot, decl.getSourceFile().fileName).split(sep).join("/") : file;
+    const line = decl ? decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1 : 1;
+    out.push(finding(PORT_RULE, declFile.startsWith("..") ? file : declFile, line, occurrenceDetail(counts, PORT_RULE, detail), message));
+  };
   for (const portProp of checker.getPropertiesOfType(checker.getDeclaredTypeOfSymbol(rootSymbol))) {
     const portType = typeOf(portProp);
+    // A port that is itself untyped has no members to read: it is the finding.
+    if (isUntypedType(checker.getTypeOfSymbol(portProp)) || isUntypedType(portType)) {
+      add(portProp.declarations?.[0], portProp.name, "a host port is itself typed any, unknown or object, so it bounds nothing a manifest declares (cinatra#4872)");
+      continue;
+    }
     const named = portType.aliasSymbol?.name ?? portType.getSymbol()?.name;
     const port = named && !named.startsWith("__") ? named : portProp.name;
     for (const member of checker.getPropertiesOfType(portType)) {
+      // A member that is itself typed any, unknown or object has no signature
+      // to read, and is the finding.
+      if (isUntypedType(checker.getTypeOfSymbol(member)) || isUntypedType(typeOf(member))) {
+        add(member.declarations?.[0], `${port}.${member.name}`, "a host port member is itself typed any, unknown or object, so it bounds nothing a manifest declares (cinatra#4872)");
+        continue;
+      }
       const untyped = typeOf(member)
         .getCallSignatures()
         .flatMap((sig) => sig.getParameters().filter((p) => isUntypedType(checker.getTypeOfSymbol(p))).map((p) => p.name));
       if (untyped.length === 0) continue;
-      const decl = member.declarations?.[0];
-      const declFile = decl ? relative(repoRoot, decl.getSourceFile().fileName).split(sep).join("/") : file;
-      out.push(
-        finding(
-          PORT_RULE,
-          declFile.startsWith("..") ? file : declFile,
-          decl ? decl.getSourceFile().getLineAndCharacterOfPosition(decl.getStart()).line + 1 : 1,
-          occurrenceDetail(counts, PORT_RULE, `${port}.${member.name}`),
-          `a host port member takes an untyped input (${[...new Set(untyped)].join(", ")}: any, unknown, object or an unconstrained type parameter); the port bounds nothing a manifest declares (cinatra#4872)`,
-        ),
+      // The untyped parameter names are in the key: one more untyped parameter
+      // of a listed member is a new key, never the listed one.
+      const names = [...new Set(untyped)].sort().join(",");
+      add(
+        member.declarations?.[0],
+        `${port}.${member.name}(${names})`,
+        `a host port member takes an untyped input (${names}: any, unknown, object or an unconstrained type parameter); the port bounds nothing a manifest declares (cinatra#4872)`,
       );
     }
   }

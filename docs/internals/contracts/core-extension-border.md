@@ -60,14 +60,21 @@ checker. Each property of `ExtensionHostContext` is a port. For each property of
 property alike. A member is one finding when a parameter of one of its signatures
 resolves to `any`, `unknown`, the non-primitive `object`, or a type parameter whose
 constraint is absent or is one of those. Whether the member also takes a name does not
-matter. The finding is the member, `<port type>.<member>`, once, however many overloads it has.
+matter. The finding is the member once, however many overloads it has, and its key names the
+untyped parameters, sorted and comma-joined: `HostJobsPort.enqueue(payload)`. One more untyped
+parameter of a listed member is therefore a new key. A port that is itself typed `any`,
+`unknown` or `object` has no members to read; it is one finding, keyed by the port property
+(`jobs`). A member whose own type is `any`, `unknown` or `object` (`run: any`) has no
+signature to read; it is one finding keyed `<port type>.<member>`, with no parameter list.
 
 The members that stood on main when the rule landed are ledger entries with their
 reasons, written once by `--write-baseline`; afterwards the rule is shrink-only like
 the others. The base guard admits a new entry of this rule only when its member is a
-finding on the BASE tree: the head script reads the files of the base revision from git
-and lists what it finds there, so a declaration added in the same change cannot be
-listed. A base that cannot be read, or one without the root, admits nothing.
+finding on the BASE tree: the head script reads the files the base revision tracks from
+git (everything under `node_modules`, TypeScript's library files included, from disk) and
+lists what it finds there, so a declaration added in the same change cannot be listed. A
+program that cannot resolve its standard library or finds the root file's global types
+missing is refused, and a base that cannot be read, or one without the root, admits nothing.
 
 Stated limits. The rule reads what the checker resolves and nothing inside it: an object
 literal, a `Record<string, unknown>`, an array, a union or an intersection that the checker
