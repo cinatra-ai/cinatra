@@ -261,13 +261,25 @@ describe("the WordPress publish pack reads the revision the review approved", ()
       reviewDecision: resume.userResponse,
       postArtifactId: START.postArtifactId,
     };
+    // The record the flow's record read hands on (the post's record as
+    // artifacts_get answered it). The step's template renders it as JSON text
+    // through `| tojson`, behind a comment that names the input.
+    const records: Record<string, unknown> = {
+      postRecord: { artifactId: START.postArtifactId, title: "The post" },
+    };
     const fillFrom = (value: unknown): unknown => {
       if (typeof value === "string") {
-        return value.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
-          const v = values[name];
-          if (v === undefined) throw new Error(`no value for ${name}`);
-          return v;
-        });
+        return value
+          .replace(/\{#[\s\S]*?#\}/g, "")
+          .replace(/\{\{\s*(\w+)\s*\|\s*tojson\s*\}\}/g, (_m, name: string) => {
+            if (!(name in records)) throw new Error(`no record for ${name}`);
+            return JSON.stringify(records[name]);
+          })
+          .replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
+            const v = values[name];
+            if (v === undefined) throw new Error(`no value for ${name}`);
+            return v;
+          });
       }
       if (value && typeof value === "object" && !Array.isArray(value)) {
         return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, fillFrom(v)]));
@@ -296,6 +308,7 @@ describe("the WordPress publish pack reads the revision the review approved", ()
       ...successor,
       text: "# The regenerated title\n\nThe regenerated words.",
       truncated: false,
+      title: "The post",
     });
   });
 });

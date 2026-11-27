@@ -8,8 +8,7 @@
       "@cinatra-ai/context-selection-agent": 1
     },
     "docker/wayflow/tests/fixtures/publish_gate_parity.json": {
-      "@cinatra-ai/blog-linkedin-publish-agent": 1,
-      "@cinatra-ai/blog-wordpress-publish-agent": 1
+      "@cinatra-ai/blog-linkedin-publish-agent": 1
     },
     "docker/wayflow/tests/fixtures/regenerate-segment-blog-pipeline.json": {
       "@cinatra-ai/blog-draft-writer-agent": 5,

@@ -20,7 +20,8 @@
  *   - blog-pipeline: inherits the children's fix — its 3 nested findings clear.
  * All six now both MOUNT in WayFlow's pyagentspec loader (verified live) and
  * produce zero validator findings, so none of them has an entry here.
- * The one entry is blog-wordpress-publish-agent (cinatra#4150, OAS-RUNTIME-013).
+ * The list is empty: the last entry, blog-wordpress-publish-agent
+ * (cinatra#4150, OAS-RUNTIME-013), was deleted in the PR that pinned its cure.
  * `oas-runtime-invariants.test.ts` enforces that any resolved entry is deleted
  * (anti-rot), so re-adding a stale entry for a now-clean agent fails CI.
  *
@@ -45,18 +46,7 @@ export type AllowlistEntry = {
   reason: string;
 };
 
-export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {
-  // cinatra#4150: the pinned pack's review step does not surface its targets
-  // input, so the run opens the review with no artifact. Delete this entry in
-  // the PR that pins the pack's cure.
-  "blog-wordpress-publish-agent": {
-    phase: "cinatra#4150",
-    expectedCodes: ["OAS-RUNTIME-013"],
-    expectedBlockerCount: 1,
-    expectedLocations: ['Review step "review_post" names its targets input "reviewTargets"'],
-    reason: "the pinned pack's review step does not surface its targets input",
-  },
-};
+export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {};
 
 /**
  * Asserts that structured `findings` for `slug` match the documented

@@ -16,7 +16,11 @@
  * review_post, marked cinatra.artifactReview) before the words are read, and
  * the publish node is the declared publishing step (publishes: true +
  * publishRows), so the host's publish card is the one stop in front of the
- * outward call. The page's title comes only from the reviewed words.
+ * outward call. The post's record is read before the review (read_post_record,
+ * from the start input) and the read step behind the review answers the page's
+ * title as plain text. The HTML of the page is written by a model step that
+ * follows a skill (write_post_html, cinatra#4893): the card shows title, words
+ * and HTML, and the publish step sends that HTML unchanged.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -92,8 +96,12 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
       unknown
     >;
     expect(publishMeta.publishes).toBe(true);
-    // The card shows the words that go out; they also carry the page's title.
-    expect(publishMeta.publishRows).toEqual([{ label: "Post text", input: "postText" }]);
+    // The card shows the title, the approved words and the HTML that goes out.
+    expect(publishMeta.publishRows).toEqual([
+      { label: "Title", input: "postTitle" },
+      { label: "Post text", input: "postText" },
+      { label: "Post HTML", input: "postHtml" },
+    ]);
     // The write-back is NOT a publishing step: one publish card per run.
     const writeMeta = (components.write_address.metadata as Record<string, unknown>).cinatra as Record<
       string,
@@ -104,6 +112,17 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
 
   it("Pin 4b: the host review of the pinned revision comes before anything is read for publishing", () => {
     type Ref = { $component_ref: string };
+    const targetEdgesInto = (id: string) =>
+      (
+        oas.data_flow_connections as Array<{
+          source_node: Ref;
+          source_output: string;
+          destination_node: Ref;
+          destination_input: string;
+        }>
+      )
+        .filter((e) => e.destination_node.$component_ref === id)
+        .map((e) => `${e.source_node.$component_ref}.${e.source_output}->${e.destination_input}`);
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const gather = components.gather_review_target;
     expect(gather.component_type).toBe("ApiNode");
@@ -143,13 +162,20 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(control).toEqual([
       "start->gather_review_target",
       "gather_review_target->review_post",
-      "review_post->read_post_text",
-      "read_post_text->publish",
+      "review_post->read_post_record",
+      "read_post_record->read_post_text",
+      "read_post_text->write_post_html",
+      "write_post_html->publish",
       "publish->write_address",
       "write_address->end",
     ]);
-    // The old record read is gone: nothing of the artifact's current state is read.
-    expect(components.read_post_record).toBeUndefined();
+    // The one record read behind the review takes the artifact under review
+    // from the start input, and only the read step behind it takes that record.
+    const recordData = components.read_post_record.data as { tool?: string };
+    expect(recordData.tool).toBe("artifacts_get");
+    expect(targetEdgesInto("read_post_record")).toContain("start.postArtifactId->postArtifactId");
+    // No second step runs the pack's tool: the flow has one extension_tool step.
+    expect(components.check_review).toBeUndefined();
   });
 
   it("Pin 4c: the words read for publishing are the revision the review approved, not the one the run started with", () => {
@@ -169,6 +195,7 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     expect(readData.input?.input).toEqual({
       reviewDecision: "{{ reviewDecision }}",
       artifactId: "{{ postArtifactId }}",
+      postRecord: "{# pyagentspec-input-hint: {{ postRecord }} #}{{ postRecord | tojson }}",
     });
     const tools = ((pkg.cinatra ?? {}) as { tools?: unknown }).tools;
     expect(tools).toContainEqual({
@@ -187,10 +214,15 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
         `${e.source_node.$component_ref}.${e.source_output}->${e.destination_node.$component_ref}.${e.destination_input}`,
     );
     expect(edges).toContain("review_post.reviewDecision->read_post_text.reviewDecision");
+    expect(edges).toContain("read_post_record.artifact->read_post_text.postRecord");
     expect(edges).toContain("read_post_text.artifactId->publish.postArtifactId");
     expect(edges).toContain(
       "read_post_text.representationRevisionId->publish.postRepresentationRevisionId",
     );
+    // The HTML the person sees on the card is the HTML the publish step sends:
+    // it is written from the approved words and handed to the publish step.
+    expect(edges).toContain("read_post_text.text->write_post_html.postText");
+    expect(edges).toContain("write_post_html.postHtml->publish.postHtml");
     expect(edges.filter((e) => e.startsWith("start.postRepresentationRevisionId->"))).toEqual([
       "start.postRepresentationRevisionId->gather_review_target.postRepresentationRevisionId",
     ]);
@@ -273,21 +305,31 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
     // call is gone.
     expect(skill).toContain("you run only after the person chose Publish there");
     expect(skill).not.toContain("blog_post_publish_wordpress_delete");
+    // The body is the HTML the skill step wrote, sent unchanged.
+    expect(skill).toContain("`postHtml: string` — THE BODY YOU PUBLISH");
+    expect(skill).toContain("you convert nothing yourself");
+    expect(skill).toContain("When `postHtml` is empty, there is no body the person saw");
+    // The step that writes the HTML follows the one skill the pack depends on.
+    const dependencies = ((pkg.cinatra ?? {}) as { dependencies?: Array<{ kind: string }> }).dependencies ?? [];
+    expect(dependencies.filter((d) => d.kind === "skill")).toHaveLength(1);
   });
 
-  it("takes the page's title only from the reviewed words, never from the artifact's current state", () => {
-    expect(skill).toContain("Take the page's title from the first heading line of `postText`");
-    expect(skill).toContain("you never take a title from the artifact's current state");
-    // No heading in the pinned words: nothing is published.
-    expect(skill).toContain("When `postText` carries no heading line");
-    // The publish step is handed no record of the artifact at all.
+  it("takes the page's title only from the title the publish card shows, never from the artifact's current state", () => {
+    expect(skill).toContain("The page's title is `postTitle`, exactly as given");
+    expect(skill).toContain("never take one from a section heading of `postText`");
+    // No title on the card: nothing is published.
+    expect(skill).toContain("An empty `postTitle` means there is no title the person saw");
+    // The publish step is handed no record of the artifact at all, only the
+    // title, the words and the HTML the card shows.
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const inputs = (components.publish.inputs as Array<{ title: string }>).map((i) => i.title).sort();
     expect(inputs).toEqual([
       "instanceId",
       "postArtifactId",
+      "postHtml",
       "postRepresentationRevisionId",
       "postText",
+      "postTitle",
       "truncated",
     ]);
   });
