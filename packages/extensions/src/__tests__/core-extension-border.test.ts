@@ -791,14 +791,14 @@ describe("core/extension border — a port member does not take an untyped input
 
   it("reports a method that takes an unknown input, name or no name", () => {
     expect(portDetails("type JobsPort = { run(jobName: string, input: unknown): void; ping(input: any): void };")).toEqual([
-      "JobsPort.run(input)",
-      "JobsPort.ping(input)",
+      "JobsPort.run(#2)",
+      "JobsPort.ping(#1)",
     ]);
   });
 
   it("reports a nullable function property", () => {
     expect(portDetails("type JobsPort = { run: ((jobName: string, input: unknown) => void) | null };")).toEqual([
-      "JobsPort.run(input)",
+      "JobsPort.run(#2)",
     ]);
   });
 
@@ -807,7 +807,7 @@ describe("core/extension border — a port member does not take an untyped input
       portDetails(
         "interface UnsafePort { run(input: object): void }\ninterface JobsPort extends UnsafePort {}",
       ),
-    ).toEqual(["JobsPort.run(input)"]);
+    ).toEqual(["JobsPort.run(#1)"]);
   });
 
   it("reports an unconstrained type parameter, and one constrained to unknown", () => {
@@ -815,15 +815,16 @@ describe("core/extension border — a port member does not take an untyped input
       portDetails(
         "type JobsPort = { set<T = unknown>(key: string, value: T): void; put<T extends unknown>(value: T): void };",
       ),
-    ).toEqual(["JobsPort.set(value)", "JobsPort.put(value)"]);
+    ).toEqual(["JobsPort.set(#2)", "JobsPort.put(#1)"]);
   });
 
   it.each([
-    ["an optional object", "run(input?: object): void", "JobsPort.run(input)"],
-    ["an object or null", "run(input: object | null): void", "JobsPort.run(input)"],
-    ["an unknown or undefined", "run(input: unknown | undefined): void", "JobsPort.run(input)"],
-    ["a rest of unknown", "run(...args: unknown[]): void", "JobsPort.run(args)"],
-    ["an optional unconstrained type parameter", "run<T>(input?: T): void", "JobsPort.run(input)"],
+    ["an optional object", "run(input?: object): void", "JobsPort.run(#1)"],
+    ["an object or null", "run(input: object | null): void", "JobsPort.run(#1)"],
+    ["an unknown or undefined", "run(input: unknown | undefined): void", "JobsPort.run(#1)"],
+    ["a rest of unknown", "run(...args: unknown[]): void", "JobsPort.run(#1)"],
+    ["a rest of unknown after a typed parameter", "run(name: string, ...args: unknown[]): void", "JobsPort.run(#2)"],
+    ["an optional unconstrained type parameter", "run<T>(input?: T): void", "JobsPort.run(#1)"],
   ])("reports %s", (_name, member, key) => {
     expect(portDetails(`type JobsPort = { ${member} };`)).toEqual([key]);
   });
@@ -839,22 +840,22 @@ describe("core/extension border — a port member does not take an untyped input
   it("reads each function of a union of functions, and each port of a union of ports", () => {
     expect(
       portDetails("type JobsPort = { run: ((a: string) => void) | ((b: unknown) => void) | null };"),
-    ).toEqual(["JobsPort.run(b)"]);
+    ).toEqual(["JobsPort.run(#1)"]);
     expect(
       portFindings(
         "type A = { run(input: unknown): void };\ntype B = { stop(input: string): void };",
         "export type ExtensionHostContext = { jobs: A | B | null };",
       ).map((f) => f.detail),
-    ).toEqual(["A.run(input)"]);
+    ).toEqual(["A.run(#1)"]);
   });
 
   it("reads a constructor like a call, behind a `new ` prefix in the key", () => {
     expect(portDetails("type JobsPort = { Factory: new (input: unknown) => object };")).toEqual([
-      "JobsPort.Factory(new input)",
+      "JobsPort.Factory(new #1)",
     ]);
     expect(
       portDetails("type JobsPort = { make: { (a: unknown): void; new (b: any, c: string): void; new (d: string): void } };"),
-    ).toEqual(["JobsPort.make(a|new b)"]);
+    ).toEqual(["JobsPort.make(#1|new #1)"]);
     expect(portDetails("type JobsPort = { Factory: new (input: string) => object };")).toEqual([]);
   });
 
@@ -869,7 +870,7 @@ describe("core/extension border — a port member does not take an untyped input
     it("still reports the port beside them, and only the port", () => {
       expect(
         portFindings("type JobsPort = { run(input: unknown): void };", root("jobs: JobsPort")).map((f) => f.detail),
-      ).toEqual(["JobsPort.run(input)"]);
+      ).toEqual(["JobsPort.run(#1)"]);
     });
 
     it("never walks a lib type behind a port: an intersection with Map, an array", () => {
@@ -877,7 +878,7 @@ describe("core/extension border — a port member does not take an untyped input
         portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs: JobsPort & Map<string, string>; tags: string[] };").map(
           (f) => f.detail,
         ),
-      ).toEqual(["jobs.run(input)"]);
+      ).toEqual(["jobs.run(#1)"]);
     });
 
     it("reads a port wrapped in a utility type through its members", () => {
@@ -885,7 +886,7 @@ describe("core/extension border — a port member does not take an untyped input
         portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs: Partial<JobsPort> };").map(
           (f) => f.detail,
         ),
-      ).toEqual(["jobs.run(input)"]);
+      ).toEqual(["jobs.run(#1)"]);
     });
 
     it("reads an optional port, and an accessor that returns a function", () => {
@@ -893,14 +894,60 @@ describe("core/extension border — a port member does not take an untyped input
         portFindings("type JobsPort = { run(input: unknown): void };", "export type ExtensionHostContext = { jobs?: JobsPort };").map(
           (f) => f.detail,
         ),
-      ).toEqual(["JobsPort.run(input)"]);
+      ).toEqual(["JobsPort.run(#1)"]);
       expect(
         portDetails("interface JobsPort { get run(): (input: unknown) => void }"),
-      ).toEqual(["JobsPort.run(input)"]);
+      ).toEqual(["JobsPort.run(#1)"]);
+    });
+  });
+
+  describe("every place a value can enter a port", () => {
+    it("reads the write type of an accessor, by its set declaration", () => {
+      expect(portDetails("interface JobsPort { get value(): string; set value(v: unknown) }")).toEqual([
+        "JobsPort.value(set #1)",
+      ]);
+      expect(portDetails("interface JobsPort { get value(): string; set value(v: string) }")).toEqual([]);
     });
 
-    it("states its limit: a port made of an index signature is not read", () => {
-      expect(portDetails("type JobsPort = { [name: string]: (input: unknown) => void };")).toEqual([]);
+    it("reads a callable port and a constructable port, keyed by the port property", () => {
+      expect(portDetails("type JobsPort = (input: unknown) => void;")).toEqual(["jobs(#1)"]);
+      expect(portDetails("type JobsPort = new (name: string, input: any) => object;")).toEqual(["jobs(new #2)"]);
+      expect(portDetails("type JobsPort = (input: string) => void;")).toEqual([]);
+      // a lib constructor behind a root field is a lib's, not the SDK's
+      expect(portFindings("", "export type ExtensionHostContext = { make: ArrayConstructor };")).toEqual([]);
+    });
+
+    it("reads the type arguments of a generic port interface, and its default", () => {
+      const iface = "interface JobsPort<T = unknown> { set(v: T): void }";
+      expect(portFindings(iface, "export type ExtensionHostContext = { jobs: JobsPort<unknown> };").map((f) => f.detail)).toEqual([
+        "JobsPort.set(#1)",
+      ]);
+      expect(portFindings(iface, "export type ExtensionHostContext = { jobs: JobsPort };").map((f) => f.detail)).toEqual([
+        "JobsPort.set(#1)",
+      ]);
+      expect(portFindings(iface, "export type ExtensionHostContext = { jobs: JobsPort<string> };")).toEqual([]);
+    });
+
+    it("reads an index signature: its function values and its untyped values", () => {
+      expect(portDetails("type JobsPort = { [name: string]: (input: unknown) => void };")).toEqual([
+        "JobsPort[string](#1)",
+      ]);
+      expect(portFindings("", "export type ExtensionHostContext = { bag: Record<string, unknown> };").map((f) => f.detail)).toEqual([
+        "bag[string]",
+      ]);
+      expect(portFindings("", "export type ExtensionHostContext = { bag: Record<string, string>; list: string[] };")).toEqual([]);
+    });
+
+    it("reads a member that holds members, down to three levels", () => {
+      expect(portDetails("type JobsPort = { admin: { run(input: unknown): void } };")).toEqual(["JobsPort.admin.run(#1)"]);
+      expect(portDetails("type JobsPort = { admin: { data: unknown } };")).toEqual(["JobsPort.admin.data"]);
+      // a cycle ends at the type it came from
+      expect(portDetails("interface JobsPort { parent: JobsPort; run(input: unknown): void }")).toEqual(["JobsPort.run(#1)"]);
+    });
+
+    it("states its limits: a this parameter and a parameter that is itself a callback are no input", () => {
+      expect(portDetails("type JobsPort = { run(this: unknown, name: string): void };")).toEqual([]);
+      expect(portDetails("type JobsPort = { on(handler: (payload: unknown) => void): void };")).toEqual([]);
     });
   });
 
@@ -910,26 +957,30 @@ describe("core/extension border — a port member does not take an untyped input
     ]);
   });
 
-  it("names every untyped parameter in the key, sorted", () => {
+  it("names every untyped parameter by position, ascending", () => {
     expect(portDetails("type JobsPort = { run(payload: any, jobName: string, input: unknown): void };")).toEqual([
-      "JobsPort.run(input,payload)",
+      "JobsPort.run(#1,#3)",
     ]);
   });
 
-  it("names every untyped parameter in the key, so one more is a violation and not the listed key", () => {
+  it("keys by position: one more untyped parameter is a new key, a rename is the same key", () => {
     const listed = new Set(portFindings("type JobsPort = { run(input: unknown, payload: string): void };").map(gate.keyOf));
     const widened = portFindings("type JobsPort = { run(input: unknown, payload: any): void };");
-    expect(gate.violationsOf(widened, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input,payload)"]);
+    expect(gate.violationsOf(widened, listed).map((f) => f.detail)).toEqual(["JobsPort.run(#1,#2)"]);
+    const renamed = portFindings("type JobsPort = { run<U>(renamedInput: unknown, other: U): void };");
+    expect(gate.violationsOf(renamed, listed).map((f) => f.detail)).toEqual(["JobsPort.run(#1,#2)"]);
+    const sameTypes = portFindings("type JobsPort = { run(renamed: unknown, text: string): void };");
+    expect(gate.violationsOf(sameTypes, listed)).toEqual([]);
   });
 
   it("carries each untyped signature in the key, so one more overload is a new key", () => {
     const listed = new Set(portFindings("type JobsPort = { run(input: unknown): void };").map(gate.keyOf));
     const overloaded = portFindings("type JobsPort = { run(input: unknown): void; run(input: unknown, n: number): void };");
-    expect(gate.violationsOf(overloaded, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input|input)"]);
+    expect(gate.violationsOf(overloaded, listed).map((f) => f.detail)).toEqual(["JobsPort.run(#1|#1)"]);
     // Only a signature with an untyped parameter counts, in declaration order.
     expect(
       portDetails("type JobsPort = { run(a: unknown): void; run(b: string): void; run(c: any, d: any): void };"),
-    ).toEqual(["JobsPort.run(a|c,d)"]);
+    ).toEqual(["JobsPort.run(#1|#1,#2)"]);
   });
 
   it("reports a member whose own type is any, unknown or object, keyed without a parameter list", () => {
@@ -961,7 +1012,7 @@ describe("core/extension border — a port member does not take an untyped input
   });
 
   it("finds the standing members of the real port declarations", () => {
-    expect(portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set(value)");
+    expect(portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set(#2)");
   });
 
   // The first recording is a closed seed: the keys that stood on main, admitted

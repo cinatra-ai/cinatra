@@ -458,19 +458,25 @@ const partsOf = (checker, type) => {
   return t.isUnion() ? t.types : [t];
 };
 
-/** Every port member (inherited ones included) whose call or construct
- *  signature takes an untyped parameter, one finding per member. A member typed
- *  untyped is the finding itself, and so is a port, and so is the root. Only a
- *  member DECLARED in the SDK's own source directory (the root file's) is read,
- *  never one of a lib or node_modules type, so the identity fields of the root
- *  (`id: string`, `labels: readonly string[]`, `meta: Map<…>`) read as nothing.
- *  The key of a member carries each signature that has an untyped parameter,
- *  calls first and then constructors, each in declaration order: its parameter
- *  names sorted and comma-joined, a constructor's behind `new `, the signatures
- *  joined with `|`: `Port.run(input)`, `Port.run(input|input)` for two overloads,
- *  `Port.Factory(new input)` for a constructor. A rest parameter is read by its
- *  element type. Reads the checkout from disk and nothing from git. A missing
- *  root throws. */
+/** Every place a value enters a port: the parameters of a member's call and
+ *  construct signatures, of a callable or constructable port itself, of a
+ *  setter, and the values of an index signature. One finding per member, port
+ *  or index signature that has an untyped input; a member typed untyped is the
+ *  finding itself, and so is a port, and so is the root. Only what the SDK
+ *  DECLARES is read (a member, a signature or an index signature declared in the
+ *  root file's directory), never one of a lib or node_modules type, so the
+ *  identity fields of the root (`id: string`, `labels: readonly string[]`,
+ *  `meta: Map<…>`) read as nothing. A member that holds members is read down to
+ *  three levels.
+ *
+ *  The key names the place and, per signature that has an untyped parameter, its
+ *  POSITIONS, not its names (a rename changes nothing): `Port.run(#2)`, several
+ *  positions comma-joined `(#1,#3)`, a rest parameter by its own position, a
+ *  constructor behind `new ` and a setter behind `set `, the signatures joined
+ *  with `|` in declaration order, calls first: `Port.run(#1|#1)` for two
+ *  overloads, `Port.Factory(new #1)`, `Port.value(set #1)`. A callable port is
+ *  keyed by its property (`jobs(#1)`), an index signature `Port[string]`. Reads
+ *  the checkout from disk and nothing from git. A missing root throws. */
 export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
   const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
   host.realpath = (p) => p;
@@ -491,8 +497,9 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
     const r = relative(sdkDir, decl.getSourceFile().fileName);
     return !r.startsWith("..") && !isAbsolute(r) && !r.split(sep).includes("node_modules");
   };
-  // A symbol with a declaration outside the SDK's source is a lib or package type's.
-  const fromSdk = (symbol) => !symbol.declarations?.length || symbol.declarations.every(inSdk);
+  // A declaration outside the SDK's source is a lib or package type's; one that
+  // is absent (a mapped type's key) is read.
+  const fromSdk = (decls) => !decls?.length || decls.every(inSdk);
   const out = [];
   const counts = new Map();
   const add = (decl, detail, what) => {
@@ -506,6 +513,58 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
     const rest = p.valueDeclaration && ts.isParameter(p.valueDeclaration) && p.valueDeclaration.dotDotDotToken;
     return (rest && checker.getIndexTypeOfType(t, ts.IndexKind.Number)) || t;
   };
+  // The untyped inputs of a type's own call and construct signatures (a union of
+  // functions one at a time), as `{ prefix, at: [positions], names }`.
+  const inputsOf = (t) =>
+    partsOf(checker, t)
+      .flatMap((c) => [
+        ...c.getCallSignatures().map((sig) => ["", sig]),
+        ...c.getConstructSignatures().map((sig) => ["new ", sig]),
+      ])
+      .filter(([, sig]) => !sig.declaration || inSdk(sig.declaration))
+      .map(([prefix, sig]) => {
+        const hit = sig.getParameters().flatMap((p, i) => (untyped(parameterType(p)) ? [[i + 1, p.name]] : []));
+        return { prefix, at: hit.map(([n]) => n), names: hit.map(([, name]) => name) };
+      });
+  // The write type of an accessor: the parameter of its `set` declaration.
+  const settersOf = (member) =>
+    (member.declarations ?? [])
+      .filter((d) => ts.isSetAccessorDeclaration(d) && d.parameters[0] && untyped(checker.getTypeAtLocation(d.parameters[0])))
+      .map((d) => ({ prefix: "set ", at: [1], names: [d.parameters[0].name.getText()] }));
+  const report = (decl, name, inputs) => {
+    const hits = inputs.filter((i) => i.at.length > 0);
+    if (hits.length === 0) return;
+    const keys = hits.map((i) => `${i.prefix}${i.at.map((n) => `#${n}`).join(",")}`).join("|");
+    const names = [...new Set(hits.flatMap((i) => i.names))].join(", ");
+    add(decl, `${name}(${keys})`, `a host port takes an untyped input (${names}: any, unknown, object or an unconstrained type parameter)`);
+  };
+  const MAX_DEPTH = 3;
+  const walk = (part, label, depth, path) => {
+    if (!(part.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) || path.has(part)) return;
+    const here = new Set(path).add(part);
+    for (const info of checker.getIndexInfosOfType(part)) {
+      if (info.declaration && !inSdk(info.declaration)) continue;
+      const name = `${label}[${checker.typeToString(info.keyType)}]`;
+      if (untyped(info.type)) add(info.declaration, name, "a host port index signature is itself typed any, unknown or object");
+      else report(info.declaration, name, inputsOf(info.type));
+    }
+    for (const member of checker.getPropertiesOfType(part)) {
+      if (!fromSdk(member.declarations)) continue;
+      const memberType = checker.getTypeOfSymbol(member);
+      const name = `${label}.${member.name}`;
+      const where = member.declarations?.[0];
+      // A member that is itself untyped has no signature to read: it is the finding.
+      if (untyped(memberType)) {
+        add(where, name, "a host port member is itself typed any, unknown or object");
+        continue;
+      }
+      const own = inputsOf(memberType);
+      report(where, name, [...own, ...settersOf(member)]);
+      if (depth < MAX_DEPTH && own.length === 0) {
+        for (const inner of partsOf(checker, memberType)) walk(inner, name, depth + 1, here);
+      }
+    }
+  };
   const rootType = checker.getDeclaredTypeOfSymbol(rootSymbol);
   if (untyped(rootType)) {
     add(rootSymbol.declarations?.[0], type, "the port root is itself typed any, unknown or object");
@@ -518,54 +577,30 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
       add(portProp.declarations?.[0], portProp.name, "a host port is itself typed any, unknown or object");
       continue;
     }
+    // A callable or constructable port takes its inputs itself: keyed by the property.
+    report(portProp.declarations?.[0], portProp.name, inputsOf(portType));
     for (const part of partsOf(checker, portType)) {
       // The port is named by the SDK declaration that names it, else by its property.
       const named = [part.aliasSymbol, part.getSymbol()].find(
-        (sym) => sym?.declarations?.length && fromSdk(sym) && !sym.name.startsWith("__"),
+        (sym) => sym?.declarations?.length && fromSdk(sym.declarations) && !sym.name.startsWith("__"),
       );
-      const port = named?.name ?? portProp.name;
-      for (const member of checker.getPropertiesOfType(part)) {
-        if (!fromSdk(member)) continue;
-        const memberType = checker.getTypeOfSymbol(member);
-        // A member that is itself untyped has no signature to read: it is the finding.
-        if (untyped(memberType)) {
-          add(member.declarations?.[0], `${port}.${member.name}`, "a host port member is itself typed any, unknown or object");
-          continue;
-        }
-        const signatures = partsOf(checker, memberType)
-          .flatMap((c) => [
-            ...c.getCallSignatures().map((sig) => ["", sig]),
-            ...c.getConstructSignatures().map((sig) => ["new ", sig]),
-          ])
-          .map(([prefix, sig]) => [prefix, sig.getParameters().filter((p) => untyped(parameterType(p))).map((p) => p.name).sort().join(",")])
-          .filter(([, names]) => names !== "")
-          .map(([prefix, names]) => `${prefix}${names}`);
-        if (signatures.length === 0) continue;
-        // Every untyped signature is in the key, so one more untyped parameter,
-        // or one more overload with one, is a new key and never the listed one.
-        const names = signatures.join("|");
-        add(
-          member.declarations?.[0],
-          `${port}.${member.name}(${names})`,
-          `a host port member takes an untyped input (${names}: any, unknown, object or an unconstrained type parameter)`,
-        );
-      }
+      walk(part, named?.name ?? portProp.name, 0, new Set());
     }
   }
   return out;
 }
 
 /** The FIRST RECORDING of the rule: exactly the keys that stood on main the day
- *  it landed (`<file>::<port>.<member>(<untyped parameters>)`, the ledger's
+ *  it landed (`<file>::<port>.<member>(<untyped positions>)`, the ledger's
  *  key form). Inert for good once the base list carries the rule's marker in
  *  `installedRules`, whatever entries are left. */
 export const PORT_SEED = [
-  "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(payload)",
-  "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(input)",
-  "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(value)",
-  "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(value)",
-  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(surface)",
-  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(surface)",
+  "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(#2)",
+  "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(#2)",
+  "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(#2)",
+  "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(#2)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(#1)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(#1)",
 ];
 
 /** Every entry of the skill packaging legacy list, reported so the committed

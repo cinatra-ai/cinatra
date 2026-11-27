@@ -56,30 +56,37 @@ and it has no matcher of its own: it builds a TypeScript program over
 `packages/sdk-extensions/src/host-context.ts` (and what it imports) and asks the type
 checker, reading the checkout from disk and nothing from git. Each property of
 `ExtensionHostContext` is looked at; its type, with `null` and `undefined` removed, is
-walked member by member (the checker lists the members it inherits too), but only a member
-declared in the SDK's own source directory is read, never one of a TypeScript lib type or a
-package, so an identity field (`id: string`, `labels: readonly string[]`, `meta: Map<…>`)
-reads as nothing. A port wrapped in a utility type (`Partial<…>`) or an intersection is read
-through its SDK members. For each member the call signatures and the construct signatures of
-its type are read, one function at a time when the type is a union of functions. This covers
-a method, a constructor and a nullable function property alike; an accessor is read by its
-declared type. One test decides "untyped" for a
-port, a member and every parameter: the type, or the type without `null` and `undefined`,
-is `any`, `unknown`, the non-primitive `object`, or a type parameter whose constraint is
-absent or untyped, or a union with such a constituent (`input?: object`, `input: object | null`
-and `input: T | undefined` are untyped; an optional parameter reads like a required one). A
-rest parameter is read by its element type (`...args: unknown[]` is untyped).
+walked member by member (the checker lists the members it inherits too, and resolves the
+type arguments of a generic port interface). Only what the SDK declares is read: a member, a
+signature or an index signature declared in the SDK's own source directory, never one of a
+TypeScript lib type or a package, so an identity field (`id: string`,
+`labels: readonly string[]`, `meta: Map<…>`, `make: ArrayConstructor`) reads as nothing. A
+port wrapped in a utility type (`Partial<…>`) or an intersection is read through its SDK
+members, and a member that holds members is read down to three levels.
 
-A member is one finding when a parameter of one of its signatures is untyped; whether it
-also takes a name does not matter. Its key carries each call signature that has an untyped
-parameter, in declaration order: the parameter names of a signature sorted and comma-joined,
-the signatures joined with `|`, calls first and then constructors, whose names stand behind
-`new ` (`HostJobsPort.enqueue(payload)` for one, `X.run(input|input)` for two overloads,
-`X.Factory(new input)` for a constructor). One more untyped parameter, or one more overload with one, of a listed
-member is therefore a new key. A port, a member or the root `ExtensionHostContext` that is
-itself untyped has nothing to read and is the finding: keyed by the port property (`jobs`),
-by `<port type>.<member>`, or by the root's name. A port is named by the SDK declaration
-that names it, else by its property (`jobs.run(input)`).
+One test decides "untyped" for a root, a port, a member, an index signature and every
+parameter: the type, or the type without `null` and `undefined`, is `any`, `unknown`, the
+non-primitive `object`, or a type parameter whose constraint is absent or untyped, or a union
+with such a constituent (`input?: object`, `input: object | null` and `input: T | undefined`
+are untyped; an optional parameter reads like a required one). A rest parameter is read by its
+element type. A value enters a port in these places, all read: the parameters of a method, of
+a function-typed property (a union of functions one at a time), of an overload, of a
+constructor (`new (…) => …`), of a callable or constructable port itself, the parameter of a
+setter (`set value(v: unknown)` beside a typed getter), the type arguments of a generic port
+(`P<unknown>`, or an unconstrained default), the type parameters of a member, and the values
+of an index signature. A member, port, index signature or root that is itself untyped has
+nothing to read and is the finding.
+
+The key names the place and, per signature that has an untyped parameter, its POSITIONS, not
+its names, so a rename that keeps the types changes nothing: `HostSettingsPort.set(#2)`,
+several positions comma-joined (`(#1,#3)`), a rest parameter by its own position, a
+constructor behind `new ` (`X.Factory(new #1)`), a setter behind `set ` (`X.value(set #1)`),
+the signatures joined with `|` in declaration order, calls first (`X.run(#1|#1)` for two
+overloads). A callable port is keyed by its property (`jobs(#1)`), an index signature by
+`X[string]`, a member that is itself untyped by `X.member`, a port by its property (`jobs`),
+the root by its name. A port is named by the SDK declaration that names it, else by its
+property (`jobs.run(#1)`). One more untyped parameter, or one more overload with one, of a
+listed member is therefore a new key.
 
 The six members that stood on main when the rule landed are ledger entries with their
 reasons, and the constant `PORT_SEED` in the gate script lists exactly their keys. The seed
@@ -94,10 +101,13 @@ Stated limits. The rule reads what the checker resolves and nothing inside an ob
 object literal, a `Record<string, unknown>`, an array or an intersection that the checker
 does not reduce to an untyped type is not looked into (`input: { data: unknown }` and
 `input: unknown[]` pass; `unknown & { id: string }` and `keyof Record<string, unknown>`
-reduce to typed forms and pass). A member typed `Function` has no signature and is not
-reported, and neither is a member of a port that is an index signature
-(`{ [name: string]: (input: unknown) => void }`). A parameter of a callback that a member receives is not an input the member takes. Only the members of `ExtensionHostContext` are read: the port set of
-a declared tool module is not. A way around the check that needs a disguise on purpose is left
+reduce to typed forms and pass). A `this` parameter is the receiver, not an input, and is not
+read. A parameter that is itself a callback is not read either: the values the host hands to
+the callback are outputs of the port (`on(handler: (payload: unknown) => void)` passes). A
+member typed `Function` has no signature and is not reported, and a signature declared outside
+the SDK's source (a function type of a lib or a package) is not read. Only the members of
+`ExtensionHostContext` are read: the port set of a declared tool module is not, and the root
+itself is not a callable port. A way around the check that needs a disguise on purpose is left
 to review.
 
 ## What the gate does not see
