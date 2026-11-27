@@ -67,7 +67,6 @@ type GateModule = {
     reasons: Map<string, string>;
   };
   unjustifiedBaselineEntries: (baseline: unknown) => string[];
-  baselineDefects: (baseline: unknown) => string[];
   baselineGrowth: (previous: unknown, current: unknown) => string[];
   packTypeNamespaces: (packs: Set<string>, workspacePackages?: Set<string>) => Map<string, string>;
   walkProductFiles: (dir: string, acc?: string[], repoRoot?: string | null) => string[];
@@ -94,6 +93,9 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  scanPortMembers: (input: { file: string; text: string; rootType: string }) => Finding[] | null;
+  portMemberFindings: (repoRoot: string, roots?: { file: string; type: string }[]) => Finding[];
+  baselineDefects: (baseline: unknown) => string[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -400,6 +402,132 @@ describe("core/extension border — evasions the scanner must not fall for", () 
     // directory of that name anywhere gave a crossing a place to hide.
     expect(gate.GENERATED_PATHS.has("src/lib/generated")).toBe(true);
     expect(gate.GENERATED_PATHS.has("packages/objects/src/generated")).toBe(false);
+  });
+});
+
+// UNBOUNDED PORT MEMBERS (cinatra#4872). The rule reads the port TYPES a pack
+// is handed, through the declared aggregate that lists them.
+describe("core/extension border — a port member bounds what it takes", () => {
+  const SDK_FILE = "packages/sdk-extensions/src/example-context.ts";
+  const portFile = (member: string, preamble = "") =>
+    [
+      preamble,
+      "export type ExamplePort = {",
+      `  ${member}`,
+      "  ping(): Promise<void>;",
+      "};",
+      "export type ExampleContext = {",
+      "  readonly packageName: string;",
+      "  example: ExamplePort;",
+      "};",
+      "",
+    ].join("\n");
+  const ports = (text: string, file = SDK_FILE) =>
+    (gate.scanPortMembers({ file, text, rootType: "ExampleContext" }) ?? []).map((f) => `${f.rule} ${f.detail}`);
+
+  it("refuses a member that takes a free string name and an untyped input", () => {
+    expect(ports(portFile("run(name: string, input: unknown): Promise<unknown>;"))).toEqual([
+      "unbounded-port-member ExamplePort.run",
+    ]);
+  });
+
+  it("refuses a `*Key` name with a Record input, written as a function-typed property too", () => {
+    expect(ports(portFile("put: (storeKey: string, value: Record<string, unknown>) => void;"))).toEqual([
+      "unbounded-port-member ExamplePort.put",
+    ]);
+    expect(ports(portFile("send(jobName: string, payload: any): void;"))).toEqual([
+      "unbounded-port-member ExamplePort.send",
+    ]);
+  });
+
+  it("passes a member whose name parameter is a literal union", () => {
+    expect(ports(portFile('run(name: "first" | "second", input: unknown): Promise<unknown>;'))).toEqual([]);
+  });
+
+  it("passes a member whose name parameter is a declared alias", () => {
+    const pre = 'import type { DeclaredJobName } from "./manifest";';
+    expect(ports(portFile("run(name: DeclaredJobName, input: unknown): Promise<unknown>;", pre))).toEqual([]);
+  });
+
+  it("passes a free name with a typed input, and an untyped input with no name", () => {
+    expect(ports(portFile("get(key: string, fallback: string): Promise<string>;"))).toEqual([]);
+    expect(ports(portFile("log(message: string, fields?: Record<string, unknown>): void;"))).toEqual([]);
+  });
+
+  it("refuses a member that hands out a type imported from outside the SDK", () => {
+    const pre = 'import type { Pool } from "pg";\nimport type { Shared } from "./shared";';
+    expect(ports(portFile("client(): Pool;", pre))).toEqual(["unbounded-port-member ExamplePort.client"]);
+    expect(ports(portFile("shared(): Shared;", pre))).toEqual([]);
+    expect(ports(portFile("client(): Pool;", 'import type { Pool } from "@example-org/sdk-extensions";'))).toEqual([
+      "unbounded-port-member ExamplePort.client",
+    ]);
+  });
+
+  it("reads only the types the aggregate lists", () => {
+    const text = portFile("ping2(): void;") + "export type Loose = { run(name: string, input: unknown): void };\n";
+    expect(ports(text)).toEqual([]);
+  });
+
+  it("answers null when the aggregate is not declared, and the repository scan fails closed", () => {
+    expect(gate.scanPortMembers({ file: SDK_FILE, text: "export type Other = {};", rootType: "ExampleContext" })).toBeNull();
+    expect(() => gate.portMemberFindings(REPO_ROOT, [{ file: SDK_FILE, type: "ExampleContext" }])).toThrow(/port root/);
+  });
+
+  it("names no port, no member and no pack in its own logic", () => {
+    const source = readFileSync(GATE_PATH, "utf8");
+    for (const word of ["HostMcpPort", "HostJobsPort", "callPrimitive", "enqueue"]) {
+      expect(source).not.toContain(word);
+    }
+  });
+
+  it("records every such member on main in the ledger, with its reason", () => {
+    const keys = [...gate.readBaseline(BASELINE_PATH).keys];
+    expect(keys).toContain("unbounded-port-member::packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive");
+    expect(keys).toContain("unbounded-port-member::packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue");
+  });
+
+  it("fails on a ledger entry whose member no longer has the shape", () => {
+    const result = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+    const present = new Set(result.findings.map(gate.keyOf));
+    expect(present.has("unbounded-port-member::packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive")).toBe(true);
+    const stale = "unbounded-port-member::packages/sdk-extensions/src/host-context.ts::ExamplePort.gone";
+    expect(present.has(stale)).toBe(false);
+    expect(gate.staleVerdict([stale]).ok).toBe(false);
+  });
+});
+
+describe("core/extension border — a new rule is seeded once", () => {
+  const rule = "unbounded-port-member";
+  const e = (key: string) => ({ rule, key, reason: "a member that stood on main when the rule landed" });
+
+  it("does not count the introducing change's entries of a seeded rule as growth", () => {
+    expect(gate.baselineGrowth({ entries: [] }, { seededRules: [rule], entries: [e("a.ts::P.m")] })).toEqual([]);
+  });
+
+  it("refuses a new entry once the rule is seeded on the base", () => {
+    const base = { seededRules: [rule], entries: [e("a.ts::P.m")] };
+    expect(gate.baselineGrowth(base, { seededRules: [rule], entries: [e("a.ts::P.m"), e("a.ts::P.n")] })).toEqual([
+      `new entry: ${rule}::a.ts::P.n`,
+    ]);
+  });
+
+  it("refuses taking a seeded rule off the list, so it is never seeded twice", () => {
+    expect(gate.baselineGrowth({ seededRules: [rule], entries: [] }, { entries: [] })).toEqual([
+      `seeded rule taken off the list: ${rule} (a rule is seeded once)`,
+    ]);
+  });
+
+  it("does not seed a rule the base already holds entries of", () => {
+    const base = { entries: [e("a.ts::P.m")] };
+    expect(gate.baselineGrowth(base, { seededRules: [rule], entries: [e("a.ts::P.m"), e("a.ts::P.n")] })).toEqual([
+      `new entry: ${rule}::a.ts::P.n`,
+    ]);
+  });
+
+  it("refuses an unknown seeded rule", () => {
+    expect(gate.baselineDefects({ seededRules: ["no-such-rule"], entries: [] })).toEqual([
+      "unknown seeded rule: no-such-rule",
+    ]);
   });
 });
 

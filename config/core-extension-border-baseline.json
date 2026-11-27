@@ -1,6 +1,9 @@
 {
-  "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. See docs/internals/contracts/core-extension-border.md.",
+  "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. A rule added after the ledger landed is seeded ONCE: its introducing change lists it in `seededRules`, and it may never be taken off that list. See docs/internals/contracts/core-extension-border.md.",
   "schemaVersion": 1,
+  "seededRules": [
+    "unbounded-port-member"
+  ],
   "entries": [
     {
       "rule": "pack-named-passthrough",
@@ -247,6 +250,16 @@
       "rule": "skill-legacy-exception",
       "key": "config/skill-packaging-legacy-exceptions.json::embeddedSkills :: @cinatra-ai/media-transcript-agent :: skills/transcribe-media/SKILL.md",
       "reason": "The one embedded skill that shipped before the packaging separation rule. The list is a ratchet for that pre-existing debt and empties as the skill is extracted into its own package."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue",
+      "reason": "A pack names any host job by a free string with an untyped payload; the host casts the name to its own job-name type and enqueues it on the BullMQ queue. No manifest declaration bounds the name yet (cinatra#4872)."
+    },
+    {
+      "rule": "unbounded-port-member",
+      "key": "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive",
+      "reason": "A pack names any host primitive by a free string with an untyped input; the call is authorized per call by the host, but the port itself bounds nothing the pack's manifest declares (cinatra#4872)."
     }
   ]
 }

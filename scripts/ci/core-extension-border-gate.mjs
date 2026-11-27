@@ -50,11 +50,23 @@
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
 //   node scripts/ci/core-extension-border-gate.mjs --write-baseline # regenerate, carrying every existing reason forward
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
+//
+// UNBOUNDED PORT MEMBERS (cinatra#4872): the rule `unbounded-port-member`
+// reads the TYPES a pack is handed, not text. The two declared aggregates in
+// PORT_ROOTS (the host context of the SDK and the tool-port set of a declared
+// module) list the port types by their properties; each port type is parsed
+// with the TypeScript compiler and every member is read. A member is refused
+// when it takes a parameter named `*name`/`*key` typed `string` together with a
+// parameter typed `unknown`, `any` or `Record<string, unknown|any>` (a free
+// name and an untyped input: the port bounds nothing a manifest declares), or
+// when its signature names a type imported from outside the SDK (a raw handle).
+// A name parameter typed by a literal union or by a named alias passes.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import ts from "typescript";
 import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -403,6 +415,175 @@ export function scanScopedToolAdmissions({ file, text, packs }) {
   return out;
 }
 
+/** The declared aggregates whose properties ARE the pack-facing port types:
+ *  the host context an extension's register(ctx) receives, and the port set a
+ *  declared tool module receives. The rule reads the types these list; it names
+ *  no port and no member itself. A root that cannot be found fails closed. */
+export const PORT_ROOTS = [
+  { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" },
+  { file: "src/lib/extension-tool-dispatch.ts", type: "ExtensionToolPorts" },
+];
+
+/** The SDK package: a type imported from it (or from a file inside it) is not a
+ *  raw handle. */
+export const SDK_PACKAGE = "@cinatra-ai/sdk-extensions";
+export const SDK_ROOT = "packages/sdk-extensions/";
+
+const NAME_PARAM_RE = /(?:name|key)$/i;
+
+/** The members of a type node: a type literal, or each type literal of an
+ *  intersection. */
+function typeLiteralMembers(node) {
+  if (!node) return [];
+  if (ts.isTypeLiteralNode(node)) return [...node.members];
+  if (ts.isIntersectionTypeNode(node)) return node.types.flatMap(typeLiteralMembers);
+  if (ts.isParenthesizedTypeNode(node)) return typeLiteralMembers(node.type);
+  return [];
+}
+
+/** The declared members of a named type alias or interface in one file, or null. */
+function declaredMembers(sf, name) {
+  for (const st of sf.statements) {
+    if (ts.isTypeAliasDeclaration(st) && st.name.text === name) return typeLiteralMembers(st.type);
+    if (ts.isInterfaceDeclaration(st) && st.name.text === name) return [...st.members];
+  }
+  return null;
+}
+
+function memberName(sf, m) {
+  return m.name ? m.name.getText(sf) : null;
+}
+
+/** The parameters of a member: a method, or a property typed by a function. */
+function memberParameters(m) {
+  if (ts.isMethodSignature(m)) return m.parameters;
+  if (ts.isPropertySignature(m) && m.type && ts.isFunctionTypeNode(m.type)) return m.type.parameters;
+  return null;
+}
+
+/** `unknown`, `any`, or `Record<string, unknown|any>`. */
+export function isUntypedInput(type) {
+  if (!type) return true; // an unannotated parameter is `any`
+  if (type.kind === ts.SyntaxKind.UnknownKeyword || type.kind === ts.SyntaxKind.AnyKeyword) return true;
+  if (
+    ts.isTypeReferenceNode(type) &&
+    ts.isIdentifier(type.typeName) &&
+    type.typeName.text === "Record" &&
+    type.typeArguments?.length === 2 &&
+    type.typeArguments[0].kind === ts.SyntaxKind.StringKeyword &&
+    (type.typeArguments[1].kind === ts.SyntaxKind.UnknownKeyword || type.typeArguments[1].kind === ts.SyntaxKind.AnyKeyword)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/** The type names a file imports from outside the SDK, mapped to their source. */
+export function foreignTypeImports(sf, file) {
+  const out = new Map();
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier.text;
+    let inside;
+    if (spec === SDK_PACKAGE || spec.startsWith(`${SDK_PACKAGE}/`)) inside = true;
+    else if (spec.startsWith(".")) inside = join(dirname(file), spec).split(sep).join("/").startsWith(SDK_ROOT);
+    else inside = false;
+    if (inside) continue;
+    const clause = st.importClause;
+    if (!clause) continue;
+    if (clause.name) out.set(clause.name.text, spec);
+    const nb = clause.namedBindings;
+    if (nb && ts.isNamespaceImport(nb)) out.set(nb.name.text, spec);
+    if (nb && ts.isNamedImports(nb)) for (const el of nb.elements) out.set(el.name.text, spec);
+  }
+  return out;
+}
+
+/** The foreign type names a member's signature references, in order. */
+function foreignNamesIn(node, foreign) {
+  const names = [];
+  const visit = (n) => {
+    if (ts.isTypeReferenceNode(n)) {
+      let left = n.typeName;
+      while (ts.isQualifiedName(left)) left = left.left;
+      if (foreign.has(left.text) && !names.includes(left.text)) names.push(left.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return names;
+}
+
+/** The `unbounded-port-member` findings of one file, for the root aggregate
+ *  `rootType` declared in it. Returns null when the root is not declared. */
+export function scanPortMembers({ file, text, rootType }) {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const rootMembers = declaredMembers(sf, rootType);
+  if (rootMembers === null) return null;
+  const foreign = foreignTypeImports(sf, file);
+  const out = [];
+  const seen = new Set();
+  for (const prop of rootMembers) {
+    if (!ts.isPropertySignature(prop) || !prop.type || !ts.isTypeReferenceNode(prop.type)) continue;
+    if (!ts.isIdentifier(prop.type.typeName)) continue;
+    const portType = prop.type.typeName.text;
+    if (seen.has(portType)) continue;
+    seen.add(portType);
+    const members = declaredMembers(sf, portType);
+    if (!members) continue;
+    for (const m of members) {
+      const name = memberName(sf, m);
+      if (!name) continue;
+      const reasons = [];
+      const params = memberParameters(m);
+      if (params) {
+        const freeName = params.find(
+          (p) => ts.isIdentifier(p.name) && NAME_PARAM_RE.test(p.name.text) && p.type?.kind === ts.SyntaxKind.StringKeyword,
+        );
+        const untyped = params.find((p) => p !== freeName && isUntypedInput(p.type));
+        if (freeName && untyped) {
+          reasons.push(
+            `takes the free name \`${freeName.name.text}: string\` with the untyped input \`${untyped.name.getText(sf)}\``,
+          );
+        }
+      }
+      const handles = foreignNamesIn(m, foreign);
+      if (handles.length) {
+        reasons.push(`names ${handles.map((h) => `\`${h}\` (from ${foreign.get(h)})`).join(", ")}, a type from outside the SDK`);
+      }
+      if (!reasons.length) continue;
+      out.push(
+        finding(
+          "unbounded-port-member",
+          file,
+          sf.getLineAndCharacterOfPosition(m.getStart(sf)).line + 1,
+          `${portType}.${name}`,
+          `a pack-facing port member ${reasons.join(" and ")}; a port member is bounded by what the manifest declares (a literal union or a manifest-exported alias) and hands out no host internals`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
+/** Every `unbounded-port-member` finding of the declared port roots. Fails
+ *  closed when a root file or a root type is missing: a renamed aggregate would
+ *  otherwise turn the rule off without saying so. */
+export function portMemberFindings(repoRoot, roots = PORT_ROOTS) {
+  const out = [];
+  for (const { file, type } of roots) {
+    const abs = join(repoRoot, file);
+    const found = existsSync(abs) ? scanPortMembers({ file, text: readFileSync(abs, "utf8"), rootType: type }) : null;
+    if (found === null) {
+      throw new Error(
+        `[core-extension-border] cannot read the port root ${type} in ${file} — the gate fails closed rather than skipping the port-member rule`,
+      );
+    }
+    out.push(...found);
+  }
+  return out;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -574,6 +755,7 @@ export const KNOWN_RULES = new Set([
   "skill-legacy-exception",
   "materialized-extension-file",
   "pack-shaped-core-domain",
+  "unbounded-port-member",
 ]);
 
 /** Everything structurally wrong with a ledger, as messages. An unreadable or
@@ -583,6 +765,9 @@ export function baselineDefects(doc) {
   const bad = [];
   const entries = doc?.entries;
   if (!Array.isArray(entries)) return ["the ledger has no `entries` array"];
+  const seeded = doc?.seededRules ?? [];
+  if (!Array.isArray(seeded)) bad.push("`seededRules` is not an array");
+  else for (const r of seeded) if (!KNOWN_RULES.has(r)) bad.push(`unknown seeded rule: ${r}`);
   const seen = new Set();
   for (const e of entries) {
     const id = `${e?.rule}::${e?.key}`;
@@ -649,14 +834,34 @@ export function wildcardBaselineEntries(doc) {
  *  ledger is shrink-only: a crossing may leave it, none may enter. A domain
  *  entry that recorded a HIGHER line count, or a file it did not record, is
  *  growth too. */
+//
+// THE ONE-TIME SEED OF A NEW RULE. A rule added to this gate after the ledger
+// landed records the findings that stand on the day it lands. Its introducing
+// change lists the rule in the ledger's `seededRules`; a rule listed there on
+// the checkout, absent from the base's list and holding no base entry, is the
+// seed, and its entries are not growth. Once on the base, the rule is held like
+// every other: a new entry of it is growth, and taking it off `seededRules` is
+// growth too, so a rule is never seeded twice.
+export function seedingRules(previousDoc, currentDoc) {
+  const baseSeeded = new Set(previousDoc?.seededRules ?? []);
+  const baseRules = new Set((previousDoc?.entries ?? []).map((e) => e.rule));
+  return new Set((currentDoc?.seededRules ?? []).filter((r) => !baseSeeded.has(r) && !baseRules.has(r)));
+}
+
 export function baselineGrowth(previousDoc, currentDoc) {
   const previous = new Map();
   for (const e of previousDoc?.entries ?? []) previous.set(`${e.rule}::${e.key}`, e);
   const grown = [];
+  const seeding = seedingRules(previousDoc, currentDoc);
+  const headSeeded = new Set(currentDoc?.seededRules ?? []);
+  for (const r of previousDoc?.seededRules ?? []) {
+    if (!headSeeded.has(r)) grown.push(`seeded rule taken off the list: ${r} (a rule is seeded once)`);
+  }
   for (const e of currentDoc?.entries ?? []) {
     const id = `${e.rule}::${e.key}`;
     const was = previous.get(id);
     if (!was) {
+      if (seeding.has(e.rule)) continue;
       grown.push(`new entry: ${id}`);
       continue;
     }
@@ -730,6 +935,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
   }
 
   findings.push(...trackedExtensionFileFindings(repoRoot));
+  findings.push(...portMemberFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
 
   const present = new Set(findings.map(keyOf));
