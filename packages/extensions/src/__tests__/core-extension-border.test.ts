@@ -1392,6 +1392,104 @@ describe("core/extension border — unbounded-port-member", () => {
     });
   });
 
+  // The identity of a finding: the port as the extension reaches it, and the member (`<Port>.<member>`).
+  describe("a finding is the port that exposes the member", () => {
+    const RUN = "run(name: string, input: unknown): void";
+    const BASE = `interface JobsPort { ${RUN} }\ninterface DerivedPort extends JobsPort { id: string }\n`;
+    const ctx = (props: string) => `export type ExtensionHostContext = ${props};\n`;
+    const ctxFile = (decls: string, props: string) => ({ "host-context.ts": `${decls}${ctx(props)}` });
+    function foundIn(files: Record<string, string>) {
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+      try {
+        for (const [name, text] of Object.entries({ "tsconfig.json": TSCONFIG, "register.ts": REGISTER, ...files })) {
+          writeFileSync(path.join(dir, name), text);
+        }
+        return ports.unboundedPortMemberFindings?.({ repoRoot: dir, contractFile: "register.ts" }) ?? [];
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+
+    it("a second port that inherits the member is its own finding, and a ledger entry of the first does not cover it", () => {
+      const files = ctxFile(BASE, "{ jobs: JobsPort; derived: DerivedPort }");
+      expect(seen(files)).toEqual(["JobsPort.run", "DerivedPort.run"]);
+      const found = foundIn(files);
+      const recorded = new Set([gate.keyOf(found[0])]);
+      expect(gate.violationsOf(found, recorded).map((f) => f.detail)).toEqual(["DerivedPort.run"]);
+    });
+    it("the order of the context properties does not matter", () => {
+      expect(seen(ctxFile(BASE, "{ derived: DerivedPort; jobs: JobsPort }"))).toEqual(["DerivedPort.run", "JobsPort.run"]);
+      expect(seen(ctxFile(`${BASE}interface Deeper extends DerivedPort { n: number }\n`, "{ jobs: JobsPort; deeper: Deeper; derived: DerivedPort }"))).toEqual([
+        "JobsPort.run",
+        "Deeper.run",
+        "DerivedPort.run",
+      ]);
+    });
+    it("an overloaded member inherited by two ports is one finding for each", () => {
+      const decls = 'interface JobsPort { run(name: "a", input: unknown): void; run(name: string, input: unknown): void }\ninterface DerivedPort extends JobsPort { id: string }\n';
+      expect(seen(ctxFile(decls, "{ jobs: JobsPort; derived: DerivedPort }"))).toEqual(["JobsPort.run", "DerivedPort.run"]);
+    });
+    it("the context that inherits a port member does not hide the port", () => {
+      const decls = `interface JobsPort { ${RUN} }\ninterface Ctx extends JobsPort { jobs: JobsPort }\n`;
+      expect(seen({ "host-context.ts": `${decls}export type ExtensionHostContext = Ctx;\n` })).toEqual(["JobsPort.run", "Ctx.run"]);
+    });
+    it("the same port type on two context properties, or through an alias, is one finding", () => {
+      expect(seen(ctxFile(BASE, "{ jobs: JobsPort; again: JobsPort }"))).toEqual(["JobsPort.run"]);
+      expect(seen(ctxFile(`${BASE}type Jobs = JobsPort;\n`, "{ jobs: Jobs; again: JobsPort }"))).toEqual(["JobsPort.run"]);
+      expect(seen(ctxFile(BASE, "{ jobs: JobsPort | undefined; again: JobsPort | null }"))).toEqual(["JobsPort.run"]);
+    });
+    it("an alias of a literal type is named by that alias, an alias of an alias by the first", () => {
+      expect(seen(ctxFile(`type Jobs = { ${RUN} };\ntype Same = Jobs;\n`, "{ a: Jobs; b: Same }"))).toEqual(["Jobs.run"]);
+    });
+    it("an anonymous port is named by its context property", () => {
+      expect(seen(ctxFile("", `{ a: { ${RUN} }; b: { ${RUN} } }`))).toEqual(["a.run", "b.run"]);
+    });
+    it("a union or an intersection port is read per constituent", () => {
+      const decls = `${BASE}interface OtherPort { ${RUN} }\n`;
+      expect(seen(ctxFile(decls, "{ jobs: JobsPort | OtherPort }"))).toEqual(["JobsPort.run", "OtherPort.run"]);
+      expect(seen(ctxFile(decls, "{ jobs: JobsPort & { id: string } }"))).toEqual(["JobsPort.run"]);
+      expect(seen(ctxFile(decls, "{ jobs: JobsPort & OtherPort }"))).toEqual(["JobsPort.run", "OtherPort.run"]);
+    });
+    it("the instantiations of one generic port are one port, named by its declaration", () => {
+      const decls = "interface Port<T> { run(name: string, input: T): void }\n";
+      expect(seen(ctxFile(decls, "{ a: Port<any>; b: Port<unknown> }"))).toEqual(["Port.run"]);
+      expect(seen(ctxFile(decls, "{ a: Port<string>; b: Port<any> }"))).toEqual(["Port.run"]);
+      expect(seen(ctxFile(decls, "{ a: Port<string> }"))).toEqual([]);
+    });
+    it("two different port declarations under one key fail closed with a plain line", () => {
+      const COLLISION = (key: string) => [`threw: [core-extension-border] two different port declarations are both reported as "${key}" — one ledger key cannot name both; rename one of them (the rule fails closed)`];
+      const imports = 'import type { JobsPort as A } from "./a";\nimport type { JobsPort as B } from "./b";\n';
+      // same name from two modules
+      expect(
+        seen({
+          "a.ts": `export interface JobsPort { ${RUN} }\n`,
+          "b.ts": `export interface JobsPort { ${RUN} }\n`,
+          "host-context.ts": `${imports}${ctx("{ a: A; b: B }")}`,
+        }),
+      ).toEqual(COLLISION("JobsPort.run"));
+      // the member is inherited from one file, so even the ledger's file part is the same
+      expect(
+        seen({
+          "base.ts": `export interface Base { ${RUN} }\n`,
+          "a.ts": 'import type { Base } from "./base";\nexport interface JobsPort extends Base { a: string }\n',
+          "b.ts": 'import type { Base } from "./base";\nexport interface JobsPort extends Base { b: string }\n',
+          "host-context.ts": `${imports}${ctx("{ a: A; b: B }")}`,
+        }),
+      ).toEqual(COLLISION("JobsPort.run"));
+      // two inline ports of one property name in a union context
+      expect(seen({ "host-context.ts": `export type ExtensionHostContext = { jobs: { ${RUN} } } | { jobs: { ${RUN} } };\n` })).toEqual(COLLISION("jobs.run"));
+    });
+    it("a same-named port without the shape in the way does not fail", () => {
+      expect(
+        seen({
+          "a.ts": "export interface JobsPort { run(name: string): void }\n",
+          "b.ts": `export interface JobsPort { ${RUN} }\n`,
+          "host-context.ts": 'import type { JobsPort as A } from "./a";\nimport type { JobsPort as B } from "./b";\n' + ctx("{ a: A; b: B }"),
+        }),
+      ).toEqual(["JobsPort.run"]);
+    });
+  });
+
   it("an unresolved type, a missing anchor and an untyped context fail closed with a plain line", () => {
     expect(members("run(name: string, input: Missing): void")).toEqual([
       "threw: [core-extension-border] the border check could not resolve a type of input in register.ts",

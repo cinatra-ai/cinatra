@@ -66,7 +66,21 @@ union of tuples one per tuple, a generic rest (`...args: A`) through its constra
 tuple its elements (named or not, optional included), an array `T[]` zero or more `T`,
 where `T` fills both positions only when `T` itself can be a free name and untyped
 (`string | U` for a type parameter `U`; `string | unknown` is `unknown` and is not).
-The finding is keyed `<Port>.<member>`.
+
+A finding is the port as the extension reaches it, and the member, keyed
+`<Port>.<member>` (the ledger's detail; the file is the member's declaration). The port
+is the type of a context property, split per constituent of a union or intersection (a
+type parameter through its constraint), and named by the declaration the checker
+resolves, never by an alias: an alias of an interface or class is that interface or
+class, and `Port<A>` and `Port<B>` are the one declared port `Port`. A literal type is
+named by the alias that declares it; an anonymous one (inline, or a generic alias) by
+the context property that exposes it. So the same port type on two context properties is
+one finding; a different port type that inherits the member (`DerivedPort extends
+HostJobsPort`) is its own finding, `DerivedPort.enqueue`, and a new entry for the
+ledger. Nothing is skipped for having been seen before. Two different port declarations
+that would be reported under one key (two `JobsPort` from different modules, two inline
+ports on a property of the same name in a union context) cannot be told apart by the
+ledger, so the check fails with a plain line: rename one of them.
 
 The anchor is the only place the rule names anything: the SDK registration module
 `packages/sdk-extensions/src/register.ts`, its export `ExtensionServerEntry` and that

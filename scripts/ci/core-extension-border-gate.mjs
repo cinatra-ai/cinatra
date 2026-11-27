@@ -753,8 +753,11 @@ function productCompilerOptions(repoRoot) {
  *  by its constraint (none, or `unknown`, is untyped; `string` is a free name). The anchor is the
  *  registration contract: the module's exports, aliases followed, the entry type's `register`
  *  property, the first parameter of each call signature (the context); its members are the ports,
- *  and each own, non-private member of a port is read, every union constituent and every overload.
- *  Keyed `<Port>.<member>`. A type the checker cannot resolve, or a missing anchor, fails closed. */
+ *  and each own, non-private member of a port is read, every union or intersection constituent and
+ *  every overload. A finding is keyed `<Port>.<member>`: the port as the extension reaches it (see
+ *  `portOf`); the same port reached twice is one finding, a port that inherits the member is its own,
+ *  and two different port declarations with one key fail closed. A type the checker cannot resolve,
+ *  or a missing anchor, fails closed. */
 export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, contractFile = PORT_CONTRACT.file } = {}) {
   const realRoot = realpathSync(repoRoot);
   const contractPath = join(realRoot, contractFile);
@@ -842,34 +845,67 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     (prop.declarations ?? []).length > 0 &&
     prop.declarations.every((d) => (ts.getCombinedModifierFlags(d) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) !== 0 || (d.name && ts.isPrivateIdentifier(d.name)));
   const membersOf = (t) => flat(t).flatMap((c) => flat(checker.getApparentType(c)).flatMap((a) => checker.getPropertiesOfType(a))).filter((p) => isOwn(p) && !isHidden(p));
-  const nameOf = (t, fallback) => {
-    const own = t.getSymbol()?.name;
-    return (own && !own.startsWith("__") ? own : t.aliasTypeArguments?.length ? undefined : t.aliasSymbol?.name) ?? fallback;
+  // A port as the extension reaches it, split to its parts: a union or intersection per constituent, a
+  // type parameter through its base constraint (none: no port).
+  const parts = (t, seen = new Set()) => {
+    if (t.isUnion() || t.isIntersection()) return t.types.flatMap((c) => parts(c, seen));
+    if (t.flags & F.TypeParameter && !seen.has(t)) {
+      const c = checker.getBaseConstraintOfType(t);
+      return c ? parts(c, new Set(seen).add(t)) : [];
+    }
+    return [t];
+  };
+  // THE IDENTITY of a port: its name and the declaration that name stands for. The name is the
+  // resolved declaration's own (an alias of an interface or class is that interface or class;
+  // instantiations `Port<A>` and `Port<B>` are the one declared port `Port`); a literal type takes the
+  // name of the alias that declares it, and an anonymous one (inline, or a generic alias) the name of
+  // the context property that exposes it.
+  const portOf = (t, fallback) => {
+    const sym = t.getSymbol();
+    if (sym && !sym.name.startsWith("__")) return { name: sym.name, decl: sym.declarations?.[0] ?? t };
+    if (t.aliasSymbol && !t.aliasTypeArguments?.length) return { name: t.aliasSymbol.name, decl: t.aliasSymbol.declarations?.[0] ?? t };
+    return { name: fallback, decl: sym?.declarations?.[0] ?? t };
   };
 
+  // THE IDENTITY of a finding: the port as the extension reaches it, and the member: `<Port>.<member>`.
+  // It is the ledger's detail and the only thing findings are told apart by: the same port reached twice
+  // is one finding; a different port that inherits the member is its own; two DIFFERENT port
+  // declarations that produce one such string cannot be told apart by the ledger, so the rule fails
+  // closed. Nothing else is remembered: no visited member, no visited type.
   const out = [];
-  const counts = new Map();
-  const judged = new Set();
-  const judge = (owner, prop) => {
-    if (judged.has(prop)) return;
-    judged.add(prop);
-    if (!flat(checker.getNonNullableType(typeOf(prop))).flatMap((c) => c.getCallSignatures()).some(hasShape)) return;
+  const emitted = new Map();
+  const shapes = new Map();
+  const shaped = (prop) => {
+    if (!shapes.has(prop)) shapes.set(prop, flat(checker.getNonNullableType(typeOf(prop))).flatMap((c) => c.getCallSignatures()).some(hasShape));
+    return shapes.get(prop);
+  };
+  const judge = ({ name, decl }, prop) => {
+    if (!shaped(prop)) return;
+    const detail = `${name}.${checker.symbolToString(prop)}`;
+    const first = emitted.get(detail);
+    if (first) {
+      if (first !== decl) {
+        throw new Error(`[core-extension-border] two different port declarations are both reported as "${detail}" — one ledger key cannot name both; rename one of them (the rule fails closed)`);
+      }
+      return;
+    }
+    emitted.set(detail, decl);
     const d = prop.valueDeclaration ?? prop.declarations?.[0] ?? register.declarations?.[0] ?? entry.declarations[0];
     out.push(
       finding(
         "unbounded-port-member",
         rel(d.getSourceFile().fileName),
         d.getSourceFile().getLineAndCharacterOfPosition(d.getStart()).line + 1,
-        occurrenceDetail(counts, "unbounded-port-member", `${owner}.${checker.symbolToString(prop)}`),
+        detail,
         "a host port member takes a free name (a plain string) together with an untyped payload (any or unknown): a generic tunnel to any core behaviour; declare the names as a literal union the manifest bounds (cinatra#4872)",
       ),
     );
   };
-  for (const ctx of contexts) {
+  for (const ctx of contexts.flatMap((c) => parts(c))) {
     for (const prop of membersOf(ctx)) {
-      judge(nameOf(ctx, "ctx"), prop);
-      for (const port of flat(checker.getNonNullableType(typeOf(prop)))) {
-        for (const member of membersOf(port)) judge(nameOf(port, checker.symbolToString(prop)), member);
+      judge(portOf(ctx, "ctx"), prop);
+      for (const port of parts(checker.getNonNullableType(typeOf(prop)))) {
+        for (const member of membersOf(port)) judge(portOf(port, checker.symbolToString(prop)), member);
       }
     }
   }
