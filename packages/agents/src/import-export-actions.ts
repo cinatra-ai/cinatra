@@ -6,7 +6,8 @@
 // Agent ZIP format (app upload path — import-form.tsx, the MCP import
 // handler, and the startup ensure-agent-package builders all produce or
 // consume this shape):
-//   - agent.json    : an OAS Flow document (component_type: "Flow"). DB
+//   - cinatra/oas.json : an OAS Flow document (component_type: "Flow"), the one
+//                     definition file; a root agent.json is not read. DB
 //                     column values (inputSchema, approvalPolicy, prompt,
 //                     packageName, ...) are DERIVED by compileOasAgentJson,
 //                     never read as literal fields.

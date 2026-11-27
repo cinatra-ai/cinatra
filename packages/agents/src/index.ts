@@ -476,11 +476,6 @@ export type { AgentRunStatus, ChildRunHitlContext } from "./store";
 export { updateAgentType } from "./actions";
 export { ensureAgentPackage, ensureAgentPackageFromGitFile } from "./ensure-agent-package";
 export {
-  fetchCampaignRecipients,
-  removeEmailOutreachRecipient,
-  type StageRecipient,
-} from "./email-outreach-stage-actions";
-export {
   triggerAgentRun,
   createPendingRunForZeroInputTemplate,
   type TriggerAgentRunArgs,
