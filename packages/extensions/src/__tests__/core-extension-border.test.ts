@@ -825,7 +825,6 @@ describe("core/extension border — the ports are a closed shape with typed inpu
     ["an interface-typed property", `${OTHER}\ninterface JobsPort { sub: Other }`, undefined, "JobsPort.sub"],
     ["a constructor-typed property", "interface JobsPort { Factory: new (input: string) => object }", undefined, "JobsPort.Factory"],
     ["a union of functions", "interface JobsPort { run: ((a: string) => void) | ((b: string) => void) }", undefined, "JobsPort.run"],
-    ["a readonly property that can be called", "type Handler = (a: string) => void;\ninterface JobsPort { readonly run: Handler }", undefined, "JobsPort.run"],
     ["a readonly property typed any", "interface JobsPort { readonly run: any }", undefined, "JobsPort.run"],
     ["a getter typed any", "interface JobsPort { get run(): any }", undefined, "JobsPort.run"],
     ["a getter with no type", "interface JobsPort { get run() }", undefined, "JobsPort.run"],
@@ -919,6 +918,59 @@ describe("core/extension border — the ports are a closed shape with typed inpu
     ["overloads, each with its own positions", "run(a: unknown): void; run(b: string): void; run(c: any, d: any): void", ["JobsPort.run(#1|#1,#2)"]],
   ])("reports %s", (_name, member, keys) => {
     expect(ports(`interface JobsPort { ${member} }`)).toEqual(keys.map((k) => `untyped-port-input ${k}`));
+  });
+
+  // cinatra#4872: the rules read what the type checker resolves, not the syntax a type is written in.
+  describe("a type is read through the checker, in whatever form it is written", () => {
+    it("allows a member typed by a named function alias, readonly or optional too", () => {
+      const handler = "type Handler = (input: string) => void;";
+      expect(ports(`${handler}\ninterface JobsPort { run: Handler; stop?: Handler | null; readonly on: Handler; get off(): Handler }`)).toEqual([]);
+      expect(ports("interface Handler { (input: string): void }\ninterface JobsPort { run: Handler }")).toEqual([]);
+      expect(ports("type Handler<T> = (input: T) => void;\ninterface JobsPort { run: Handler<string> }")).toEqual([]);
+    });
+
+    it("still judges the parameters of a member typed by a named function alias", () => {
+      expect(ports("type Handler = (input: any) => void;\ninterface JobsPort { run: Handler }")).toEqual(["untyped-port-input JobsPort.run(#1)"]);
+      expect(ports("type Handler = (name: string, input: unknown) => void;\ninterface JobsPort { readonly run: Handler | null }")).toEqual(["untyped-port-input JobsPort.run(#2)"]);
+      expect(ports("type Handler<T> = (name: string, input: T) => void;\ninterface JobsPort { run: Handler<any> }")).toEqual(["untyped-port-input JobsPort.run(#2)"]);
+      expect(ports("type Handler = (this: unknown, input: object) => void;\ninterface JobsPort { run: Handler }")).toEqual(["untyped-port-input JobsPort.run(#1)"]);
+    });
+
+    const namespaced = "namespace Ports { export interface JobsPort { run(input: unknown): void } export interface TypedPort { run(input: string): void } export interface Base { run(input: object): void } }";
+
+    it("reads a namespace-qualified port type like a bare one, and judges its members", () => {
+      expect(ports(namespaced, "jobs: Ports.JobsPort")).toEqual(["untyped-port-input JobsPort.run(#1)"]);
+      expect(ports(namespaced, "jobs: Ports.TypedPort | null")).toEqual([]);
+      expect(ports(namespaced, "jobs: Ports.Missing")).toEqual(["port-shape jobs"]);
+    });
+
+    it("reads a namespace-qualified extends like a bare one, and judges its members", () => {
+      expect(ports(`${namespaced}\ninterface JobsPort extends Ports.Base {}`)).toEqual(["untyped-port-input Base.run(#1)"]);
+      expect(ports(`${namespaced}\ninterface JobsPort extends Ports.TypedPort { stop(input: any): void }`)).toEqual(["untyped-port-input JobsPort.stop(#1)"]);
+      expect(ports(`${namespaced}\ninterface JobsPort extends Ports.TypedPort {}`)).toEqual([]);
+    });
+
+    it("reads a namespace import, an import under another name and a re-export to the same declaration", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+      try {
+        writeFileSync(path.join(dir, "ports.ts"), "export interface JobsPort { run(input: unknown): void }\nexport interface Base { run(input: object): void }\n");
+        writeFileSync(path.join(dir, "reexport.ts"), 'export * as Inner from "./ports";\nexport { JobsPort as Renamed } from "./ports";\n');
+        writeFileSync(
+          path.join(dir, "host-context.ts"),
+          [
+            'import * as Ports from "./ports";',
+            'import { JobsPort as Jobs } from "./ports";',
+            'import * as Out from "./reexport";',
+            "interface Mine extends Ports.Base {}",
+            "export type ExtensionHostContext = { a: Ports.JobsPort; b: Jobs; c: Out.Inner.JobsPort; d: Out.Renamed; e: Mine };",
+          ].join("\n"),
+        );
+        const found = portFindings({ repoRoot: dir, file: "host-context.ts" });
+        expect(found.map((f) => `${f.rule} ${f.file}::${f.detail}`)).toEqual(["untyped-port-input ports.ts::JobsPort.run(#1)", "untyped-port-input ports.ts::Base.run(#1)"]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   it("reads the root through the checker: inherited, intersected and merged properties", () => {

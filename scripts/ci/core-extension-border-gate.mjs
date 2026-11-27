@@ -481,7 +481,8 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
   const shape = (node, detail, what) =>
     report(SHAPE_RULE, node, detail, `${what}: a port holds only methods, function-typed properties and output-only members, and is read from its declaration (cinatra#4872)`);
   const nameOf = (m) => m.name?.getText() ?? ts.SyntaxKind[m.kind];
-  const isNullish = (n) => n.kind === ts.SyntaxKind.UndefinedKeyword || (ts.isLiteralTypeNode(n) && n.literal.kind === ts.SyntaxKind.NullKeyword);
+  // Is this written type `null` or `undefined`: the checker's reading of it, so an alias of either counts.
+  const isNullish = (n) => !!(checker.getTypeFromTypeNode(n).flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined));
   const unwrap = (n) => {
     while (ts.isParenthesizedTypeNode(n)) n = n.type;
     const rest = ts.isUnionTypeNode(n) ? n.types.filter((t) => !isNullish(t)) : [];
@@ -491,21 +492,38 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
   const plain = (t) =>
     !!(t.flags & (F.StringLike | F.NumberLike | F.BigIntLike | F.BooleanLike | F.ESSymbolLike | F.EnumLike | F.Void | F.Null | F.Undefined)) ||
     (t.isUnion() ? t.types.every(plain) : (checker.isArrayType(t) || checker.isTupleType(t)) && checker.getTypeArguments(t).every(plain));
+  // The declaration a written reference resolves to, whatever its form: a bare name, a namespace-qualified one
+  // (`Ports.JobsPort`, in a type or in an `extends` clause), an import under another name, a re-export. The checker
+  // resolves the right-most name; an import or namespace-member alias is followed to what it names.
   const declarationOf = (n) => {
     const name = ts.isTypeReferenceNode(n) ? n.typeName : ts.isExpressionWithTypeArguments(n) ? n.expression : undefined;
-    let sym = name && ts.isIdentifier(name) ? checker.getSymbolAtLocation(name) : undefined;
+    const last = !name ? undefined : ts.isQualifiedName(name) ? name.right : ts.isPropertyAccessExpression(name) ? name.name : name;
+    let sym = last && ts.isIdentifier(last) ? checker.getSymbolAtLocation(last) : undefined;
     if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
     const decls = sym?.declarations ?? [];
     return decls.length === 1 && inSdk(decls[0]) ? decls[0] : undefined;
   };
   const isPort = (d) => d && (ts.isInterfaceDeclaration(d) || (ts.isTypeAliasDeclaration(d) && ts.isTypeLiteralNode(d.type)));
+  // The input positions of one RESOLVED signature that are untyped. The `this` parameter is not among a
+  // signature's parameters, and a type alias of a function type is read as written there, with its type arguments.
   const positions = (sig) =>
-    sig.parameters
-      .filter((p) => !(ts.isIdentifier(p.name) && p.name.text === "this"))
-      .flatMap((p, i) => {
-        const t = checker.getTypeAtLocation(p);
-        return isUntypedType(checker, p.dotDotDotToken ? checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t : t) ? [i + 1] : [];
-      });
+    sig.getParameters().flatMap((p, i) => {
+      const d = p.valueDeclaration;
+      if (!d) return [];
+      const t = checker.getTypeOfSymbolAtLocation(p, d);
+      return isUntypedType(checker, d.dotDotDotToken ? checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t : t) ? [i + 1] : [];
+    });
+  // The call signatures of a member's type when the checker reads it as a plain function: callable, and nothing else
+  // (no construct signature, no property, no index signature, no union with another type). A written function type, a
+  // named alias of one, an interface with only a call signature and a generic alias all give the same answer.
+  const functionSignatures = (annotation) => {
+    const t = checker.getNonNullableType(checker.getTypeFromTypeNode(annotation));
+    if (t.flags & F.Any || t.isUnion()) return undefined;
+    const calls = t.getCallSignatures();
+    return calls.length > 0 && t.getConstructSignatures().length === 0 && checker.getPropertiesOfType(t).length === 0 && checker.getIndexInfosOfType(t).length === 0
+      ? calls
+      : undefined;
+  };
   // Can a value of this type be called: `any`, a `Function`, or a call or construct signature, in any union constituent.
   const callable = (annotation) => {
     const t = checker.getNonNullableType(checker.getTypeFromTypeNode(annotation));
@@ -526,15 +544,17 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
     for (const m of ts.isInterfaceDeclaration(decl) ? decl.members : decl.type.members) {
       const key = `${name}.${nameOf(m)}`;
       const annotation = ts.isPropertySignature(m) || ts.isGetAccessorDeclaration(m) ? m.type : undefined;
-      const fn = annotation && unwrap(annotation);
       const output = ts.isGetAccessorDeclaration(m) || (ts.isPropertySignature(m) && m.modifiers?.some((x) => x.kind === ts.SyntaxKind.ReadonlyKeyword));
-      if (ts.isMethodSignature(m) || (fn && ts.isFunctionTypeNode(fn))) signatures.set(key, [...(signatures.get(key) ?? []), ts.isMethodSignature(m) ? m : fn]);
+      const sigs = ts.isMethodSignature(m)
+        ? [checker.getSignatureFromDeclaration(m)].map((sig) => sig && { sig, node: m })
+        : annotation && functionSignatures(annotation)?.map((sig) => ({ sig, node: sig.declaration && sig.declaration.getSourceFile() === m.getSourceFile() && sig.declaration.pos >= m.pos && sig.declaration.end <= m.end ? sig.declaration : m }));
+      if (sigs?.every(Boolean)) signatures.set(key, [...(signatures.get(key) ?? []), ...sigs]);
       else if (!output || !annotation || callable(annotation)) shape(m, key, `the member ${key} is no method, function-typed property or output-only member`);
     }
-    for (const [key, sigs] of signatures) {
-      const hits = sigs.map(positions).filter((at) => at.length > 0);
+    for (const [key, found] of signatures) {
+      const hits = found.map(({ sig }) => positions(sig)).filter((at) => at.length > 0);
       const detail = `${key}(${hits.map((at) => at.map((n) => `#${n}`).join(",")).join("|")})`;
-      if (hits.length > 0) report(PORT_RULE, sigs[0], detail, "a host port member takes an untyped input (any, unknown, object or an unconstrained type parameter); it bounds nothing a manifest declares (cinatra#4872)");
+      if (hits.length > 0) report(PORT_RULE, found[0].node, detail, "a host port member takes an untyped input (any, unknown, object or an unconstrained type parameter); it bounds nothing a manifest declares (cinatra#4872)");
     }
   };
   // The root's properties come from the checker, so inherited and intersected ones are read too;

@@ -57,7 +57,14 @@ from disk). They do not try to understand every shape TypeScript allows for a po
 require a closed one and refuse the rest as `port-shape`, keyed by the property or by
 `<Interface>.<member>`. The type checker answers one question: is a parameter's type `any`,
 `unknown`, `object` or an unconstrained type parameter, after removing `null` and `undefined`,
-in any union constituent, by its element type for a rest parameter.
+in any union constituent, by its element type for a rest parameter. The checker also answers
+the other questions about a type: a member is a function-typed property when its type has call
+signatures and nothing else (no construct signature, property, index signature or union with
+another type), so a written function type, a named alias of one and a generic alias of one are
+the same; and a referenced port or base resolves through the checker's symbol of the
+right-most name, so a bare, a namespace-qualified, a re-exported and a renamed import reach
+the same declaration. What the check reads from the syntax is only the declaration form of a
+port (interface, or alias of one type literal) and its member kinds.
 
 A root property is a port when its annotation (optionally `| null | undefined` or `?`)
 references an SDK interface or an SDK type alias of one type literal; it is an identity field
@@ -72,8 +79,8 @@ mapped or conditional type, a type parameter, `any`, `unknown` or `object`) is o
 `[call]` or `[construct]`, because each hides members from the property list.
 
 A port has no type parameters, extends SDK interfaces only, and holds methods, function-typed properties (optionally
-nullable) and output-only members (`readonly` properties and getters whose type cannot be
-called). Anything else in a port is `port-shape`.
+nullable, `readonly` or not) and output-only members (`readonly` properties and getters whose
+type cannot be called). Anything else in a port is `port-shape`.
 
 `untyped-port-input` is a method or function-typed property with an untyped parameter, keyed
 `<Interface>.<member>(#positions)`: positions, not names, so a rename that keeps the types
