@@ -469,33 +469,46 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
   // The listing walks every agent source directory (cinatra#4920): each one is
   // READ (listed) or REPORTED (a warnings[] message naming the directory, the
   // file found and the exact place the definition must be). Directories are
-  // keyed by path, and no directory name is skipped (`cinatra` is a slug).
-  // One table; the by-slug read of every READ directory is checked against it.
-  // (A READ directory behind an operator directory with an old file and the
-  // same slug is read by slug as that operator's migration error: the first
-  // directory with ANY definition file decides, covered above.)
+  // keyed by path, and no directory name is skipped (`cinatra` is a slug). A
+  // directory that a by-slug read does not select (another directory holds the
+  // same slug and comes first) is `shadowed` by the one it does select. One
+  // table, with no excluded shape; the by-slug read of every slug is checked
+  // against it: the selected directory's own outcome, its content if READ, its
+  // migration error if REPORTED, and nothing at all when no directory is selected
+  // (a by-slug read never looks at a root agent.json of a scoped directory, nor
+  // at a flat directory that has only cinatra/oas.json; the listing reports both).
   const S = SLUG;
+  const V = FIRST_PARTY;
+  const OP = OPERATOR;
   type Row = {
     name: string;
     files: string[];
     read: string[];
     reported?: Array<{ dir: string; found: string[]; at: string; also?: string }>;
+    /** directory -> the directory a by-slug read selects instead */
+    shadowed?: Record<string, string>;
+    /** what a by-slug read of each slug selects: a directory, or null for none */
+    bySlug: Array<{ slug: string; dir: string | null }>;
   };
   const ROWS: Row[] = [
-    { name: "scoped canonical", files: [`${FIRST_PARTY}/${S}/cinatra/oas.json`], read: [`${FIRST_PARTY}/${S}`] },
-    { name: "scoped old-only, cinatra/agent.json", files: [`${FIRST_PARTY}/${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${FIRST_PARTY}/${S}`, found: ["cinatra/agent.json"], at: `${FIRST_PARTY}/${S}/cinatra/oas.json` }] },
-    { name: "scoped old-only, root agent.json", files: [`${FIRST_PARTY}/${S}/agent.json`], read: [], reported: [{ dir: `${FIRST_PARTY}/${S}`, found: ["agent.json"], at: `${FIRST_PARTY}/${S}/cinatra/oas.json` }] },
-    { name: "scoped old-only, both old forms", files: [`${FIRST_PARTY}/${S}/cinatra/agent.json`, `${FIRST_PARTY}/${S}/agent.json`], read: [], reported: [{ dir: `${FIRST_PARTY}/${S}`, found: ["cinatra/agent.json", "agent.json"], at: `${FIRST_PARTY}/${S}/cinatra/oas.json` }] },
-    { name: "scoped both", files: [`${FIRST_PARTY}/${S}/cinatra/oas.json`, `${FIRST_PARTY}/${S}/cinatra/agent.json`, `${FIRST_PARTY}/${S}/agent.json`], read: [`${FIRST_PARTY}/${S}`] },
-    { name: "flat canonical", files: [`${S}/cinatra/oas.json`], read: [], reported: [{ dir: S, found: ["cinatra/oas.json"], at: `${OPERATOR}/${S}/cinatra/oas.json` }] },
-    { name: "flat old-only, cinatra/agent.json", files: [`${S}/cinatra/agent.json`], read: [], reported: [{ dir: S, found: ["cinatra/agent.json"], at: `${OPERATOR}/${S}/cinatra/oas.json` }] },
-    { name: "flat old-only, root agent.json", files: [`${S}/agent.json`], read: [], reported: [{ dir: S, found: ["agent.json"], at: `${OPERATOR}/${S}/cinatra/oas.json` }] },
-    { name: "flat both", files: [`${S}/cinatra/oas.json`, `${S}/cinatra/agent.json`, `${S}/agent.json`], read: [], reported: [{ dir: S, found: ["cinatra/oas.json", "cinatra/agent.json", "agent.json"], at: `${OPERATOR}/${S}/cinatra/oas.json` }] },
-    { name: "slug cinatra, scoped", files: [`${FIRST_PARTY}/cinatra/cinatra/oas.json`], read: [`${FIRST_PARTY}/cinatra`] },
-    { name: "a vendor directory that holds its own definition", files: [`${FIRST_PARTY}/agent.json`, `${FIRST_PARTY}/${S}/cinatra/oas.json`], read: [`${FIRST_PARTY}/${S}`], reported: [{ dir: FIRST_PARTY, found: ["agent.json"], at: `${OPERATOR}/${FIRST_PARTY}/cinatra/oas.json` }] },
-    { name: "two directories with one slug", files: [`${OPERATOR}/${S}/cinatra/oas.json`, `${FIRST_PARTY}/${S}/cinatra/oas.json`, `${S}/cinatra/oas.json`], read: [`${OPERATOR}/${S}`, `${FIRST_PARTY}/${S}`], reported: [{ dir: S, found: ["cinatra/oas.json"], at: `${OPERATOR}/${S}/cinatra/oas.json`, also: "already holds a definition" }] },
-    { name: "legacy renamed slug", files: ["drupal-content-editor/cinatra/agent.json"], read: [], reported: [{ dir: "drupal-content-editor", found: ["cinatra/agent.json"], at: `${OPERATOR}/drupal-agent/cinatra/oas.json` }] },
-    { name: "a vendor directory the listing does not walk", files: [`other-vendor/${S}/cinatra/oas.json`], read: [] },
+    { name: "scoped canonical", files: [`${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], bySlug: [{ slug: S, dir: `${V}/${S}` }] },
+    { name: "scoped old-only, cinatra/agent.json", files: [`${V}/${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${V}/${S}` }] },
+    { name: "scoped old-only, root agent.json", files: [`${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["agent.json"], at: `${V}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: null }] },
+    { name: "scoped old-only, both old forms", files: [`${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json", "agent.json"], at: `${V}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${V}/${S}` }] },
+    { name: "scoped both", files: [`${V}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [`${V}/${S}`], bySlug: [{ slug: S, dir: `${V}/${S}` }] },
+    { name: "flat canonical", files: [`${S}/cinatra/oas.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/oas.json"], at: `${OP}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: null }] },
+    { name: "flat old-only, cinatra/agent.json", files: [`${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${S}` }] },
+    { name: "flat old-only, root agent.json", files: [`${S}/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${S}` }] },
+    { name: "flat both", files: [`${S}/cinatra/oas.json`, `${S}/cinatra/agent.json`, `${S}/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/oas.json", "cinatra/agent.json", "agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${S}` }] },
+    { name: "slug cinatra, scoped", files: [`${V}/cinatra/cinatra/oas.json`], read: [`${V}/cinatra`], bySlug: [{ slug: "cinatra", dir: `${V}/cinatra` }] },
+    { name: "a vendor directory that holds its own definition", files: [`${V}/agent.json`, `${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], reported: [{ dir: `${V}`, found: ["agent.json"], at: `${OP}/${V}/cinatra/oas.json` }], bySlug: [{ slug: S, dir: `${V}/${S}` }, { slug: V, dir: `${V}` }] },
+    { name: "operator canonical + first-party canonical", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/oas.json`], read: [`${OP}/${S}`, `${V}/${S}`], shadowed: { [`${V}/${S}`]: `${OP}/${S}` }, bySlug: [{ slug: S, dir: `${OP}/${S}` }] },
+    { name: "operator old + first-party canonical", files: [`${OP}/${S}/cinatra/agent.json`, `${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], reported: [{ dir: `${OP}/${S}`, found: ["cinatra/agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], shadowed: { [`${V}/${S}`]: `${OP}/${S}` }, bySlug: [{ slug: S, dir: `${OP}/${S}` }] },
+    { name: "operator canonical + first-party old", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/agent.json`], read: [`${OP}/${S}`], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }], shadowed: { [`${V}/${S}`]: `${OP}/${S}` }, bySlug: [{ slug: S, dir: `${OP}/${S}` }] },
+    { name: "flat + scoped, same slug", files: [`${V}/${S}/cinatra/oas.json`, `${S}/agent.json`], read: [`${V}/${S}`], reported: [{ dir: `${S}`, found: ["agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], shadowed: { [`${S}`]: `${V}/${S}` }, bySlug: [{ slug: S, dir: `${V}/${S}` }] },
+    { name: "operator, first-party and flat directories with one slug", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/oas.json`, `${S}/cinatra/oas.json`], read: [`${OP}/${S}`, `${V}/${S}`], reported: [{ dir: `${S}`, found: ["cinatra/oas.json"], at: `${OP}/${S}/cinatra/oas.json`, also: "already holds a definition" }], shadowed: { [`${V}/${S}`]: `${OP}/${S}`, [`${S}`]: `${OP}/${S}` }, bySlug: [{ slug: S, dir: `${OP}/${S}` }] },
+    { name: "legacy renamed slug", files: [`drupal-content-editor/cinatra/agent.json`], read: [], reported: [{ dir: `drupal-content-editor`, found: ["cinatra/agent.json"], at: `${OP}/drupal-agent/cinatra/oas.json` }], bySlug: [{ slug: "drupal-agent", dir: `drupal-content-editor` }] },
+    { name: "a vendor directory the readers do not walk", files: [`other-vendor/${S}/cinatra/oas.json`], read: [], bySlug: [] },
   ];
 
   for (const row of ROWS) {
@@ -506,8 +519,19 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
       const result = await run("agent_source_list", {});
 
       const canonical = (d: string) => path.join(d, "cinatra", "oas.json");
-      expect(result.items.map((i: { path: string }) => i.path).sort()).toEqual(row.read.map(canonical).sort());
-      for (const d of row.read) expect(readLog).toContain(path.join(process.cwd(), canonical(d)));
+      const shadowed = row.shadowed ?? {};
+      const items = result.items as Array<{ path: string; shadowed: { by: string; note: string } | null }>;
+      expect(items.map((i) => i.path).sort()).toEqual(row.read.map(canonical).sort());
+      for (const d of row.read) {
+        expect(readLog).toContain(path.join(process.cwd(), canonical(d)));
+        const item = items.find((i) => i.path === canonical(d))!;
+        if (shadowed[d]) {
+          expect(item.shadowed?.by).toBe(path.normalize(shadowed[d]));
+          expect(item.shadowed?.note).toContain(`a read of slug ${path.basename(d)} `);
+        } else {
+          expect(item.shadowed).toBeNull();
+        }
+      }
       expect(readLog.filter((p) => /[\\/]agent\.json$/.test(p))).toEqual([]);
 
       const reported = row.reported ?? [];
@@ -516,13 +540,24 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
         const warning = result.warnings.find((w: string) => w.startsWith(`${r.dir} is an agent in the old layout`));
         expect(warning).toBeDefined();
         for (const text of [...r.found, path.normalize(r.at), ...(r.also ? [r.also] : [])]) expect(warning).toContain(text);
+        if (shadowed[r.dir]) expect(warning).toContain(`is also shadowed: a read of slug`);
       }
 
-      // Whatever the listing reads, a by-slug read reads.
-      for (const d of row.read) {
-        const read = await run("agent_source_read", { packageSlug: path.basename(d) });
-        expect(read.error).toBeUndefined();
-        expect(row.read.map(canonical)).toContain(read.path);
+      // The by-slug read agrees with the listing, for every slug in the row.
+      for (const by of Object.values(shadowed)) expect(row.bySlug.map((e) => e.dir)).toContain(by);
+      for (const { slug, dir } of row.bySlug) {
+        const read = await run("agent_source_read", { packageSlug: slug });
+        if (dir === null) {
+          expect(read.error).toBeDefined();
+          expect(read.error).not.toContain("old layout");
+        } else if (row.read.includes(dir)) {
+          expect(read.error).toBeUndefined();
+          expect(read.path).toBe(canonical(dir));
+        } else {
+          const r = reported.find((x) => x.dir === dir)!;
+          expect(read.error).toContain(`in ${path.normalize(dir)},`);
+          expect(read.error).toContain(path.normalize(r.at));
+        }
       }
     });
   }

@@ -107,6 +107,8 @@ export type GitNativeAgentDefinitionLoader = (opts: {
 export type GitNativeAgentIngestOptions = {
   /** Defaults to the extension source root (`resolveDevExtensionSourceRoot()`). */
   sourceRoot?: string;
+  /** The vendor directories a by-slug read walks. Defaults to the operator's own, then first-party. */
+  vendors?: readonly string[];
   /** Defaults to `GIT_NATIVE_AGENT_INGEST_BUDGET_MS`. */
   budgetMs?: number;
   /** Test seam — defaults to `ensureAgentPackageFromGitFile`. */
@@ -152,9 +154,22 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
  * tree, and each caller answers it its own way. An unreadable directory BELOW
  * the root is skipped, as it always was.
  */
-async function collectDefinitions(sourceRoot: string) {
+async function collectDefinitions(sourceRoot: string, vendors?: readonly string[]) {
   const { enumerateAgentSourceDirs } = await import("@cinatra-ai/agents/agent-source-dirs");
-  return enumerateAgentSourceDirs(sourceRoot, null);
+  return enumerateAgentSourceDirs(sourceRoot, null, { selectionVendors: vendors ?? (await bySlugVendors()) });
+}
+
+/**
+ * The vendor directories a by-slug read walks: the operator's own, then
+ * first-party. They decide which of two directories with one slug is read by
+ * slug (the other is reported as shadowed); both are still loaded here.
+ */
+async function bySlugVendors(): Promise<string[]> {
+  const first = "cinatra-ai";
+  const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
+  const { isSafePathSegment } = await import("@cinatra-ai/registries");
+  const own = readInstanceIdentity()?.instanceNamespace;
+  return typeof own === "string" && own !== first && isSafePathSegment(own) ? [own, first] : [first];
 }
 
 /** Read every git-native agent definition under `sourceRoot` into the database. */
@@ -175,7 +190,7 @@ export async function ingestGitNativeAgentDefinitions(
   }
   const budgetMs = options?.budgetMs ?? GIT_NATIVE_AGENT_INGEST_BUDGET_MS;
 
-  const sources = await collectDefinitions(sourceRoot);
+  const sources = await collectDefinitions(sourceRoot, options?.vendors);
   const definitions = sources.flatMap((source) => (source.state === "read" ? [source.definitionPath] : []));
   const report: GitNativeAgentIngestReport = {
     sourceRoot,
@@ -190,10 +205,14 @@ export async function ingestGitNativeAgentDefinitions(
   // A reported directory is no definition: the loader never sees it. It is
   // logged and recorded with the directory, the file found and the place its
   // definition must be, and the walk goes on.
-  const { agentSourceMessage, reportedAgentSources, warnAgentSource } = await import("@cinatra-ai/agents/agent-source-dirs");
-  for (const state of reportedAgentSources(sources)) {
+  // A READ directory that a by-slug read does not select is still loaded (as
+  // before) and gets its report line only.
+  const { agentSourceReport, warnAgentSource } = await import("@cinatra-ai/agents/agent-source-dirs");
+  for (const state of sources) {
     warnAgentSource(state);
-    report.failures.push({ definitionPath: relative(sourceRoot, state.dir), reason: agentSourceMessage(state, sourceRoot) });
+    if (state.state === "reported") {
+      report.failures.push({ definitionPath: relative(sourceRoot, state.dir), reason: agentSourceReport(state, sourceRoot)! });
+    }
   }
 
   const expiresAt = Date.now() + budgetMs;

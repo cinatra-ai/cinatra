@@ -520,9 +520,11 @@ export function readProviderDeclaredAgents(
         oasSourcePath: source.definitionPath,
         siblingPkgPaths: [path.join(source.dir, "package.json")],
       });
-    } else {
-      warnAgentSource(source);
     }
+    // A directory that is REPORTED, or READ but shadowed by another directory
+    // with its slug, gets its report line; which one a by-slug read selects
+    // does not change which agents are surfaced here.
+    warnAgentSource(source);
   }
 
   const persisted: PersistedAgent[] = [];

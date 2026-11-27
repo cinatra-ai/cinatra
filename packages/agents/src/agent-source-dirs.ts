@@ -16,7 +16,9 @@
 //             definition must be, which is a place that IS read.
 //
 // Results are keyed by PATH, never by slug: two directories with one slug each
-// get their own state. A definition file belongs to one directory only: the
+// get their own state, and every directory a by-slug read does NOT select is
+// marked `shadowedBy` the one it does select (findAgentDefinition decides, so
+// the listing cannot disagree with a read). A definition file belongs to one directory only: the
 // flat `<root>/<name>/cinatra/agent.json` is not also the root `agent.json` of
 // a scoped slug `cinatra` under `<root>/<name>`.
 //
@@ -24,6 +26,7 @@
 
 import { existsSync, readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { findAgentDefinition } from "./agent-definition-order";
 
 /** The vendor directory a message names when the reader has no operator vendor. */
 const DEFAULT_TARGET_VENDOR = "cinatra-ai";
@@ -37,7 +40,7 @@ export const LEGACY_AGENT_DIR_NAMES: Readonly<Record<string, string>> = {
 /** The relative places a definition file can be, the read one first. */
 const DEFINITION_PLACES = ["cinatra/oas.json", "cinatra/agent.json", "agent.json"] as const;
 
-export type AgentSourceDir =
+export type AgentSourceDir = (
   | { state: "read"; dir: string; definitionPath: string }
   | {
       state: "reported";
@@ -49,7 +52,12 @@ export type AgentSourceDir =
       scopedDir: string;
       /** `<scopedDir>/cinatra/oas.json`, the exact place the definition must be. */
       definitionPath: string;
-    };
+    }
+) & {
+  slug: string;
+  /** The directory a by-slug read of `slug` selects instead of this one. */
+  shadowedBy?: AgentSourceDir;
+};
 
 type ReportedAgentSourceDir = Extract<AgentSourceDir, { state: "reported" }>;
 
@@ -74,14 +82,16 @@ function classifyAgentSourceDir(
   });
   for (const place of found) claimed.add(join(dir, place));
   if (found.length === 0) return null;
+  const slug = flat ? slugOfFlatDir(basename(dir)) : basename(dir);
   if (!flat && found[0] === "cinatra/oas.json") {
-    return { state: "read", dir, definitionPath: join(dir, "cinatra", "oas.json") };
+    return { state: "read", slug, dir, definitionPath: join(dir, "cinatra", "oas.json") };
   }
   const scopedDir = flat
-    ? join(context.root, context.targetVendor ?? DEFAULT_TARGET_VENDOR, slugOfFlatDir(basename(dir)))
+    ? join(context.root, context.targetVendor ?? DEFAULT_TARGET_VENDOR, slug)
     : dir;
   return {
     state: "reported",
+    slug,
     flat,
     dir,
     found,
@@ -101,9 +111,15 @@ function classifyAgentSourceDir(
 export function enumerateAgentSourceDirs(
   root: string,
   vendors: readonly string[] | null,
-  options: { targetVendor?: string; onUnreadable?: (dir: string, error: unknown) => void } = {},
+  options: {
+    targetVendor?: string;
+    /** The vendors a by-slug read walks; defaults to `vendors`. Without either, nothing is marked shadowed. */
+    selectionVendors?: readonly string[];
+    onUnreadable?: (dir: string, error: unknown) => void;
+  } = {},
 ): AgentSourceDir[] {
-  const context = { root, targetVendor: options.targetVendor ?? vendors?.[0] };
+  const selectionVendors = options.selectionVendors ?? vendors;
+  const context = { root, targetVendor: options.targetVendor ?? selectionVendors?.[0] };
   const names = readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name);
@@ -125,7 +141,39 @@ export function enumerateAgentSourceDirs(
       options.onUnreadable?.(entryDir, error);
     }
   }
+  if (selectionVendors) markShadowed(out, root, selectionVendors);
   return out;
+}
+
+/**
+ * For every slug held by more than one directory, the by-slug read selects one
+ * (findAgentDefinition, never a second copy of its order); every other
+ * directory of that slug is marked shadowed by it, whatever the states are.
+ */
+function markShadowed(states: AgentSourceDir[], root: string, vendors: readonly string[]): void {
+  const bySlug = new Map<string, AgentSourceDir[]>();
+  for (const s of states) bySlug.set(s.slug, [...(bySlug.get(s.slug) ?? []), s]);
+  for (const [slug, group] of bySlug) {
+    if (group.length < 2) continue;
+    const found = findAgentDefinition({ root, vendors: [...vendors], slug, legacySlug: LEGACY_AGENT_DIR_NAMES[slug] ?? slug });
+    if (!found) continue;
+    const selected = group.find((s) =>
+      found.kind === "oas" ? s.dir === found.rootDir : s.state === "reported" && s.found.some((f) => join(s.dir, f) === found.found),
+    );
+    if (selected) for (const s of group) if (s !== selected) s.shadowedBy = selected;
+  }
+}
+
+/** The sentence for a directory a by-slug read does not select, or null. */
+export function agentSourceShadowNote(state: AgentSourceDir, base: string = process.cwd()): string | null {
+  const by = state.shadowedBy;
+  if (!by) return null;
+  const show = (p: string) => relative(base, p) || p;
+  if (by.state === "read") {
+    return `a read of slug ${state.slug} uses ${show(by.dir)} instead of ${show(state.dir)}; keep one of the two directories or give one of them another slug.`;
+  }
+  const files = by.found.join(" and ");
+  return `a read of slug ${state.slug} is decided by ${show(by.dir)}, which holds ${files} and is not read; move ${files} to ${show(by.definitionPath)} or remove the directory.`;
 }
 
 /**
@@ -141,19 +189,24 @@ export function agentSourceMessage(state: ReportedAgentSourceDir, base: string =
     : "move it there.";
   return (
     `${show(state.dir)} is an agent in the old layout (${state.flat ? "a directory directly under the source root" : "no cinatra/oas.json"}; found ${found}), ` +
-    `so it is not read. The definition must be at ${show(state.definitionPath)}; ${move}${taken}`
+    `so it is not read. The definition must be at ${show(state.definitionPath)}; ${move}${taken}` +
+    (state.shadowedBy ? ` This directory is also shadowed: ${agentSourceShadowNote(state, base)}` : "")
   );
 }
 
 const warned = new Set<string>();
 
-/** Log the sentence once per directory per process; a stale directory never stops a reader. */
-export function warnAgentSource(state: ReportedAgentSourceDir): void {
-  if (warned.has(state.dir)) return;
-  warned.add(state.dir);
-  console.warn(`[agents] ${agentSourceMessage(state)}`);
+/** The report line of a directory that needs one: REPORTED, or READ but shadowed. */
+export function agentSourceReport(state: AgentSourceDir, base?: string): string | null {
+  if (state.state === "reported") return agentSourceMessage(state, base);
+  const note = agentSourceShadowNote(state, base);
+  return note && `${relative(base ?? process.cwd(), state.dir) || state.dir} is shadowed: ${note}`;
 }
 
-export function reportedAgentSources(states: readonly AgentSourceDir[]): ReportedAgentSourceDir[] {
-  return states.filter((s): s is ReportedAgentSourceDir => s.state === "reported");
+/** Log the report line once per directory per process; a stale directory never stops a reader. */
+export function warnAgentSource(state: AgentSourceDir): void {
+  const line = agentSourceReport(state);
+  if (!line || warned.has(state.dir)) return;
+  warned.add(state.dir);
+  console.warn(`[agents] ${line}`);
 }

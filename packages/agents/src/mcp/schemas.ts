@@ -380,7 +380,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_list": {
     description:
-      "Exploration tool — use before starting the source-authoring pipeline. Lists all agent definition files (cinatra/oas.json) in the extension source directory. Returns items[], total, warnings[]. Each item includes path, packageName, packageVersion, name, and description. A source directory that is not at <vendor>/<slug>/cinatra/oas.json (an agent.json, or a flat <slug>/ directory) is not listed; its warnings[] entry names the directory, the file found and the exact place the definition must be.",
+      "Exploration tool — use before starting the source-authoring pipeline. Lists all agent definition files (cinatra/oas.json) in the extension source directory. Returns items[], total, warnings[]. Each item includes path, packageName, packageVersion, name, description, and shadowed (null, or { by, note } when another directory with the same slug is the one agent_source_read selects). A source directory that is not at <vendor>/<slug>/cinatra/oas.json (an agent.json, or a flat <slug>/ directory) is not listed; its warnings[] entry names the directory, the file found and the exact place the definition must be.",
     inputSchema: z.object({}),
   },
   "agent_source_read": {

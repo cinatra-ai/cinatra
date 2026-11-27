@@ -81,8 +81,8 @@ import {
 } from "./agent-source-paths";
 import {
   agentSourceMessage,
+  agentSourceShadowNote,
   enumerateAgentSourceDirs,
-  reportedAgentSources,
   type AgentSourceDir,
 } from "../agent-source-dirs";
 import { createZipBuffer } from "../zip-helpers";
@@ -2746,6 +2746,8 @@ async function handleAgentBuilderGitList(
   // for the operator's OWN vendor dir and the first-party "cinatra-ai" dir,
   // cinatra#537) is listed; REPORTED (an old-layout or flat directory) is named
   // in warnings[] with the directory, the file found and the place to move it.
+  // A directory a by-slug read does not select carries `shadowed` (the directory
+  // that read selects, and a note).
   const root = resolveDevExtensionSourceRoot();
   let sources: AgentSourceDir[] = [];
   try {
@@ -2753,7 +2755,7 @@ async function handleAgentBuilderGitList(
   } catch {
     /* root unreadable — nothing to list */
   }
-  const warnings = reportedAgentSources(sources).map((state) => agentSourceMessage(state));
+  const warnings = sources.flatMap((state) => (state.state === "reported" ? [agentSourceMessage(state)] : []));
 
   const items: unknown[] = [];
   for (const source of sources) {
@@ -2783,6 +2785,11 @@ async function handleAgentBuilderGitList(
         packageVersion: cinatra?.packageVersion ?? content.packageVersion ?? siblingPkgVersion ?? null,
         name: content.name ?? null,
         description,
+        // A directory a by-slug read does not select (same slug as another one):
+        // `by` is the directory that read selects. Null for the selected one.
+        shadowed: source.shadowedBy
+          ? { by: relative(process.cwd(), source.shadowedBy.dir), note: agentSourceShadowNote(source) }
+          : null,
       });
     } catch {
       // Skip unreadable or invalid files — do not fail the entire list
