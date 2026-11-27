@@ -739,6 +739,9 @@ export const SUPPLIED_REPOSITORY_SUBJECT: SuppliedTreeSubject = {
   emptyDescription: "the repository tree contains no files",
 };
 
+/** The one file that holds an agent package's definition (cinatra#4920). */
+export const AGENT_DEFINITION_PATH = "cinatra/oas.json";
+
 /**
  * Resolve the payload a KIND requires, or say what is missing.
  *
@@ -747,9 +750,9 @@ export const SUPPLIED_REPOSITORY_SUBJECT: SuppliedTreeSubject = {
  * later look for — and a package that does not is refused at intake instead of
  * halfway through an install:
  *
- *   agent     — the OAS Flow document: `cinatra.entrypoint`, else the
- *               conventional `cinatra/oas.json`. A root `agent.json` is not read
- *               (cinatra#4920).
+ *   agent     — the OAS Flow document `cinatra/oas.json`, and no other file:
+ *               a `cinatra.entrypoint` may name only that file, and a root
+ *               `agent.json` is not read (cinatra#4920).
  *   skill     — at least one `SKILL.md` (the catalog is built from these).
  *   connector — the declared `cinatra.serverEntry` (the module the pipeline
  *               later hot-loads; its presence is checkable, and checking it is
@@ -773,6 +776,14 @@ export function resolveSuppliedKindPayload(
 
   if (kind === "agent") {
     if (entrypoint) {
+      // cinatra#4920: an agent's definition is cinatra/oas.json and nothing else.
+      // The install road reads only that file, so a package whose entrypoint names
+      // another file would pass intake and fail at install; it is refused here.
+      if (entrypoint !== AGENT_DEFINITION_PATH) {
+        return {
+          missing: `${AGENT_DEFINITION_PATH} as the agent definition: package.json "cinatra.entrypoint" names "${entrypoint}", and an agent definition is ${AGENT_DEFINITION_PATH} only`,
+        };
+      }
       const doc = get(entrypoint);
       if (doc === undefined) {
         return { missing: `the entrypoint "${entrypoint}" that package.json names` };
@@ -787,7 +798,7 @@ export function resolveSuppliedKindPayload(
     }
     return {
       missing:
-        'an OAS Flow document: put the agent definition in cinatra/oas.json (or name it in a package.json "cinatra.entrypoint"); a root agent.json is no longer read',
+        'an OAS Flow document: put the agent definition in cinatra/oas.json (a package.json "cinatra.entrypoint" may name only that file); a root agent.json is no longer read',
     };
   }
 

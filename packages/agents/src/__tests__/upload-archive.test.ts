@@ -241,6 +241,62 @@ describe("resolveAgentArchive — old flat layout is refused", () => {
   });
 });
 
+describe("resolveAgentArchive — the definition is cinatra/oas.json whatever the entrypoint names (cinatra#4920)", () => {
+  const namesOtherFile = /package\.json names "agent\.json" as the agent definition.*cinatra\/oas\.json only/;
+  const pkgWith = (cinatra: Record<string, unknown>) =>
+    JSON.stringify({ name: "@example-org/entry-agent", version: "1.0.0", cinatra: { kind: "agent", ...cinatra } });
+
+  it("refuses an entrypoint that names a root agent.json, naming both files", async () => {
+    const archive = storedZip([
+      { name: "package.json", content: pkgWith({ entrypoint: "agent.json" }) },
+      { name: "agent.json", content: OAS_FLOW },
+    ]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(namesOtherFile);
+  });
+
+  it("refuses an entrypoint that names another file even when cinatra/oas.json is also shipped", async () => {
+    const archive = storedZip([
+      { name: "package.json", content: pkgWith({ entrypoint: "./flows/main.json" }) },
+      { name: "flows/main.json", content: OAS_FLOW },
+      { name: "cinatra/oas.json", content: OAS_FLOW },
+    ]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(/names "\.\/flows\/main\.json" as the agent definition/);
+  });
+
+  it("refuses the same entrypoint under a single folder prefix", async () => {
+    const archive = storedZip([
+      { name: "entry-agent/package.json", content: pkgWith({ entrypoint: "agent.json" }) },
+      { name: "entry-agent/agent.json", content: OAS_FLOW },
+    ]);
+    // red-first-expect: promise resolved
+    await expect(resolve(archive)).rejects.toThrow(namesOtherFile);
+  });
+
+  it("still resolves an entrypoint of cinatra/oas.json, with or without a leading ./", async () => {
+    for (const entrypoint of ["cinatra/oas.json", "./cinatra/oas.json"]) {
+      const resolved = await resolve(
+        storedZip([
+          { name: "package.json", content: pkgWith({ entrypoint }) },
+          { name: "cinatra/oas.json", content: OAS_FLOW },
+        ]),
+      );
+      expect(JSON.parse(resolved.agentJson).name).toBe("Round Trip Agent");
+    }
+  });
+
+  it("still resolves with no entrypoint when cinatra/oas.json is present", async () => {
+    const resolved = await resolve(
+      storedZip([
+        { name: "package.json", content: pkgWith({}) },
+        { name: "cinatra/oas.json", content: OAS_FLOW },
+      ]),
+    );
+    expect(JSON.parse(resolved.agentJson).name).toBe("Round Trip Agent");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Deflate support
 // ---------------------------------------------------------------------------

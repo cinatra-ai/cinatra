@@ -179,6 +179,51 @@ describe("resolveSuppliedArchive refuses by name", () => {
     await expect(resolveFixture(oldLayout)).rejects.toThrow(/put the agent definition in cinatra\/oas\.json .*a root agent\.json is no longer read/);
   });
 
+  it("refuses an agent whose entrypoint names a root agent.json, naming both files (cinatra#4920)", async () => {
+    const entrypointNamesRootFile = [
+      { name: "package.json", content: pkgJson({ name: "@example-org/entry-agent", cinatra: { kind: "agent", entrypoint: "agent.json" } }) },
+      { name: "agent.json", content: OAS_FLOW },
+    ];
+    // red-first-expect: promise resolved
+    await expect(resolveFixture(entrypointNamesRootFile)).rejects.toThrow(
+      /declares kind "agent" but does not contain cinatra\/oas\.json as the agent definition: package\.json "cinatra\.entrypoint" names "agent\.json".*cinatra\/oas\.json only/,
+    );
+  });
+
+  it("refuses an agent entrypoint of another file even when cinatra/oas.json is shipped too, through the repository road as well", async () => {
+    const files = [
+      { name: "package.json", content: pkgJson({ name: "@example-org/entry-agent", cinatra: { kind: "agent", entrypoint: "./flows/main.json" } }) },
+      { name: "flows/main.json", content: OAS_FLOW },
+      { name: "cinatra/oas.json", content: OAS_FLOW },
+    ];
+    // red-first-expect: promise resolved
+    await expect(resolveFixture(files)).rejects.toThrow(/names "flows\/main\.json"/);
+    const tree = new Map(files.map((f) => [f.name, new TextEncoder().encode(f.content)]));
+    // red-first-expect: promise resolved
+    await expect(resolveSuppliedPackageTree(tree, SUPPLIED_REPOSITORY_SUBJECT)).rejects.toThrow(
+      /names "flows\/main\.json"/,
+    );
+  });
+
+  it("still resolves an agent with entrypoint cinatra/oas.json, or none beside cinatra/oas.json", async () => {
+    const declared = await resolveFixture(KIND_FIXTURES.agent);
+    expect([...declared.payload.keys()]).toEqual(["cinatra/oas.json"]);
+    const absent = await resolveFixture([
+      { name: "package.json", content: pkgJson({ name: "@example-org/entry-agent", cinatra: { kind: "agent" } }) },
+      { name: "cinatra/oas.json", content: OAS_FLOW },
+    ]);
+    expect([...absent.payload.keys()]).toEqual(["cinatra/oas.json"]);
+  });
+
+  it("leaves another kind's own entrypoint alone: an artifact may name its own descriptor", async () => {
+    const r = await resolveFixture([
+      { name: "package.json", content: pkgJson({ name: "@example-org/entry-artifact", cinatra: { kind: "artifact", entrypoint: "descriptors/main.json" } }) },
+      { name: "descriptors/main.json", content: DESCRIPTOR },
+    ]);
+    expect(r.kind).toBe("artifact");
+    expect([...r.payload.keys()]).toEqual(["descriptors/main.json"]);
+  });
+
   it("refuses an archive with no package.json at all", async () => {
     await expect(resolveFixture([{ name: "README.md", content: "hi" }])).rejects.toThrow(
       /no package\.json found/,

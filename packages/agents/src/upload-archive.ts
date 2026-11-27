@@ -45,6 +45,7 @@
 // ---------------------------------------------------------------------------
 
 import {
+  AGENT_DEFINITION_PATH,
   MAX_SUPPLIED_ENTRY_BYTES,
   MAX_SUPPLIED_TREE_BYTES,
   MAX_SUPPLIED_TREE_ENTRIES,
@@ -325,6 +326,12 @@ function resolveAtRoot(files: Map<string, string>, prefix: string): RootResoluti
     const entrypoint = pkg.cinatra?.entrypoint;
     if (typeof entrypoint === "string" && entrypoint.length > 0) {
       const normalized = entrypoint.replace(/^\.\//, "");
+      // cinatra#4920: an agent's definition is cinatra/oas.json and nothing else.
+      if (normalized !== AGENT_DEFINITION_PATH) {
+        throw new Error(
+          `Invalid archive: package.json names "${entrypoint}" as the agent definition (cinatra.entrypoint). The agent definition is ${AGENT_DEFINITION_PATH} only.`,
+        );
+      }
       const agentJson = get(normalized);
       if (agentJson === undefined) {
         throw new Error(
