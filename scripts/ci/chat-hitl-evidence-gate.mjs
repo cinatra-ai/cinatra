@@ -41,7 +41,10 @@
 // STATED LIMIT: the comparison is mode-blind. It does not read `enforcement`,
 // `gateLandedAt` or `trunkBranch`, and it does not ask what the CLI flags do with
 // the lists; changing the mode is a visible one-line change in review, the lists
-// are what silently grow. Both sides read a list the same way: an array of
+// are what silently grow. The workflow names the base from the event itself
+// (CHAT_HITL_EVIDENCE_BASE: the pull request's or the merge group's base SHA), so
+// a rerun compares with the base the run started from, not a moved branch tip. A
+// merge group run with no such base fails closed. Both sides read a list the same way: an array of
 // strings; absent or `null` is the empty list; any other shape fails closed.
 //
 // Zero runtime dependencies (node builtins only) so the caller needs no install.
@@ -116,6 +119,15 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
       status: "malformed",
       ok: false,
       lines: [`[chat-hitl-evidence-gate] FAIL - the floor ${FLOOR_FILE} is not a readable rollout file (${err.message}). Failing closed.`],
+    };
+  }
+  // A merge group has no pull request base branch for the shared guard to fall
+  // back on: it would pass as "no base". The workflow always names the base.
+  if (env.GITHUB_EVENT_NAME === "merge_group" && !env[FLOOR_BASE_VAR]) {
+    return {
+      status: "unreadable",
+      ok: false,
+      lines: [`[chat-hitl-evidence-gate] FAIL - the floor ${FLOOR_FILE} cannot be compared with the base: the run is a merge group's but ${FLOOR_BASE_VAR} is empty. Failing closed.`],
     };
   }
   return compareFloorWithBase({

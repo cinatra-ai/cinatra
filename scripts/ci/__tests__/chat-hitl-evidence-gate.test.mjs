@@ -30,6 +30,7 @@ import {
   PULL_REQUEST_RUN,
   UNREADABLE_BASE_RUN,
   envWithoutBase,
+  fixtureGit,
   makeFloorRepo,
 } from "../../audit/__tests__/floor-base-fixture.mjs";
 
@@ -507,5 +508,93 @@ describe("chat-hitl-evidence-gate — the recorded lists may not grow against th
       expect(run.status, flags.join(" ")).toBe(1);
       expect(run.stderr, flags.join(" ")).toContain("knownFindings entry pointer-text:a.ts:1");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The base is the EVENT's own, not the live branch tip (cinatra#3832, review
+// finding): the workflow sets CHAT_HITL_EVIDENCE_BASE from the pull request's
+// or the merge group's base SHA.
+// ---------------------------------------------------------------------------
+
+describe("chat-hitl-evidence-gate — the comparison takes the event's own base", () => {
+  const FLOOR = "scripts/ci/chat-hitl-evidence-gate.rollout.json";
+  const rollout = (knownFindings) => ({
+    enforcement: "warn-first",
+    trunkBranch: "main",
+    gateLandedAt: "2026-08-19T00:00:00Z",
+    grandfatheredBranches: [],
+    knownFindings,
+  });
+  const cleanups = [];
+  afterAll(() => cleanups.forEach((c) => c()));
+
+  /**
+   * pinned (the event's base SHA) holds `pinnedList`; the live origin/main has
+   * moved on to `liveList`; the checked-out head holds `headList`.
+   */
+  function fixture({ pinnedList, liveList, headList }) {
+    const f = makeFloorRepo({ base: { [FLOOR]: rollout(pinnedList) }, head: { [FLOOR]: rollout(headList) } });
+    cleanups.push(f.cleanup);
+    const headSha = fixtureGit(f.root, ["rev-parse", "HEAD"]).trim();
+    const pinned = fixtureGit(f.root, ["rev-parse", "HEAD~1"]).trim();
+    fixtureGit(f.root, ["checkout", "-q", "--detach", pinned]);
+    writeFileSync(join(f.root, FLOOR), JSON.stringify(rollout(liveList), null, 2) + "\n");
+    fixtureGit(f.root, ["commit", "-q", "-a", "--allow-empty", "-m", "live main moved on"]);
+    fixtureGit(f.root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fixtureGit(f.root, ["checkout", "-q", "--detach", headSha]);
+    return { root: f.root, pinned };
+  }
+  const call = (root, env) => {
+    expect(typeof gateLib.checkFloorAgainstBase).toBe("function");
+    return gateLib.checkFloorAgainstBase({ repoRoot: root, env });
+  };
+
+  it("pull request: a pinned base that holds an entry live main has since removed passes an unchanged head", () => {
+    const { root, pinned } = fixture({ pinnedList: ["old-entry"], liveList: [], headList: ["old-entry"] });
+    const pinnedRun = { ...PULL_REQUEST_RUN, CHAT_HITL_EVIDENCE_BASE: pinned };
+    expect(call(root, pinnedRun)).toMatchObject({ ok: true, status: "held" });
+    // Without the event's base the live tip is read: the unchanged entry looks like growth.
+    expect(call(root, PULL_REQUEST_RUN)).toMatchObject({ ok: false, status: "grew" });
+  });
+
+  it("pull request: growth against the pinned base still fails, naming the entry", () => {
+    const { root, pinned } = fixture({ pinnedList: [], liveList: [], headList: ["new-entry"] });
+    const r = call(root, { ...PULL_REQUEST_RUN, CHAT_HITL_EVIDENCE_BASE: pinned });
+    expect(r).toMatchObject({ ok: false, status: "grew" });
+    expect(r.lines.join("\n")).toContain("knownFindings entry new-entry");
+  });
+
+  it("merge group: growth against the group's base_sha fails", () => {
+    const { root, pinned } = fixture({ pinnedList: [], liveList: [], headList: ["new-entry"] });
+    const r = call(root, { GITHUB_EVENT_NAME: "merge_group", CHAT_HITL_EVIDENCE_BASE: pinned });
+    expect(r).toMatchObject({ ok: false, status: "grew" });
+    expect(r.lines.join("\n")).toContain("knownFindings entry new-entry");
+  });
+
+  it("merge group: an unchanged head passes against the group's base_sha", () => {
+    const { root, pinned } = fixture({ pinnedList: ["old-entry"], liveList: [], headList: ["old-entry"] });
+    expect(call(root, { GITHUB_EVENT_NAME: "merge_group", CHAT_HITL_EVIDENCE_BASE: pinned })).toMatchObject({
+      ok: true,
+      status: "held",
+    });
+  });
+
+  it("merge group with no base named fails closed instead of passing as no-base", () => {
+    const { root } = fixture({ pinnedList: [], liveList: [], headList: ["new-entry"] });
+    const r = call(root, { GITHUB_EVENT_NAME: "merge_group" });
+    expect(r).toMatchObject({ ok: false, status: "unreadable" });
+    expect(r.lines.join("\n")).toMatch(/merge group's but CHAT_HITL_EVIDENCE_BASE is empty/);
+  });
+
+  it("the workflow step sets CHAT_HITL_EVIDENCE_BASE from the merge group's or the pull request's base SHA", () => {
+    const text = readFileSync(join(REPO_ROOT, ".github", "workflows", "gates.yml"), "utf8");
+    const lines = text.split("\n");
+    const at = lines.findIndex((l) => l === "      - name: chat-HITL Evidence Gate");
+    expect(at, "the step is missing").toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > at && /^ {6}(- |#)/.test(l));
+    const step = lines.slice(at, end === -1 ? undefined : end).join("\n");
+    expect(step).toContain("        env:\n          CHAT_HITL_EVIDENCE_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}\n");
+    expect(step).toContain("node scripts/ci/chat-hitl-evidence-gate.mjs");
   });
 });
