@@ -3,12 +3,13 @@
  * before it installs an agent package from disk.
  *
  * The import path refuses a package whose top-level Flow has a visible input
- * with no default that the start step does not declare required
- * (`scanOasForVisibleInputContractFindings`, called with the package's own
- * name as the installer does). The runtime refuses a package whose published
- * marker does not match the definition bytes. Two fixtures were committed with
- * an empty start-step `metadata` and could not be installed; this test finds
- * every fixture package on disk so a new one cannot repeat that.
+ * with no default that the start step does not declare required, or a model
+ * step the run does not read (`scanOasForInstallFindings`, called with the
+ * package's own name as the installer does). The runtime refuses a package
+ * whose published marker does not match the definition bytes. Two fixtures
+ * were committed with an empty start-step `metadata` and could not be
+ * installed; this test finds every fixture package on disk so a new one cannot
+ * repeat that.
  *
  *   npx vitest run src/__tests__/fixture-agents-install-contract.test.ts
  */
@@ -18,7 +19,7 @@ import { join, relative, sep } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { scanOasForVisibleInputContractFindings } from "../../packages/agents/src/validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "../../packages/agents/src/validate-oas-runtime-invariants";
 
 const FIXTURES_ROOT = join(__dirname, "..", "..", "tests", "fixtures");
 
@@ -58,7 +59,7 @@ function readPackage(root: string) {
 
 /** The input titles the import path would refuse this package for. */
 function refusedInputTitles(oas: Record<string, unknown>, packageName: string): string[] {
-  return scanOasForVisibleInputContractFindings(oas, packageName)
+  return scanOasForInstallFindings(oas, packageName)
     .map((finding) => /visible Flow input "([^"]+)"/.exec(finding.message)?.[1] ?? finding.message)
     .sort();
 }

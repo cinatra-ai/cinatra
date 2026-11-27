@@ -83,6 +83,8 @@
  *                     through `forEachRunStep` ($referenced_components, a
  *                     subflow, a ParallelFlowNode's subflows), by their id, and
  *                     refuses calls of any other step (step_tool_step_unknown).
+ *                     Also refused at install (`scanOasForInstallFindings`,
+ *                     called by the ZIP import and the registry install).
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -113,7 +115,7 @@
  *                     declarative binding replaces prompt-driven persistence.
  */
 
-import type { ReviewFinding } from "./validate-agent-json";
+import { isLlmBridgeUrl, type ReviewFinding } from "./validate-agent-json";
 import {
   collectArtifactBindingsFromOasDocument,
   collectArtifactImageNodesFromOasDocument,
@@ -660,12 +662,11 @@ export type StepToolDeclaration =
   | { kind: "declared"; tools: string[] }
   | { kind: "invalid"; reason: string };
 
+// A model step is an ApiNode whose url ENDS at the bridge route (the predicate of
+// the llm-bridge wiring scan in validate-agent-json). An ordinary ApiNode such as
+// `/api/llm-bridge/status` is not one.
 function isModelBridgeApiNode(node: Record<string, unknown>): boolean {
-  return (
-    node.component_type === "ApiNode" &&
-    typeof node.url === "string" &&
-    node.url.includes("/api/llm-bridge")
-  );
+  return node.component_type === "ApiNode" && isLlmBridgeUrl(node.url);
 }
 
 function carriesStepToolKey(node: Record<string, unknown>): boolean {
@@ -2417,4 +2418,23 @@ export function scanOasForVisibleInputContractFindings(
     });
   }
   return findings;
+}
+
+/**
+ * The findings that refuse an install (cinatra#4897). The ZIP import
+ * (import-agent-core) and the registry install (build-agent-template-seed) both
+ * call this one function on the package's document, after their compile: the
+ * compile checks the document's structure only, so a flow the run could not
+ * read (OAS-RUNTIME-016) or that setup could not start
+ * (visible_input_setup_omission) would otherwise install and fail later. A rule that must refuse an install joins
+ * this list; every other rule stays with the review and the lint.
+ */
+export function scanOasForInstallFindings(
+  parsed: Record<string, unknown>,
+  packageName = resolvePackageName(parsed),
+): ReviewFinding[] {
+  return [
+    ...scanOasForVisibleInputContractFindings(parsed, packageName),
+    ...scanModelStepsOutsideRunSteps(parsed),
+  ];
 }

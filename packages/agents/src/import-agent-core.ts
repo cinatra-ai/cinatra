@@ -37,7 +37,7 @@ import {
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
 import { assertStoredRegenerateHonoured } from "./retained-regenerate";
-import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
@@ -322,7 +322,7 @@ export async function importAgentTemplateCore(
     }
     compiled = compileResult.value;
     // Use the ZIP manifest/compiler identity, never the OAS's claimed identity.
-    const inputFindings = scanOasForVisibleInputContractFindings(
+    const inputFindings = scanOasForInstallFindings(
       agent as unknown as Record<string, unknown>,
       installPackageName,
     );

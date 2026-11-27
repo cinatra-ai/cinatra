@@ -132,6 +132,7 @@ vi.mock("../agent-template-identity", async () =>
 import { importAgentTemplateCore } from "../import-agent-core";
 import { createZipBuffer } from "../zip-helpers";
 import { PUBLISHED_MARKER_FILENAME } from "../materialize-agent-package";
+import { UNREAD_MODEL_STEP_PATH, withUnreadModelStep } from "./helpers/unread-model-step-oas-4897";
 
 const OAS = JSON.stringify({
   agentspec_version: "26.1.0",
@@ -424,6 +425,17 @@ it("refuses an undeclared visible input before ZIP import writes or materializes
     $referenced_components: { start: { component_type: "StartNode", id: "start", inputs: [input] } },
   });
   await expect(importAgentTemplateCore(zip(oas), undefined, { redirect: false, requireRuntimeMount: true })).rejects.toThrow(/postId/);
+  expect(createTemplate).not.toHaveBeenCalled();
+  expect(updateTemplate).not.toHaveBeenCalled();
+  expect(reload).not.toHaveBeenCalled();
+  await expect(stat(agentDir)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("refuses a model step the run does not read before ZIP import writes or materializes (cinatra#4897)", async () => {
+  const oas = JSON.stringify(withUnreadModelStep(JSON.parse(OAS)));
+  await expect(importAgentTemplateCore(zip(oas), undefined, { redirect: false, requireRuntimeMount: true })).rejects.toThrow(
+    `Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`,
+  );
   expect(createTemplate).not.toHaveBeenCalled();
   expect(updateTemplate).not.toHaveBeenCalled();
   expect(reload).not.toHaveBeenCalled();

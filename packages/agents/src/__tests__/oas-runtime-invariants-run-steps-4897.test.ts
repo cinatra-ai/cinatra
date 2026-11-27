@@ -131,6 +131,14 @@ describe("OAS-RUNTIME-016: a model step sits where the run reads steps (cinatra#
     expect(findings[0].message).toContain("also carried by the step at $.$referenced_components.draft");
   });
 
+  it("does not take an ordinary ApiNode for a model step: a url that does not end at the bridge route", () => {
+    const status = { ...modelStep("status"), url: "{{CINATRA_BASE_URL}}/api/llm-bridge/status" };
+    expect(unread(flow({}, [status]))).toEqual([]);
+    expect(unread(flow({}, [{ ...status, url: "/api/llm-bridge/status" }]))).toEqual([]);
+    // The same node at the bridge route itself is a model step the run does not read.
+    expect(unread(flow({}, [{ ...status, url: "/api/llm-bridge" }]))).toHaveLength(1);
+  });
+
   it("does not search a node's payload for steps", () => {
     const api = { ...modelStep("call"), data: { example: modelStep("quoted") } };
     expect(unread(flow({ call: api }, [{ $component_ref: "call" }]))).toEqual([]);

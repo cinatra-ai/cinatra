@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { compileOasAgentJson, type PublishRows } from "./oas-compiler";
-import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "./validate-oas-runtime-invariants";
 import {
   readManifestLifecycle,
   serializeLifecycleConfig,
@@ -233,7 +233,7 @@ export async function buildAgentTemplateInstallSeed(input: {
     throw new Error(`Cannot verify start inputs for ${input.packageName}: ${error instanceof Error ? error.message : String(error)}`);
   }
   // Refuse before registry installation or bundled seeding can write a row.
-  const inputFindings = scanOasForVisibleInputContractFindings(oasDoc, input.packageName);
+  const inputFindings = scanOasForInstallFindings(oasDoc, input.packageName);
   if (inputFindings.length > 0) {
     throw new Error(`Cannot install ${input.packageName}: ${inputFindings.map(finding => finding.message).join("\n")}`);
   }
