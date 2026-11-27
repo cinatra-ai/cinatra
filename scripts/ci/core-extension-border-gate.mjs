@@ -750,12 +750,12 @@ function productCompilerOptions(repoRoot) {
 /** `unbounded-port-member` (cinatra#4872): a host port member that takes a FREE NAME (a parameter of
  *  the plain `string` type) together with an UNTYPED PAYLOAD (another parameter of type `any` or
  *  `unknown`), the shape `run(name: string, input: unknown)`. Decided on the checker's resolved
- *  types, never on how a type is written. A REST parameter is read EXACTLY when its type is a plain
- *  array `T[]` / `readonly T[]` (one more parameter of type T) or a tuple of fixed shape (its
- *  elements as parameters); every other rest type (a union, a type parameter or a type still holding
- *  one, a tuple with a rest or variadic element, `any`, `unknown`, an intersection, a conditional or
- *  indexed type) is read conservatively: it counts as both a possible free name and a possible
- *  untyped payload, so the signature is a finding. The anchor is the registration contract: the module's exports, aliases
+ *  types, never on how a type is written. A signature is judged by its ALTERNATIVES: a rest
+ *  parameter is read as a list of alternative lists of positions (`alternatives` below: an array
+ *  gives two positions of its element type, a tuple its elements, a union each constituent, a type
+ *  parameter its constraint) and the signature is a finding only if SOME alternative, together with
+ *  the fixed parameters, has a free name and, at ANOTHER position, an untyped payload. Nothing is
+ *  reported merely for its form. The anchor is the registration contract: the module's exports, aliases
  *  followed, the entry type's `register` property, the first parameter of each call signature (the
  *  context). Every property of the context is walked on its own, and so is every member of its
  *  type, and every member of such a member that is an object (two levels down). A finding is keyed `<context property>.<member>`, the grant name the product itself uses;
@@ -771,17 +771,22 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
   const rel = (f) => relative(realRoot, f).split(sep).join("/");
   const flat = (t) => (t.isUnion() ? t.types.flatMap(flat) : [t]);
   const fail = (what) => new Error(`[core-extension-border] the registration contract ${PORT_CONTRACT.type}.${PORT_CONTRACT.member}(…) ${what} in ${contractFile} — the rule fails closed rather than reading no port`);
-  const typeOf = (sym) => {
-    const t = checker.getTypeOfSymbol(sym);
+  const typeOf = (sym) => checked(checker.getTypeOfSymbol(sym), sym);
+  const isRest = (p) => !!p.valueDeclaration?.dotDotDotToken;
+
+  // One position of a list nothing is known about (`any`, an unconstrained type parameter, an
+  // overflow): it takes arbitrary data and is never a DECLARED free name.
+  const OPEN = Symbol("open position");
+  const checked = (t, sym) => {
     if (t.flags & F.Any && (t.intrinsicName === "error" || t.intrinsicName === "unresolved")) {
       throw new Error(`[core-extension-border] the border check could not resolve a type of ${checker.symbolToString(sym)} in ${contractFile}`);
     }
     return t;
   };
-  const isRest = (p) => !!p.valueDeclaration?.dotDotDotToken;
 
-  // The two questions asked of a RESOLVED parameter type.
+  // The two questions asked of one RESOLVED position.
   const freeString = (t, seen = new Set()) => {
+    if (t === OPEN) return false;
     if (t.flags & F.String) return true;
     if (t.flags & F.TypeParameter && !seen.has(t)) {
       const c = checker.getBaseConstraintOfType(t);
@@ -792,38 +797,68 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     return t.isUnion() && t.types.some((c) => freeString(c, seen));
   };
   const untyped = (t, seen = new Set()) => {
-    if (t.flags & (F.Any | F.Unknown)) return true;
+    if (t === OPEN || t.flags & (F.Any | F.Unknown)) return true;
     if (t.flags & F.TypeParameter && !seen.has(t)) {
       const c = checker.getBaseConstraintOfType(t);
       return !c || untyped(c, seen.add(t));
     }
     return t.isUnion() && t.types.some((c) => untyped(c, seen));
   };
-  // The parameter types of a rest parameter that is read EXACTLY: a plain array `T[]` / `readonly T[]`
-  // is one more parameter of type T; a tuple of FIXED shape (required and optional elements only, none
-  // of them a type parameter or another type still to be instantiated) is its elements. Anything else
-  // gives `undefined`: the caller reads it conservatively.
-  const exactRest = (t) => {
-    if (checker.isArrayType(t)) return [checker.getTypeArguments(t)[0]];
-    if (!checker.isTupleType(t) || t.target.elementFlags.some((f) => f & (ts.ElementFlags.Rest | ts.ElementFlags.Variadic))) return undefined;
-    const elements = checker.getTypeArguments(t);
-    return elements.some((e) => flat(e).some((c) => c.flags & (F.TypeParameter | F.IndexedAccess | F.Conditional | F.Substitution))) ? undefined : elements;
-  };
-  // The shape of one call signature: a free name and, in another parameter, an untyped payload. A rest
-  // parameter read exactly is more ordinary parameters. A rest parameter read conservatively counts as
-  // BOTH a possible free name and a possible untyped payload: the signature is then a finding.
-  const hasShape = (sig) => {
-    const types = [];
-    for (const p of sig.getParameters()) {
-      if (!isRest(p)) {
-        types.push(typeOf(p));
-        continue;
-      }
-      const exact = exactRest(typeOf(p));
-      if (!exact) return true;
-      types.push(...exact);
+  // The shape of ONE list of positions: a free name and, at another position, an untyped payload.
+  const shaped = (types) => types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
+
+  // The rest parameter read as ALTERNATIVES: a list of lists of positions, each list one way the
+  // caller can fill the rest. Decided on resolved types only.
+  //   array `T[]`          one alternative [T, T] (a list can supply two positions of one kind)
+  //   tuple                its elements; an optional element is its type; a rest element `...T[]` is
+  //                        [T, T]; a variadic element `...X` splices the alternatives of X
+  //   union                the alternatives of every constituent
+  //   type parameter       the alternatives of its base constraint; none: an open list
+  //   intersection         the alternatives of every list-like member
+  //   conditional, indexed the alternatives of the checker's base constraint
+  //   any, unknown, anything else, too deep (MAX_DEPTH), too many (MAX_ALTERNATIVES): open positions
+  const MAX_DEPTH = 6;
+  const MAX_ALTERNATIVES = 256;
+  const alternatives = (t, sym, depth = 0, seen = new Set()) => {
+    const open = [[OPEN, OPEN]];
+    const cap = (alts) => (alts.length > MAX_ALTERNATIVES ? [[OPEN]] : alts);
+    if (depth > MAX_DEPTH) return [[OPEN]];
+    if (t.flags & (F.Any | F.Unknown)) return open;
+    if (t.isUnion()) return cap(t.types.flatMap((c) => alternatives(c, sym, depth + 1, seen)));
+    if (checker.isArrayType(t)) {
+      const element = checked(checker.getTypeArguments(t)[0], sym);
+      return [[element, element]];
     }
-    return types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
+    if (checker.isTupleType(t)) {
+      const flags = t.target.elementFlags;
+      let alts = [[]];
+      checker.getTypeArguments(t).forEach((arg, i) => {
+        const element = checked(arg, sym);
+        const part = flags[i] & ts.ElementFlags.Variadic ? alternatives(element, sym, depth + 1, seen) : flags[i] & ts.ElementFlags.Rest ? [[element, element]] : [[element]];
+        alts = cap(alts.flatMap((head) => part.map((tail) => [...head, ...tail])));
+      });
+      return alts;
+    }
+    if (t.flags & F.TypeParameter) {
+      const c = seen.has(t) ? undefined : checker.getBaseConstraintOfType(t);
+      return c ? alternatives(c, sym, depth + 1, new Set(seen).add(t)) : open;
+    }
+    if (t.isIntersection()) {
+      const lists = t.types.filter((c) => c.flags & (F.TypeParameter | F.IndexedAccess | F.Conditional | F.Substitution) || checker.isArrayType(c) || checker.isTupleType(c));
+      return lists.length ? cap(lists.flatMap((c) => alternatives(c, sym, depth + 1, seen))) : [[OPEN]];
+    }
+    if (t.flags & (F.IndexedAccess | F.Conditional | F.Substitution)) {
+      const c = checker.getBaseConstraintOfType(t);
+      return c && c !== t ? alternatives(c, sym, depth + 1, seen) : [[OPEN]];
+    }
+    return [[OPEN]];
+  };
+  // One call signature: the fixed parameters followed by each alternative of its rest parameter.
+  const hasShape = (sig) => {
+    const params = sig.getParameters();
+    const fixed = params.filter((p) => !isRest(p)).map(typeOf);
+    const rest = params.find(isRest);
+    return (rest ? alternatives(typeOf(rest), rest) : [[]]).some((tail) => shaped([...fixed, ...tail]));
   };
 
   // The anchor: the entry type through the module's exports, then its `register`, then the context.

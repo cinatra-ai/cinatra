@@ -71,20 +71,38 @@ product's `tsconfig.json`. An unresolved type, a missing anchor, an untyped cont
 written as a rest parameter ("the registration context is variadic; the border check cannot read
 it") fail the check with a plain line.
 
-A rest parameter is read exactly in two cases, as ordinary parameters, and then the normal test
-applies (a free name and an untyped payload in the same signature): a plain array `T[]` or
-`readonly T[]` is one more parameter of type `T`, and a tuple of fixed shape (required and optional
-elements only, no rest or variadic element, no element that is a type parameter) is its elements.
-So `(name: string, ...ids: number[])`, `(...parts: string[])` and `(...args: [id: number])` pass;
-`(name: string, ...rest: unknown[])` and `(...args: [name: string, input: unknown])` are reported.
+A rest parameter is read as a list of ALTERNATIVES, each alternative being one list of parameter
+types the caller can fill it with, on the checker's resolved types. The signature is a finding
+only if SOME alternative, together with the fixed parameters, has a free name (a position typed
+`string`) and, at ANOTHER position, an untyped payload (`any` or `unknown`); nothing is reported
+merely for how a signature is written. One position is never both. An array `T[]` or `readonly T[]`
+is one alternative of two positions of type `T` (a list can supply two); a tuple is its elements
+(an optional element keeps its type); a rest element `...T[]` inside a tuple is two positions of
+`T`; a variadic element `...X` splices the alternatives of `X`; a union is the alternatives of each
+constituent; a type parameter is the alternatives of its constraint, and with none (or `any` or
+`unknown`) an open list of untyped positions; an intersection is those of its list-like members; a
+conditional or indexed type is those of the checker's base constraint. Anything else, and anything
+nested deeper than 6 levels or giving more than 256 alternatives, is one untyped position. An
+untyped position is a payload and is not a free name: a list of `unknown` alone declares no name,
+and a literal-union name before it (`(event: "a" | "b", ...args: unknown[])`) stays bounded.
 
-Every other rest type is read conservatively: a union (of tuples or of anything), a type parameter
-or a type that still holds one, a tuple with a rest or variadic element, `any`, `unknown`, an
-intersection, a conditional or an indexed type. Such a rest part counts as both a possible free
-name and a possible untyped payload, so the signature is a finding whatever its fixed parameters
-are. The check does not try to read every way a variadic list can be written; a port member that
-needs one of these forms is recorded with its reason. This over-reports on purpose, for example
-`(...args: [a: number] | [b: boolean])`. No member on `main` has a rest parameter.
+| Signature | Alternatives (free name N, untyped payload U) | Verdict |
+| --- | --- | --- |
+| `(name: string, ...ids: number[])` | `[N, number, number]` | passes |
+| `(...args: [id: number])` | `[number]` | passes |
+| `(...args: [a: number] \| [b: boolean])` | `[number]`, `[boolean]` | passes |
+| `(...args: [name: string, input: unknown] \| [name: "known", input: {id: string}])` | `[N, U]`, `["known", {id}]` | reported |
+| `<A extends [unknown]>(name: string, ...rest: [boolean, ...A])` | `[N, boolean, U]` | reported |
+| `(name: string, ...rest: unknown[])` | `[N, U, U]` | reported |
+| `(...rest: unknown[])` | `[U, U]` | passes |
+| `(event: "a" \| "b", ...args: unknown[])` | `["a" \| "b", U, U]` | passes |
+| `(...args: [first: number, ...mid: unknown[], last: string])` | `[number, U, U, N]` | reported |
+| `<A extends [number] \| [string, unknown]>(...args: A)` | `[number]`, `[N, U]` | reported |
+| `(name: string, ...args: unknown[] \| [number])` | `[N, U, U]`, `[N, number]` | reported |
+
+The fixed parameters are judged by the same two questions, so nothing in them changed. A port
+member that needs a reported form is recorded with its reason. No member on `main` has a rest
+parameter.
 
 Stated limits. A member typed `any` or `Function`, a name written as a template literal
 (`` `job:${string}` ``) and an index signature are not this rule's business. A payload typed

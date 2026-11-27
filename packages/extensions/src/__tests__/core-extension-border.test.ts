@@ -1307,47 +1307,98 @@ describe("core/extension border — unbounded-port-member", () => {
     });
   });
 
-  // A rest parameter of a plain array type or of a fixed tuple is read EXACTLY (as ordinary
-  // parameters); every other rest type is read conservatively (a possible free name AND a possible
-  // untyped payload), so its signature is a finding. Each case compares the whole list of findings.
-  describe("a rest parameter: a list or a fixed tuple is read exactly, anything else conservatively", () => {
-    it.each([
-      ["a free name and an untyped list", "run(name: string, ...rest: unknown[]): void"],
-      ["a free name and an any list", "run(name: string, ...rest: any[]): void"],
-      ["a free name and a readonly untyped list", "run(name: string, ...rest: readonly unknown[]): void"],
-      ["an untyped fixed payload and a list of free names", "run(input: unknown, ...names: string[]): void"],
-      ["a tuple of a free name and an untyped payload", "run(...args: [name: string, input: unknown]): void"],
-      ["a tuple of an optional free name and an optional payload", "run(...args: [name?: string, input?: unknown]): void"],
-      ["a readonly tuple of a free name and an untyped payload", "run(...args: readonly [name: string, input: unknown]): void"],
-      ["a free name and a tuple payload", "run(name: string, ...args: [input: unknown]): void"],
-      ["an untyped payload and a tuple name", "run(input: unknown, ...args: [name: string]): void"],
-      ["the event tunnel: a free event name and an untyped list", "run(event: string, ...args: unknown[]): void"],
-    ])("%s is reported (read exactly)", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
-    it.each([
-      ["a union of tuples (review example)", 'run(...args: [name: string, input: unknown] | [name: "known", input: { id: string }]): void'],
-      ["a union of tuples with no free name", "run(...args: [a: number] | [b: boolean]): void"],
-      ["a variadic tuple with a generic spread (review example)", "run<A extends [unknown]>(name: string, ...rest: [boolean, ...A]): void"],
-      ["a type parameter", "run<A extends number[]>(...args: A): void"],
-      ["a tuple with a type parameter element", "run<T>(...args: [T]): void"],
-      ["a tuple with a rest element", "run(...args: [id: number, ...rest: string[]]): void"],
-      ["a tuple with a leading rest element", "run(...args: [...rest: string[], id: number]): void"],
-      ["an any rest", "run(...args: any): void"],
-      ["a conditional rest type", "run<T>(...args: T extends string ? [id: number] : [id: string]): void"],
-      ["an intersection rest type", "run(...args: [id: number] & { tag: string }): void"],
-    ])("%s is reported (read conservatively)", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
-    it.each([
-      ["a free name and a typed list (review example)", "run(name: string, ...ids: number[]): void"],
-      ["a typed fixed tuple (review example)", "run(...args: [id: number]): void"],
-      ["a message and a typed list", "run(message: string, ...values: number[]): void"],
-      ["a list of free names", "run(...parts: string[]): void"],
-      ["a plain list of one typed kind", "run(...ids: number[]): void"],
-      ["a readonly list of objects after a literal name", 'run(name: "a", ...ids: readonly { id: string }[]): void'],
-      ["an untyped fixed payload and a typed list", "run(input: unknown, ...ids: number[]): void"],
-      ["a free name and a list of records", "run(name: string, ...rest: Record<string, unknown>[]): void"],
-      ["a free name and a fixed tuple of typed elements", "run(name: string, ...args: [id: number, flag?: boolean]): void"],
-      ["a tuple of a free name and a typed payload", "run(...args: [name: string, input: { id: string }]): void"],
-      ["a tuple of a literal-union name and an untyped payload", 'run(...args: [name: "a" | "b", input: unknown]): void'],
-    ])("%s passes", (_n, m) => expect(jobs(m)).toEqual([]));
+  // A rest parameter is read as ALTERNATIVES (lists of positions): an array is two positions of its
+  // element type, a tuple its elements (a rest element two positions, a variadic element the
+  // alternatives of its type), a union each constituent, a type parameter its constraint. A signature
+  // is a finding only if SOME alternative, with the fixed parameters, has a free name (a position
+  // typed `string`) and, at ANOTHER position, an untyped payload (`any` or `unknown`). Every verdict
+  // below is derived by hand from that sentence ("F" = finding `jobs.run`, "P" = passes) and the whole
+  // list of findings of a row is compared. No row is reported merely for its form.
+  describe("a rest parameter: a finding only if some alternative has a free name and an untyped payload", () => {
+    const F = ["jobs.run"];
+    const P: string[] = [];
+    const rows: [string, string, string[]][] = [
+      // the four findings of the reviews
+      ["review: union of a tuple with a free name and an untyped payload and a bounded tuple", 'run(...args: [name: string, input: unknown] | [name: "known", input: { id: string }]): void', F],
+      ["review: a generic spread constrained to an untyped tuple after a free name", "run<A extends [unknown]>(name: string, ...rest: [boolean, ...A]): void", F],
+      ["review: a free name and a typed list", "run(name: string, ...ids: number[]): void", P],
+      ["review: a typed tuple", "run(...args: [id: number]): void", P],
+      ["review: a union of bounded tuples", "run(...args: [a: number] | [b: boolean]): void", P],
+      // arrays of each kind
+      ["a list of free names", "run(...parts: string[]): void", P],
+      ["a list of numbers", "run(...ids: number[]): void", P],
+      ["a list of unknown (no declared free name)", "run(...xs: unknown[]): void", P],
+      ["a list of any", "run(...xs: any[]): void", P],
+      ["a readonly list of unknown", "run(...xs: readonly unknown[]): void", P],
+      ["a list of string or unknown (collapses to unknown)", "run(...xs: (string | unknown)[]): void", P],
+      ["a list of string or number", "run(...xs: (string | number)[]): void", P],
+      ["a list of records", "run(...xs: Record<string, unknown>[]): void", P],
+      ["a list of string or an open generic (two positions: one name, one payload)", "run<T>(...xs: (string | T)[]): void", F],
+      ["a list of never after a free name", "run(name: string, ...xs: never[]): void", P],
+      // fixed parameters plus each rest kind
+      ["a free name and an untyped list", "run(name: string, ...xs: unknown[]): void", F],
+      ["an optional free name and an untyped list", "run(name?: string, ...xs: unknown[]): void", F],
+      ["a literal-union name and an untyped list", 'run(event: "a" | "b", ...args: unknown[]): void', P],
+      ["an untyped payload and a list of free names", "run(input: unknown, ...names: string[]): void", F],
+      ["an untyped payload and a typed list", "run(input: unknown, ...ids: number[]): void", P],
+      ["a free name and a list of records", "run(name: string, ...xs: Record<string, unknown>[]): void", P],
+      ["a free name and an any rest", "run(name: string, ...xs: any): void", F],
+      ["an any rest alone", "run(...xs: any): void", P],
+      // fixed parameters, the same definition
+      ["fixed: a free name and an untyped payload", "run(name: string, input: unknown): void", F],
+      ["fixed: two untyped parameters", "run(a: unknown, b: unknown): void", P],
+      ["fixed: a free name and a free name", "run(a: string, b: string): void", P],
+      ["fixed: an untyped payload alone", "run(a: unknown): void", P],
+      // fixed tuples with optional, named and readonly members
+      ["a tuple of an optional free name and an optional payload", "run(...args: [name?: string, input?: unknown]): void", F],
+      ["a readonly tuple of a free name and an untyped payload", "run(...args: readonly [name: string, input: unknown]): void", F],
+      ["an unnamed tuple of a free name and an untyped payload", "run(...args: [string, unknown]): void", F],
+      ["a tuple of a free name and an optional typed payload", "run(...args: [name: string, input?: { id: string }]): void", P],
+      ["a tuple of a literal-union name and an untyped payload", 'run(...args: [name: "a" | "b", input: unknown]): void', P],
+      ["a free name and a tuple payload", "run(name: string, ...args: [input: unknown]): void", F],
+      // tuples with an array spread
+      ["a spread list at the end after a free name", "run(...args: [name: string, ...rest: unknown[]]): void", F],
+      ["a spread list at the start before an untyped payload", "run(...args: [...rest: string[], input: unknown]): void", F],
+      ["a spread list in the middle between a number and a free name", "run(...args: [first: number, ...mid: unknown[], last: string]): void", F],
+      ["a typed spread list at the end", "run(...args: [id: number, ...rest: string[]]): void", P],
+      ["a typed spread list at the start", "run(...args: [...ids: number[], flag: boolean]): void", P],
+      ["an untyped spread list after a number (no declared free name)", "run(...args: [a: number, ...rest: unknown[]]): void", P],
+      ["a record spread list before a free name", "run(...args: [...rest: Record<string, unknown>[], name: string]): void", P],
+      // generic spreads and generic rests
+      ["a generic rest constrained to numbers after a free name", "run<A extends number[]>(name: string, ...args: A): void", P],
+      ["a generic rest constrained to a tuple of a free name and an untyped payload", "run<A extends [string, unknown]>(...args: A): void", F],
+      ["a generic rest constrained to an untyped list after a free name", "run<A extends unknown[]>(name: string, ...rest: [...A]): void", F],
+      ["a generic spread constrained to a typed tuple after a free name", "run<A extends [number]>(name: string, ...rest: [...A]): void", P],
+      ["a generic rest constrained to any[] alone", "run<A extends any[]>(...args: A): void", P],
+      ["a tuple of one open generic element alone", "run<T>(...args: [T]): void", P],
+      ["a tuple of one open generic element after a free name", "run<T>(name: string, ...args: [T]): void", F],
+      ["a tuple of a string-constrained generic and an untyped payload", "run<T extends string>(...args: [T, unknown]): void", F],
+      ["a tuple of a number-constrained generic after a free name", "run<T extends number>(name: string, ...args: [T]): void", P],
+      // generic rest constrained to a union
+      ["a generic rest constrained to two bounded tuples after a free name", "run<A extends [number] | [boolean]>(name: string, ...args: A): void", P],
+      ["a generic rest constrained to a bounded and an unsafe tuple", "run<A extends [number] | [string, unknown]>(...args: A): void", F],
+      ["a generic rest constrained to an untyped list or a tuple, after a free name", "run<A extends unknown[] | [number]>(name: string, ...args: A): void", F],
+      // unions
+      ["a union of two bounded tuples after a free name", "run(name: string, ...args: [a: number] | [b: boolean]): void", P],
+      ["a union of a bounded and an unsafe tuple", "run(...args: [a: number] | [name: string, input: unknown]): void", F],
+      ["a union of a list of strings and a tuple", "run(...args: string[] | [number]): void", P],
+      ["a union of an untyped list and a tuple alone", "run(...args: unknown[] | [number]): void", P],
+      ["a union of an untyped list and a tuple after a free name", "run(name: string, ...args: unknown[] | [number]): void", F],
+      ["a nested union of bounded tuples after a free name", "run(name: string, ...args: ([a: number] | [b: boolean]) | ([c: bigint] | [d: symbol])): void", P],
+      ["a nested union with one untyped tuple after a free name", "run(name: string, ...args: [a: number] | ([b: boolean] | [c: unknown])): void", F],
+      // conditional, indexed and intersection rest types
+      ["a conditional rest type of bounded tuples after a free name", "run<T>(name: string, ...args: T extends string ? [id: number] : [id: string]): void", P],
+      ["a conditional rest type with an untyped branch after a free name", "run<T>(name: string, ...args: T extends string ? [id: number] : [input: unknown]): void", F],
+      ["an indexed rest type of a bounded tuple after a free name", 'run<T extends { a: [id: number] }>(name: string, ...args: T["a"]): void', P],
+      ["an intersection rest type of a bounded tuple after a free name", "run(name: string, ...args: [id: number] & { tag: string }): void", P],
+      ["an intersection rest type of an untyped tuple after a free name", "run(name: string, ...args: [input: unknown] & { tag: string }): void", F],
+      // overloads
+      ["overloads: both bounded", 'run(name: "a", input: unknown): void; run(...args: [id: number]): void', P],
+      ["overloads: one has a free name and an untyped list", "run(...args: [id: number]): void; run(name: string, ...rest: unknown[]): void", F],
+      ["overloads: a free name alone and a typed list", "run(name: string): void; run(...ids: number[]): void", P],
+    ];
+    it("the table holds at least forty signatures", () => expect(rows.length).toBeGreaterThanOrEqual(40));
+    it.each(rows)("%s: %s", (_n, member, expected) => expect(jobs(member)).toEqual(expected));
     it("a variadic registration context fails closed with a plain line", () => {
       const register = REGISTER.replace("register(ctx: ExtensionHostContext)", "register(...ctx: [ExtensionHostContext])");
       expect(keys({ ...ctx(`interface JobsPort { ${RUN} }\n`, "{ jobs: JobsPort }"), "register.ts": register })).toEqual([
