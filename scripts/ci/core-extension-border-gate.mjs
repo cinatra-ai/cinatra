@@ -50,6 +50,9 @@
 // rule set is append-only, so a rename cannot reset a floor). A base ledger without the list ratchets every rule its base copy of
 // this script knows (zero-entry rules too); that copy unread fails closed.
 //
+// THE PORTS (cinatra#4872): `untyped-port-input` reads the checker's types of the root
+// context `register(ctx)` receives; see untypedPortInputFindings and the contract document.
+//
 // Usage:
 //   node scripts/ci/core-extension-border-gate.mjs                  # check (exit 1 on any finding outside the baseline, a stale entry or a grown ledger)
 //   node scripts/ci/core-extension-border-gate.mjs --report         # print every finding, baselined ones included
@@ -728,6 +731,116 @@ export function keepRecordedKindDetails(findings, baselineEntries) {
   return findings;
 }
 
+/** The aggregate whose properties ARE the ports an extension is handed: the
+ *  object `register(ctx)` receives (cinatra#4872). */
+export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", type: "ExtensionHostContext" };
+
+const PORT_COMPILER_OPTIONS = {
+  noEmit: true, strict: true, skipLibCheck: true, types: [],
+  target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
+};
+
+/** The one question asked of a RESOLVED input type: does it carry no constraint.
+ *  `any`, `unknown`, `object` and the empty object type (no property, no signature, no
+ *  index signature) carry none. A type parameter carries none when it has no constraint or
+ *  its constraint carries none. A union carries none when any constituent, `null` and
+ *  `undefined` aside, carries none. An intersection carries none when every member carries
+ *  none, so `T & {}` (what `NonNullable<T>` resolves to) is untyped for an unconstrained
+ *  `T` and `T & { id: string }` is not. Nothing inside an object, record, array or callback
+ *  type is read. `seen` holds the type parameters on the current path. */
+function isUntypedType(checker, type, seen = new Set()) {
+  const F = ts.TypeFlags;
+  if (type.flags & (F.Any | F.Unknown | F.NonPrimitive)) return true;
+  if (type.flags & F.TypeParameter) {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    try {
+      const constraint = type.getConstraint();
+      return !constraint || isUntypedType(checker, constraint, seen);
+    } finally {
+      seen.delete(type);
+    }
+  }
+  if (type.isUnion()) return type.types.some((c) => !(c.flags & (F.Null | F.Undefined)) && isUntypedType(checker, c, seen));
+  if (type.isIntersection()) return type.types.every((c) => isUntypedType(checker, c, seen));
+  return !!(type.flags & F.Object) && checker.getPropertiesOfType(type).length === 0 && type.getCallSignatures().length === 0
+    && type.getConstructSignatures().length === 0 && checker.getIndexInfosOfType(type).length === 0;
+}
+
+/** `untyped-port-input`: a host port call whose input carries no type constraint
+ *  (cinatra#4872). Read ONLY from the checker's types, never from how a type is written:
+ *  the root context's members are the ports, a port's members are its calls, and each
+ *  parameter of each call signature is asked `isUntypedType`. A member of type `any` is one
+ *  finding. Keyed `<Port>.<member>(#positions)`, positions comma-joined and one group per
+ *  signature joined with `|`. A tree without the SDK package has no ports; one with it and
+ *  without the root fails closed. */
+export function untypedPortInputFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
+  const rootPath = join(repoRoot, file);
+  if (!existsSync(rootPath) && !existsSync(dirname(dirname(rootPath)))) return [];
+  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+  host.realpath = (p) => p;
+  const program = ts.createProgram({ rootNames: [rootPath], options: PORT_COMPILER_OPTIONS, host });
+  const checker = program.getTypeChecker();
+  const sourceFile = program.getSourceFile(rootPath);
+  const moduleSymbol = sourceFile && checker.getSymbolAtLocation(sourceFile);
+  const rootSymbol = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === type);
+  if (!rootSymbol || !(rootSymbol.flags & ts.SymbolFlags.Type)) {
+    throw new Error(`[core-extension-border] the port root ${type} is not an exported type of ${file} — the rule fails closed rather than reading no port`);
+  }
+  const F = ts.TypeFlags;
+  const flat = (t) => (t.isUnion() ? t.types.flatMap(flat) : [t]);
+  // Every constituent of a union is read; the checker has already flattened intersections and inheritance.
+  const membersOf = (t) => flat(t).flatMap((c) => flat(checker.getApparentType(c)).flatMap((a) => checker.getPropertiesOfType(a)));
+  // A member declared only in the TypeScript lib or in node_modules is not ours to judge.
+  const isOwn = (prop) =>
+    (prop.declarations ?? []).length === 0 ||
+    prop.declarations.some((d) => {
+      const sf = d.getSourceFile();
+      return !program.isSourceFileDefaultLibrary(sf) && !sf.fileName.split("/").includes("node_modules");
+    });
+  const positions = (sig) =>
+    sig.getParameters().flatMap((p, i) => {
+      const t = checker.getTypeOfSymbol(p);
+      const input = p.valueDeclaration?.dotDotDotToken ? checker.getIndexTypeOfType(t, ts.IndexKind.Number) ?? t : t;
+      return isUntypedType(checker, input) ? [i + 1] : [];
+    });
+  const out = [];
+  const counts = new Map();
+  const judged = new Set();
+  const judge = (owner, prop) => {
+    if (judged.has(prop) || !isOwn(prop)) return;
+    judged.add(prop);
+    const parts = flat(checker.getNonNullableType(checker.getTypeOfSymbol(prop)));
+    const hits = parts.some((c) => c.flags & F.Any)
+      ? ["any"]
+      : parts.flatMap((c) => c.getCallSignatures()).map(positions).filter((at) => at.length > 0).map((at) => at.map((n) => `#${n}`).join(","));
+    if (hits.length === 0) return;
+    const d = prop.valueDeclaration ?? prop.declarations?.[0] ?? rootSymbol.declarations[0];
+    const at = d.getSourceFile();
+    out.push(
+      finding(
+        "untyped-port-input",
+        relative(repoRoot, at.fileName).split(sep).join("/"),
+        at.getLineAndCharacterOfPosition(d.getStart()).line + 1,
+        occurrenceDetail(counts, "untyped-port-input", `${owner}.${prop.name}(${hits.join("|")})`),
+        "a host port member takes an untyped input (any, unknown, object, the empty object type or a type parameter without a constraint); it bounds nothing a manifest declares (cinatra#4872)",
+      ),
+    );
+  };
+  for (const prop of membersOf(checker.getDeclaredTypeOfSymbol(rootSymbol))) {
+    judge(type, prop);
+    for (const port of flat(checker.getNonNullableType(checker.getTypeOfSymbol(prop)))) {
+      // The port's own name: its symbol, else the alias that names it. A utility alias (`Readonly<P>`) names
+      // nothing, so a port without a name of its own takes its property's name.
+      const own = port.getSymbol()?.name;
+      const name = own && !own.startsWith("__") ? own : port.aliasTypeArguments?.length ? undefined : port.aliasSymbol?.name;
+      const owner = name ?? prop.name;
+      for (const member of membersOf(port)) judge(owner, member);
+    }
+  }
+  return out;
+}
+
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
 export function legacyExceptionFindings({ file, doc }) {
@@ -900,6 +1013,7 @@ export const KNOWN_RULES = new Set([
   "materialized-extension-file",
   "pack-shaped-core-domain",
   "pack-step-kind-in-core",
+  "untyped-port-input",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1130,6 +1244,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     );
   }
 
+  findings.push(...untypedPortInputFindings({ repoRoot }));
   findings.push(...trackedExtensionFileFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
 

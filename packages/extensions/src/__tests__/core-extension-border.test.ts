@@ -107,6 +107,7 @@ type GateModule = {
     findings: Finding[];
     tables: number;
   };
+  untypedPortInputFindings?: (input: { repoRoot?: string; file?: string; type?: string }) => Finding[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -1228,4 +1229,186 @@ describe("core/extension border — only a truly new rule may seed (the migratio
     expect(blank.status).toBe("unreadable");
     expect(blank.lines.join("\n")).toContain("names no rule list");
   });
+});
+
+// cinatra#4872: `untyped-port-input` reads the checker's types of the context a
+// pack's `register(ctx)` receives, never how a type is written. Each case writes a
+// declaration and compares the WHOLE list of findings; the same meaning is written
+// through different syntax to show that the syntax does not matter.
+describe("core/extension border — a host port call takes typed inputs", () => {
+  const JOBS = "interface JobsPort { enqueue(name: string, payload: unknown): void }";
+  const HIT = ["JobsPort.enqueue(#2)"];
+  function ports(files: Record<string, string>, input: { file?: string; type?: string } = {}): string[] {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      for (const [name, text] of Object.entries(files)) writeFileSync(path.join(dir, name), text);
+      return (gate.untypedPortInputFindings?.({ repoRoot: dir, file: "host-context.ts", ...input }) ?? []).map((f) => f.detail);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const ctx = (declarations: string, root: string) => ports({ "host-context.ts": `${declarations}\n${root}\n` });
+
+  it.each([
+    ["an interface", JOBS, "export type ExtensionHostContext = { jobs: JobsPort };"],
+    ["a type alias", "type JobsPort = { enqueue(name: string, payload: unknown): void };", "export type ExtensionHostContext = { jobs: JobsPort };"],
+    ["an alias of an interface", `${JOBS}\ntype Jobs = JobsPort;`, "export type ExtensionHostContext = { jobs: Jobs };"],
+    ["an optional property", JOBS, "export type ExtensionHostContext = { jobs?: JobsPort };"],
+    ["a nullable type", JOBS, "export type ExtensionHostContext = { jobs: JobsPort | null };"],
+    ["a nullable alias", `${JOBS}\ntype Nullish = null | undefined;`, "export type ExtensionHostContext = { jobs: JobsPort | Nullish };"],
+    ["a readonly property", JOBS, "export type ExtensionHostContext = { readonly jobs: JobsPort };"],
+    ["a root interface", JOBS, "export interface ExtensionHostContext { jobs: JobsPort }"],
+    ["a root intersection", JOBS, "type A = { id: string };\nexport type ExtensionHostContext = A & { jobs: JobsPort };"],
+    ["a root interface that extends", `${JOBS}\ninterface Base { jobs: JobsPort }`, "export interface ExtensionHostContext extends Base { id: string }"],
+    ["a root union of two shapes", JOBS, "export type ExtensionHostContext = { jobs: JobsPort } | { jobs: JobsPort; extra: string };"],
+    ["a union of two ports", JOBS, "export type ExtensionHostContext = { jobs: JobsPort | { stop(): void } };"],
+  ])("a port written as %s is read: one finding", (_name, declarations, root) => {
+    expect(ctx(declarations, root)).toEqual(HIT);
+  });
+
+  it("a port written as import(\"./ports\").JobsPort or through a namespace name is read the same", () => {
+    const ports_ts = `export ${JOBS}\n`;
+    expect(ports({ "ports.ts": ports_ts, "host-context.ts": 'export type ExtensionHostContext = { jobs: import("./ports").JobsPort };\n' })).toEqual(HIT);
+    expect(
+      ports({
+        "ports.ts": ports_ts,
+        "host-context.ts": 'import * as Ports from "./ports";\nexport type ExtensionHostContext = { jobs: Ports.JobsPort };\n',
+      }),
+    ).toEqual(HIT);
+    expect(
+      ports({
+        "ports.ts": ports_ts,
+        "host-context.ts": 'import type { JobsPort as Renamed } from "./ports";\nexport type ExtensionHostContext = { jobs: Renamed };\n',
+      }),
+    ).toEqual(HIT);
+  });
+
+  it.each([
+    ["a method", "interface JobsPort { enqueue(name: string, payload: unknown): void }"],
+    ["a property with an inline function type", "interface JobsPort { enqueue: (name: string, payload: unknown) => void }"],
+    ["a nullable property with an inline function type", "interface JobsPort { enqueue?: ((name: string, payload: unknown) => void) | null }"],
+    ["a property with a named alias", "type Enqueue = (name: string, payload: unknown) => void;\ninterface JobsPort { enqueue: Enqueue }"],
+    ["a property with an interface that only has a call signature", "interface Enqueue { (name: string, payload: unknown): void }\ninterface JobsPort { enqueue: Enqueue }"],
+    ["a generic alias of a function type", "type Fn<P> = (name: string, payload: P) => void;\ninterface JobsPort { enqueue: Fn<unknown> }"],
+    ["a function type taken from another type", "type Enqueue = (name: string, payload: unknown) => void;\ninterface JobsPort { enqueue: Required<{ f: Enqueue }>['f'] }"],
+    ["an inherited member", "interface Base { enqueue(name: string, payload: unknown): void }\ninterface JobsPort extends Base {}"],
+    ["a member of an intersection", "type JobsPort = { stop(): void } & { enqueue(name: string, payload: unknown): void };"],
+    ["a readonly property", "interface JobsPort { readonly enqueue: (name: string, payload: unknown) => void }"],
+  ])("a call written as %s is read: one finding", (_name, declarations) => {
+    expect(ctx(declarations, "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual(HIT);
+  });
+
+  it.each([
+    ["any", "any", true],
+    ["unknown", "unknown", true],
+    ["object", "object", true],
+    ["the empty object type", "{}", true],
+    ["an empty interface", "Empty", true],
+    ["an unconstrained type parameter", "T", true],
+    ["a type parameter constrained to unknown", "U", true],
+    ["T & {}", "T & {}", true],
+    ["NonNullable<T>", "NonNullable<T>", true],
+    ["a union with unknown", "string | unknown", true],
+    ["a union with object", "string | object", true],
+    ["an optional unknown", "unknown | undefined", true],
+    ["string", "string", false],
+    ["an object type with a property", "{ id: string }", false],
+    ["a named interface with a property", "Named", false],
+    ["a type parameter with a constraint", "C", false],
+    ["T & { id: string }", "T & { id: string }", false],
+    ["a union of typed members", "string | { id: string } | null", false],
+    ["a callback", "(x: unknown) => void", false],
+    ["a record (its contents are not read)", "Record<string, unknown>", false],
+    ["an array of unknown (its contents are not read)", "unknown[]", false],
+  ])("an input of %s", (_name, type, reported) => {
+    const declarations =
+      "interface Empty {}\ninterface Named { id: string }\n" +
+      `interface JobsPort { enqueue<T, U extends unknown, C extends { id: string }>(name: string, payload: ${type}, spare?: [T, U, C]): void }`;
+    expect(ctx(declarations, "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual(reported ? HIT : []);
+  });
+
+  it("reads a rest parameter by its element type, and names every position and every signature", () => {
+    expect(ctx("interface JobsPort { a(...args: any[]): void; b(...args: string[]): void; c(...args: [string, unknown]): void }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual([
+      "JobsPort.a(#1)",
+      "JobsPort.c(#1)",
+    ]);
+    expect(ctx("interface JobsPort { run(a: any, b: string, c: unknown): void }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual(["JobsPort.run(#1,#3)"]);
+    expect(
+      ctx("interface JobsPort { run(a: string): void; run(a: unknown): void; run(a: string, b: object): void }", "export type ExtensionHostContext = { jobs: JobsPort };"),
+    ).toEqual(["JobsPort.run(#1|#2)"]);
+  });
+
+  it("keys by position: renaming a parameter keeps the key", () => {
+    const root = "export type ExtensionHostContext = { jobs: JobsPort };";
+    expect(ctx("interface JobsPort { enqueue(a: string, b: unknown): void }", root)).toEqual(
+      ctx("interface JobsPort { enqueue(label: string, data: unknown): void }", root),
+    );
+  });
+
+  it("a member that is no call has no input to judge: nothing is reported", () => {
+    const declarations =
+      "interface JobsPort { readonly state: unknown; readonly shape: object; get mode(): string; get data(): unknown; fn: Function; call: CallableFunction; done: Promise<unknown>; names: string[] }";
+    expect(ctx(declarations, "export type ExtensionHostContext = { id: string; jobs: JobsPort; tags: readonly string[]; when: Date; cb: Function };")).toEqual([]);
+  });
+
+  it("a port member of type any is one finding for that member", () => {
+    expect(ctx("interface JobsPort { legacy: any; run(a: string): void; later?: any }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual([
+      "JobsPort.legacy(any)",
+      "JobsPort.later(any)",
+    ]);
+  });
+
+  it("a root property that is callable or any is judged the same way", () => {
+    expect(ctx(JOBS, "export type ExtensionHostContext = { jobs: JobsPort; log: (line: any) => void; extra: any };")).toEqual([
+      ...HIT,
+      "ExtensionHostContext.log(#1)",
+      "ExtensionHostContext.extra(any)",
+    ]);
+  });
+
+  it("a port with no name of its own takes its property's name, and one declaration is one finding", () => {
+    expect(ctx("", "export type ExtensionHostContext = { jobs: { enqueue(name: string, payload: unknown): void } };")).toEqual(["jobs.enqueue(#2)"]);
+    expect(ctx(JOBS, "export type ExtensionHostContext = { jobs: JobsPort; again: JobsPort };")).toEqual(HIT);
+  });
+
+  it("a port made by a utility type or an object value is keyed by its property", () => {
+    expect(ctx(JOBS, "export type ExtensionHostContext = { jobs: Readonly<JobsPort>; picked: Pick<JobsPort, 'enqueue'> };")).toEqual([
+      "jobs.enqueue(#2)",
+      "picked.enqueue(#2)",
+    ]);
+    expect(ctx("const impl = { enqueue(name: string, payload: any) {} };", "export type ExtensionHostContext = { jobs: typeof impl };")).toEqual(["jobs.enqueue(#2)"]);
+  });
+
+  it("a class, a generic port and a port that extends a lib type are read; a `this` parameter is not an input", () => {
+    expect(ctx("class JobsPort { private n = 1; enqueue(name: string, payload: unknown) {} }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual(HIT);
+    expect(ctx("interface JobsPort<T> { enqueue(name: string, payload: T): void }", "export type ExtensionHostContext = { jobs: JobsPort<unknown>; typed: JobsPort<{ id: string }> };")).toEqual(HIT);
+    expect(ctx("interface JobsPort extends Map<string, unknown> { run(this: any, a: string): void }", "export type ExtensionHostContext = { jobs: JobsPort };")).toEqual([]);
+  });
+
+  it("fails closed on a root that is not there, and reads nothing from a tree without the SDK", () => {
+    expect(() => ports({ "host-context.ts": "export type Other = { id: string };\n" })).toThrow(/port root ExtensionHostContext/);
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-none-"));
+    try {
+      expect(gate.untypedPortInputFindings?.({ repoRoot: dir }) ?? ["not a function"]).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the real tree: the six members that stood on main, whole list, and nothing else", () => {
+    expect((gate.untypedPortInputFindings?.({ repoRoot: REPO_ROOT }) ?? []).map((f) => `${f.file}::${f.detail}`).sort()).toEqual(
+      [
+        "HostJobsPort.enqueue(#2)",
+        "HostMcpPort.callPrimitive(#2)",
+        "HostObjectsPort.write(#2)",
+        "HostSettingsPort.set(#2)",
+        "HostUiPort.registerSettingsSurface(#1)",
+        "HostUiPort.registerSetupSurface(#1)",
+      ].map((d) => `packages/sdk-extensions/src/host-context.ts::${d}`),
+    );
+    expect(gate.KNOWN_RULES.has("untyped-port-input")).toBe(true);
+    const ledger = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    expect(ledger.rules).toContain("untyped-port-input");
+    expect(ledger.entries.filter((e: { rule: string }) => e.rule === "untyped-port-input")).toHaveLength(6);
+  }, 60_000);
 });

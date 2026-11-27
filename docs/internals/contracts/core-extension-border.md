@@ -49,6 +49,40 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+## A host port call takes typed inputs
+
+The rule `untyped-port-input` (cinatra#4872) reads the type checker's types of
+`ExtensionHostContext` in `packages/sdk-extensions/src/host-context.ts`, the context
+`register(ctx)` receives, and never how a type is written. The properties of the root are
+the ports and the properties of a port are its calls; a union is read through every
+constituent, and the checker has already flattened intersections and inheritance, so an
+interface, an alias, `import("./ports").Port`, a namespace name, a nullable or optional
+port, a class, and a root written as an interface, an intersection, an `extends` or a union
+all give the same members. For each call signature of a member (and of a root property that
+is itself callable), each parameter (for a rest parameter, its element type) is asked one
+question: does its type carry no constraint. `any`, `unknown`, `object` and the empty object
+type `{}` (no property, no signature, no index signature) carry none. A type parameter
+carries none when it has no constraint or its constraint carries none. A union carries none
+when any constituent, `null` and `undefined` aside, carries none; an intersection carries
+none when every member carries none, so `T & {}` (what `NonNullable<T>` resolves to) is
+untyped for an unconstrained `T` and `T & { id: string }` is not. A port member, or a root
+property, of type `any` is one finding.
+
+The finding is keyed `<Port>.<member>(#positions)`: positions, not names, so a rename that
+keeps the types keeps the key; positions are comma-joined and the signatures of an overload
+are joined with `|`. A port with no name of its own (an inline type, `typeof value`, a
+utility type) takes its property's name. The six members that stood on main are ledger
+entries with reasons; the rule is in the ledger's `rules` list, so it only shrinks from here.
+
+Stated limits (nothing the walk cannot read is reported): the contents of object, record,
+array and callback parameter types are not searched, so `Record<string, unknown>` and
+`unknown[]` count as typed; index signatures on a root or a port are not enumerated; ports
+nested inside a port are not read; a member with no call signature (a `Function`, a getter,
+a value) has no parameter to judge; a `this` parameter is not an input; members declared
+only in the TypeScript lib or in `node_modules` are not judged; a conditional or indexed
+access type is not unwrapped. A tree without `packages/sdk-extensions` has no ports; one
+with it and without the root type fails closed.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the
