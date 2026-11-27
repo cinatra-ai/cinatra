@@ -72,6 +72,8 @@ export type ExtractedAgentPackage = {
 type RegistryPackument = {
   versions?: Record<string, { deprecated?: string }>;
   "dist-tags"?: Record<string, string>;
+  /** Full-metadata publish times, keyed by version. */
+  time?: Record<string, string>;
 };
 
 function ensureTrailingSlash(url: string): string {
@@ -192,15 +194,14 @@ function toSummary(
   manifest: unknown,
   payload: unknown,
   deprecated: boolean,
+  publishedAt: string,
 ): AgentPackageSummary {
   const packageName = getField<string>(manifest, "name") ?? "";
   const packageVersion = getField<string>(manifest, "version") ?? "";
   const title = getField<string>(payload, "title") ?? packageName;
   const description = getField<string | null>(payload, "description") ?? null;
-  const changelog = getField<string | null>(payload, "changelog") ?? null;
   const publish = getField<Record<string, unknown>>(payload, "publish") ?? {};
   const template = getField<Record<string, unknown>>(payload, "template") ?? {};
-  const publishedAt = getField<string>(payload, "publishedAt") ?? "";
   const riskLevel =
     (publish.riskLevel as AgentPackageSummary["riskLevel"] | undefined) ?? "low";
   const hasApprovalGates = Boolean(publish.hasApprovalGates);
@@ -225,6 +226,11 @@ function toSummary(
 
   // Read kind from the optional cinatra manifest block.
   const cinatraBlock = getField<Record<string, unknown>>(manifest, "cinatra") ?? {};
+  // The release note the publisher supplied rides in the manifest's cinatra
+  // block (a published tarball ships no root agent.json to carry it).
+  const changelogRaw = cinatraBlock.changelog;
+  const changelog =
+    typeof changelogRaw === "string" && changelogRaw.trim() ? changelogRaw.trim() : null;
   const kindRaw = cinatraBlock.kind;
   // Workflow is included so registry-driven discovery matches deriveTypeId
   // and handler bootstrap.
@@ -762,8 +768,12 @@ export async function getAgentPackage(
       packument.versions?.[extracted.packageVersion]?.deprecated,
     );
 
+    // The publish time is the registry's own record of the version (a published
+    // tarball ships no root agent.json to carry one).
+    const publishedAt = packument.time?.[extracted.packageVersion] ?? "";
+
     return {
-      ...toSummary(resolvedConfig, extracted.manifest, extracted.payload, deprecated),
+      ...toSummary(resolvedConfig, extracted.manifest, extracted.payload, deprecated, publishedAt),
       manifest: extracted.manifest,
       payload: extracted.payload,
       readme: extracted.readme,

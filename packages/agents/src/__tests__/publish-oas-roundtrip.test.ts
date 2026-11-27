@@ -126,6 +126,27 @@ describe("engineering#420 publishAgentPackage emits cinatra/oas.json", () => {
     expect(Object.keys(files.files).sort()).toEqual(["README.md", "cinatra/oas.json", "package.json"]);
   });
 
+  it("carries the changelog in the manifest's cinatra block, in the parsed manifest and in the shipped package.json (#4920)", () => {
+    const input = {
+      template: makeTemplate(),
+      version: makeVersion(),
+      semver: "1.0.0",
+      title: "Lead Researcher",
+      riskLevel: "low" as const,
+      toolAccess: [],
+      hasApprovalGates: false,
+    };
+    const withNote = buildAgentPackageFiles({ ...input, changelog: "  Added depth control  " }, CONFIG);
+    expect(withNote.manifest.cinatra.changelog).toBe("Added depth control");
+    const shipped = JSON.parse(withNote.files["package.json"]) as { cinatra: { changelog?: string } };
+    expect(shipped.cinatra.changelog).toBe("Added depth control");
+
+    for (const changelog of [undefined, null, "  "]) {
+      const without = buildAgentPackageFiles({ ...input, changelog }, CONFIG);
+      expect(Object.keys(without.manifest.cinatra)).not.toContain("changelog");
+    }
+  });
+
   it("synthesized OAS is structurally valid", () => {
     const oas = buildAgentOasFromTemplate(makeTemplate());
     expect(validateOasFlowStructural(oas)).toEqual([]);

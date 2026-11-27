@@ -260,10 +260,73 @@ describe("publishAgentPackageFromGitDir fails closed on the compile (cinatra#426
   it("does not ship a stale root agent.json that sits beside cinatra/oas.json in the source", async () => {
     const agentDir = await writeAgentDir({});
     await fs.writeFile(path.join(agentDir, "agent.json"), OTHER_SOURCE);
-    await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+    } finally {
+      warn.mockRestore();
+    }
     await publishedManifests();
     expect((await shippedBytes("cinatra/oas.json")).equals(OAS_BYTES)).toBe(true);
     expect(await shipsFile("agent.json")).toBe(false);
+  });
+
+  it("a source with cinatra/oas.json AND stale cinatra/agent.json + agent.json ships neither, and says so once", async () => {
+    const agentDir = await writeAgentDir({});
+    // The sibling credential scan skips cinatra/agent.json as a canonical
+    // definition file, so a credential-like value in it must never reach the tarball.
+    const staleSecret = '{"apiKey": "sk-test1234567890abcdef1234567890ABCDEF12"}\n';
+    await fs.writeFile(path.join(agentDir, "cinatra", "agent.json"), staleSecret);
+    await fs.writeFile(path.join(agentDir, "agent.json"), OTHER_SOURCE);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+      const said = warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("not shipping"));
+      expect(said).toHaveLength(1);
+      expect(said[0]).toContain("cinatra/agent.json");
+      expect(said[0]).toContain("agent.json");
+      expect(said[0]).toContain(PACKAGE_NAME);
+    } finally {
+      warn.mockRestore();
+    }
+    await publishedManifests();
+    const files = (await fs.readdir(path.join(tmpRoot, "extracted", "package"), { recursive: true })).sort();
+    expect(files).toContain("cinatra/oas.json");
+    expect(files).not.toContain("agent.json");
+    expect(files).not.toContain("cinatra/agent.json");
+    expect((await shippedBytes("cinatra/oas.json")).equals(OAS_BYTES)).toBe(true);
+  });
+
+  it("a source with only cinatra/oas.json publishes without the stale-file warning", async () => {
+    const agentDir = await writeAgentDir({});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await publishAgentPackageFromGitDir({ agentDir }, CONFIG);
+      expect(warn.mock.calls.map((call) => String(call[0])).filter((line) => line.includes("not shipping"))).toHaveLength(0);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("carries the publish changelog in the manifest's cinatra block (packument and tarball), trimmed", async () => {
+    const agentDir = await writeAgentDir({});
+    await publishAgentPackageFromGitDir({ agentDir, changelog: "  Fixed the retry loop  " }, CONFIG);
+    for (const manifest of await publishedManifests()) {
+      expect(cinatraOf(manifest).changelog).toBe("Fixed the retry loop");
+    }
+  });
+
+  it("absence stays absence: no changelog key when the publish supplies none or a blank one", async () => {
+    for (const changelog of [undefined, null, "   "]) {
+      puts = [];
+      await fs.rm(path.join(tmpRoot, "agent"), { recursive: true, force: true });
+      await fs.rm(path.join(tmpRoot, "extracted"), { recursive: true, force: true });
+      const agentDir = await writeAgentDir({});
+      await publishAgentPackageFromGitDir({ agentDir, changelog }, CONFIG);
+      for (const manifest of await publishedManifests()) {
+        expect(Object.keys(cinatraOf(manifest))).not.toContain("changelog");
+      }
+    }
   });
 
   it("an A->B->A swap during the compile cannot split the compiled flow from the shipped bytes", async () => {

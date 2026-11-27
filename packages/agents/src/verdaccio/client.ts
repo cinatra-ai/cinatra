@@ -524,6 +524,12 @@ export async function publishAgentPackage(
   }
 }
 
+// An agent's one definition file is cinatra/oas.json. These are the old-layout
+// definition files: a publish never copies them into a tarball. The sibling
+// credential scan skips them as canonical definition files, so shipping a stale
+// one beside cinatra/oas.json would ship it unscanned.
+const OLD_LAYOUT_DEFINITION_FILES: readonly string[] = ["cinatra/agent.json", "agent.json"];
+
 export async function publishAgentPackageFromGitDir(
   input: {
     agentDir: string;
@@ -579,7 +585,7 @@ export async function publishAgentPackageFromGitDir(
     oasBytes = await readFile(oasSourcePath);
   } catch {
     let oldLayoutFile: string | null = null;
-    for (const rel of ["cinatra/agent.json", "agent.json"]) {
+    for (const rel of OLD_LAYOUT_DEFINITION_FILES) {
       if (await access(path.join(input.agentDir, rel)).then(() => true, () => false)) {
         oldLayoutFile = rel;
         break;
@@ -748,6 +754,7 @@ export async function publishAgentPackageFromGitDir(
   // reasoning.
   const displayName = carryManifestDisplayName(gitPkgJson);
   const vendor = carryManifestVendor(gitPkgJson);
+  const changelog = input.changelog?.trim() || undefined;
 
   // Build distribution-format package.json (satisfies AgentPackageManifest schema)
   const distManifest: Record<string, unknown> = {
@@ -786,6 +793,9 @@ export async function publishAgentPackageFromGitDir(
       // survive the rebuild — same class of fix, same rebuild site as logo.
       ...(displayName !== undefined ? { displayName } : {}),
       ...(vendor !== undefined ? { vendor } : {}),
+      // The release note the publisher supplied. It no longer lives in a root
+      // agent.json; the registry read (`toSummary`) takes it from this block.
+      ...(changelog !== undefined ? { changelog } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,
@@ -913,12 +923,25 @@ export async function publishAgentPackageFromGitDir(
     // having declared one, which is the failure mode #1482/#2467 exist to end.
     //
     // Derived from the ACTUAL copy set, not the raw walk (codex round-4): the
-    // loop below additionally drops the synthesized package.json, a stray root
-    // agent.json and every `isEnvBlocked` file, so asserting against the unfiltered walk would
+    // loop below additionally drops the synthesized package.json, any old-layout
+    // definition file (cinatra/agent.json, agent.json) and every `isEnvBlocked`
+    // file, so asserting against the unfiltered walk would
     // certify a file the tarball does not in fact contain. Same predicate, one
     // definition, so the two cannot drift.
     const shipsInTarball = (f: { relPath: string; isEnvBlocked: boolean }): boolean =>
-      f.relPath !== "package.json" && f.relPath !== "agent.json" && !f.isEnvBlocked;
+      f.relPath !== "package.json" &&
+      !OLD_LAYOUT_DEFINITION_FILES.includes(f.relPath) &&
+      !f.isEnvBlocked;
+    const staleDefinitions = publishableFiles
+      .map((f) => f.relPath)
+      .filter((relPath) => OLD_LAYOUT_DEFINITION_FILES.includes(relPath));
+    if (staleDefinitions.length > 0) {
+      console.warn(
+        `[publishAgentPackageFromGitDir] ${packageName}@${packageVersion}: not shipping ` +
+          `${staleDefinitions.join(", ")} (old layout); the one definition file is cinatra/oas.json. ` +
+          "Delete the stale file from the source.",
+      );
+    }
     assertDeclaredLogoShips({
       logo,
       packageRoot: input.agentDir,
@@ -936,7 +959,7 @@ export async function publishAgentPackageFromGitDir(
     }
     for (const file of publishableFiles) {
       // The top-level package.json is synthesized above (distManifest), so skip
-      // the original-on-disk version; a root agent.json never ships. .env* files
+      // the original-on-disk version; an old-layout definition file never ships. .env* files
       // (other than .env.example) MUST NOT ship — the sibling scan would have
       // rejected the package at the gate; this is defense-in-depth.
       if (!shipsInTarball(file)) continue;

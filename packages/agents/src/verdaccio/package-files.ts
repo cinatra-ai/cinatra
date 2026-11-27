@@ -339,6 +339,10 @@ function buildAgentMetadata(
   if (input.agentDependencies && Object.keys(input.agentDependencies).length > 0) {
     metadata.agentDependencies = { ...input.agentDependencies };
   }
+  // The release note moves with the manifest: it no longer lives in a root
+  // agent.json, and the registry read takes the summary's changelog from here.
+  const changelog = input.changelog?.trim();
+  if (changelog) metadata.changelog = changelog;
   // Emit executionProvider when the template declares a non-default provider.
   // Schema (package-contract.ts) marks this field optional; install path
   // (agents-install.mjs line 355) falls back to "default" when absent, so
