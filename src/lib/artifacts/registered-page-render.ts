@@ -9,7 +9,7 @@ import {
   captureDenialCopy,
   type CaptureTargetDenial,
   type RegisteredCaptureSite,
-} from "./cms-preview-capture-policy";
+} from "./page-capture-policy";
 import { allowsLoopbackHttp } from "../loopback-http-policy";
 
 // ---------------------------------------------------------------------------

@@ -358,7 +358,7 @@ with the TypeScript compiler API and refuses a new occurrence of:
    value declarations (the names of top-level functions, classes and
    variables, exported or not). A count above the ceiling is refused; a count
    below it is a stale entry. A new top-level function in
-   `src/lib/artifacts/cms-preview-capture-policy.ts` is refused; a fix inside
+   `src/lib/artifacts/page-capture-policy.ts` is refused; a fix inside
    an existing declaration adds no name, so a listed module stays maintainable
    while its surface cannot widen.
 
