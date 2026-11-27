@@ -18,6 +18,8 @@ import {
   flowSteps,
   isAgentPack,
   isContent,
+  isSkippedDir,
+  isTestFile,
   listGrowth,
   missingItems,
   nonContentFiles,
@@ -96,7 +98,7 @@ const packs = () => ({
       "cinatra/oas.json": JSON.stringify(callFlow("read_text")),
       "cinatra/tools/read.mjs": "export {};\n",
       "skills/pick/SKILL.md": "# pick\n",
-      "test/read.test.mjs": "\n",
+      "test/helper.mjs": "\n",
     },
   },
   "mail-connector": {
@@ -108,7 +110,7 @@ const packs = () => ({
 const READ = "@example-org/read-agent";
 const FLOW_KEY = `${READ} :: cinatra/oas.json`;
 const recorded = () => ({
-  nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "test/read.test.mjs"] } },
+  nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "test/helper.mjs"] } },
   toolDeclarations: { [READ]: { count: 1, items: ["read"] } },
   extensionToolSteps: { [FLOW_KEY]: { count: 1, items: ["read_text -> read"] } },
   unreadableSteps: {},
@@ -152,6 +154,15 @@ test("every file outside the content rule counts: source of any language, extens
   const files = plain("bin/run", "cli", "a.rb", "vitest.config.ts", "pnpm-lock.yaml", "package-lock.json", ".npmrc", "x.d.ts", "Makefile", "LICENSE", ".github/workflows/ci.yml", ".github/check.mjs", "docs/a.md", "logo.PNG");
   assert.deepEqual(nonContentFiles(files), [".npmrc", "Makefile", "a.rb", "bin/run", "cli", "vitest.config.ts", "x.d.ts"]);
   assert.equal(isContent("nested/.github/x.mjs"), false);
+});
+
+test("a file is left out as a test only by its base name (*.test.<ext>, *.spec.<ext>); no folder name decides, node_modules and .git aside", () => {
+  for (const rel of ["src/a.test.ts", "a.spec.mjs", "test/x.test.mjs", "cinatra/tools/test/z.spec.sh"]) assert.equal(isTestFile(rel), true, rel);
+  for (const rel of ["test/helper.mjs", "tests/a.mjs", "src/__tests__/a.ts", "cinatra/tools/test/delivery.mjs", "src/contest.ts", "a.test", "a.tests.mjs", "test.mjs"]) assert.equal(isTestFile(rel), false, rel);
+  for (const rel of ["node_modules/p/i.js", "a/node_modules/b.js", "a/.git/hook.sh"]) assert.equal(isSkippedDir(rel), true, rel);
+  for (const rel of ["node_modules", "src/build/selection.ts", "dist/run.js", "out/x.js", "coverage/c.js", "venv/bin/x", ".env"]) assert.equal(isSkippedDir(rel), false, rel);
+  const all = plain("test/x.test.mjs", "tests/a.spec.ts", "test/helper.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts", "dist/run.js", "node_modules/p/i.js", "a/.git/hook.sh");
+  assert.deepEqual(nonContentFiles(all), ["cinatra/tools/test/delivery.mjs", "dist/run.js", "src/build/selection.ts", "test/helper.mjs"]);
 });
 
 test("a symbolic link or a gitlink always counts, even with a content extension", () => {
@@ -222,7 +233,7 @@ test("the ratchet compares items as a multiset: a same-count substitution fails 
   found.extensionToolSteps[FLOW_KEY] = { count: 1, items: ["read_text -> other"] };
   found.unreadableSteps[FLOW_KEY] = { count: 1, items: ["x: data.tool is not a plain name"] };
   const d = diffWithList(found, list);
-  assert.deepEqual(d.nonContentFiles, { fresh: [`${READ}: src/runtime.ts`], stale: [`${READ}: test/read.test.mjs`] });
+  assert.deepEqual(d.nonContentFiles, { fresh: [`${READ}: src/runtime.ts`], stale: [`${READ}: test/helper.mjs`] });
   assert.deepEqual(d.toolDeclarations, { fresh: [`${READ}: renamed`], stale: [`${READ}: read`] });
   assert.deepEqual(d.extensionToolSteps, { fresh: [`${FLOW_KEY}: read_text -> other`], stale: [`${FLOW_KEY}: read_text -> read`] });
   assert.deepEqual(d.unreadableSteps, { fresh: [`${FLOW_KEY}: x: data.tool is not a plain name`], stale: [] });
@@ -344,7 +355,7 @@ test("live: the recorded list passes; one more committed and pinned file fails; 
     repin(root, "read-agent", READ);
     const stale = runGate(root);
     assert.equal(stale.status, 1);
-    assert.match(stale.out, /\[nonContentFiles\] recorded items that are gone[\s\S]*- @example-org\/read-agent: test\/read\.test\.mjs/);
+    assert.match(stale.out, /\[nonContentFiles\] recorded items that are gone[\s\S]*- @example-org\/read-agent: test\/helper\.mjs/);
   });
 });
 
@@ -364,14 +375,31 @@ test("live: a file in the working tree or the index but not in the pinned commit
 test("live: a file removed from the index but present at the pinned commit is still counted (no offset of a new file)", () => {
   withRoot({ packs: packs(), list: recorded() }, (root) => {
     const pack = packDir(root, "read-agent");
-    git(pack, "rm", "-q", "--cached", "test/read.test.mjs");
+    git(pack, "rm", "-q", "--cached", "test/helper.mjs");
     writeFile(join(pack, "src", "new.ts"), "export {};\n");
     git(pack, "add", "src/new.ts");
     const res = runGate(root, ["--report"]);
     assert.equal(res.status, 0, res.out);
-    assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    test\/read\.test\.mjs\n/);
+    assert.match(res.out, /@example-org\/read-agent: 2\n    cinatra\/tools\/read\.mjs\n    test\/helper\.mjs\n/);
     assert.equal(runGate(root).status, 0);
   });
+});
+
+test("live: a *.test.mjs file is not counted; test/helper.mjs, cinatra/tools/test/delivery.mjs and src/build/selection.ts each are", () => {
+  withRoot({ packs: packs(), list: recorded() }, (root) => {
+    writeFile(join(packDir(root, "read-agent"), "test", "x.test.mjs"), "\n");
+    repin(root, "read-agent", READ);
+    assert.equal(runGate(root).status, 0);
+  });
+  for (const rel of ["test/other.mjs", "cinatra/tools/test/delivery.mjs", "src/build/selection.ts"]) {
+    withRoot({ packs: packs(), list: recorded() }, (root) => {
+      writeFile(join(packDir(root, "read-agent"), ...rel.split("/")), "export {};\n");
+      repin(root, "read-agent", READ);
+      const grown = runGate(root);
+      assert.equal(grown.status, 1, rel);
+      assert.ok(grown.out.includes(`+ @example-org/read-agent: ${rel}`), rel);
+    });
+  }
 });
 
 test("live: a later commit with one more code file counts only once the lock moves to it", () => {
@@ -459,9 +487,9 @@ test("live: the writer refuses a missing list and growth (a substituted item too
   withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 2, items: ["cinatra/tools/read.mjs", "src/gone.ts"] } } } }, (root) => {
     const refused = runGate(root, ["--write-baseline"]);
     assert.equal(refused.status, 1);
-    assert.match(refused.out, /the list only shrinks:\n  \+ \[nonContentFiles\] @example-org\/read-agent: test\/read\.test\.mjs/);
+    assert.match(refused.out, /the list only shrinks:\n  \+ \[nonContentFiles\] @example-org\/read-agent: test\/helper\.mjs/);
   });
-  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/gone.ts", "test/read.test.mjs"] } } } }, (root) => {
+  withRoot({ packs: packs(), list: { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/gone.ts", "test/helper.mjs"] } } } }, (root) => {
     assert.equal(runGate(root).status, 1);
     assert.equal(runGate(root, ["--write-baseline"]).status, 0);
     assert.equal(runGate(root).status, 0);
@@ -483,7 +511,7 @@ test("live base guard: seeds once, an added item fails (a same-count substitutio
     const pack = packDir(root, "read-agent");
     writeFile(join(pack, "src", "more.ts"), "export {};\n");
     repin(root, "read-agent", READ);
-    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/more.ts", "test/read.test.mjs"] } } });
+    writeJson(join(root, LIST_REL), { ...recorded(), nonContentFiles: { [READ]: { count: 3, items: ["cinatra/tools/read.mjs", "src/more.ts", "test/helper.mjs"] } } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1);
     assert.match(grew.out, /GREW against the base[\s\S]*\[nonContentFiles\] @example-org\/read-agent: src\/more\.ts \(the base does not hold it\)/);
