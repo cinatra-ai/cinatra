@@ -6,7 +6,7 @@
 //   2. ensureAgentPackage / ensureAgentPackageFromGitFile (startup, no request)
 
 import { createHash, randomUUID } from "node:crypto";
-import { writeFile, mkdir, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { redirect } from "next/navigation";
@@ -37,7 +37,7 @@ import {
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
 import { assertStoredRegenerateHonoured } from "./retained-regenerate";
-import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
@@ -311,9 +311,17 @@ export async function importAgentTemplateCore(
   try {
     const installPackageName = siblingPkgName ??
       `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`;
+    // cinatra#4897: the one source of the install. Staging has settled which
+    // file is canonical (an archive's own `cinatra/oas.json` replaces the root
+    // `agent.json` staged above), so the bytes are read from the staged file,
+    // handed to the compile, and scanned: what is compiled, materialized and
+    // mounted is what the scan read. The archive's root `agent.json` decides
+    // nothing here.
+    const oasBytes = await readFile(tmpOasJson);
     const compileResult = await compileOasAgentJson({
       packageName: installPackageName,
       oasSourcePath: tmpOasJson,
+      oasSource: oasBytes,
     });
     if (!compileResult.ok) {
       throw new Error(
@@ -322,8 +330,9 @@ export async function importAgentTemplateCore(
     }
     compiled = compileResult.value;
     // Use the ZIP manifest/compiler identity, never the OAS's claimed identity.
-    const inputFindings = scanOasForVisibleInputContractFindings(
-      agent as unknown as Record<string, unknown>,
+    // The compile has parsed these same bytes, so they are valid JSON here.
+    const inputFindings = scanOasForInstallFindings(
+      JSON.parse(oasBytes.toString("utf8")) as Record<string, unknown>,
       installPackageName,
     );
     if (inputFindings.length > 0) {
