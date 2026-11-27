@@ -57,7 +57,7 @@
       "key": "packages/agents/src/campaign-recipients-review-renderer.tsx",
       "reason": "A host-authored renderer for a pack's review screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink as the pack takes its pixels back.",
       "files": {
-        "packages/agents/src/campaign-recipients-review-renderer.tsx": 688
+        "packages/agents/src/campaign-recipients-review-renderer.tsx": 669
       }
     },
     {
