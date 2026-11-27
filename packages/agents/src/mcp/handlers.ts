@@ -77,6 +77,7 @@ import {
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
   resolveAgentJsonPathForRead,
+  resolveAgentOasPathForRead,
   resolveAgentRootDirForRead,
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
@@ -2515,7 +2516,8 @@ async function handleAgentBuilderExport(
     }
 
     const exportSlug = template.packageName.split("/").pop() ?? "";
-    const resolved = exportSlug ? resolveAgentJsonPathForRead(exportSlug) : null;
+    const resolved = exportSlug ? resolveAgentOasPathForRead(exportSlug) : null;
+    if (resolved && "error" in resolved) return { error: `Export unavailable: ${resolved.error}` };
     if (!resolved) {
       return {
         error:
@@ -2853,10 +2855,10 @@ async function handleAgentBuilderGitRead(
   if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
     return { error: "packageSlug must not contain path separators or '..'." };
   }
-  // prefer agents/{slug}/cinatra/agent.json; fall back to legacy flat path.
-  const resolved = resolveAgentJsonPathForRead(packageSlug);
+  const resolved = resolveAgentOasPathForRead(packageSlug);
+  if (resolved && "error" in resolved) return { error: resolved.error };
   if (!resolved) {
-    return { error: `Agent file not found: agents/${packageSlug}/cinatra/agent.json` };
+    return { error: `Agent file not found: agents/${packageSlug}/cinatra/oas.json` };
   }
   let raw: string;
   try {
@@ -3351,7 +3353,8 @@ async function handleAgentBuilderGitValidate(
     if (packageSlug.includes("..") || packageSlug.includes("/") || packageSlug.includes("\\")) {
       return { valid: false, errors: ["packageSlug must not contain path separators or '..'."] };
     }
-    const resolved = resolveAgentJsonPathForRead(packageSlug);
+    const resolved = resolveAgentOasPathForRead(packageSlug);
+    if (resolved && "error" in resolved) return { valid: false, errors: [resolved.error] };
     if (!resolved) {
       return {
         valid: false,
@@ -3458,7 +3461,17 @@ async function handleAgentSourceReview(
         ranAdvisoryAgents: [],
       };
     }
-    const resolved = resolveAgentJsonPathForRead(packageSlug);
+    const resolved = resolveAgentOasPathForRead(packageSlug);
+    if (resolved && "error" in resolved) {
+      return {
+        blockers: [
+          { code: "agent_not_found", severity: "blocker", message: resolved.error, source: "deterministic" },
+        ],
+        warnings: [],
+        suggestions: [],
+        ranAdvisoryAgents: [],
+      };
+    }
     if (!resolved) {
       return {
         blockers: [
@@ -3674,8 +3687,8 @@ async function handleAgentBuilderGitCompileAndWrite(
     return { error: "packageSlug must not contain path separators or '..'." };
   }
 
-  // prefer agents/{slug}/cinatra/agent.json; fall back to legacy flat path.
-  const resolved = resolveAgentJsonPathForRead(packageSlug);
+  const resolved = resolveAgentOasPathForRead(packageSlug);
+  if (resolved && "error" in resolved) return { error: resolved.error };
   if (!resolved) {
     return {
       error: `Agent file not found: agents/${packageSlug}/cinatra/oas.json. Use agent_source_write to create it first.`,
@@ -4161,11 +4174,12 @@ async function handleAgentBuilderGitPublish(
     return { error: "packageSlug must not contain path separators or '..'." };
   }
 
-  // probe new canonical, then legacy via resolveAgentRootDirForRead.
-  const agentDir = resolveAgentRootDirForRead(packageSlug);
-  if (!agentDir) {
+  const resolvedOas = resolveAgentOasPathForRead(packageSlug);
+  if (resolvedOas && "error" in resolvedOas) return { error: resolvedOas.error };
+  if (!resolvedOas) {
     return { error: `Agent directory not found for slug: ${packageSlug}` };
   }
+  const agentDir = resolvedOas.rootDir;
   try {
     await readdir(agentDir);
   } catch {
@@ -4185,27 +4199,24 @@ async function handleAgentBuilderGitPublish(
   // non-fatal (legacy packages may not carry one yet) — the existing
   // license + publish-time validators still apply downstream.
   {
-    const resolvedOas = resolveAgentJsonPathForRead(packageSlug);
-    if (resolvedOas) {
-      try {
-        const oasRaw = (await readFile(resolvedOas.path, "utf8")) as string;
-        const oasParsed = JSON.parse(oasRaw) as Record<string, unknown>;
-        const review = runDeterministicReview(oasParsed);
-        if (review.blockers.length > 0) {
-          return {
-            error: `agent.json failed review (${review.blockers.length} blocker${review.blockers.length === 1 ? "" : "s"}): ${review.blockers.map((b) => b.message).join("; ")}`,
-            code: "review_blocked",
-            blockers: review.blockers,
-          };
-        }
-      } catch (gateErr) {
-        // Read/parse failure — log and proceed. The license + publish
-        // validators still gate the publish path downstream.
-        console.warn(
-          "[agent_source_publish] review gate skipped (read/parse failed):",
-          gateErr,
-);
+    try {
+      const oasRaw = (await readFile(resolvedOas.path, "utf8")) as string;
+      const oasParsed = JSON.parse(oasRaw) as Record<string, unknown>;
+      const review = runDeterministicReview(oasParsed);
+      if (review.blockers.length > 0) {
+        return {
+          error: `agent.json failed review (${review.blockers.length} blocker${review.blockers.length === 1 ? "" : "s"}): ${review.blockers.map((b) => b.message).join("; ")}`,
+          code: "review_blocked",
+          blockers: review.blockers,
+        };
       }
+    } catch (gateErr) {
+      // Read/parse failure — log and proceed. The license + publish
+      // validators still gate the publish path downstream.
+      console.warn(
+        "[agent_source_publish] review gate skipped (read/parse failed):",
+        gateErr,
+);
     }
   }
 
