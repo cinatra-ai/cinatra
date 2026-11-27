@@ -62,7 +62,9 @@ in any union constituent, by its element type for a rest parameter.
 A root property is a port when its annotation (optionally `| null | undefined` or `?`)
 references an SDK interface or an SDK type alias of one type literal; it is an identity field
 when it is a primitive, a literal, an array or tuple of those, or a reference the checker
-resolves to such. Anything else on the root is `port-shape`. A port has no type parameters,
+resolves to such. Anything else on the root is `port-shape`, and so is any index, call or
+construct signature of the root (own or inherited), keyed `[index]`, `[call]` or `[construct]`:
+it reaches members no declaration names. A port has no type parameters,
 extends SDK interfaces only, and holds methods, function-typed properties (optionally
 nullable) and output-only members (`readonly` properties and getters whose type cannot be
 called). Anything else in a port is `port-shape`.

@@ -549,6 +549,15 @@ export function portFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.fi
     if (isPort(decl)) readPort(decl);
     else if (!annotation || !plain(checker.getTypeFromTypeNode(annotation))) shape(d && inSdk(d) ? d : rootDecl, prop.name, `the root property ${prop.name} is neither a port nor an identity field`);
   }
+  // An index, call or construct signature on the root is access to undeclared members, one finding each.
+  const rootSignatures = [
+    ["[index]", checker.getIndexInfosOfType(rootType).map((i) => i.declaration)],
+    ["[call]", rootType.getCallSignatures().map((x) => x.declaration)],
+    ["[construct]", rootType.getConstructSignatures().map((x) => x.declaration)],
+  ];
+  for (const [key, declarations] of rootSignatures) {
+    for (const d of declarations) shape(d ?? rootDecl, key, `the root ${type} has a ${key} signature, which reaches members no declaration names`);
+  }
   return out;
 }
 

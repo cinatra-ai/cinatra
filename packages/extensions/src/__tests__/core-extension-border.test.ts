@@ -798,7 +798,7 @@ describe("core/extension border — the ports are a closed shape with typed inpu
       "enum Kind { A, B }\ninterface JobsPort { run(): void }",
       "jobs: JobsPort; sym: symbol; readonly tag: unique symbol; kind: Kind; nothing: void; big: bigint; nil: null; tpl: `a${string}`",
     ],
-  ])("allows %s", (_name, declarations, fields) => {
+  ])("allows %s", (_name, declarations, fields?: string) => {
     expect(ports(declarations, fields)).toEqual([]);
   });
 
@@ -834,6 +834,28 @@ describe("core/extension border — the ports are a closed shape with typed inpu
     ["a root property typed never", "interface JobsPort { run(): void }", "jobs: JobsPort; n: never", "n"],
   ])("refuses %s as port-shape", (_name, declarations, fields, detail) => {
     expect(ports(declarations, fields)).toEqual([`port-shape ${detail}`]);
+  });
+
+  it.each([
+    ["an index signature", "[name: string]: any", "port-shape [index]"],
+    ["a call signature", "(input: string): void", "port-shape [call]"],
+    ["a construct signature", "new (input: string): object", "port-shape [construct]"],
+  ])("refuses %s on the root as port-shape", (_name, member, finding) => {
+    const jobs = "interface JobsPort { run(): void }";
+    expect(ports(jobs, "", `export interface ExtensionHostContext { jobs: JobsPort; ${member} }`)).toEqual([finding]);
+    expect(ports(jobs, "", `export type ExtensionHostContext = { jobs: JobsPort; ${member} };`)).toEqual([finding]);
+    // inherited from a base declared in the SDK
+    expect(ports(`${jobs}\ninterface BaseContext { ${member} }`, "", "export interface ExtensionHostContext extends BaseContext { jobs: JobsPort }")).toEqual([finding]);
+  });
+
+  it("reports each signature of the root once, and a root without any as before", () => {
+    const jobs = "interface JobsPort { run(): void }";
+    expect(ports(jobs, "", "export interface ExtensionHostContext { jobs: JobsPort; (a: string): void; (b: number): void; new (): object }")).toEqual([
+      "port-shape [call]",
+      "port-shape [call] (occurrence 2)",
+      "port-shape [construct]",
+    ]);
+    expect(ports(jobs, "", "export interface ExtensionHostContext { jobs: JobsPort; id: string }")).toEqual([]);
   });
 
   it.each([
