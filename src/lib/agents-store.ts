@@ -45,9 +45,10 @@ import {
 // status to active/published and excludes drafts.
 import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
 import {
-  enumerateAgentSourceDirs,
+  DEFINITION_PLACES,
+  classifyAgentSourceDirs,
   warnAgentSource,
-  type AgentSourceDir,
+  type AgentSourceCandidate,
 } from "@cinatra-ai/agents/agent-source-dirs";
 // Provider-declared agents live under `<installDir>/cinatra/<slug>/`
 // and are NOT in `agent_templates`. The matcher's "agents" axis must union the
@@ -498,23 +499,46 @@ export function readProviderDeclaredAgents(
   const candidates: Array<{ oasSourcePath: string; siblingPkgPaths: string[] }> = [];
   const vendorSegments = safeProviderVendorSegments();
 
-  // The one enumeration of agent source directories (cinatra#4920, shared with
-  // the listing handler and the boot ingest): `<vendor>/<slug>/cinatra/oas.json`
-  // is read; any other directory that looks like an agent source (an old-layout
-  // file, a flat <installDir>/<slug>/) is named in a warning, never read.
-  let sources: AgentSourceDir[] = [];
+  // Which directories are agent sources, and in what state, is decided by one
+  // classifier (cinatra#4920, shared with the listing handler and the boot
+  // ingest); the walk and its error handling are this reader's own, as before:
+  // `<vendor>/<slug>/cinatra/oas.json` is read; any other directory that looks
+  // like an agent source (an old-layout file, a flat <installDir>/<slug>/) is
+  // named in a warning, never read.
+  const present = (dir: string) => DEFINITION_PLACES.filter((place) => existsSync(path.join(dir, place)));
+  const looked: AgentSourceCandidate[] = [];
+
+  // New layout: <installDir>/<vendor>/<slug>/
+  for (const vendor of vendorSegments) {
+    const vendorDir = path.join(installRoot, vendor);
+    if (!existsSync(vendorDir)) continue;
+    try {
+      for (const sub of readdirSync(vendorDir, { withFileTypes: true })) {
+        if (!sub.isDirectory()) continue;
+        const dir = path.join(vendorDir, sub.name);
+        looked.push({ dir, flat: false, present: present(dir) });
+      }
+    } catch (err) {
+      if (options.throwOnError) throw err;
+      console.warn("[agents-store] readdir vendor dir failed:", err);
+    }
+  }
+
+  // Alternate/legacy layout: <installDir>/<slug>/.
+  type DirEntry = { name: string; isDirectory: () => boolean };
+  let topEntries: DirEntry[] = [];
   try {
-    sources = enumerateAgentSourceDirs(installRoot, vendorSegments, {
-      onUnreadable: (dir, err) => {
-        if (options.throwOnError) throw err;
-        console.warn(`[agents-store] readdir failed for ${dir}:`, err);
-      },
-    });
+    topEntries = readdirSync(installRoot, { withFileTypes: true }) as unknown as DirEntry[];
   } catch (err) {
     if (options.throwOnError) throw err;
     console.warn("[agents-store] readdir install root failed:", err);
   }
-  for (const source of sources) {
+  for (const entry of topEntries) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(installRoot, entry.name);
+    looked.push({ dir, flat: true, present: present(dir) });
+  }
+  for (const source of classifyAgentSourceDirs(looked, { root: installRoot, vendors: vendorSegments })) {
     if (source.state === "read") {
       candidates.push({
         oasSourcePath: source.definitionPath,

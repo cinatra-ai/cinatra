@@ -494,6 +494,20 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     expect(readProviderDeclaredAgents()).toEqual([]);
   });
 
+  it("throwOnError does not fail on a vendor directory that does not exist (only an unreadable one does)", () => {
+    // The operator's vendor directory is absent: it is skipped, as it always
+    // was, and the first-party agent is still surfaced.
+    readInstanceIdentityMock.mockReturnValue(makeInstanceIdentity("marcushorndt-local", "Marcus Local"));
+    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+      layout: "new-oas",
+      metadataPackageName: "@cinatra-ai/email-drafting-agent",
+      name: "Email Drafting Agent",
+      description: "Drafts cold-outreach emails.",
+    });
+    expect(() => readProviderDeclaredAgents({ throwOnError: true })).not.toThrow();
+    expect(readProviderDeclaredAgents({ throwOnError: true })).toHaveLength(1);
+  });
+
   it("throwOnError propagates a malformed sibling package.json when it's the only packageName source", () => {
     // Provider agent without packageName in agent.json — depends on sibling
     // package.json fallback. If that sibling file exists but is malformed,

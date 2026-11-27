@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 
 // ---------------------------------------------------------------------------
 // vi.hoisted refs.
@@ -39,7 +40,7 @@ const {
   mockReadAgentTemplateById: vi.fn(),
   mockCreateZipBuffer: vi.fn(),
   // The operator's vendor directory; null = identity unset (first-party only).
-  identity: { vendor: null as string | null },
+  identity: { vendor: null as string | null, failure: null as Error | null },
 }));
 
 // Observe which definition file a handler really opens: record each readFile path.
@@ -64,7 +65,11 @@ vi.mock("../verdaccio/client", () => ({
 // "identity unset", so the resolvers use the first-party "cinatra-ai" vendor
 // segment only.
 vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(() => (identity.vendor ? { vendorName: identity.vendor } : null)),
+  readInstanceIdentity: vi.fn(() => {
+    // A failing identity store (the database is down) throws, as the real one does.
+    if (identity.failure) throw identity.failure;
+    return identity.vendor ? { vendorName: identity.vendor } : null;
+  }),
   markFirstPublishedIfCurrentScope: vi.fn(),
 }));
 
@@ -365,6 +370,7 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
     originalCwd = process.cwd();
     process.chdir(tmpRoot);
     identity.vendor = null;
+    identity.failure = null;
     mockPublishAgentPackageFromGitDir.mockReset();
     mockPublishAgentPackageFromGitDir.mockResolvedValue({
       packageName: `@cinatra/${SLUG}`,
@@ -561,4 +567,26 @@ describe("by-slug source handlers read cinatra/oas.json only (cinatra#4920)", ()
       }
     });
   }
+
+  // The listing keeps the error behaviour it had: a failing instance identity
+  // store is an error of the call (it is not an unreadable tree, and it must
+  // not pass as "no sources"); only an unreadable or missing source root lists
+  // nothing.
+  it("agent_source_list: a failing identity store rejects the call", async () => {
+    await put(`${FIRST_PARTY}/${SLUG}/cinatra/oas.json`, oas("LISTED"));
+    identity.failure = new Error("identity store down");
+    await expect(run("agent_source_list", {})).rejects.toThrow("identity store down");
+  });
+
+  it("agent_source_list: a source root that cannot be read lists nothing", async () => {
+    identity.vendor = OPERATOR;
+    vi.mocked(resolveDevExtensionSourceRoot).mockReturnValue(path.join(tmpRoot, "no-such-root"));
+    try {
+      const result = await run("agent_source_list", {});
+      expect(result.items).toEqual([]);
+      expect(result.warnings).toEqual([]);
+    } finally {
+      vi.mocked(resolveDevExtensionSourceRoot).mockImplementation(() => process.cwd());
+    }
+  });
 });

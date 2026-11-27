@@ -107,8 +107,6 @@ export type GitNativeAgentDefinitionLoader = (opts: {
 export type GitNativeAgentIngestOptions = {
   /** Defaults to the extension source root (`resolveDevExtensionSourceRoot()`). */
   sourceRoot?: string;
-  /** The vendor directories a by-slug read walks. Defaults to the operator's own, then first-party. */
-  vendors?: readonly string[];
   /** Defaults to `GIT_NATIVE_AGENT_INGEST_BUDGET_MS`. */
   budgetMs?: number;
   /** Test seam — defaults to `ensureAgentPackageFromGitFile`. */
@@ -144,32 +142,48 @@ async function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 
 /**
  * Every git-native agent source directory under `sourceRoot`, each in its one
- * state (cinatra#4920, `@cinatra-ai/agents/agent-source-dirs`): a directory with
+ * state (cinatra#4920). The walk is the one the boot scan always made (async
+ * `readdir`, every top-level directory also read for the agents below it, the
+ * same awaits, no database or identity read); only the CLASSIFICATION of what it
+ * found is shared (`@cinatra-ai/agents/agent-source-dirs`): a directory with
  * `<vendor>/<slug>/cinatra/oas.json` is READ and handed to the loader; any other
  * directory that holds a definition file (an `agent.json`, a flat `<slug>/`) is
- * REPORTED, never loaded and never passed over silently. Every top-level
- * directory is a vendor here.
+ * REPORTED, never loaded and never passed over silently. The operator's vendor
+ * is not known here, so a shadow note is made only where every possible vendor
+ * gives the same selection.
  *
  * A source root that cannot be read at all THROWS — that is a question about the
  * tree, and each caller answers it its own way. An unreadable directory BELOW
  * the root is skipped, as it always was.
  */
-async function collectDefinitions(sourceRoot: string, vendors?: readonly string[]) {
-  const { enumerateAgentSourceDirs } = await import("@cinatra-ai/agents/agent-source-dirs");
-  return enumerateAgentSourceDirs(sourceRoot, null, { selectionVendors: vendors ?? (await bySlugVendors()) });
-}
+async function collectDefinitions(sourceRoot: string) {
+  const { readdir } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { existsSync } = await import("node:fs");
+  const { DEFINITION_PLACES, classifyAgentSourceDirs } = await import("@cinatra-ai/agents/agent-source-dirs");
 
-/**
- * The vendor directories a by-slug read walks: the operator's own, then
- * first-party. They decide which of two directories with one slug is read by
- * slug (the other is reported as shadowed); both are still loaded here.
- */
-async function bySlugVendors(): Promise<string[]> {
-  const first = "cinatra-ai";
-  const { readInstanceIdentity } = await import("@/lib/instance-identity-store");
-  const { isSafePathSegment } = await import("@cinatra-ai/registries");
-  const own = readInstanceIdentity()?.instanceNamespace;
-  return typeof own === "string" && own !== first && isSafePathSegment(own) ? [own, first] : [first];
+  const presentIn = (dir: string) => DEFINITION_PLACES.filter((place) => existsSync(join(dir, place)));
+  const candidates: Array<{ dir: string; flat: boolean; present: readonly string[] }> = [];
+  const entries = await readdir(sourceRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const entryPath = join(sourceRoot, entry.name);
+    candidates.push({ dir: entryPath, flat: true, present: presentIn(entryPath) });
+
+    // Every top-level directory is also read for the agents below it
+    // (e.g., extensions/cinatra-ai/<slug>-agent/cinatra/oas.json).
+    try {
+      const subEntries = await readdir(entryPath, { withFileTypes: true });
+      for (const sub of subEntries) {
+        if (!sub.isDirectory()) continue;
+        const subPath = join(entryPath, sub.name);
+        candidates.push({ dir: subPath, flat: false, present: presentIn(subPath) });
+      }
+    } catch {
+      // Non-fatal — skip unreadable subdirectories
+    }
+  }
+  return classifyAgentSourceDirs(candidates, { root: sourceRoot, vendors: null });
 }
 
 /** Read every git-native agent definition under `sourceRoot` into the database. */
@@ -190,7 +204,7 @@ export async function ingestGitNativeAgentDefinitions(
   }
   const budgetMs = options?.budgetMs ?? GIT_NATIVE_AGENT_INGEST_BUDGET_MS;
 
-  const sources = await collectDefinitions(sourceRoot, options?.vendors);
+  const sources = await collectDefinitions(sourceRoot);
   const definitions = sources.flatMap((source) => (source.state === "read" ? [source.definitionPath] : []));
   const report: GitNativeAgentIngestReport = {
     sourceRoot,

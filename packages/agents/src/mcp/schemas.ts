@@ -385,7 +385,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_read": {
     description:
-      "Exploration tool — use before agent_source_write to inspect the current definition. Reads the OAS Flow file from the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). Reads transparently fall back to legacy locations (cinatra/agent.json, then flat agents/<slug>/cinatra/agent.json, then agents/<slug>/agent.json). Returns the parsed content and file path.",
+      "Exploration tool — use before agent_source_write to inspect the current definition. Reads the OAS Flow file <vendor>/<packageSlug>/cinatra/oas.json from the extension source directory, in the operator's own vendor directory first, then in cinatra-ai. Only cinatra/oas.json is read: when the first directory that holds a definition file for the slug has only an old-layout file (cinatra/agent.json or agent.json), the call returns an error that names that file and the exact place to move it. Returns the parsed content and file path.",
     inputSchema: z.object({
       packageSlug: z
         .string()
@@ -396,7 +396,7 @@ export const AGENT_BUILDER_TOOL_META: Record<string, ToolMeta> = {
   },
   "agent_source_write": {
     description:
-      "ADMIN-ONLY (platform_admin). Live source mutation: write an OAS Flow 26.1.0 agent definition to the canonical source-package directory (currently extensions/cinatra-ai/<packageSlug>/cinatra/oas.json regardless of operator vendor; the disk layout is a separate concern tracked for a future migration). When a legacy file (agents/<packageSlug>/cinatra/agent.json or agents/<packageSlug>/agent.json) already exists it is overwritten in place. Creates directories and files as needed. The caller is responsible for bumping packageVersion before writing. Source-authoring pipeline step 1 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected by both the delegated-chat tool policy and the handler's admin gate; the non-admin proposal→approval workflow runs through a separate `agent_creation_request` store — never these live tools.",
+      "ADMIN-ONLY (platform_admin). Live source mutation: write an OAS Flow 26.1.0 agent definition to <operator vendor>/<packageSlug>/cinatra/oas.json in the extension source directory. An old-layout file (cinatra/agent.json or agent.json) is neither read nor overwritten; the definition always goes to cinatra/oas.json. Creates directories and files as needed. The caller is responsible for bumping packageVersion before writing. Source-authoring pipeline step 1 of 5: agent_source_write → agent_source_validate → agent_source_compile → agent_source_publish → agent_run. Non-admin invocations are rejected by both the delegated-chat tool policy and the handler's admin gate; the non-admin proposal→approval workflow runs through a separate `agent_creation_request` store — never these live tools.",
     inputSchema: z.object({
       packageSlug: z
         .string()

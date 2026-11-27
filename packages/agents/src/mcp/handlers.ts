@@ -80,10 +80,11 @@ import {
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
 import {
+  DEFINITION_PLACES,
   agentSourceMessage,
   agentSourceShadowNote,
-  enumerateAgentSourceDirs,
-  type AgentSourceDir,
+  classifyAgentSourceDirs,
+  type AgentSourceCandidate,
 } from "../agent-source-dirs";
 import { createZipBuffer } from "../zip-helpers";
 import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
@@ -2749,12 +2750,44 @@ async function handleAgentBuilderGitList(
   // A directory a by-slug read does not select carries `shadowed` (the directory
   // that read selects, and a note).
   const root = resolveDevExtensionSourceRoot();
-  let sources: AgentSourceDir[] = [];
-  try {
-    sources = enumerateAgentSourceDirs(root, safeVendorSegmentsForRead());
-  } catch {
-    /* root unreadable — nothing to list */
+  // The instance identity is read first and a failure of it escapes (it is not
+  // an unreadable tree); only an unreadable source root lists nothing.
+  const vendors = safeVendorSegmentsForRead();
+  const present = (dir: string) => DEFINITION_PLACES.filter((place) => existsSync(join(dir, place)));
+  const looked: AgentSourceCandidate[] = [];
+  // Walk the operator's OWN vendor dir AND the first-party "cinatra-ai" dir
+  // (cinatra#537), then the top-level directories.
+  for (const vendorSegment of vendors) {
+    const vendorDir = join(root, vendorSegment);
+    if (!existsSync(vendorDir)) continue;
+    try {
+      const subEntries = (await readdir(vendorDir, { withFileTypes: true })) as unknown as Array<{
+        name: string;
+        isDirectory: () => boolean;
+      }>;
+      for (const sub of subEntries) {
+        if (!sub.isDirectory()) continue;
+        const dir = join(vendorDir, sub.name);
+        looked.push({ dir, flat: false, present: present(dir) });
+      }
+    } catch {
+      /* skip if unreadable */
+    }
   }
+  try {
+    const topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
+      name: string;
+      isDirectory: () => boolean;
+    }>;
+    for (const entry of topEntries) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      looked.push({ dir, flat: true, present: present(dir) });
+    }
+  } catch {
+    /* root unreadable — what was collected so far is still listed */
+  }
+  const sources = classifyAgentSourceDirs(looked, { root, vendors });
   const warnings = sources.flatMap((state) => (state.state === "reported" ? [agentSourceMessage(state)] : []));
 
   const items: unknown[] = [];

@@ -1,6 +1,8 @@
 // Which directories under the extension source root are agent sources, and in
-// what state (cinatra#4920). One function decides, for the listing handler,
-// provider discovery and the boot ingest, so they cannot disagree.
+// what state (cinatra#4920). This file CLASSIFIES; it does no I/O. The listing
+// handler, provider discovery and the boot ingest each walk the tree with their
+// own reads, deadlines and error handling (exactly as before this piece), hand
+// in what they found, and get the same answer back, so they cannot disagree.
 //
 // A directory is an agent source directory exactly when it CONTAINS a
 // definition file at one of the known relative places below, whatever the
@@ -17,19 +19,16 @@
 //
 // Results are keyed by PATH, never by slug: two directories with one slug each
 // get their own state, and every directory a by-slug read does NOT select is
-// marked `shadowedBy` the one it does select (findAgentDefinition decides, so
-// the listing cannot disagree with a read). A definition file belongs to one directory only: the
-// flat `<root>/<name>/cinatra/agent.json` is not also the root `agent.json` of
-// a scoped slug `cinatra` under `<root>/<name>`.
-//
-// Plain node:fs, so src/lib readers and the handlers share it.
+// marked `shadowedBy` the one it does select (selectAgentDefinition decides, so
+// the listing cannot disagree with a read). A definition file belongs to one
+// directory only: the flat `<root>/<name>/cinatra/agent.json` is not also the
+// root `agent.json` of a scoped slug `cinatra` under `<root>/<name>`.
 
-import { existsSync, readdirSync } from "node:fs";
-import { basename, join, relative } from "node:path";
-import { findAgentDefinition } from "./agent-definition-order";
+import { basename, dirname, join, relative } from "node:path";
+import { selectAgentDefinition } from "./agent-definition-order";
 
-/** The vendor directory a message names when the reader has no operator vendor. */
-const DEFAULT_TARGET_VENDOR = "cinatra-ai";
+/** The first-party vendor directory every reader walks. */
+export const FIRST_PARTY_VENDOR = "cinatra-ai";
 
 /** The two slugs whose old flat directory names differ from the slug. */
 export const LEGACY_AGENT_DIR_NAMES: Readonly<Record<string, string>> = {
@@ -37,8 +36,8 @@ export const LEGACY_AGENT_DIR_NAMES: Readonly<Record<string, string>> = {
   "wordpress-agent": "wordpress-content-editor",
 };
 
-/** The relative places a definition file can be, the read one first. */
-const DEFINITION_PLACES = ["cinatra/oas.json", "cinatra/agent.json", "agent.json"] as const;
+/** The relative places a definition file can be, the read one first. A caller checks which of these exist in a directory. */
+export const DEFINITION_PLACES = ["cinatra/oas.json", "cinatra/agent.json", "agent.json"] as const;
 
 export type AgentSourceDir = (
   | { state: "read"; dir: string; definitionPath: string }
@@ -52,6 +51,8 @@ export type AgentSourceDir = (
       scopedDir: string;
       /** `<scopedDir>/cinatra/oas.json`, the exact place the definition must be. */
       definitionPath: string;
+      /** A definition is already at `definitionPath` (the caller's walk saw it). */
+      occupied: boolean;
     }
 ) & {
   slug: string;
@@ -61,105 +62,87 @@ export type AgentSourceDir = (
 
 type ReportedAgentSourceDir = Extract<AgentSourceDir, { state: "reported" }>;
 
+/** One directory a caller looked at: which of DEFINITION_PLACES exist in it. */
+export type AgentSourceCandidate = {
+  dir: string;
+  /** Flat: `<root>/<name>`. Scoped: `<root>/<vendor>/<slug>`. */
+  flat: boolean;
+  present: readonly string[];
+};
+
 function slugOfFlatDir(name: string): string {
   return Object.entries(LEGACY_AGENT_DIR_NAMES).find(([, dirName]) => dirName === name)?.[0] ?? name;
 }
 
 /**
- * The state of ONE directory read as scoped or flat, or null when it holds no
- * definition file (it is not a source). `claimed` holds the files an earlier
- * directory already owns; they do not count here, and the files found are added.
+ * The state of every candidate directory, in the order given; a directory with
+ * no definition file is not a source and is left out. `vendors` is the vendor
+ * list a by-slug read walks (operator first, then first-party); `null` when the
+ * caller does not know the operator's vendor (the boot ingest does not read the
+ * instance identity), in which case a directory is marked shadowed only where
+ * every possible operator vendor gives the same selection.
  */
-function classifyAgentSourceDir(
-  dir: string,
-  flat: boolean,
-  context: { root: string; targetVendor?: string },
-  claimed: Set<string> = new Set(),
-): AgentSourceDir | null {
-  const found = DEFINITION_PLACES.filter((place) => {
-    const file = join(dir, place);
-    return !claimed.has(file) && existsSync(file);
-  });
-  for (const place of found) claimed.add(join(dir, place));
-  if (found.length === 0) return null;
-  const slug = flat ? slugOfFlatDir(basename(dir)) : basename(dir);
-  if (!flat && found[0] === "cinatra/oas.json") {
-    return { state: "read", slug, dir, definitionPath: join(dir, "cinatra", "oas.json") };
-  }
-  const scopedDir = flat
-    ? join(context.root, context.targetVendor ?? DEFAULT_TARGET_VENDOR, slug)
-    : dir;
-  return {
-    state: "reported",
-    slug,
-    flat,
-    dir,
-    found,
-    scopedDir,
-    definitionPath: join(scopedDir, "cinatra", "oas.json"),
-  };
-}
-
-/**
- * EVERY agent source directory under `root`, at the two depths: each top-level
- * directory (flat, `<root>/<name>`) and the children of each vendor directory
- * (scoped, `<root>/<vendor>/<slug>`). `vendors` names the vendor directories a
- * reader walks, first to last; `null` makes every top-level directory a vendor.
- * An unreadable `root` THROWS; an unreadable vendor directory is handed to
- * `onUnreadable` and its children are skipped.
- */
-export function enumerateAgentSourceDirs(
-  root: string,
-  vendors: readonly string[] | null,
-  options: {
-    targetVendor?: string;
-    /** The vendors a by-slug read walks; defaults to `vendors`. Without either, nothing is marked shadowed. */
-    selectionVendors?: readonly string[];
-    onUnreadable?: (dir: string, error: unknown) => void;
-  } = {},
+export function classifyAgentSourceDirs(
+  candidates: readonly AgentSourceCandidate[],
+  context: { root: string; vendors: readonly string[] | null },
 ): AgentSourceDir[] {
-  const selectionVendors = options.selectionVendors ?? vendors;
-  const context = { root, targetVendor: options.targetVendor ?? selectionVendors?.[0] };
-  const names = readdirSync(root, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name);
-  const ordered = vendors === null ? names : [...vendors.filter((v) => names.includes(v)), ...names.filter((n) => !vendors.includes(n))];
+  const { root, vendors } = context;
+  const targetVendor = vendors?.[0] ?? FIRST_PARTY_VENDOR;
+  // A file belongs to one directory: a flat directory owns it before a scoped one.
   const claimed = new Set<string>();
-  const out: AgentSourceDir[] = [];
-  for (const name of ordered) {
-    const entryDir = join(root, name);
-    const flat = classifyAgentSourceDir(entryDir, true, context, claimed);
-    if (flat) out.push(flat);
-    if (vendors !== null && !vendors.includes(name)) continue;
-    try {
-      for (const sub of readdirSync(entryDir, { withFileTypes: true })) {
-        if (!sub.isDirectory()) continue;
-        const scoped = classifyAgentSourceDir(join(entryDir, sub.name), false, context, claimed);
-        if (scoped) out.push(scoped);
-      }
-    } catch (error) {
-      options.onUnreadable?.(entryDir, error);
+  const found = new Map<AgentSourceCandidate, string[]>();
+  for (const flat of [true, false]) {
+    for (const c of candidates) {
+      if (c.flat !== flat) continue;
+      const own = c.present.filter((place) => !claimed.has(join(c.dir, place)));
+      for (const place of own) claimed.add(join(c.dir, place));
+      found.set(c, own);
     }
   }
-  if (selectionVendors) markShadowed(out, root, selectionVendors);
+  const exists = new Set(candidates.flatMap((c) => c.present.map((place) => join(c.dir, place))));
+  const out: AgentSourceDir[] = [];
+  for (const c of candidates) {
+    const files = found.get(c)!;
+    if (files.length === 0) continue;
+    const slug = c.flat ? slugOfFlatDir(basename(c.dir)) : basename(c.dir);
+    if (!c.flat && files[0] === "cinatra/oas.json") {
+      out.push({ state: "read", slug, dir: c.dir, definitionPath: join(c.dir, "cinatra", "oas.json") });
+      continue;
+    }
+    const scopedDir = c.flat ? join(root, targetVendor, slug) : c.dir;
+    const definitionPath = join(scopedDir, "cinatra", "oas.json");
+    out.push({ state: "reported", slug, flat: c.flat, dir: c.dir, found: files, scopedDir, definitionPath, occupied: exists.has(definitionPath) });
+  }
+  markShadowed(out, root, vendors, (file) => exists.has(file));
   return out;
 }
 
 /**
  * For every slug held by more than one directory, the by-slug read selects one
- * (findAgentDefinition, never a second copy of its order); every other
+ * (selectAgentDefinition, never a second copy of its order); every other
  * directory of that slug is marked shadowed by it, whatever the states are.
  */
-function markShadowed(states: AgentSourceDir[], root: string, vendors: readonly string[]): void {
+function markShadowed(states: AgentSourceDir[], root: string, vendors: readonly string[] | null, has: (file: string) => boolean): void {
   const bySlug = new Map<string, AgentSourceDir[]>();
   for (const s of states) bySlug.set(s.slug, [...(bySlug.get(s.slug) ?? []), s]);
-  for (const [slug, group] of bySlug) {
-    if (group.length < 2) continue;
-    const found = findAgentDefinition({ root, vendors: [...vendors], slug, legacySlug: LEGACY_AGENT_DIR_NAMES[slug] ?? slug });
-    if (!found) continue;
-    const selected = group.find((s) =>
+  const pick = (group: AgentSourceDir[], walked: string[], slug: string): AgentSourceDir | undefined => {
+    const found = selectAgentDefinition({ root, vendors: walked, slug, legacySlug: LEGACY_AGENT_DIR_NAMES[slug] ?? slug }, has);
+    if (!found) return undefined;
+    return group.find((s) =>
       found.kind === "oas" ? s.dir === found.rootDir : s.state === "reported" && s.found.some((f) => join(s.dir, f) === found.found),
     );
+  };
+  for (const [slug, group] of bySlug) {
+    if (group.length < 2) continue;
+    let selected: AgentSourceDir | undefined;
+    if (vendors) selected = pick(group, [...vendors], slug);
+    else {
+      // The operator's vendor is not known: try each vendor directory that could be it.
+      const scopedVendors = group.flatMap((s) => (s.state === "reported" && s.flat ? [] : [basename(dirname(s.dir))]));
+      const possible: Array<string | null> = [null, ...new Set(scopedVendors.filter((v) => v !== FIRST_PARTY_VENDOR))];
+      const picks = possible.map((op) => pick(group, op ? [op, FIRST_PARTY_VENDOR] : [FIRST_PARTY_VENDOR], slug));
+      selected = picks.every((p) => p === picks[0]) ? picks[0] : undefined;
+    }
     if (selected) for (const s of group) if (s !== selected) s.shadowedBy = selected;
   }
 }
@@ -183,9 +166,9 @@ export function agentSourceShadowNote(state: AgentSourceDir, base: string = proc
 export function agentSourceMessage(state: ReportedAgentSourceDir, base: string = process.cwd()): string {
   const show = (p: string) => relative(base, p) || p;
   const found = state.found.join(" and ");
-  const taken = existsSync(state.definitionPath) ? ` ${show(state.definitionPath)} already holds a definition, so keep one of the two.` : "";
+  const taken = state.occupied ? ` ${show(state.definitionPath)} already holds a definition, so keep one of the two.` : "";
   const move = state.flat
-    ? `move the directory to ${show(state.scopedDir)}${state.found.includes("cinatra/oas.json") ? "" : " and its definition to cinatra/oas.json"}.`
+    ? `move the directory to ${show(state.scopedDir)}${state.found.includes("cinatra/oas.json") ? "" : " and its definition to cinatra/oas.json"} (${basename(dirname(state.scopedDir))} is a vendor directory the readers walk).`
     : "move it there.";
   return (
     `${show(state.dir)} is an agent in the old layout (${state.flat ? "a directory directly under the source root" : "no cinatra/oas.json"}; found ${found}), ` +
