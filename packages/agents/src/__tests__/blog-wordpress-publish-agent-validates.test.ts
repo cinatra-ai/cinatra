@@ -19,8 +19,8 @@
  * outward call. The post's record is read before the review (read_post_record,
  * from the start input) and the read step behind the review answers the page's
  * title as plain text. The HTML of the page is written by a model step that
- * follows a skill (write_post_html, cinatra#4893): the card shows title, words
- * and HTML, and the publish step sends that HTML unchanged.
+ * follows a skill (write_post_html, cinatra#4893): the card shows the title and
+ * the HTML, and the publish step sends that HTML unchanged.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -96,10 +96,11 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
       unknown
     >;
     expect(publishMeta.publishes).toBe(true);
-    // The card shows the title, the approved words and the HTML that goes out.
+    // The card shows the title and the HTML that goes out. The approved words
+    // are not a second row: the publish step takes only the HTML, so the
+    // approval record carries the body once.
     expect(publishMeta.publishRows).toEqual([
       { label: "Title", input: "postTitle" },
-      { label: "Post text", input: "postText" },
       { label: "Post HTML", input: "postHtml" },
     ]);
     // The write-back is NOT a publishing step: one publish card per run.
@@ -223,6 +224,8 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     // it is written from the approved words and handed to the publish step.
     expect(edges).toContain("read_post_text.text->write_post_html.postText");
     expect(edges).toContain("write_post_html.postHtml->publish.postHtml");
+    // The publish step is not handed the words a second time.
+    expect(edges.filter((e) => e.endsWith("->publish.postText"))).toEqual([]);
     expect(edges.filter((e) => e.startsWith("start.postRepresentationRevisionId->"))).toEqual([
       "start.postRepresentationRevisionId->gather_review_target.postRepresentationRevisionId",
     ]);
@@ -316,11 +319,11 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
 
   it("takes the page's title only from the title the publish card shows, never from the artifact's current state", () => {
     expect(skill).toContain("The page's title is `postTitle`, exactly as given");
-    expect(skill).toContain("never take one from a section heading of `postText`");
+    expect(skill).toContain("never take one from a section heading inside `postHtml`");
     // No title on the card: nothing is published.
     expect(skill).toContain("An empty `postTitle` means there is no title the person saw");
     // The publish step is handed no record of the artifact at all, only the
-    // title, the words and the HTML the card shows.
+    // title and the HTML the card shows (not the words a second time).
     const components = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const inputs = (components.publish.inputs as Array<{ title: string }>).map((i) => i.title).sort();
     expect(inputs).toEqual([
@@ -328,7 +331,6 @@ describe("blog-wordpress-publish-agent — inline instruction contract", () => {
       "postArtifactId",
       "postHtml",
       "postRepresentationRevisionId",
-      "postText",
       "postTitle",
       "truncated",
     ]);
