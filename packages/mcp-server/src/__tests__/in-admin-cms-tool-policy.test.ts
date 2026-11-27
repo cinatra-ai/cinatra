@@ -98,6 +98,30 @@ describe("resolveAgentRunCinatraMcpAllowedTools", () => {
   });
 });
 
+describe("a served tool list for a step that declares tools (cinatra#4150)", () => {
+  const SERVED = ["artifact_get", "wordpress_site_tool_call", "drupal_node_get", "artifact_get"];
+
+  // red-first-expect: AssertionError: expected null to deeply equal [ 'artifact_get', …(2) ]
+  it("an ordinary run gets exactly the served list", () => {
+    expect(resolveAgentRunCinatraMcpAllowedTools(false, SERVED)).toEqual(["artifact_get",
+      "wordpress_site_tool_call", "drupal_node_get"]);
+    expect(resolveAgentRunCinatraMcpAllowedTools(false, [])).toEqual([]);
+  });
+
+  // red-first-expect: AssertionError: expected [ 'wordpress_site_tool_call', …(6) ] to deeply equal [ 'wordpress_site_tool_call', …(1) ]
+  it("an in-admin CMS editor run gets the intersection, never a tool outside either list", () => {
+    expect(resolveAgentRunCinatraMcpAllowedTools(true, SERVED)).toEqual(["wordpress_site_tool_call",
+      "drupal_node_get"]);
+    expect(resolveAgentRunCinatraMcpAllowedTools(true, [])).toEqual([]);
+  });
+
+  // Guard (passes before and after): no served list keeps today's answer.
+  it("no served list keeps today's answer", () => {
+    expect(resolveAgentRunCinatraMcpAllowedTools(false, null)).toBeNull();
+    expect(resolveAgentRunCinatraMcpAllowedTools(true, null)).toEqual([...IN_ADMIN_CMS_MCP_ALLOWED_TOOLS]);
+  });
+});
+
 // cinatra#3745: the connector splits the proxy, and every ability other than a
 // read moves to `wordpress_site_tool_write`. "write" is a denied verb token on
 // the chat perimeter and the host declares no chat class for it, so the write

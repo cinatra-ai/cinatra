@@ -59,6 +59,7 @@ const {
   verifyRunExecutedSourceMock,
   readCurrentRunStepToolPolicyMock,
   readTrustedStepToolDeclarationMock,
+  listAgentRunServedToolNamesMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn<
     (input: Record<string, unknown>) => Promise<{ text: string; artifacts: unknown[] }>
@@ -101,6 +102,7 @@ const {
   verifyRunExecutedSourceMock: vi.fn(),
   readCurrentRunStepToolPolicyMock: vi.fn(),
   readTrustedStepToolDeclarationMock: vi.fn(),
+  listAgentRunServedToolNamesMock: vi.fn(async (_runId: string): Promise<string[]> => []),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -148,6 +150,8 @@ vi.mock("@/lib/agents-store", () => ({
 vi.mock("@/lib/agent-run-mcp-actor-token", () => ({
   issueAgentRunMcpActorToken: issueAgentRunMcpActorTokenMock,
 }));
+// cinatra#4150: the tool list the product's server serves the run (its own registration pass).
+vi.mock("@/lib/mcp-server", () => ({ listAgentRunServedToolNames: listAgentRunServedToolNamesMock }));
 vi.mock("@/lib/agent-run-actor-resolve", () => ({
   resolveAgentRunMcpActor: resolveAgentRunMcpActorMock,
 }));
@@ -739,6 +743,42 @@ describe("the model bridge offers a run-bound step only the tools it declares", 
     }
   });
 
+  /** The allow-list the product's own tool server was built with for the one model call. */
+  async function selfServerAllowList(): Promise<unknown> {
+    await invokeOverride();
+    expect(buildLlmMcpServerToolForAgentRunMock).toHaveBeenCalledTimes(1);
+    return (buildLlmMcpServerToolForAgentRunMock.mock.calls[0] as unknown[])[3];
+  }
+
+  // (b19a) cinatra#4150
+  // red-first-expect: AssertionError: expected null to deeply equal [ 'mail_send', 'other_tool' ]
+  it("a step that declares tools gets the product's tool server with the tool list it serves the run", async () => {
+    readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "declared", tools: ["mail_send"] });
+    listAgentRunServedToolNamesMock.mockResolvedValue(["mail_send", "other_tool"]);
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(await selfServerAllowList()).toEqual(["mail_send", "other_tool"]);
+    expect(listAgentRunServedToolNamesMock).toHaveBeenCalledWith(RUN.id);
+  });
+
+  // (b19b) cinatra#4150
+  // red-first-expect: AssertionError: expected null to deeply equal []
+  it("a failed read of the served list gives the declared step no product tool", async () => {
+    readTrustedStepToolDeclarationMock.mockReturnValue({ kind: "declared", tools: ["mail_send"] });
+    listAgentRunServedToolNamesMock.mockRejectedValue(new Error("registration failed"));
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(await selfServerAllowList()).toEqual([]);
+  });
+
+  // (b19c) cinatra#4150 guard (passes before and after): an undeclared step is unchanged.
+  it("a step that declares nothing keeps the product's tool server without a list and reads none", async () => {
+    const res = await POST(makeReq({ user: "hi" }, { ...RUN_BOUND, ...sourceHeaders() }));
+    expect(res.status).toBe(200);
+    expect(await selfServerAllowList()).toBeNull();
+    expect(listAgentRunServedToolNamesMock).not.toHaveBeenCalled();
+  });
+
   // (b20)
   it("a call without a resolved run carries no step policy", async () => {
     const res = await POST(makeReq({ user: "hi" }, { "x-cinatra-a2a-context-id": CTX }));
@@ -861,6 +901,7 @@ afterAll(() => {
   vi.doUnmock("@/lib/agents-store");
   vi.doUnmock("@/lib/agent-run-mcp-actor-token");
   vi.doUnmock("@/lib/agent-run-actor-resolve");
+  vi.doUnmock("@/lib/mcp-server");
   vi.doUnmock("@cinatra-ai/agents");
   vi.resetModules();
 });

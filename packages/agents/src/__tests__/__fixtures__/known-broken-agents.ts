@@ -1,5 +1,6 @@
 /**
- * Allowlist for documented OAS-RUNTIME findings — CURRENTLY EMPTY.
+ * Allowlist for documented OAS-RUNTIME findings. Shrink-only: an entry is
+ * deleted in the PR that pins the cured pack (the sweep fails on a clean entry).
  *
  * This map encodes any "runtime-backed-agent" design exception, where a
  * context-using agent declares a `contextRefs` EndNode output with NO
@@ -18,7 +19,8 @@
  *     dropped accordingly — e.g. blog-draft-writer 15->11 DFE, 3->2 CFE).
  *   - blog-pipeline: inherits the children's fix — its 3 nested findings clear.
  * All six now both MOUNT in WayFlow's pyagentspec loader (verified live) and
- * produce zero validator findings, so this map is empty.
+ * produce zero validator findings, so none of them has an entry here.
+ * The one entry is blog-wordpress-publish-agent (cinatra#4150, OAS-RUNTIME-013).
  * `oas-runtime-invariants.test.ts` enforces that any resolved entry is deleted
  * (anti-rot), so re-adding a stale entry for a now-clean agent fails CI.
  *
@@ -43,7 +45,18 @@ export type AllowlistEntry = {
   reason: string;
 };
 
-export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {};
+export const KNOWN_BROKEN_AGENTS: Record<string, AllowlistEntry> = {
+  // cinatra#4150: the pinned pack's review step does not surface its targets
+  // input, so the run opens the review with no artifact. Delete this entry in
+  // the PR that pins the pack's cure.
+  "blog-wordpress-publish-agent": {
+    phase: "cinatra#4150",
+    expectedCodes: ["OAS-RUNTIME-013"],
+    expectedBlockerCount: 1,
+    expectedLocations: ['Review step "review_post" names its targets input "reviewTargets"'],
+    reason: "the pinned pack's review step does not surface its targets input",
+  },
+};
 
 /**
  * Asserts that structured `findings` for `slug` match the documented

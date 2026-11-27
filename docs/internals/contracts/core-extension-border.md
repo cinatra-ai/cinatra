@@ -24,7 +24,7 @@ map is the materializer crossing. Comments are masked before every scan, so a co
 that names a pack to explain a gap states knowledge without encoding it. The
 materialized `extensions/` tree is never walked; it is a pack's own source at a pin.
 
-`config/core-extension-border-baseline.json` is the shrink-only ledger of the
+`scripts/ci/core-extension-border-baseline.json` is the shrink-only ledger of the
 crossings that stood when the gate landed. Each entry names one file and one detail
 and states in one line why it stands; there is no wildcard, and an entry without a
 stated reason fails the gate. A crossing outside the ledger fails immediately. A
