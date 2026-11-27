@@ -34,6 +34,15 @@
 // exit 1 -> at least one blocking finding on an enforcing branch;
 // exit 2 -> the gate itself could not run.
 //
+// FLOOR COMPARED WITH THE BASE (cinatra#3832): the rollout file is this gate's
+// floor. A pull request may not loosen it in its own change: it may not name a
+// new grandfathered branch or a new known finding, lower the enforcement mode,
+// move `gateLandedAt` later or change `trunkBranch`. The base comes from
+// CHAT_HITL_EVIDENCE_BASE when a workflow sets it, else from the pull request's
+// base branch (fetched one commit deep when the checkout does not hold it); a
+// base that cannot be read fails closed (the shared guard,
+// scripts/audit/lib/floor-base-guard.mjs). Removing an entry is never growth.
+//
 // Zero runtime dependencies (node builtins only) so the caller needs no install.
 // ---------------------------------------------------------------------------
 
@@ -50,6 +59,7 @@ import {
   validateCaptureIndex,
 } from "./lib/capture-record-contract.mjs";
 import { decideOutcome } from "./lib/evidence-gate-rollout.mjs";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -63,6 +73,74 @@ export const ACCEPTANCE_MANIFEST_PATH = join(
   "audit",
   "chat-hitl-acceptance-manifest.json",
 );
+
+/** The floor this gate compares with the base branch, repo-relative. */
+export const FLOOR_FILE = "scripts/ci/chat-hitl-evidence-gate.rollout.json";
+
+/** The variable a workflow may set to name the base revision. */
+export const FLOOR_BASE_VAR = "CHAT_HITL_EVIDENCE_BASE";
+
+// How strongly each enforcement mode holds; an unknown mode only warns.
+const MODE_RANK = { off: 0, "warn-first": 1, "enforce-all": 2 };
+const modeRank = (mode) => MODE_RANK[mode] ?? 0;
+
+/**
+ * A rollout file's text -> the parts of it that decide what is enforced;
+ * throws when the text is not a rollout file.
+ */
+export function parseRolloutFloor(text) {
+  const doc = JSON.parse(text);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a rollout object");
+  const names = (key) => {
+    const list = doc[key] ?? [];
+    if (!Array.isArray(list) || !list.every((k) => typeof k === "string")) {
+      throw new Error(`${key} is not a list of names`);
+    }
+    return list;
+  };
+  return {
+    enforcement: doc.enforcement ?? "warn-first",
+    trunkBranch: doc.trunkBranch ?? "main",
+    gateLandedAt: doc.gateLandedAt ?? null,
+    grandfatheredBranches: names("grandfatheredBranches"),
+    knownFindings: names("knownFindings"),
+  };
+}
+
+/** One line per loosening of the rollout file against the base. */
+export function loosenings(base, head) {
+  const out = [
+    ...newKeys(base.grandfatheredBranches, head.grandfatheredBranches).map((b) => `grandfathered branch ${b}`),
+    ...newKeys(base.knownFindings, head.knownFindings).map((k) => `known finding ${k}`),
+  ];
+  if (modeRank(head.enforcement) < modeRank(base.enforcement)) {
+    out.push(`enforcement (${base.enforcement} -> ${head.enforcement})`);
+  }
+  const was = Date.parse(base.gateLandedAt ?? "");
+  const now = Date.parse(head.gateLandedAt ?? "");
+  if (Number.isFinite(was) && !(Number.isFinite(now) && now <= was)) {
+    out.push(`gateLandedAt (${base.gateLandedAt} -> ${head.gateLandedAt})`);
+  }
+  if (head.trunkBranch !== base.trunkBranch) out.push(`trunkBranch (${base.trunkBranch} -> ${head.trunkBranch})`);
+  return out.sort();
+}
+
+/**
+ * The floor base guard (cinatra#3832): the rollout file in `repoRoot` is
+ * compared with the copy on the base branch.
+ */
+export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env } = {}) {
+  return compareFloorWithBase({
+    gate: "chat-hitl-evidence-gate",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor: parseRolloutFloor(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
+    parse: parseRolloutFloor,
+    grown: loosenings,
+    repoRoot,
+    env,
+  });
+}
 
 /** Where deterministic chat-dispatch prose can live. */
 export const DISPATCH_ROOTS = ["src/app/api/chat", "packages/chat/src"];
@@ -407,6 +485,9 @@ function main() {
   const argv = parseArgv(process.argv.slice(2));
   let result;
   try {
+    // The guard speaks on stderr under --json, so stdout stays one JSON document.
+    const out = argv.json ? { log: console.error, error: console.error } : console;
+    if (!reportFloorGuard(checkFloorAgainstBase(), out)) process.exit(1);
     result = runGate({ argv });
   } catch (err) {
     console.error(`[chat-hitl-evidence-gate] ${err.message}`);

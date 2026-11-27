@@ -35,7 +35,18 @@ import {
   scanCaptureEvidence,
   scanDispatchProse,
   POLICY_PATH,
+  FLOOR_BASE_VAR,
+  FLOOR_FILE,
+  checkFloorAgainstBase,
 } from "../chat-hitl-evidence-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  envWithoutBase,
+  makeFloorRepo,
+  makeOneCommitCheckout,
+} from "../../audit/__tests__/floor-base-fixture.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..");
@@ -363,5 +374,93 @@ describe("the CLI on the real tree", () => {
     expect(run.status, run.stderr).toBe(0);
     const parsed = JSON.parse(run.stdout);
     expect(parsed.failing).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The rollout file is compared with the base branch (cinatra#3832): a pull
+// request cannot loosen the gate in its own change.
+// ---------------------------------------------------------------------------
+
+describe("chat-hitl-evidence-gate — floor compared with the base", () => {
+  const rollout = (over = {}) => ({ ...POLICY, ...over });
+  const cleanups = [];
+  afterAll(() => cleanups.forEach((c) => c()));
+
+  function guard(base, head, { make = makeFloorRepo, env = PULL_REQUEST_RUN } = {}) {
+    expect(typeof checkFloorAgainstBase).toBe("function");
+    const f = make({ base: { [FLOOR_FILE]: base }, head: { [FLOOR_FILE]: head } });
+    cleanups.push(f.cleanup);
+    return checkFloorAgainstBase({ repoRoot: f.root, env });
+  }
+
+  it("names its floor file and its own base variable", () => {
+    expect(FLOOR_FILE).toBe("scripts/ci/chat-hitl-evidence-gate.rollout.json");
+    expect(FLOOR_BASE_VAR).toBe("CHAT_HITL_EVIDENCE_BASE");
+  });
+
+  it("a raised floor FAILS: a new grandfathered branch, a new known finding, a lower mode, a later cut", () => {
+    const base = rollout({ enforcement: "enforce-all", knownFindings: [] });
+    const cases = [
+      [rollout({ enforcement: "enforce-all", grandfatheredBranches: [...POLICY.grandfatheredBranches, "feat/mine"] }), /grandfathered branch feat\/mine/],
+      [rollout({ enforcement: "enforce-all", knownFindings: ["pointer-text:a.ts:1"] }), /known finding pointer-text:a\.ts:1/],
+      [rollout({ enforcement: "warn-first" }), /enforcement \(enforce-all -> warn-first\)/],
+      [rollout({ enforcement: "enforce-all", gateLandedAt: "2030-01-01T00:00:00Z" }), /gateLandedAt/],
+      [rollout({ enforcement: "enforce-all", trunkBranch: "feat/mine" }), /trunkBranch \(main -> feat\/mine\)/],
+    ];
+    for (const [head, line] of cases) {
+      const r = guard(base, head);
+      expect(r.status).toBe("grew");
+      expect(r.ok).toBe(false);
+      expect(r.lines.join("\n")).toMatch(line);
+    }
+  });
+
+  it("a lowered floor PASSES: an entry removed, a stricter mode, an earlier cut", () => {
+    const base = rollout({ knownFindings: ["pointer-text:a.ts:1"], gateLandedAt: "2026-09-01T00:00:00Z" });
+    const head = rollout({
+      enforcement: "enforce-all",
+      grandfatheredBranches: POLICY.grandfatheredBranches.slice(1),
+      knownFindings: [],
+      gateLandedAt: "2026-08-01T00:00:00Z",
+    });
+    expect(guard(base, head)).toMatchObject({ ok: true, status: "held" });
+    expect(guard(base, base)).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("a base that cannot be read FAILS with its reason: unresolved, not a rollout file", () => {
+    const f = makeFloorRepo({ base: { [FLOOR_FILE]: rollout() }, head: { [FLOOR_FILE]: rollout() } });
+    cleanups.push(f.cleanup);
+    const r = checkFloorAgainstBase({ repoRoot: f.root, env: UNREADABLE_BASE_RUN });
+    expect(r).toMatchObject({ ok: false, status: "unreadable" });
+    expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+    const bad = guard({ grandfatheredBranches: "x" }, rollout());
+    expect(bad).toMatchObject({ ok: false, status: "unreadable" });
+    expect(bad.lines[0]).toMatch(/not a readable floor \(grandfatheredBranches is not a list of names\)/);
+  });
+
+  it("a run that is no pull request says so and passes", () => {
+    const r = guard(rollout(), rollout(), { env: NO_PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+    expect(r.lines[0]).toContain(FLOOR_BASE_VAR);
+  });
+
+  it("in a checkout of one commit the base is fetched: a raised floor FAILS, a lowered one PASSES", () => {
+    const loose = rollout({ grandfatheredBranches: [...POLICY.grandfatheredBranches, "feat/mine"] });
+    expect(guard(rollout(), loose, { make: makeOneCommitCheckout }).status).toBe("grew");
+    expect(guard(loose, rollout(), { make: makeOneCommitCheckout })).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("the gate itself runs the guard first: an unreadable base fails it with the reason", () => {
+    const run = spawnSync(process.execPath, [GATE_CLI, "--json"], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env: { ...envWithoutBase(process.env), ...UNREADABLE_BASE_RUN },
+    });
+    expect(run.status).toBe(1);
+    expect(run.stderr).toMatch(
+      /\[chat-hitl-evidence-gate\] FAIL — the floor scripts\/ci\/chat-hitl-evidence-gate\.rollout\.json cannot be compared with the base/,
+    );
+    expect(run.stdout).toBe("");
   });
 });
