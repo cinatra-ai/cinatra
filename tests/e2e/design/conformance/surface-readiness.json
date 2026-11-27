@@ -253,7 +253,10 @@
           "action": "open-in-cms",
           "outcome": "cms-opened",
           "awaits": null,
-          "why": "No first-party module carries a control for this action, and none of the open pull requests read while grounding this wave adds one. It is not awaiting a landing; it is awaiting the work."
+          "shippedBy": [
+            "src/app/lifecycle/review-island/island-open-link.tsx"
+          ],
+          "why": "Shipped from the review card (cinatra#3092): the island's click handler at src/app/lifecycle/review-island/island-open-link.tsx takes the display's Open in the CMS anchor, which carries the attribute for this action-and-outcome pair, and asks the card to open the tab, since the card's sandboxed frame drops a plain new-tab click. The file named in shippedBy is the only one that carries it. Its own tests, src/app/lifecycle/review-island/__tests__/island-open-link-3092.test.tsx and packages/agents/src/__tests__/review-gate-card.open-in-cms-3092.test.tsx, exercise the road. What keeps the surface undriven by this harness is the reason its other entries give: the card for this artifact kind is not drawn at all, and the per-kind reading sits inside the card's credentialed island frame, which a props-only harness mount cannot reach. Until then this entry pins WHERE the control lives, and goes red if it moves, spreads or disappears."
         },
         {
           "surface": "review-card-cms-page",

@@ -156,6 +156,9 @@ import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[
 import { ReviewTargetPanel } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-target-panel";
 import { PdfShellFrameProvider } from "@cinatra-ai/sdk-ui/artifacts/pdf-detail-shell";
 import { IslandHeightReporter } from "./island-height-reporter";
+// cinatra#3092 — the open-in-the-CMS road: see `island-open-link.tsx`.
+import { IslandOpenInCmsAddresses } from "./island-open-link";
+import { islandOpenableAddresses } from "./island-open-link-addresses";
 
 /** Never cached, never statically rendered — the reader is resolved per request. */
 export const dynamic = "force-dynamic";
@@ -496,6 +499,9 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
           >
             <StreamedReviewTarget
               prepared={stream.prepared}
+              // cinatra#3092 — this panel's own key: the open-in-the-CMS road
+              // checks a clicked link against this target's addresses only.
+              targetKey={reviewTargetStreamKey(index, stream.target)}
               // ONE BORDER PER TARGET (cinatra#3441). A document that draws ONE
               // target is framed by the CARD — that target's header over this
               // document inside one panel — so a border here too would be the
@@ -538,10 +544,13 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
  */
 function StreamedReviewTarget({
   prepared,
+  targetKey,
   framed,
   orgId,
 }: {
   prepared: ReviewTargetStream["prepared"];
+  /** This panel's own key in this document (cinatra#3092): position and pinned revision. */
+  targetKey: string;
   /** Whether this panel draws its own frame (cinatra#3441) — see the caller. */
   framed: boolean;
   orgId: string;
@@ -549,10 +558,19 @@ function StreamedReviewTarget({
   const target = use(prepared);
   return (
     <>
-      <ReviewTargetPanel prepared={target} orgId={orgId} framed={framed} />
+      {/* cinatra#3092 — the panel's key, read by the open-in-the-CMS listener
+          from the clicked link (the outermost element carrying it). A plain block with a box of its own:
+          the island measures its height from its direct children's boxes, so a
+          boxless wrapper would hide the panel from that measure. */}
+      <div data-island-target-key={targetKey}>
+        <ReviewTargetPanel prepared={target} orgId={orgId} framed={framed} />
+      </div>
       {/* The card's idle-progress bound restarts on this: a gate that is still
           streaming panels is never painted over with a failure plate. */}
       <IslandPanelMountedSignal />
+      {/* cinatra#3092 — the addresses this target's pinned data holds, under
+          its own key: the only ones a link in THIS panel hands the card to open. */}
+      <IslandOpenInCmsAddresses targetKey={targetKey} addresses={islandOpenableAddresses(target.props)} />
     </>
   );
 }
