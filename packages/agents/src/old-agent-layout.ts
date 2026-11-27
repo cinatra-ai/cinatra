@@ -20,22 +20,24 @@ export function isOldLayoutAgentDir(dir: string): boolean {
 }
 
 /**
- * The old-layout directory of the agent `slug`, or null: `<root>/<vendor>/<slug>`
- * for each vendor segment (in order), then the flat `<root>/<legacySlug>` the
- * retired read ladder also probed. The caller has already checked that `slug`
- * and the vendor segments are single safe path segments.
+ * EVERY old-layout directory of the agent `slug`: `<root>/<vendor>/<slug>` for
+ * each vendor segment (in order), then the flat `<root>/<legacySlug>` the
+ * retired read ladder also probed. Several can share one slug (a vendor
+ * directory and a flat one), and each is its own directory to move, so none is
+ * dropped. The caller has already checked that `slug` and the vendor segments
+ * are single safe path segments.
  */
-export function findOldLayoutAgentDir(
+export function findOldLayoutAgentDirs(
   root: string,
   vendors: readonly string[],
   slug: string,
   legacySlug: string = slug,
-): string | null {
+): string[] {
   const candidates = [
     ...vendors.map((vendor) => join(root, vendor, slug)),
     join(/* turbopackIgnore: true */ root, legacySlug),
   ];
-  return candidates.find((dir) => isOldLayoutAgentDir(dir)) ?? null;
+  return candidates.filter((dir) => isOldLayoutAgentDir(dir));
 }
 
 /** The one sentence every reader uses for an old-layout directory. */

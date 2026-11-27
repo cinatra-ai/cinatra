@@ -8,6 +8,12 @@
  * a read that asks for it by slug answers with one error that names the
  * directory and says "move it to cinatra/oas.json".
  *
+ * Two old-layout directories can share one slug (a vendor directory and a flat
+ * one): the listing warns for each, and a slug-keyed error names both.
+ *
+ * `agent_source_publish` refuses when `cinatra/oas.json` exists but cannot be
+ * read, and never reaches the publisher.
+ *
  * Fixtures sit under `<cwd>/extensions`, the dev source root.
  *
  * Run: cd packages/agents && pnpm exec vitest run src/__tests__/agent-source-old-layout-4920.test.ts
@@ -16,6 +22,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
+
+const { mockPublishFromGitDir } = vi.hoisted(() => ({
+  mockPublishFromGitDir: vi.fn(async () => ({ published: true })),
+}));
+
+// The real client with the two publishers replaced, so a test can say that the
+// publisher was never called.
+vi.mock("../verdaccio/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../verdaccio/client")>()),
+  publishAgentPackageFromGitDir: mockPublishFromGitDir,
+  publishAgentPackage: mockPublishFromGitDir,
+}));
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: vi.fn(async () => null),
@@ -78,6 +96,7 @@ function call(name: string, input: Record<string, unknown>, admin = false): Prom
 }
 
 beforeEach(async () => {
+  mockPublishFromGitDir.mockClear();
   tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "old-layout-4920-"));
   originalCwd = process.cwd();
   process.chdir(tmpRoot);
@@ -180,5 +199,70 @@ describe("agent_source_* readers: cinatra/oas.json is the one definition file (c
     const publish = (await call("agent_source_publish", { packageSlug: SLUG }, true)) as { error?: string };
     expect(publish.error).toContain(named);
     expect(publish.error).toContain(MOVE);
+  });
+});
+
+describe("two old-layout directories sharing one slug are both named (cinatra#4920)", () => {
+  const VENDOR_DIR = ["cinatra-ai", SLUG];
+  const FLAT_DIR = [SLUG];
+
+  async function plantBoth(): Promise<void> {
+    await put([...VENDOR_DIR, "cinatra", "agent.json"], oasJson("Old A"));
+    await put([...FLAT_DIR, "agent.json"], oasJson("Old B"));
+  }
+
+  it("the listing warns for each directory, once each", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await plantBoth();
+
+    const list = (await call("agent_source_list", {})) as { items: unknown[]; warnings?: string[] };
+
+    expect(list.items).toEqual([]);
+    expect(list.warnings).toHaveLength(2);
+    for (const dir of [VENDOR_DIR, FLAT_DIR]) {
+      expect(list.warnings!.filter((w) => w.includes(`${printed(dir)} is an agent in the old layout`))).toHaveLength(1);
+    }
+  });
+
+  it("the listing also names an old directory that shares a slug with a current agent", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await put([...VENDOR_DIR, "cinatra", "oas.json"], oasJson("Current"));
+    await put([...FLAT_DIR, "agent.json"], oasJson("Old B"));
+
+    const list = (await call("agent_source_list", {})) as { items: Array<{ name: string }>; warnings?: string[] };
+
+    expect(list.items.map((i) => i.name)).toEqual(["Current"]);
+    expect(list.warnings).toHaveLength(1);
+    expect(list.warnings![0]).toContain(`${printed(FLAT_DIR)} is an agent in the old layout`);
+  });
+
+  it("a slug-keyed error names both directories and the move", async () => {
+    await plantBoth();
+    const named = [VENDOR_DIR, FLAT_DIR].map((dir) => `${printed(dir)} is an agent in the old layout`);
+
+    const read = (await call("agent_source_read", { packageSlug: SLUG })) as { error?: string };
+    const compile = (await call("agent_source_compile", { packageSlug: SLUG }, true)) as { error?: string };
+    const validate = (await call("agent_source_validate", { packageSlug: SLUG })) as { errors?: string[] };
+    for (const text of [read.error, compile.error, validate.errors?.join(" ")]) {
+      for (const sentence of named) expect(text).toContain(sentence);
+      expect(text!.split(MOVE)).toHaveLength(3);
+    }
+  });
+});
+
+describe("agent_source_publish refuses when cinatra/oas.json cannot be read (cinatra#4920)", () => {
+  it("the file check passes, the read fails (a directory stands where oas.json should be): refused, publisher not called", async () => {
+    // existsSync(oas.json) is true for a directory, so the resolver accepts it;
+    // readFile then fails with EISDIR.
+    await fs.mkdir(path.join(tmpRoot, "extensions", "cinatra-ai", SLUG, "cinatra", "oas.json"), { recursive: true });
+    expect(__resolveAgentJsonPathForRead(SLUG)).not.toBeNull();
+
+    const publish = (await call("agent_source_publish", { packageSlug: SLUG }, true)) as { error?: string; code?: string };
+
+    expect(publish.error).toContain("Agent file could not be read");
+    expect(publish.error).toContain(path.join("extensions", "cinatra-ai", SLUG, "cinatra", "oas.json"));
+    expect(publish.error).toContain("EISDIR");
+    expect(publish.error).toContain("the publish was not started");
+    expect(mockPublishFromGitDir).not.toHaveBeenCalled();
   });
 });

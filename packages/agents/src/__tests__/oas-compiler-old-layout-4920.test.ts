@@ -145,6 +145,18 @@ describe("compileOasAgentJson by package name: cinatra/oas.json is the one sourc
     expect(error).not.toContain("(tried");
   });
 
+  it("names EVERY old-layout directory when two share the slug", async () => {
+    put(["cinatra-ai", SLUG, "cinatra", "agent.json"], parentFlow("@example-org/child-agent"));
+    put([SLUG, "agent.json"], parentFlow("@example-org/child-agent"));
+    const res = await compileOasAgentJson({ packageName: PACKAGE, registryPath: path.join(tmpRoot, "components.json") });
+    expect(res.ok).toBe(false);
+    const error = (res as { error: string }).error;
+    for (const dir of [path.join("cinatra-ai", SLUG), SLUG]) {
+      expect(error).toContain(`${path.join(tmpRoot, "extensions", dir)} is an agent in the old layout`);
+    }
+    expect(error.split(MOVE)).toHaveLength(3);
+  });
+
   it("a slug with no source at all keeps the plain not-found error, which lists oas.json only", async () => {
     const res = await compileOasAgentJson({ packageName: PACKAGE, registryPath: path.join(tmpRoot, "components.json") });
     expect(res.ok).toBe(false);
@@ -163,6 +175,20 @@ describe("compileOasAgentJson by package name: cinatra/oas.json is the one sourc
 });
 
 describe("a parent flow reads its child's renderer from the child's oas.json only (cinatra#4920)", () => {
+  it("logs EVERY old-layout directory of a child that has no oas.json anywhere", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    put(["cinatra-ai", "child-agent", "cinatra", "agent.json"], childFlow());
+    put(["child-agent", "agent.json"], childFlow());
+
+    await compileSteps("parent-agent", "@example-org/child-agent");
+
+    for (const dir of [path.join("cinatra-ai", "child-agent"), "child-agent"]) {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`${path.join(tmpRoot, "extensions", dir)} is an agent in the old layout`),
+      );
+    }
+  });
+
   it("derives the child's renderer from <vendor>/<slug>/cinatra/oas.json, with nothing logged", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     put(["cinatra-ai", "child-agent", "cinatra", "oas.json"], childFlow());

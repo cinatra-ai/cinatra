@@ -370,6 +370,20 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     warn.mockRestore();
   });
 
+  it("cinatra#4920: two old-layout directories sharing one slug are both named", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    makeProviderAgentDir(tmpRoot, "shared-slug", { layout: "new-agent", packageName: "@example-org/shared-slug" });
+    makeProviderAgentDir(tmpRoot, "shared-slug", { layout: "legacy-flat", packageName: "@example-org/shared-slug" });
+
+    expect(readProviderDeclaredAgents()).toEqual([]);
+
+    const messages = warn.mock.calls.map((call) => String(call[0]));
+    for (const dir of [path.join(tmpRoot, "cinatra-ai", "shared-slug"), path.join(tmpRoot, "shared-slug")]) {
+      expect(messages.filter((m) => m.includes(`${dir} is an agent in the old layout`))).toHaveLength(1);
+    }
+    warn.mockRestore();
+  });
+
   it("falls back to sibling package.json for packageName + description", () => {
     makeProviderAgentDir(tmpRoot, "fallback-agent", {
       layout: "new-oas",

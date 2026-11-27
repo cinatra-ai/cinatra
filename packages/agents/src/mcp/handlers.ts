@@ -74,6 +74,7 @@ import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
   oldLayoutAgentErrorForSlug,
+  oldLayoutAgentMessagesForDirs,
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
   resolveAgentJsonPathForRead,
@@ -2740,8 +2741,11 @@ async function handleAgentBuilderGitList(
   // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537). A source
   // directory in the old layout (agent.json, no cinatra/oas.json) is not an
   // agent any more: it is named in `warnings`, and the other agents still list.
+  // The old-layout directories are collected by DIRECTORY, not by slug: two of
+  // them can share a slug (a vendor dir and a flat one), and each is named.
   const root = resolveDevExtensionSourceRoot();
   const slugSet = new Set<string>();
+  const oldLayoutDirs = new Set<string>();
 
   // New layout: <installDir>/<vendor>/<slug>/ — probe both the instance vendor
   // segment and the first-party segment (deduped, filesystem-safe only).
@@ -2754,7 +2758,9 @@ async function handleAgentBuilderGitList(
         isDirectory: () => boolean;
       }>;
       for (const sub of subEntries) {
-        if (sub.isDirectory()) slugSet.add(sub.name);
+        if (!sub.isDirectory()) continue;
+        slugSet.add(sub.name);
+        if (isOldLayoutAgentDir(join(vendorDir, sub.name))) oldLayoutDirs.add(join(vendorDir, sub.name));
       }
     } catch {
       /* skip if unreadable */
@@ -2774,18 +2780,14 @@ async function handleAgentBuilderGitList(
   for (const entry of topEntries) {
     if (!entry.isDirectory()) continue;
     if (entry.name === "cinatra") continue; // Vendor dir already walked above
-    if (isOldLayoutAgentDir(join(root, entry.name))) slugSet.add(entry.name);
+    if (isOldLayoutAgentDir(join(root, entry.name))) oldLayoutDirs.add(join(root, entry.name));
   }
 
   const items: unknown[] = [];
-  const warnings: string[] = [];
+  const warnings = oldLayoutAgentMessagesForDirs([...oldLayoutDirs], true);
   for (const slug of slugSet) {
     const resolved = resolveAgentJsonPathForRead(slug);
-    if (!resolved) {
-      const oldLayout = oldLayoutAgentErrorForSlug(slug, true);
-      if (oldLayout) warnings.push(oldLayout);
-      continue;
-    }
+    if (!resolved) continue;
     try {
       const raw = (await readFile(resolved.path, "utf8")) as string;
       const content = JSON.parse(raw) as Record<string, unknown>;
@@ -4170,31 +4172,37 @@ async function handleAgentBuilderGitPublish(
   // license-detection rejection gives faster, more actionable feedback. The
   // gate is admin-gated (the admin check ran above) so this does not leak
   // privileged info — only admins can reach it. Idempotent —
-  // runDeterministicReview is pure. Failing to locate or parse oas.json is
-  // non-fatal (legacy packages may not carry one yet) — the existing
-  // license + publish-time validators still apply downstream.
+  // runDeterministicReview is pure. oas.json is the one definition file
+  // (cinatra#4920): when it cannot be found or READ (unreadable, a directory,
+  // gone since the check above) the publish is refused, never continued. A
+  // parse failure is still logged and passed on to the publish-time validators.
   {
     const resolvedOas = resolveAgentJsonPathForRead(packageSlug);
-    if (resolvedOas) {
-      try {
-        const oasRaw = (await readFile(resolvedOas.path, "utf8")) as string;
-        const oasParsed = JSON.parse(oasRaw) as Record<string, unknown>;
-        const review = runDeterministicReview(oasParsed);
-        if (review.blockers.length > 0) {
-          return {
-            error: `agent.json failed review (${review.blockers.length} blocker${review.blockers.length === 1 ? "" : "s"}): ${review.blockers.map((b) => b.message).join("; ")}`,
-            code: "review_blocked",
-            blockers: review.blockers,
-          };
-        }
-      } catch (gateErr) {
-        // Read/parse failure — log and proceed. The license + publish
-        // validators still gate the publish path downstream.
-        console.warn(
-          "[agent_source_publish] review gate skipped (read/parse failed):",
-          gateErr,
-);
+    if (!resolvedOas) {
+      return { error: oldLayoutAgentErrorForSlug(packageSlug) ?? `Agent file not found: agents/${packageSlug}/cinatra/oas.json` };
+    }
+    let oasRaw: string;
+    try {
+      oasRaw = (await readFile(resolvedOas.path, "utf8")) as string;
+    } catch (readErr) {
+      // Errno code only: an fs error message embeds absolute host paths.
+      const code = (readErr as { code?: unknown })?.code;
+      return { error: `Agent file could not be read: ${resolvedOas.relPath} (${typeof code === "string" ? code : "read failed"}); the publish was not started.` };
+    }
+    try {
+      const oasParsed = JSON.parse(oasRaw) as Record<string, unknown>;
+      const review = runDeterministicReview(oasParsed);
+      if (review.blockers.length > 0) {
+        return {
+          error: `agent.json failed review (${review.blockers.length} blocker${review.blockers.length === 1 ? "" : "s"}): ${review.blockers.map((b) => b.message).join("; ")}`,
+          code: "review_blocked",
+          blockers: review.blockers,
+        };
       }
+    } catch (gateErr) {
+      // Parse failure — log and proceed. The license + publish
+      // validators still gate the publish path downstream.
+      console.warn("[agent_source_publish] review gate skipped (parse failed):", gateErr);
     }
   }
 

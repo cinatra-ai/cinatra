@@ -132,6 +132,21 @@ describe("ingestGitNativeAgentDefinitions", () => {
     }
   });
 
+  it("names EVERY old-layout directory when two share a slug", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));
+    await writeDefinition(path.join("cinatra-ai", "shared-slug", "cinatra", "agent.json"));
+    await writeDefinition(path.join("shared-slug", "agent.json"));
+
+    const loadDefinition = loaderImporting();
+    const report = await ingestGitNativeAgentDefinitions({ sourceRoot: root, loadDefinition });
+
+    expect(report.found).toBe(1);
+    expect(report.failures.map((f) => f.definitionPath).sort()).toEqual(
+      [path.join("cinatra-ai", "shared-slug"), "shared-slug"].sort(),
+    );
+  });
+
   it("a directory that has both files is read from its oas.json and is not an old layout", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await writeDefinition(path.join("cinatra-ai", "research-agent", "cinatra", "oas.json"));

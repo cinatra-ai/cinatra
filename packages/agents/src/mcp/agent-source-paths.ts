@@ -11,7 +11,7 @@ import { join, relative } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
-import { findOldLayoutAgentDir, oldLayoutAgentMessage, warnOldLayoutAgentDir } from "../old-agent-layout";
+import { findOldLayoutAgentDirs, oldLayoutAgentMessage, warnOldLayoutAgentDir } from "../old-agent-layout";
 
 // ---------------------------------------------------------------------------
 // Agent definition path resolution (cinatra#4920).
@@ -117,13 +117,14 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
 }
 
 /**
- * The directory of this slug's agent in the OLD layout (an `agent.json`, no
- * `cinatra/oas.json`), or null. Probes where the retired read ladder looked: the
- * vendor directories and the flat `<root>/<slug>` (or its old directory name).
+ * EVERY directory of this slug's agent in the OLD layout (an `agent.json`, no
+ * `cinatra/oas.json`). Probes where the retired read ladder looked: the vendor
+ * directories and the flat `<root>/<slug>` (or its old directory name). Two
+ * directories can share a slug, and each is returned.
  */
-export function findOldLayoutAgentDirForSlug(packageSlug: string): string | null {
-  if (!isSafePathSegment(packageSlug)) return null;
-  return findOldLayoutAgentDir(
+export function findOldLayoutAgentDirsForSlug(packageSlug: string): string[] {
+  if (!isSafePathSegment(packageSlug)) return [];
+  return findOldLayoutAgentDirs(
     resolveDevExtensionSourceRoot(),
     safeVendorSegmentsForRead(),
     packageSlug,
@@ -132,17 +133,27 @@ export function findOldLayoutAgentDirForSlug(packageSlug: string): string | null
 }
 
 /**
- * The sentence a handler returns when it cannot find this slug's agent because
- * the source tree is in the old layout: it names the directory and says to move
- * it to `cinatra/oas.json`. Null when the slug has no old-layout directory, so
- * a handler keeps its own "not found" text. `alsoLog` also logs it (once per
- * directory) for a reader, like the listing, that carries on without it.
+ * One sentence per old-layout directory: it names the directory (relative to
+ * the working directory) and says to move it to `cinatra/oas.json`. With
+ * `alsoLog` each is also logged once per directory, for a reader, like the
+ * listing, that carries on without the agent.
  */
-export function oldLayoutAgentErrorForSlug(packageSlug: string, alsoLog = false): string | null {
-  const dir = findOldLayoutAgentDirForSlug(packageSlug);
-  if (dir === null) return null;
-  if (alsoLog) warnOldLayoutAgentDir(dir);
-  return oldLayoutAgentMessage(relative(process.cwd(), dir));
+export function oldLayoutAgentMessagesForDirs(dirs: readonly string[], alsoLog = false): string[] {
+  return dirs.map((dir) => {
+    if (alsoLog) warnOldLayoutAgentDir(dir);
+    return oldLayoutAgentMessage(relative(process.cwd(), dir));
+  });
+}
+
+/**
+ * The text a slug-keyed handler returns when it cannot find the agent because
+ * the source tree is in the old layout: the sentence for EVERY old-layout
+ * directory of the slug, joined. Null when the slug has none, so a handler
+ * keeps its own "not found" text.
+ */
+export function oldLayoutAgentErrorForSlug(packageSlug: string): string | null {
+  const dirs = findOldLayoutAgentDirsForSlug(packageSlug);
+  return dirs.length === 0 ? null : oldLayoutAgentMessagesForDirs(dirs).join(" ");
 }
 
 // Resolves the on-disk directory that contains the agent (for sibling reads
