@@ -22,13 +22,7 @@
       "@cinatra-ai/default-artifact"
     ]
   },
-  "undeclaredToolOwnerDeps": {
-    "@cinatra-ai/list-curator-agent": {
-      "crm_account_get": "Seeded with the rule (cinatra#4874). The pack declares the tool in cinatra.consumes; it is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped.",
-      "crm_list_create": "Seeded with the rule (cinatra#4874). The pack declares the tool in cinatra.consumes; it is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped.",
-      "crm_list_member_add": "Seeded with the rule (cinatra#4874). The pack declares the tool in cinatra.consumes; it is registered by @cinatra-ai/crm-connector (per the authz inventory), which @cinatra-ai/list-curator-agent does not declare in cinatra.dependencies. Leaves when the pack declares the connector and its pin is bumped."
-    }
-  },
+  "undeclaredToolOwnerDeps": {},
   "notes": {
     "@cinatra-ai/blog-draft-writer-agent :: @cinatra-ai/blog-post-artifact": "cinatra#2537 offender 1/5 — fixed by cinatra-ai/blog-draft-writer-agent#39 (declares the required kind:artifact edge). Drops out of this baseline when the pin in cinatra-dev-extensions.lock.json is bumped past that merge.",
     "@cinatra-ai/blog-idea-generator-agent :: @cinatra-ai/blog-idea-artifact": "cinatra#2537 offender 2/5 — fixed by cinatra-ai/blog-idea-generator-agent#37. Drops out when the dev-lock pin is bumped.",
