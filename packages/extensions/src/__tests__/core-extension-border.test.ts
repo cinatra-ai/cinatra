@@ -99,9 +99,18 @@ type GateModule = {
     headFloor?: unknown;
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
+  // Optional: a tree whose gate does not know the port rules yet has none of them.
+  PORT_SEEDS?: Record<string, string[]>;
+  portFindings?: (input?: { repoRoot?: string; file?: string; type?: string }) => Finding[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
+
+// Where the gate does not know the port rules (a plain main tree) these read as
+// empty, so their tests fail by assertion and not by a missing function.
+const SEEDS = gate.PORT_SEEDS ?? {};
+const portFindings = (input?: { repoRoot?: string; file?: string; type?: string }): Finding[] =>
+  gate.portFindings?.(input) ?? [];
 
 const PACKS = new Set(["@cinatra-ai/blog-pipeline-agent", "@cinatra-ai/screenshot-artifact"]);
 const WORKSPACE = new Set(["@cinatra-ai/agents", "@cinatra-ai/extensions", "@cinatra-ai/chat"]);
@@ -755,4 +764,256 @@ describe("core/extension border — the floor is compared with the base branch",
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('does not grow against the base "HEAD"');
   }, 120_000);
+});
+
+// cinatra#4872: the port rules read the DECLARATIONS of the SDK's host context and
+// refuse every shape they do not read. Each case writes a declaration and asks
+// which findings it gives.
+describe("core/extension border — the ports are a closed shape with typed inputs", () => {
+  function ports(declarations: string, fields = "jobs: JobsPort", root?: string): string[] {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+    try {
+      writeFileSync(path.join(dir, "host-context.ts"), `${declarations}\n${root ?? `export type ExtensionHostContext = { ${fields} };`}\n`);
+      return portFindings({ repoRoot: dir, file: "host-context.ts" }).map((f) => `${f.rule} ${f.detail}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const OTHER = "interface Other { a: string }";
+
+  it.each([
+    ["methods, optional ones too", "interface JobsPort { run(input: string): void; stop?(): void }"],
+    ["function-typed properties, nullable and optional", "interface JobsPort { run: ((input: string) => void) | null; stop?: () => void }"],
+    ["readonly properties and getters that cannot be called", "interface JobsPort { readonly state: unknown; readonly shape: object; get mode(): string; get data(): unknown }"],
+    ["a type alias of one type literal", "type JobsPort = { run(input: string): void }"],
+    ["a base that is an SDK interface", "interface Base { run(input: string): void }\ninterface JobsPort extends Base {}"],
+    ["an optional and a nullable port", "interface JobsPort { run(): void }", "jobs?: JobsPort | null"],
+    [
+      "identity fields",
+      'type Mode = "a" | "b";\ninterface JobsPort { run(): void }',
+      "jobs: JobsPort; id: string; n?: number; on: boolean | null; labels: readonly string[]; pair: [string, number]; mode: Mode",
+    ],
+    [
+      "identity fields of every primitive kind",
+      "enum Kind { A, B }\ninterface JobsPort { run(): void }",
+      "jobs: JobsPort; sym: symbol; readonly tag: unique symbol; kind: Kind; nothing: void; big: bigint; nil: null; tpl: `a${string}`",
+    ],
+  ])("allows %s", (_name, declarations, fields?: string) => {
+    expect(ports(declarations, fields)).toEqual([]);
+  });
+
+  it.each([
+    ["a type alias of a function type", "type JobsPort = (input: string) => void", undefined, "jobs"],
+    ["an alias of another reference", `${OTHER}\ntype JobsPort = Other`, undefined, "jobs"],
+    ["an intersection", "interface JobsPort { run(): void }", "jobs: JobsPort & { extra: string }", "jobs"],
+    ["an inline type literal", "", "jobs: { run(): void }", "jobs"],
+    ["a generic wrapper", "interface JobsPort { run(): void }", "jobs: Partial<JobsPort>", "jobs"],
+    ["an array of ports", "interface JobsPort { run(): void }", "jobs: JobsPort[]", "jobs"],
+    ["any", "", "jobs: any", "jobs"],
+    ["unknown", "", "jobs: unknown", "jobs"],
+    ["object", "", "jobs: object", "jobs"],
+    ["no annotation", "", "jobs", "jobs"],
+    ["a reference outside the SDK", "", "jobs: Map<string, string>", "jobs"],
+    ["a port with type parameters", "interface JobsPort<T = string> { run(v: T): void }", undefined, "JobsPort"],
+    ["a base outside the SDK", "interface JobsPort extends Map<string, string> {}", undefined, "JobsPort.extends Map<string, string>"],
+    ["a writable data property", "interface JobsPort { count: number }", undefined, "JobsPort.count"],
+    ["a set accessor", "interface JobsPort { set value(v: string) }", undefined, "JobsPort.value"],
+    ["an index signature", "interface JobsPort { [name: string]: string }", undefined, "JobsPort.IndexSignature"],
+    ["a call signature", "interface JobsPort { (input: string): void }", undefined, "JobsPort.CallSignature"],
+    ["a construct signature", "interface JobsPort { new (input: string): object }", undefined, "JobsPort.ConstructSignature"],
+    ["an object-typed property", "interface JobsPort { opts: { a: string } }", undefined, "JobsPort.opts"],
+    ["an interface-typed property", `${OTHER}\ninterface JobsPort { sub: Other }`, undefined, "JobsPort.sub"],
+    ["a constructor-typed property", "interface JobsPort { Factory: new (input: string) => object }", undefined, "JobsPort.Factory"],
+    ["a union of functions", "interface JobsPort { run: ((a: string) => void) | ((b: string) => void) }", undefined, "JobsPort.run"],
+    ["a readonly property that can be called", "type Handler = (a: string) => void;\ninterface JobsPort { readonly run: Handler }", undefined, "JobsPort.run"],
+    ["a readonly property typed any", "interface JobsPort { readonly run: any }", undefined, "JobsPort.run"],
+    ["a getter typed any", "interface JobsPort { get run(): any }", undefined, "JobsPort.run"],
+    ["a getter with no type", "interface JobsPort { get run() }", undefined, "JobsPort.run"],
+    ["a readonly property typed Function", "interface JobsPort { readonly run: Function }", undefined, "JobsPort.run"],
+    ["a readonly union with a function", "interface JobsPort { readonly run: string | (() => void) }", undefined, "JobsPort.run"],
+    ["a root property typed never", "interface JobsPort { run(): void }", "jobs: JobsPort; n: never", "n"],
+  ])("refuses %s as port-shape", (_name, declarations, fields, detail) => {
+    expect(ports(declarations, fields)).toEqual([`port-shape ${detail}`]);
+  });
+
+  it.each([
+    ["an index signature", "[name: string]: any", "port-shape [index]"],
+    ["a call signature", "(input: string): void", "port-shape [call]"],
+    ["a construct signature", "new (input: string): object", "port-shape [construct]"],
+  ])("refuses %s on the root as port-shape", (_name, member, finding) => {
+    const jobs = "interface JobsPort { run(): void }";
+    expect(ports(jobs, "", `export interface ExtensionHostContext { jobs: JobsPort; ${member} }`)).toEqual([finding]);
+    expect(ports(jobs, "", `export type ExtensionHostContext = { jobs: JobsPort; ${member} };`)).toEqual([finding]);
+    // inherited from a base declared in the SDK
+    expect(ports(`${jobs}\ninterface BaseContext { ${member} }`, "", "export interface ExtensionHostContext extends BaseContext { jobs: JobsPort }")).toEqual([finding]);
+  });
+
+  // The root has a CLOSED FORM or it is one finding: a union, mapped or conditional type
+  // (or any, unknown, a type parameter) hides members from the property list.
+  describe("the form of the root", () => {
+    const decls =
+      "interface SafePort { call(input: string): void }\ninterface UnsafePort { call(input: any): void }\ninterface BaseContext { id: string }\ninterface Mid { id: string }";
+    const rootForm = (root: string) => ports(decls, "", root).filter((f) => f === "port-shape [root-form]");
+
+    it.each([
+      ["a union inside an intersection", "export type ExtensionHostContext = BaseContext & ({ alpha: UnsafePort } | { beta: SafePort });"],
+      ["a plain union alias", "type Branches = { alpha: SafePort } | { beta: SafePort };\nexport type ExtensionHostContext = Branches;"],
+      ["a mapped type", "export type ExtensionHostContext = { [K in \"alpha\" | \"beta\"]: SafePort };"],
+      ["a mapped type through an interface base", "export interface ExtensionHostContext extends Partial<{ alpha: SafePort }> {}"],
+      ["a conditional type", "export type ExtensionHostContext<T = string> = T extends string ? { alpha: SafePort } : { beta: SafePort };"],
+      ["any", "export type ExtensionHostContext = any;"],
+      ["unknown", "export type ExtensionHostContext = unknown;"],
+    ])("reports %s as one port-shape finding at the root", (_name, root) => {
+      expect(rootForm(root)).toEqual(["port-shape [root-form]"]);
+    });
+
+    it("names the form, and does not read the members of a union as a port set", () => {
+      const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
+      try {
+        writeFileSync(
+          path.join(dir, "host-context.ts"),
+          `${decls}\nexport type ExtensionHostContext = BaseContext & ({ alpha: UnsafePort } | { beta: SafePort });\n`,
+        );
+        const hits = portFindings({ repoRoot: dir, file: "host-context.ts" }).filter((f) => f.detail === "[root-form]");
+        expect(hits.map((f) => f.message.includes("written as a union"))).toEqual([true]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ["an interface", "export interface ExtensionHostContext { id: string; alpha: SafePort }"],
+      ["an alias of a type literal", "export type ExtensionHostContext = { id: string; alpha: SafePort };"],
+      ["an intersection of two interfaces", "interface Wide { alpha: SafePort }\nexport type ExtensionHostContext = BaseContext & Wide;"],
+      ["an interface with extends", "export interface ExtensionHostContext extends BaseContext { alpha: SafePort }"],
+      ["an alias of an interface", "export type ExtensionHostContext = Mid;"],
+      ["an interface extending an interface that extends one", "interface Wide extends BaseContext { alpha: SafePort }\nexport interface ExtensionHostContext extends Wide {}"],
+    ])("does not report %s", (_name, root) => {
+      expect(rootForm(root)).toEqual([]);
+      expect(ports(decls, "", root).filter((f) => f.includes("root-form"))).toEqual([]);
+    });
+  });
+
+  it("reports each signature of the root once, and a root without any as before", () => {
+    const jobs = "interface JobsPort { run(): void }";
+    expect(ports(jobs, "", "export interface ExtensionHostContext { jobs: JobsPort; (a: string): void; (b: number): void; new (): object }")).toEqual([
+      "port-shape [call]",
+      "port-shape [call] (occurrence 2)",
+      "port-shape [construct]",
+    ]);
+    expect(ports(jobs, "", "export interface ExtensionHostContext { jobs: JobsPort; id: string }")).toEqual([]);
+  });
+
+  it.each([
+    ["an untyped parameter after a typed one", "run(jobName: string, input: unknown): void", ["JobsPort.run(#2)"]],
+    ["an any parameter", "ping(input: any): void", ["JobsPort.ping(#1)"]],
+    ["a nullable function property", "run: ((jobName: string, input: unknown) => void) | null", ["JobsPort.run(#2)"]],
+    ["a getter that returns a function", "get run(): (input: unknown) => void", ["JobsPort.run(#1)"]],
+    ["an optional object", "run(input?: object): void", ["JobsPort.run(#1)"]],
+    ["an object or null", "run(input: object | null): void", ["JobsPort.run(#1)"]],
+    ["an unknown or undefined", "run(input: unknown | undefined): void", ["JobsPort.run(#1)"]],
+    ["a rest of unknown", "run(name: string, ...args: unknown[]): void", ["JobsPort.run(#2)"]],
+    ["an unconstrained type parameter", "set<T = unknown>(key: string, value: T): void", ["JobsPort.set(#2)"]],
+    ["an optional type parameter", "run<T>(input?: T): void", ["JobsPort.run(#1)"]],
+    ["several positions", "run(payload: any, jobName: string, input: unknown): void", ["JobsPort.run(#1,#3)"]],
+    ["overloads, each with its own positions", "run(a: unknown): void; run(b: string): void; run(c: any, d: any): void", ["JobsPort.run(#1|#1,#2)"]],
+  ])("reports %s", (_name, member, keys) => {
+    expect(ports(`interface JobsPort { ${member} }`)).toEqual(keys.map((k) => `untyped-port-input ${k}`));
+  });
+
+  it("reads the root through the checker: inherited, intersected and merged properties", () => {
+    const port = "interface JobsPort { run(input: unknown): void }\ninterface BaseContext { jobs: JobsPort }";
+    const typed = [`untyped-port-input JobsPort.run(#1)`];
+    expect(ports(port, "", "export interface ExtensionHostContext extends BaseContext { id: string }")).toEqual(typed);
+    expect(ports(port, "", "export type ExtensionHostContext = BaseContext & { id: string };")).toEqual(typed);
+    // a base outside the SDK: its properties are declared outside it
+    const lib = ports("", "", "export interface ExtensionHostContext extends Map<string, string> {}");
+    expect(lib.length).toBeGreaterThan(0);
+    expect(lib.every((f) => f.startsWith("port-shape "))).toBe(true);
+    expect(lib).toContain("port-shape size");
+    // a property declared twice by merging has no single declaration
+    expect(ports("interface JobsPort { run(): void }\ninterface ExtensionHostContext { jobs: JobsPort }", "", "interface ExtensionHostContext { jobs: JobsPort }")).toEqual(["port-shape jobs"]);
+  });
+
+  it("reports an untyped input of a base under the base's name", () => {
+    expect(ports("interface Base { run(input: object): void }\ninterface JobsPort extends Base {}")).toEqual([
+      "untyped-port-input Base.run(#1)",
+    ]);
+  });
+
+  it.each([
+    ["an optional string", "run(input?: string): void"],
+    ["an object literal or null", "run(input: { id: string } | null): void"],
+    ["a rest of strings", "run(...args: string[]): void"],
+    ["a constrained type parameter", "run<T extends { id: string }>(value: T): void"],
+    ["a reduced type", "run(a: unknown & { id: string }, b: keyof Record<string, unknown>): void"],
+    ["a record (not read)", "run(input: Record<string, unknown>): void"],
+    ["a this parameter (not an input)", "run(this: unknown, name: string): void"],
+    ["a callback parameter (not read)", "on(handler: (payload: unknown) => void): void"],
+  ])("leaves %s alone", (_name, member) => {
+    expect(ports(`interface JobsPort { ${member} }`)).toEqual([]);
+  });
+
+  it("keys by position, so a rename that keeps the types keeps the key", () => {
+    expect(ports("interface JobsPort { run(renamed: unknown, text: string): void }")).toEqual(
+      ports("interface JobsPort { run(input: unknown, name: string): void }"),
+    );
+  });
+
+  it("gives, on the real host context, exactly the six untyped inputs that stand on main", () => {
+    const standing = portFindings({ repoRoot: REPO_ROOT }).map((f) => `${f.rule} ${f.file}::${f.detail}`);
+    expect(standing.sort()).toEqual((SEEDS["untyped-port-input"] ?? ["none"]).map((k) => `untyped-port-input ${k}`).sort());
+    expect(standing).toHaveLength(6);
+    const list = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+    expect(list.installedRules).toEqual(["port-shape", "untyped-port-input"]);
+    expect(list.entries.filter((e: { rule: string }) => e.rule === "untyped-port-input")).toHaveLength(6);
+  });
+
+  // The first recording of each rule is a closed seed, consumed for good by a
+  // marker in the list's `installedRules` that can never be removed.
+  describe("the first recording", () => {
+    const FLOOR = path.relative(REPO_ROOT, BASELINE_PATH).split(path.sep).join("/");
+    const entry = (key: string) => ({ rule: "untyped-port-input", key, reason: "a member of a fixture port, with its reason" });
+    const seed = () => {
+      expect(SEEDS["untyped-port-input"] ?? []).toHaveLength(6);
+      return SEEDS["untyped-port-input"].map(entry);
+    };
+    const marked = { installedRules: ["port-shape", "untyped-port-input"] };
+    const fixtures: { cleanup: () => void }[] = [];
+    afterEach(() => {
+      while (fixtures.length) fixtures.pop()?.cleanup();
+    });
+    function check(base: Record<string, unknown>, head: Record<string, unknown>) {
+      const f = floorFixture.makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+      fixtures.push(f);
+      return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+    }
+
+    it("admits the seed on a base without the marker", () => {
+      const r = check({ entries: [] }, { ...marked, entries: seed() });
+      expect([r.ok, r.status]).toEqual([true, "held"]);
+    });
+
+    it("refuses the seed without the marker, with one key more, or in part", () => {
+      const extra = entry("packages/sdk-extensions/src/host-context.ts::HostJobsPort.extra(#1)");
+      expect(check({ entries: [] }, { entries: seed() }).ok).toBe(false);
+      expect(check({ entries: [] }, { ...marked, entries: [...seed(), extra] }).growth).toContain(`new entry: untyped-port-input::${extra.key}`);
+      expect(check({ entries: [] }, { ...marked, entries: seed().slice(1) }).ok).toBe(false);
+    });
+
+    it("refuses a new key once the base carries the marker, also when no entry is left", () => {
+      expect(check({ ...marked, entries: seed().slice(1) }, { ...marked, entries: seed() }).growth).toHaveLength(1);
+      expect(check({ ...marked, entries: [] }, { ...marked, entries: seed() }).growth).toHaveLength(6);
+    });
+
+    it("refuses a head that lacks a marker the base has, and a marker that is no list of rules", () => {
+      expect(check({ ...marked, entries: seed() }, { entries: seed() }).growth).toEqual([
+        "installed rule marker removed: port-shape",
+        "installed rule marker removed: untyped-port-input",
+      ]);
+      expect(gate.baselineDefects({ entries: [], installedRules: "port-shape" })).toHaveLength(1);
+      expect(gate.baselineDefects({ entries: [], installedRules: ["no-such-rule"] })).toHaveLength(1);
+      expect(gate.baselineDefects({ entries: [], ...marked })).toEqual([]);
+    });
+  });
 });
