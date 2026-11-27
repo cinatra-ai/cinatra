@@ -243,7 +243,6 @@ describe("the WordPress publish pack's review gate gets its targets", () => {
 // successor's, never the revision the run started with.
 describe("the WordPress publish pack reads the revision the review approved", () => {
   it("a Regenerate's successor, approved on the review, is the revision whose words are read", async () => {
-    // red-first-expect: expected 'artifact_content_read' to be 'extension_tool'
     const read = oas.$referenced_components.read_post_text;
     const readData = read.data as { tool?: string; input?: Record<string, unknown> };
     expect(readData.tool).toBe("extension_tool");
