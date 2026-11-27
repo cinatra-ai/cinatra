@@ -111,15 +111,40 @@ if (Number(dieAfterMs) > 0) setTimeout(() => process.exit(3), Number(dieAfterMs)
 for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => { server.close(); process.exit(0); });
 `;
 
-function freePort() {
+/** A listener the kernel placed on a port of its own choosing, still bound. */
+function holdEphemeralPort() {
   return new Promise((resolve, reject) => {
     const server = net.createServer();
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address();
-      server.close(() => resolve(port));
+      resolve(server);
     });
   });
+}
+
+/**
+ * TWO DIFFERENT FREE PORTS: one for the application, one for the gate.
+ *
+ * Both listeners are held at the same time and released together, so the two
+ * numbers differ by construction. Asking for one port, releasing it and asking
+ * again lets the kernel hand the same number back - and then the listener a
+ * case binds on the "application port" is also what answers on its "gate
+ * port", which reads exactly like a gate that opened.
+ */
+async function freePortPair() {
+  const first = await holdEphemeralPort();
+  let second;
+  try {
+    second = await holdEphemeralPort();
+  } catch (error) {
+    await new Promise((resolve) => first.close(resolve));
+    throw error;
+  }
+  const ports = [first.address().port, second.address().port];
+  await Promise.all(
+    [first, second].map((server) => new Promise((resolve) => server.close(resolve))),
+  );
+  return ports;
 }
 
 /** Is anything still serving on this port? — the stand-in answers /api/health. */
@@ -135,13 +160,25 @@ async function portAnswers(port) {
   }
 }
 
+// What the gate's own listener answers (`openGate` in
+// scripts/ci/dev-boot-route-gate.mjs). It is not exported, so it is mirrored
+// here; every case that waits for the gate to open pins it.
+const GATE_READY_BODY = "dev-boot-route-gate: routes ready\n";
+
+/**
+ * Is THE GATE answering on this port? - a 200 carrying the gate's own words.
+ *
+ * The status alone does not say who answered: a port number is only reserved
+ * while something is bound to it, so any other listener of the machine can
+ * hold the number once the gate is gone, and its 200 is not the gate's.
+ */
 async function gateAnswers(port) {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/`, {
       signal: AbortSignal.timeout(2_000),
     });
-    await response.arrayBuffer().catch(() => undefined);
-    return response.status === 200;
+    const body = await response.text().catch(() => "");
+    return response.status === 200 && body === GATE_READY_BODY;
   } catch {
     return false;
   }
@@ -287,8 +324,7 @@ describe("parseGateArgs", () => {
 
 describe("a boot that never registers the route", () => {
   it("is replaced by a fresh boot, and the gate opens only after the route answers", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const run = runGate({ poisonedBoots: 1, maxBoots: 2, appPort, gatePort });
 
     // THE READING IS THE GATE'S OWN SIGNAL, then the port.
@@ -323,8 +359,7 @@ describe("a boot that never registers the route", () => {
   }, TWO_BOOT_CEILING_MS + GATE_ROUTE_BOUND_MS + 5_000);
 
   it("never opens the gate while every boot in the budget is unrouted, and says which route", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const run = runGate({ poisonedBoots: 5, maxBoots: 2, appPort, gatePort });
 
     const code = await run.exited;
@@ -351,8 +386,7 @@ describe("shutdown", () => {
    * which is the part that was broken.
    */
   it("takes the development server down with it when it is signalled", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const run = runGate({ poisonedBoots: 0, maxBoots: 2, appPort, gatePort });
 
     expect(await waitUntil(() => gateAnswers(gatePort), 25_000)).toBe(true);
@@ -367,8 +401,7 @@ describe("shutdown", () => {
 
 describe("a boot that registers the route", () => {
   it("opens the gate on the first boot, with no reboot at all", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const run = runGate({ poisonedBoots: 0, maxBoots: 2, appPort, gatePort });
 
     const opened = await waitUntil(() => gateAnswers(gatePort), 25_000);
@@ -392,8 +425,7 @@ describe("a server this run did not start", () => {
    * the run lost the bind.
    */
   it("refuses to certify a server already holding the application port", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const squatter = http.createServer((_request, response) => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end("{}");
@@ -405,7 +437,10 @@ describe("a server this run did not start", () => {
       expect(code).toBe(1);
       expect(run.read()).toContain("ALREADY serving");
       expect(run.read()).toContain(String(appPort));
-      // It must not have opened the gate on somebody else's server.
+      // It must not have opened the gate on somebody else's server: it never
+      // announced the gate (the line it prints before it binds the listener),
+      // and nothing answers as the gate on the gate port.
+      expect(run.read()).not.toContain("opening the gate on :");
       expect(await gateAnswers(gatePort)).toBe(false);
     } finally {
       await new Promise((resolve) => squatter.close(resolve));
@@ -415,8 +450,7 @@ describe("a server this run did not start", () => {
 
 describe("a development server that dies on its own", () => {
   it("closes the gate with it instead of answering ready for a dead application", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const run = runGate({ poisonedBoots: 0, maxBoots: 2, appPort, gatePort, dieAfterMs: 4_000 });
 
     expect(await waitUntil(() => gateAnswers(gatePort), 25_000)).toBe(true);
@@ -430,8 +464,7 @@ describe("a development server that dies on its own", () => {
   });
 
   it("is reported as a crash, not diagnosed as the routing fault and rebooted", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     // Poisoned, so the probe sees the not-found document first — and then the
     // server dies mid-bound, which is the mixed sequence that used to be read as
     // the #3194 signature and earn a fresh boot.
@@ -533,8 +566,7 @@ describe("a boot whose route is still compiling (cinatra#3553)", () => {
    * announces NOTHING still spends the same bound and is still replaced.
    */
   it("keeps probing a route the runtime announced, and opens the gate when it answers", async () => {
-    const appPort = await freePort();
-    const gatePort = await freePort();
+    const [appPort, gatePort] = await freePortPair();
     const COMPILE_FOR_MS = 4_000;
     const run = runGate({
       poisonedBoots: 0,
