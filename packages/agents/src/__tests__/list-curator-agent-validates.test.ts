@@ -120,7 +120,7 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     expect(requiredSet.size + hiddenSet.size).toBe(5);
   });
 
-  it("EndNode declares 7 outputs (listId/memberCount/accountsCreated/contactsCreated/failures/summary/dispatchedRuns) with inputs EQUAL to outputs (the L1 EndNode invariant) AND data_flow_connections.length === 32 AND control_flow_connections.length === 7", () => {
+  it("EndNode declares 7 outputs (listId/memberCount/accountsCreated/contactsCreated/failures/summary/dispatchedRuns) with inputs EQUAL to outputs (the L1 EndNode invariant) AND data_flow_connections.length === 46 AND control_flow_connections.length === 25", () => {
     const refs = oas.$referenced_components as Record<string, Record<string, unknown>>;
     const end = refs.end;
     expect(end).toBeDefined();
@@ -137,8 +137,8 @@ describe("list-curator-agent OAS validates against L1 validator + LLM-metadata s
     const inputs = end!.inputs as Array<Record<string, unknown>>;
     expect(inputs.map((i) => [i.title, i.type])).toEqual(outputs.map((o) => [o.title, o.type]));
     const dfc = oas.data_flow_connections as unknown[];
-    expect(dfc.length).toBe(32);
+    expect(dfc.length).toBe(46);
     const cfc = oas.control_flow_connections as unknown[];
-    expect(cfc.length).toBe(7);
+    expect(cfc.length).toBe(25);
   });
 });
