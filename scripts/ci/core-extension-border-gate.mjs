@@ -58,9 +58,9 @@
 // without a useful constraint. See the contract document for its stated limits.
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { compareFloorWithBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
@@ -417,9 +417,6 @@ export const PORT_ROOT = { file: "packages/sdk-extensions/src/host-context.ts", 
 
 export const PORT_RULE = "untyped-port-input";
 
-/** The checker's "cannot find name / global type" codes. */
-const CANNOT_FIND_CODES = new Set([2304, 2318, 2583, 2584]);
-
 const PORT_COMPILER_OPTIONS = {
   noEmit: true,
   strict: true,
@@ -429,46 +426,6 @@ const PORT_COMPILER_OPTIONS = {
   module: ts.ModuleKind.ESNext,
   moduleResolution: ts.ModuleResolutionKind.Bundler,
 };
-
-/** A compiler host that reads the files the base revision TRACKS from git.
- *  Everything under a `node_modules` directory is no tracked file (the
- *  TypeScript library files are in it) and is read from disk. */
-function hostAtRef(repoRoot, ref) {
-  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
-  const outside = { ...host };
-  const cache = new Map();
-  const rel = (f) => {
-    const r = relative(repoRoot, f);
-    if (r.startsWith("..") || isAbsolute(r)) return null;
-    const parts = r.split(sep);
-    return parts.includes("node_modules") ? null : parts.join("/");
-  };
-  const show = (r) => {
-    if (!cache.has(r)) {
-      try {
-        const text = execFileSync("git", ["cat-file", "blob", `${ref}:${r}`], {
-          cwd: repoRoot,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          maxBuffer: 64 * 1024 * 1024,
-        });
-        cache.set(r, text);
-      } catch {
-        cache.set(r, undefined);
-      }
-    }
-    return cache.get(r);
-  };
-  host.fileExists = (f) => (rel(f) === null ? outside.fileExists(f) : show(rel(f)) !== undefined);
-  host.readFile = (f) => (rel(f) === null ? outside.readFile(f) : show(rel(f)));
-  host.directoryExists = (d) => (rel(d) === null ? outside.directoryExists(d) : true);
-  host.getSourceFile = (f, ...rest) => {
-    if (rel(f) === null) return outside.getSourceFile(f, ...rest);
-    const text = show(rel(f));
-    return text === undefined ? undefined : ts.createSourceFile(f, text, rest[0]);
-  };
-  return host;
-}
 
 /** A parameter's resolved type is untyped: `any`, `unknown`, `object`, or a
  *  type parameter whose constraint is absent or one of those. The checker has
@@ -483,10 +440,14 @@ function isUntypedType(t, seen = new Set()) {
 }
 
 /** Every port member (inherited ones included) whose call signature takes an
- *  untyped parameter, one finding per member. `ref` reads the tree at that git
- *  revision instead of the checkout. A missing root throws. */
-export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type, ref } = {}) {
-  const host = ref ? hostAtRef(repoRoot, ref) : ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
+ *  untyped parameter, one finding per member. A member typed any, unknown or
+ *  object is the finding itself, and so is a port typed so. The key of a member
+ *  carries each call signature that has an untyped parameter, in declaration
+ *  order, its parameter names sorted and comma-joined, the signatures joined
+ *  with `|`: `Port.run(input)`, and `Port.run(input|input)` for two overloads.
+ *  Reads the checkout from disk and nothing from git. A missing root throws. */
+export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_ROOT.file, type = PORT_ROOT.type } = {}) {
+  const host = ts.createCompilerHost(PORT_COMPILER_OPTIONS, true);
   host.realpath = (p) => p;
   const rootPath = join(repoRoot, file);
   const program = ts.createProgram({ rootNames: [rootPath], options: PORT_COMPILER_OPTIONS, host });
@@ -496,22 +457,11 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
   const rootSymbol = moduleSymbol && checker.getExportsOfModule(moduleSymbol).find((s) => s.name === type);
   if (!rootSymbol) {
     throw new Error(
-      `[core-extension-border] the port root ${type} is not exported by ${file}${ref ? ` at ${ref}` : ""} — the rule fails closed rather than reading no port`,
-    );
-  }
-  // FAIL CLOSED. A program that cannot read its standard library resolves
-  // `Record` and `Promise` as `any`, so it would report (or, on a base, admit)
-  // what is not there. Such a program is refused, never read.
-  if (
-    !program.getSourceFiles().some((f) => program.isSourceFileDefaultLibrary(f)) ||
-    program.getGlobalDiagnostics().length > 0 ||
-    program.getSemanticDiagnostics(sourceFile).some((d) => CANNOT_FIND_CODES.has(d.code))
-  ) {
-    throw new Error(
-      `[core-extension-border] the program over ${file}${ref ? ` at ${ref}` : ""} cannot resolve its standard library — the rule fails closed rather than reading unresolved types`,
+      `[core-extension-border] the port root ${type} is not exported by ${file} — the rule fails closed rather than reading no port`,
     );
   }
   const typeOf = (symbol) => checker.getNonNullableType(checker.getTypeOfSymbol(symbol));
+  const untypedSymbol = (symbol) => isUntypedType(checker.getTypeOfSymbol(symbol)) || isUntypedType(typeOf(symbol));
   const out = [];
   const counts = new Map();
   const add = (decl, detail, message) => {
@@ -520,28 +470,29 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
     out.push(finding(PORT_RULE, declFile.startsWith("..") ? file : declFile, line, occurrenceDetail(counts, PORT_RULE, detail), message));
   };
   for (const portProp of checker.getPropertiesOfType(checker.getDeclaredTypeOfSymbol(rootSymbol))) {
-    const portType = typeOf(portProp);
     // A port that is itself untyped has no members to read: it is the finding.
-    if (isUntypedType(checker.getTypeOfSymbol(portProp)) || isUntypedType(portType)) {
+    if (untypedSymbol(portProp)) {
       add(portProp.declarations?.[0], portProp.name, "a host port is itself typed any, unknown or object, so it bounds nothing a manifest declares (cinatra#4872)");
       continue;
     }
+    const portType = typeOf(portProp);
     const named = portType.aliasSymbol?.name ?? portType.getSymbol()?.name;
     const port = named && !named.startsWith("__") ? named : portProp.name;
     for (const member of checker.getPropertiesOfType(portType)) {
       // A member that is itself typed any, unknown or object has no signature
       // to read, and is the finding.
-      if (isUntypedType(checker.getTypeOfSymbol(member)) || isUntypedType(typeOf(member))) {
+      if (untypedSymbol(member)) {
         add(member.declarations?.[0], `${port}.${member.name}`, "a host port member is itself typed any, unknown or object, so it bounds nothing a manifest declares (cinatra#4872)");
         continue;
       }
-      const untyped = typeOf(member)
+      const signatures = typeOf(member)
         .getCallSignatures()
-        .flatMap((sig) => sig.getParameters().filter((p) => isUntypedType(checker.getTypeOfSymbol(p))).map((p) => p.name));
-      if (untyped.length === 0) continue;
-      // The untyped parameter names are in the key: one more untyped parameter
-      // of a listed member is a new key, never the listed one.
-      const names = [...new Set(untyped)].sort().join(",");
+        .map((sig) => sig.getParameters().filter((p) => isUntypedType(checker.getTypeOfSymbol(p))).map((p) => p.name).sort().join(","))
+        .filter((names) => names !== "");
+      if (signatures.length === 0) continue;
+      // Every untyped signature is in the key, so one more untyped parameter,
+      // or one more overload with one, is a new key and never the listed one.
+      const names = signatures.join("|");
       add(
         member.declarations?.[0],
         `${port}.${member.name}(${names})`,
@@ -551,6 +502,18 @@ export function portMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, file = PORT_R
   }
   return out;
 }
+
+/** The FIRST RECORDING of the rule: exactly the keys that stood on main the day
+ *  it landed (`<file>::<port>.<member>(<untyped parameters>)`, the ledger's
+ *  key form). Inert once the base branch carries an entry of the rule. */
+export const PORT_SEED = [
+  "packages/sdk-extensions/src/host-context.ts::HostJobsPort.enqueue(payload)",
+  "packages/sdk-extensions/src/host-context.ts::HostMcpPort.callPrimitive(input)",
+  "packages/sdk-extensions/src/host-context.ts::HostObjectsPort.write(value)",
+  "packages/sdk-extensions/src/host-context.ts::HostSettingsPort.set(value)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSettingsSurface(surface)",
+  "packages/sdk-extensions/src/host-context.ts::HostUiPort.registerSetupSurface(surface)",
+];
 
 /** Every entry of the skill packaging legacy list, reported so the committed
  *  baseline has to name each one — which makes the list shrink-only. */
@@ -823,30 +786,28 @@ export function baselineGrowth(previousDoc, currentDoc) {
  *  is baselineGrowth's: a new entry, a new recorded file or a raised count. A
  *  base that cannot be read fails closed. */
 export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env, headFloor } = {}) {
+  const head = headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
   const result = compareFloorWithBase({
     gate: "core-extension-border",
     envVar: FLOOR_BASE_VAR,
     floorPath: FLOOR_FILE,
-    headFloor: headFloor ?? JSON.parse(readFileSync(join(repoRoot, FLOOR_FILE), "utf8")),
+    headFloor: head,
     parse: (text) => JSON.parse(text),
-    grown: (base, head) => baselineGrowth(base, head),
+    grown: (base, headDoc) => baselineGrowth(base, headDoc),
     repoRoot,
     env,
   });
   if (result.status !== "grew") return result;
-  // The first recording of a rule that reads the TYPES of a tree: its entry is
-  // not growth when its declaration already stood on the base. The head script
-  // reads the base tree, so only a declaration of the base can be listed; one
-  // added in the same change is growth as for every other rule.
+  // The first recording of the port rule, and only that: its entries are not
+  // growth when the base branch holds no entry of the rule at all AND the head
+  // lists exactly PORT_SEED. In every other case they are shrink-only.
+  const ofRule = (doc) => (doc?.entries ?? []).filter((e) => e.rule === PORT_RULE).map((e) => String(e.key));
+  const seeded =
+    ofRule(result.baseFloor).length === 0 &&
+    JSON.stringify(ofRule(head).sort()) === JSON.stringify([...PORT_SEED].sort());
+  if (!seeded) return result;
   const prefix = `new entry: ${PORT_RULE}::`;
-  if (!result.growth.some((g) => g.startsWith(prefix))) return result;
-  let onBase = new Set();
-  try {
-    onBase = new Set(portMemberFindings({ repoRoot, ref: result.ref }).map((f) => `${f.file}::${f.detail}`));
-  } catch {
-    /* nothing readable stood on the base: every such entry stays growth */
-  }
-  const remaining = result.growth.filter((g) => !(g.startsWith(prefix) && onBase.has(g.slice(prefix.length))));
+  const remaining = result.growth.filter((g) => !g.startsWith(prefix));
   if (remaining.length > 0) {
     return { ...result, growth: remaining, lines: [result.lines[0], ...remaining.map((g) => `  + ${g}`)] };
   }
@@ -856,7 +817,7 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
     ref: result.ref,
     baseFloor: result.baseFloor,
     growth: [],
-    lines: [`[core-extension-border] floor base guard: ${FLOOR_FILE} does not grow against the base "${result.ref}" (the ${PORT_RULE} entries it adds stood there already).`],
+    lines: [`[core-extension-border] floor base guard: ${FLOOR_FILE} does not grow against the base "${result.ref}" (the ${PORT_RULE} entries are the closed first recording).`],
   };
 }
 

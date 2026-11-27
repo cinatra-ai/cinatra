@@ -95,7 +95,8 @@ type GateModule = {
   }) => { status: string; ok: boolean; lines: string[]; ref?: string; growth?: string[] };
   staleVerdict: (stale: string[]) => { ok: boolean; lines: string[] };
   PORT_RULE: string;
-  portMemberFindings: (input?: { repoRoot?: string; file?: string; type?: string; ref?: string }) => Finding[];
+  portMemberFindings: (input?: { repoRoot?: string; file?: string; type?: string }) => Finding[];
+  PORT_SEED: string[];
 };
 
 const gate: GateModule = (await import(pathToFileURL(GATE_PATH).href)) as unknown as GateModule;
@@ -619,7 +620,6 @@ type FloorFixture = {
   PULL_REQUEST_RUN: Record<string, string>;
   UNREADABLE_BASE_RUN: Record<string, string>;
   envWithoutBase: (env?: NodeJS.ProcessEnv) => NodeJS.ProcessEnv;
-  fixtureGit: (root: string, args: string[]) => string;
 };
 
 const floorFixture: FloorFixture = (await import(
@@ -781,6 +781,16 @@ describe("core/extension border — a port member does not take an untyped input
     expect(gate.violationsOf(widened, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input,payload)"]);
   });
 
+  it("carries each untyped signature in the key, so one more overload is a new key", () => {
+    const listed = new Set(portFindings("type JobsPort = { run(input: unknown): void };").map(gate.keyOf));
+    const overloaded = portFindings("type JobsPort = { run(input: unknown): void; run(input: unknown, n: number): void };");
+    expect(gate.violationsOf(overloaded, listed).map((f) => f.detail)).toEqual(["JobsPort.run(input|input)"]);
+    // Only a signature with an untyped parameter counts, in declaration order.
+    expect(
+      portDetails("type JobsPort = { run(a: unknown): void; run(b: string): void; run(c: any, d: any): void };"),
+    ).toEqual(["JobsPort.run(a|c,d)"]);
+  });
+
   it("reports a member whose own type is any, unknown or object, keyed without a parameter list", () => {
     expect(portDetails("type JobsPort = { run: any; data: unknown; opts: object | null; ok: string };")).toEqual([
       "JobsPort.run",
@@ -813,79 +823,57 @@ describe("core/extension border — a port member does not take an untyped input
     expect(gate.portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => f.detail)).toContain("HostSettingsPort.set(value)");
   });
 
-  // The first recording: an entry of this rule is not growth when its member
-  // already stood on the base tree. A member added in the same change is.
-  describe("the first recording reads the base tree", () => {
+  // The first recording is a closed seed: the keys that stood on main, admitted
+  // only on a base that holds no entry of the rule, and only as that exact set.
+  describe("the first recording is a closed seed", () => {
     const FLOOR = "config/core-extension-border-baseline.json";
-    const ROOT = "packages/sdk-extensions/src/host-context.ts";
-    const PORTS = (members: string) =>
-      `type JobsPort = { ${members} };\nexport type ExtensionHostContext = { jobs: JobsPort };\n`;
-    const entry = (member: string) => ({
+    const entry = (key: string) => ({
       rule: gate.PORT_RULE,
-      key: `${ROOT}::JobsPort.${member}`,
+      key,
       reason: "a member of a fixture port, with its reason",
     });
+    const seed = () => gate.PORT_SEED.map(entry);
     const fixtures: { cleanup: () => void }[] = [];
     afterEach(() => {
       while (fixtures.length) fixtures.pop()?.cleanup();
     });
-    function check(baseMembers: string, headMembers: string, entries: unknown[], baseEntries: unknown[] = []) {
+    function check(baseEntries: unknown[], headEntries: unknown[]) {
       const f = floorFixture.makeFloorRepo({
-        base: { [FLOOR]: { entries: baseEntries }, [ROOT]: PORTS(baseMembers) },
-        head: { [FLOOR]: { entries }, [ROOT]: PORTS(headMembers) },
+        base: { [FLOOR]: { entries: baseEntries } },
+        head: { [FLOOR]: { entries: headEntries } },
       });
       fixtures.push(f);
       return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
     }
 
-    it("admits an entry whose member stood on the base", () => {
-      const r = check("run(input: unknown): void;", "run(input: unknown): void;", [entry("run(input)")]);
+    it("names the six members that stand on main", () => {
+      expect(gate.PORT_SEED).toHaveLength(6);
+      const standing = gate.portMemberFindings({ repoRoot: REPO_ROOT }).map((f) => `${f.file}::${f.detail}`);
+      expect([...gate.PORT_SEED].sort()).toEqual(standing.sort());
+    });
+
+    it("admits the seed set on a base that has no entry of the rule", () => {
+      const r = check([], seed());
       expect(r.ok).toBe(true);
       expect(r.status).toBe("held");
     });
 
-    it("refuses an entry whose member the same change adds", () => {
-      const r = check("run(input: unknown): void;", "run(input: unknown): void; add(input: unknown): void;", [
-        entry("run(input)"),
-        entry("add(input)"),
-      ]);
+    it("refuses the seed set plus one extra key", () => {
+      const r = check([], [...seed(), entry("packages/sdk-extensions/src/host-context.ts::HostJobsPort.extra(input)")]);
       expect(r.ok).toBe(false);
-      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.add(input)`]);
+      expect(r.growth).toContain(
+        `new entry: ${gate.PORT_RULE}::packages/sdk-extensions/src/host-context.ts::HostJobsPort.extra(input)`,
+      );
     });
 
-    it("refuses an entry of a member the base never had", () => {
-      const r = check("", "", [entry("run(input)")]);
-      expect(r.ok).toBe(false);
-      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::JobsPort.run(input)`]);
+    it("refuses a part of the seed set", () => {
+      expect(check([], seed().slice(1)).ok).toBe(false);
     });
 
-    it("reads the standard library from disk, so a base member typed Record is not an untyped one", () => {
-      // The real layout: a source tree the base commit tracks, and an untracked
-      // node_modules (the typescript library the checker reads) inside the checkout.
-      // The base commit lives in a fixture repository; its objects are lent to
-      // the checkout through the alternates variable, nothing is written to it.
-      const logger = (fields: string) =>
-        `type LoggerPort = { info(msg: string, fields?: ${fields}): void };\nexport type ExtensionHostContext = { logger: LoggerPort };\n`;
-      const f = floorFixture.makeFloorRepo({
-        base: { [FLOOR]: { entries: [] }, [ROOT]: logger("Record<string, number>") },
-        head: {},
-      });
-      fixtures.push(f);
-      const base = floorFixture.fixtureGit(f.root, ["rev-parse", "refs/remotes/origin/main"]).trim();
-      const saved = process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
-      process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = path.join(f.root, ".git", "objects");
-      try {
-        const r = gate.checkFloorAgainstBase({
-          repoRoot: REPO_ROOT,
-          env: { CORE_EXTENSION_BORDER_BASE: base },
-          headFloor: { entries: [{ ...entry("info(fields)"), key: `${ROOT}::LoggerPort.info(fields)` }] },
-        });
-        expect(r.status).toBe("grew");
-        expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${ROOT}::LoggerPort.info(fields)`]);
-      } finally {
-        if (saved === undefined) delete process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
-        else process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES = saved;
-      }
-    }, 60_000);
+    it("refuses a new key on a base that already has entries of the rule, even one of the seed", () => {
+      const r = check(seed().slice(1), seed());
+      expect(r.ok).toBe(false);
+      expect(r.growth).toEqual([`new entry: ${gate.PORT_RULE}::${gate.PORT_SEED[0]}`]);
+    });
   });
 });
