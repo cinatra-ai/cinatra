@@ -951,6 +951,45 @@ tests against the repository as checked out, with the run's environment.
 Not guarded yet: the other gates that cinatra#3832 lists, which need a
 workflow change or a floor moved into a file of its own.
 
+**Step-screen kinds named after a pack (cinatra#4852).** The core/extension
+border gate (`scripts/ci/core-extension-border-gate.mjs`, step "Core/extension
+border — base guard" of `gates-pnpm`) has the rule `pack-step-kind-in-core`: a
+key of a step-screen kind table in product code (found by its shape,
+`const <NAME>KIND_TABLE = { ... }`) may not carry a pack's word run. The runs
+come from the two locks: every run of two or more consecutive words of a
+pack's stem (the package name without scope and role suffix), plus the one
+word of a one-word agent or connector stem and a connector's first word (its
+vendor word); a one-word artifact or skill stem is a type word and does not
+count. The gate reads each file with the TypeScript parser and judges only
+the table's declaration: a key it cannot read to a literal name (a computed
+key other than a string or a same-file `const` string, a spread, a method or
+accessor, a non-object or missing initializer) and a file that does not parse
+are findings too. The table must be declared in the frozen shape, `const` and
+typed `Readonly<...>` (`const RENDERER_KIND_TABLE: Readonly<Record<...>> =
+{ ... }`), so that `TABLE[k] = v`, `TABLE.k = v` and `delete TABLE[k]` are
+compile errors under the repository's `tsc`; a table in any other shape is a
+finding. The gate does not follow the table after its declaration. Code that
+defeats the typing on purpose (a cast to `any` or a mutable type, reflection
+such as `Object.assign` or `Object.defineProperty`) is outside the rule, and
+`Readonly` is shallow: it holds the keys, not the fields of an entry.
+Each finding names the pinned package(s) whose words it carries
+(`gmail-sender (@cinatra-ai/gmail-connector)`), so the ledger keeps such a
+pack in the universe after it leaves the locks and the row stays until the
+kind is gone. A tree with no kind table fails closed. Today's kinds are held in the
+gate's ledger, each naming the issue that removes it; the ledger's `rules`
+list names the rules it ratchets, a rule missing from the base's list is
+seeded once in the pull request that adds it, and a listed rule never gains an
+entry against the base. The rule set is append-only: every rule the base
+ratchets (its ledger's list, or for an older ledger the base copy of the gate
+script) must still be in the head's `KNOWN_RULES` and the head ledger's list,
+or the base guard fails and names it; renaming a rule (dropping its rows and
+seeding them under the new name) would otherwise reset its floor. A rule is
+retired only by a change to the guard itself. A listed rule whose rows all
+leave is a full shrink and stays listed, so it can never gain a row again;
+removing its scanner while keeping the id is a change to the gate's code,
+which the ledger ratchet does not judge. The rule reads names only: a pack-specific kind whose
+words match no pack (`final-list-review`, `send-confirmation`) is not seen.
+
 ### The record road for registers
 
 Two guarded lists are registers of things allowed after a review, not floors
