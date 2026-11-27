@@ -23,6 +23,7 @@ import {
   emitArtifactReviewGate,
   emitDeclaredReviewGateFamily,
   hasPendingProducedEventForAttempt,
+  listResumeDeliveriesForRun,
   listReviewGatesForRun,
   listReviewLineageForRun,
   readReviewGate,
@@ -69,7 +70,10 @@ export type ArtifactReviewGateSeam = {
    *  the per-artifact routing needs: a review that opens one gate per artifact
    *  sends the person to the first artifact still waiting to be read, and only
    *  the run's own gate list can say which that is. */
-  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string }>>;
+  listGates(runId: string): Promise<Array<{ reviewTaskId: string; status: string; orgId: string }>>;
+  /** The resume delivery each decided review of the run owes it, by the gate's task id (`reviewDecisionAwaitsDelivery`):
+   *  the delivery's state, `done` once it marked the resume delivered, and whether it was dead-lettered. */
+  listResumeDeliveries(runId: string): Promise<Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>>;
   /** cinatra#4762 — every review this run owns, projected to what the publish gate needs to see that an approved review
    *  came before it in the attempt that reached it: the gate's id, the status, the settled disposition, when the review
    *  was raised, the run's reset generation at that raise (null: raised before the column existed), the resolving
@@ -126,7 +130,15 @@ export function bindArtifactReviewGateSeam(): void {
     },
     async listGates(runId) {
       const gates = await listReviewGatesForRun(runId);
-      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status }));
+      return gates.map((gate) => ({ reviewTaskId: gate.reviewTaskId, status: gate.status, orgId: gate.orgId }));
+    },
+    async listResumeDeliveries(runId) {
+      const [gates, deliveries] = await Promise.all([listReviewGatesForRun(runId), listResumeDeliveriesForRun(runId)]);
+      const taskOfGate = new Map(gates.map((gate) => [gate.id, gate.reviewTaskId]));
+      return deliveries.flatMap((delivery) => {
+        const reviewTaskId = taskOfGate.get(delivery.gateId);
+        return reviewTaskId === undefined ? [] : [{ reviewTaskId, status: delivery.status, deadLettered: delivery.deadLettered }];
+      });
     },
     async listReviews(runId, executor) {
       const gates = executor === undefined

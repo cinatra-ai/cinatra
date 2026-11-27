@@ -1,7 +1,8 @@
 /**
  * isGenericObjectSchema Continue button
  *
- * Requirement: when xRenderer === "@cinatra-ai/agent-builder:schema-field-fallback"
+ * Requirement: when the schema floor draws the gate (xRenderer is
+ * "@cinatra-ai/agent-builder:schema-field-fallback", or an id no binding declares)
  * AND the interrupt schema has type === "object" AND (cinatra#4244) that schema
  * declares no field to fill (a bare confirmation), the panel must:
  *   (a) set isGenericObjectSchema = true → showContinueButton = true
@@ -30,20 +31,18 @@ const SRC = readFileSync(
 );
 
 describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button", () => {
-  it("defines isGenericObjectSchema as schema-field-fallback xRenderer combined with object type", () => {
-    // The condition must check BOTH the xRenderer id AND the schema type.
+  // red-first-expect: to match /drawnByFloor
+  it("defines isGenericObjectSchema as a gate the schema floor draws combined with object type", () => {
+    // The condition must check BOTH that the floor draws the gate AND the schema type.
     // A missing type check would incorrectly show Continue for non-object schemas.
-    // The id is centralized (identity-surface ruling): the panel references the
-    // SCHEMA_FIELD_FALLBACK_RENDERER_ID constant rather than the inline literal.
-    const referencesFallback =
-      /SCHEMA_FIELD_FALLBACK_RENDERER_ID/.test(SRC) ||
-      SRC.includes(`"${SCHEMA_FIELD_FALLBACK_RENDERER_ID}"`);
-    expect(referencesFallback, "panel must reference the schema-field-fallback id").toBe(true);
+    // The floor draws the schema-field-fallback id and any renderer id no binding
+    // declares (gateDrawnBySchemaFloor). The mounted panel pins the same conjunction:
+    // unregistered-renderer-falls-to-floor.test.tsx, "a bare object gate".
     expect(SCHEMA_FIELD_FALLBACK_RENDERER_ID).toBe("@cinatra-ai/agent-builder:schema-field-fallback");
-    expect(SRC).toMatch(/type.*===.*"object"|"object".*===.*type/);
-
-    // isGenericObjectSchema must be a const derived from interruptContext
-    expect(SRC).toMatch(/isGenericObjectSchema\s*=/);
+    expect(SRC).toMatch(/drawnByFloor\s*=\s*gateDrawnBySchemaFloor\(\s*interruptContext\.xRenderer/);
+    expect(SRC).toMatch(
+      /isGenericObjectSchema\s*=\s*drawnByFloor\s*&&\s*\(interruptContext\.schema[^)]*\)\?\.type\s*===\s*"object"/,
+    );
   });
 
   it("shows Continue button when isGenericObjectSchema is true (showContinueButton logic)", () => {

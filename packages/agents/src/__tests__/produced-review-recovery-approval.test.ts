@@ -1,4 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+// The WayFlow answer reads the paused step's durable record and refuses when that
+// read fails. These cases are about other questions: the run has no such record.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
+}));
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
@@ -315,4 +322,28 @@ describe("cinatra#3007 — an unrecordable hold inside the operator's approval",
     expect(terminalTransitions()).toEqual([]);
     expect(transitionCalls()).toHaveLength(1);
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

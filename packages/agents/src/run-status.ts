@@ -496,6 +496,26 @@ export class GateNotPendingError extends Error {
   }
 }
 
+/**
+ * A generic answer refused because the run's current gate takes none of its
+ * own: a display-only card such as the artifact-review redirect, which only
+ * the review's typed decision consumes (`currentHitlGateRefusal`). Thrown
+ * before the pause is claimed, so nothing is recorded or sent and the run
+ * stays parked.
+ */
+export class HitlStepNotAnswerableError extends Error {
+  readonly code = "hitl_step_not_answerable" as const;
+  readonly runId: string;
+  readonly xRenderer: string;
+
+  constructor(args: { runId: string; xRenderer: string; message: string }) {
+    super(args.message);
+    this.name = "HitlStepNotAnswerableError";
+    this.runId = args.runId;
+    this.xRenderer = args.xRenderer;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Terminal-run OUTCOME resolution (folded in from run-terminal-outcome.ts,
 // cinatra#2482 — route-graph ratchet: the locked routes carry this graph, so
@@ -1673,4 +1693,29 @@ function rewriteStandingWaitClause(
   return text.replace(standing, (match) =>
     match.replace(RUN_START_SCHEDULE_WAIT_CLAUSE, sentence),
   );
+}
+
+// ---------------------------------------------------------------------------
+// The pause the run waits at
+// ---------------------------------------------------------------------------
+
+/**
+ * Is the gate task `gateTaskId` the pause the run waits at now, decided as answering that gate decides it
+ * (review-task-actions.ts, the `wayflow-` road, cinatra#4245)? The run must be `pending_approval`. Then:
+ *   - the run row's gate task names this task: the column is durable, so it is the run's word, and the latest-task key
+ *     can only refuse: a key that names ANOTHER task means the run moved on to a later pause; no key (or a read fault,
+ *     passed as null) leaves the column's word;
+ *   - the run row names another task: the column's task-id write can lose a race and stay stale (event-log.ts), so
+ *     only the latest-task key can prove this task is the current pause: it must name it. No key, no proof.
+ * A durable gate row is never a source here: its write is best-effort (human-gate-park.ts), so a missing or older
+ * row says nothing about the pause the run waits at (`currentHitlGateRefusal`).
+ */
+export function gateTaskIsCurrentPause(
+  run: { readonly status: string; readonly a2aTaskId: string | null },
+  gateTaskId: string,
+  latest: string | null,
+): boolean {
+  if (run.status !== "pending_approval" || gateTaskId.length === 0) return false;
+  if (run.a2aTaskId === gateTaskId) return latest === null || latest === gateTaskId;
+  return latest === gateTaskId;
 }

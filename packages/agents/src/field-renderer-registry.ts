@@ -107,6 +107,14 @@ export type FieldRendererEntry = {
   drawsOwnSubmit?: boolean;
   /** cinatra#3035: this kind's component commits a pick as `userResponse`, and a gate drawn by it holds the card's Continue until a pick is made. */
   holdsContinueUntilPicked?: boolean;
+  /**
+   * THIS ENTRY MOUNTS THE PLAIN FORM (`SchemaOnlyFloorRenderer`). Set where the
+   * plain form is registered: its own entry, and a binding of a kind the host
+   * draws with it (a package that is not in this build keeps its own id). A
+   * host answers such a step with the plain form's payload
+   * (`gateDrawnBySchemaFloor`), whatever the id.
+   */
+  drawnBySchemaFloor?: boolean;
 };
 
 class FieldRendererRegistryImpl {

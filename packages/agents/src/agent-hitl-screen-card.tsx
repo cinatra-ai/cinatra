@@ -134,9 +134,19 @@ import {
   type AgentHitlScreenState,
 } from "./agent-hitl-screen";
 import { getAgentHitlScreenStateAction } from "./agent-hitl-screen-actions";
-import { continueAwaitsAPick, fieldRendererRegistry, type FieldRendererContext } from "./field-renderer-registry";
-import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
-import { RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
+import {
+  continueAwaitsAPick,
+  type FieldRendererContext,
+  type FieldRendererEntry,
+} from "./field-renderer-registry";
+import {
+  gateDrawnBySchemaFloor,
+  hasMidRunHitlBinding,
+  isTombstonedHitlRendererId,
+  parkedHitlStepIsAnswerable,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
+import { FloorAnswerMarkContext, FloorOwnsContinueReportContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { approveReviewTask } from "./hitl-actions";
 import { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
@@ -152,7 +162,8 @@ import {
   setupFieldRendererValue,
   withContextSelectorEnvelope,
   withDeclaredRendererValues,
-  wrapPrimitiveSetupPayload,
+  buildFieldGateAnswer,
+  buildSchemaFloorGatePayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import type { LifecycleCardHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -311,8 +322,11 @@ export function cardOwnsTheSetupSend(
    *  default is the answer a caller that cannot say leaves behind: on a primary
    *  host the renderer keeps the send, exactly as before #3532. */
   rendererDrawsOwnSubmit: boolean = true,
+  /** The entry the gate resolves to, when the caller has it: a non-setup step
+   *  the plain form draws is not read as mid-run (`classifyHitlGate`). */
+  entry?: FieldRendererEntry | null,
 ): boolean {
-  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, entry);
   if (isMidRun || isGroupedSetup) return false;
   if (hitlFieldPresentationFor(host) === "subordinate") return true;
   return !rendererDrawsOwnSubmit;
@@ -543,12 +557,24 @@ export function useAgentHitlScreenState(params: {
  * work that holds this card's Continues, which do not read a renderer's
  * validity report yet.
  */
-function classifyHitlGate(gate: AgentHitlScreenGate): {
+function classifyHitlGate(
+  gate: AgentHitlScreenGate,
+  entry?: FieldRendererEntry | null,
+): {
   isMidRun: boolean;
   isGroupedSetup: boolean;
 } {
+  // A non-setup step the plain form draws (`gateDrawnBySchemaFloor`: what is
+  // mounted, not the id) is answered as the plain form's own step, never as
+  // mid-run, whatever its id says.
+  const drawnByFloorOnNonSetup =
+    gateDrawnBySchemaFloor(gate.xRenderer, entry) && !isSetupGateTaskId(gate.reviewTaskId);
   return {
-    isMidRun: gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer),
+    // A tombstoned gate is never mid-run, so the card draws no Continue for it.
+    isMidRun:
+      !isTombstonedHitlRendererId(gate.xRenderer) &&
+      !drawnByFloorOnNonSetup &&
+      (gate.xRenderer.endsWith(":output") || hasMidRunHitlBinding(gate.xRenderer)),
     isGroupedSetup: isGroupedSetupRenderer(gate.xRenderer),
   };
 }
@@ -711,7 +737,7 @@ function resolveHitlGateEntry(runId: string, gate: AgentHitlScreenGate) {
     xRenderer: gate.xRenderer,
   };
   return (
-    fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
+    resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context) ?? null
   );
 }
 
@@ -763,7 +789,6 @@ export function AgentHitlScreenFields({
   /** The gate identity a registration is tagged with. */
   gateKey?: string;
 }): ReactElement {
-  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
   const hint = presentationHintOf(gate);
   const fieldSchema: Record<string, unknown> = {
     ...gate.inputSchema,
@@ -783,7 +808,8 @@ export function AgentHitlScreenFields({
   const entry =
     hint || withholdRenderer === true
       ? null
-      : fieldRendererRegistry.resolve(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+      : resolveHitlGateRenderer(HITL_PLACEHOLDER_FIELD_NAME, fieldSchema, context);
+  const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, entry);
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
   const Renderer = entry?.renderer ?? null;
@@ -802,6 +828,9 @@ export function AgentHitlScreenFields({
   const registerRendererFlush = registerFlush
     ? (fn: () => Promise<void>) => registerFlush(flushKey, fn)
     : undefined;
+  // An answer the plain form hands up from inside an extension wrapper
+  // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
+  const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
 
   return (
     <div
@@ -837,6 +866,7 @@ export function AgentHitlScreenFields({
           Waiting for input — no renderer configured for this step.
         </p>
       ) : (
+        <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
         <Renderer
           // The full gate identity (review task, renderer, field), as the buffer
           // is keyed (cinatra#3380, cinatra#3035): a later gate remounts with no pick.
@@ -857,6 +887,39 @@ export function AgentHitlScreenFields({
           onChange={
             isMidRun
               ? async (next: unknown) => {
+                  // A value the plain form hands up from inside an extension
+                  // wrapper (`FloorAnswerMarkContext`) takes the plain form's
+                  // shape, whatever the registry entry says. Its own submit
+                  // sends it; a change (a box, a pick) is held for the
+                  // Continue beneath and sends nothing by itself.
+                  const floorAnswer = floorAnswerKind();
+                  if (floorAnswer === "change") {
+                    let held: Record<string, unknown>;
+                    try {
+                      held = buildSchemaFloorGatePayload({
+                        schema: gate.inputSchema,
+                        next,
+                        fieldName: gate.fieldName ?? undefined,
+                      });
+                    } catch {
+                      return;
+                    }
+                    onBuffer({ ...buffered, ...held });
+                    return;
+                  }
+                  if (floorAnswer === "submit") {
+                    const { payload, payloadFieldName } = buildFieldGateAnswer({
+                      drawnByFloor: true,
+                      reviewTaskId: gate.reviewTaskId,
+                      fieldName: gate.fieldName ?? undefined,
+                      next,
+                      schema: gate.inputSchema,
+                      objectTypedField:
+                        (renderSchema as { type?: string } | undefined)?.type === "object",
+                    });
+                    await onSubmitField(payload, payloadFieldName);
+                    return;
+                  }
                   // MID-RUN: buffer into the outer Continue. A grouped-setup
                   // form owns its own submit, so it approves immediately and
                   // the reader only ever sees one Continue.
@@ -873,14 +936,21 @@ export function AgentHitlScreenFields({
                   // merge keys off `fieldName` to know which input slot to
                   // fill, and a raw value with no field name silently no-ops
                   // and re-emits the same gate for ever.
-                  const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
-                    gate.fieldName ?? undefined,
+                  // A non-setup gate the schema floor draws (its own id, or an
+                  // unclaimed id the floor took over) is answered with the
+                  // floor's approval instead, so the run receives what was
+                  // written (`buildFieldGateAnswer`).
+                  // …and so is an answer the plain form hands up from inside
+                  // an extension wrapper (`FloorAnswerMarkContext`).
+                  const { payload, payloadFieldName } = buildFieldGateAnswer({
+                    drawnByFloor: floorAnswerKind() !== null || gateDrawnBySchemaFloor(gate.xRenderer, entry),
+                    reviewTaskId: gate.reviewTaskId,
+                    fieldName: gate.fieldName ?? undefined,
                     next,
-                    {
-                      objectTypedField:
-                        (renderSchema as { type?: string } | undefined)?.type === "object",
-                    },
-                  );
+                    schema: gate.inputSchema,
+                    objectTypedField:
+                      (renderSchema as { type?: string } | undefined)?.type === "object",
+                  });
                   // The field goes on showing what the reader put in it while
                   // the card holds the send (cinatra#3532, finding 1).
                   if (hideRendererSubmit === true) {
@@ -900,6 +970,7 @@ export function AgentHitlScreenFields({
           }
           registerFlush={registerRendererFlush}
         />
+        </FloorAnswerMarkContext.Provider>
       )}
     </div>
   );
@@ -1210,6 +1281,9 @@ export function AgentHitlScreenCard({
   // cinatra#3035: the mounted renderer reports here when it settles on the floor,
   // for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(gateKey);
+  // The plain form an extension wrapper shows draws this step's one Continue
+  // (`FloorOwnsContinueReportContext`): the card draws no Continue of its own.
+  const [floorOwnsContinue, setFloorOwnsContinue] = useGateRendererFloor(gateKey);
   // THE GATE ON SCREEN, AS OF THE LAST COMMIT (cinatra#3380). A write or a press
   // made for one gate can arrive after the next gate has been committed: a
   // flush that took its time, or a replaced renderer that still calls its
@@ -1457,7 +1531,16 @@ export function AgentHitlScreenCard({
     // not a grouped-setup form. A grouped-setup form carries its own submit, and
     // a setup-loop field submits on change — a second Continue on either would
     // be a control the run page does not offer.
-    const { isMidRun, isGroupedSetup } = classifyHitlGate(gate);
+    const gateEntry = resolveHitlGateEntry(runId, gate);
+    const { isMidRun, isGroupedSetup } = classifyHitlGate(gate, gateEntry);
+    // MAY THIS STEP BE ANSWERED HERE? (`parkedHitlStepIsAnswerable`.) A step no
+    // screen draws gets no Continue of the card's: the region shows "no
+    // renderer configured for this step" and nothing is offered.
+    const stepIsAnswerable = parkedHitlStepIsAnswerable(
+      gate.xRenderer,
+      gateEntry,
+      gate.currentValues,
+    );
     // A renderer that is not declared safe without a session is withheld
     // wherever there is no session — see the header. The condition is the
     // ABSENCE of a session rather than the presence of a credential, so a host
@@ -1472,11 +1555,13 @@ export function AgentHitlScreenCard({
     // resolves to no renderer at all keeps whatever control it has, and the card
     // draws none of its own there.
     const cardOwnsSetupSend =
-      cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate)) &&
+      stepIsAnswerable &&
+      cardOwnsTheSetupSend(host, gate, gateRendererDrawsOwnSubmit(runId, gate), gateEntry) &&
       !withholdRenderer &&
       gateMountsAnAnsweringRenderer(runId, gate);
     return (
       <>
+        <FloorOwnsContinueReportContext.Provider value={setFloorOwnsContinue}>
         <RendererFloorReportContext.Provider value={setRendererFloored}>
         <AgentHitlScreenFields
           runId={runId}
@@ -1493,7 +1578,8 @@ export function AgentHitlScreenCard({
           gateKey={gateKey ?? ""}
         />
         </RendererFloorReportContext.Provider>
-        {isMidRun && !isGroupedSetup ? (
+        </FloorOwnsContinueReportContext.Provider>
+        {stepIsAnswerable && isMidRun && !isGroupedSetup && !floorOwnsContinue ? (
           <AgentHitlScreenContinue
             gate={gate}
             buffered={activeBuffered}
@@ -1531,6 +1617,8 @@ export function AgentHitlScreenCard({
     stageSetupAnswer,
     rendererFloored,
     setRendererFloored,
+    floorOwnsContinue,
+    setFloorOwnsContinue,
   ]);
 
   // Nothing before an authorized read, and NO DOM AT ALL for `none` — the

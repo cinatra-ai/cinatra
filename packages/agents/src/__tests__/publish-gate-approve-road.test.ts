@@ -6,7 +6,7 @@
 // Since cinatra#4245 the claim is the pause claim: the hold is read under it and before
 // the fence (pending_approval -> running), so a refusal moves no status and gives the
 // claim back.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, afterEach } from "vitest";
 import { pauseClaimFake } from "./pause-claim-test-fake";
 
 import { RunTransitionError } from "../run-status";
@@ -28,6 +28,9 @@ vi.mock("../run-pause-claim", async () => ({
   PauseClaimReleaseError: class extends Error {},
 }));
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // No durable gate record (a real absence): the answer goes on to the checks below.
+  readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input);
     return "captured-prompt";
@@ -208,4 +211,28 @@ describe("the generic approve road's release warning after a publish-hold refusa
     }
     expect(sendTask).not.toHaveBeenCalled();
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

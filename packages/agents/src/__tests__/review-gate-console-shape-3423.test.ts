@@ -52,6 +52,9 @@ vi.mock("../run-pause-claim", async (orig) => ({
 }));
 vi.mock("../store", () => storeMock);
 vi.mock("../agent-run-hitl-prompts", () => ({
+  // No durable gate record (a real absence): the answer goes on to the checks below.
+  readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
   captureHitlPromptForContinue: async (input: never) => {
     await (storeMock.writeHitlPrompt as unknown as (value: unknown) => Promise<void>)(input); return "captured-prompt";
   },
@@ -266,4 +269,28 @@ describe("approveReviewTaskInternal — the console calls of the claim road are 
     }
     expect(firstArgumentsCarryingAnId()).toEqual([]);
   });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

@@ -1,7 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { CINATRA_PUBLISH_DECISION_MESSAGE_KEY } from "@/lib/agent-run-token";
-import { GateNotPendingError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
+import { GateNotPendingError, HitlStepNotAnswerableError, PAUSE_SEND_LEASE_SECONDS, RunTransitionError } from "./run-status";
 import { assertNoOpenPublishDecision, publishHoldFault } from "./publish-decision-actions";
 
 import { sql, type SQL } from "drizzle-orm";
@@ -31,7 +31,8 @@ import {
   transitionRunStatus,
 } from "./store";
 import { claimPause } from "./run-pause-claim";
-import { failPreSendStep, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { currentHitlGateRefusal, failPreSendStep, readLatestGateTaskId, givePauseBackOnHoldFault, settleSendOrDescribe } from "./run-resume-under-claim";
 import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuccessfulContinue, continueBindingDigest, continueGateDigest } from "./agent-run-hitl-prompts";
 // cinatra#1939 wave 2 (§7.1): the guarded setup-resume writer — the setup-*
 // inputParams-merge + pending_approval->queued CAS now runs inside the org-write
@@ -39,6 +40,7 @@ import { readDurableHitlGateForContinue, captureHitlPromptForContinue, recordSuc
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 import { readWayflowSubmittedValues } from "./hitl-gate-submit";
+import { unsentOneValueAnswerAsFloorPayload } from "./hitl-gate-submit";
 // cinatra#2484: the setup-resume path is the LAST place a type-violating setup
 // value can be stopped before it becomes `agent_runs.inputParams` and reaches
 // the run. It needs the SAME effective schema the setup loop rendered from —
@@ -930,6 +932,59 @@ export async function approveReviewTaskInternal(
         }),
       );
     }
+    // An answer that does not reach the pause the run waits at is refused with
+    // the TYPED no-longer-pending outcome (see the race note below).
+    const refuse = (currentStatus: string, why: string) =>
+      new GateNotPendingError({
+        runId: run.id,
+        currentStatus,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
+      });
+    // The run's latest-task key, read once for this answer (`readLatestGateTaskId`:
+    // a Redis failure or a missing export reads as no key). What it decides is
+    // told where it is used: the step's durable row below and the claim further on.
+    const latestTaskId = await readLatestGateTaskId(run.id);
+    // THE STEP THE ANSWER REACHES (`currentHitlGateRefusal`, the reading both
+    // generic roads share). Which step the run waits at is decided by the run row
+    // and the latest-task key; the newest durable row only confirms it, and a
+    // missing or older row (its write is best-effort) never makes this gate
+    // stale. An answer to another gate that those sources name as the current
+    // pause is refused as no longer the pause the run waits at; a RETIRED step is
+    // answered by nothing; a DISPLAY-ONLY card (the artifact-review redirect) is
+    // consumed only by its review's own decision. All are refused here, before
+    // the pause is claimed: nothing is recorded or sent and the run stays parked.
+    // A record that cannot be read refuses too (a fixed text, no store error); no
+    // confirmed row (`null`) is left to the checks below.
+    let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
+    try {
+      parked = await currentHitlGateRefusal({ run, namedReviewTaskId: reviewTaskId, latestTaskId });
+    } catch {
+      throw new Error(`WayFlow approval rejected: the paused step of gate ${taskId} on run ${run.id} could not be read`);
+    }
+    if (parked.refusal === "stale") {
+      throw refuse(run.status, `is no longer the pause the run waits at`);
+    }
+    const parkedStep = parked.gate;
+    if (parkedStep && parked.refusal === "retired") {
+      throw new HitlStepNotAnswerableError({
+        runId: run.id,
+        xRenderer: parkedStep.xRenderer,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is a retired step; it can no longer be answered`,
+      });
+    }
+    if (parked.refusal === "display-only") {
+      throw new HitlStepNotAnswerableError({
+        runId: run.id,
+        xRenderer: parkedStep?.xRenderer ?? ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} is an artifact review; it goes on only when that review is decided`,
+      });
+    }
+    // AN ANSWER LEFT IN THE SETUP SHAPE IS NOT AN APPROVAL. A one-value answer
+    // (a text, a number, a boolean, a list) that reaches a WayFlow gate bare, or
+    // under the field it names, with no resume text of its own, is sent as the
+    // plain form sends it (`unsentOneValueAnswerAsFloorPayload`): the run
+    // receives what was written, never "[Approved by operator]" in its place.
+    values = unsentOneValueAnswerAsFloorPayload(values, fieldName ?? parkedStep?.fieldName) ?? values;
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts
       // persists task.contextId immediately after the initial sendTask succeeds.
@@ -989,12 +1044,7 @@ export async function approveReviewTaskInternal(
     // and the run surface draws its blocked state from. Nothing of the loser's
     // answer is recorded, nothing is dispatched, and the run goes on with the
     // first answer rather than failing.
-    const refuse = (currentStatus: string, why: string) =>
-      new GateNotPendingError({
-        runId: run.id,
-        currentStatus,
-        message: `WayFlow approval rejected: gate ${taskId} on run ${run.id} ${why}`,
-      });
+    // (`refuse`, above: the typed refusal for an answer to another pause.)
     //
     // The latest-task key is read on BOTH roads (cinatra#4245). Found through the
     // reverse map, the column did not name this task, so only the key can prove it
@@ -1002,9 +1052,7 @@ export async function approveReviewTaskInternal(
     // durable since the pause write is (execution.ts), and the key, which expires
     // after 7 days, can only refuse: a key that names ANOTHER task means the run has
     // moved on to a later pause; no key or a Redis failure leaves the column's word.
-    // The import is inside the guarded call, so a missing export reads as no key.
-    const latestTaskId = await (async () =>
-      (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(run.id))().catch(() => null);
+    // (`latestTaskId`: read above, before the step's durable row.)
     if (foundThroughReverseMap ? latestTaskId !== taskId : latestTaskId != null && latestTaskId !== taskId) {
       throw refuse(run.status, `is no longer the pause the run waits at`);
     }
@@ -1066,8 +1114,9 @@ export async function approveReviewTaskInternal(
       resumeText = "[Approved by operator]";
     }
 
-    // Extract structured submission payload: a named single text answer under
-    // its field (cinatra#4244), else parsed userResponse JSON, else values minus
+    // Extract structured submission payload: a named single answer under its
+    // field, of its own type (cinatra#4244; an unnamed floor answer is named
+    // `hitl-field`), else parsed userResponse JSON, else values minus
     // userResponse, else null. The resume text above is unchanged by this.
     const submittedValues = readWayflowSubmittedValues(values);
 

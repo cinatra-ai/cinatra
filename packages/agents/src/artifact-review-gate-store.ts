@@ -1280,6 +1280,26 @@ function toResumeIntentRow(row: typeof artifactReviewResumeOutbox.$inferSelect):
   };
 }
 
+/**
+ * How far the resume delivery of each of the run's decided reviews got, by gate:
+ * `done` once the delivery marked it delivered (`markResumeIntentDelivered`), and
+ * whether it was dead-lettered (no claim takes it again). A gate with no row has
+ * no decision that owes the run a resume.
+ */
+export async function listResumeDeliveriesForRun(
+  runId: string,
+): Promise<Array<{ gateId: string; status: string; deadLettered: boolean }>> {
+  const rows = await db
+    .select({
+      gateId: artifactReviewResumeOutbox.gateId,
+      status: artifactReviewResumeOutbox.status,
+      deadLetteredAt: artifactReviewResumeOutbox.deadLetteredAt,
+    })
+    .from(artifactReviewResumeOutbox)
+    .where(eq(artifactReviewResumeOutbox.runId, runId));
+  return rows.map((row) => ({ gateId: row.gateId, status: row.status, deadLettered: row.deadLetteredAt !== null }));
+}
+
 export async function readResumeIntent(gateId: string): Promise<ResumeIntentRow | null> {
   const rows = await db
     .select()

@@ -15,7 +15,7 @@
  *   (c) submittedValues parses the {text, attachments} JSON correctly.
  *   (d) the legacy plain-string userResponse path is unchanged.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // cinatra#4150: every resume road reads the run's newest publish decision before it
 // sends. This suite is about another question, so no publish decision holds its run.
@@ -90,11 +90,23 @@ const storeMock = vi.hoisted(() => ({
   transitionRunStatus: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+const continueMock = vi.hoisted(() => ({
+  // No durable gate by default: the Continue receipt is not written.
+  readDurableHitlGateForContinue: vi.fn<(runId?: string, reviewTaskId?: string) => Promise<unknown>>(async () => null),
+  // The run's current gate (its newest durable row): by default the record the
+  // suite gives for the gate it answers.
+  readCurrentDurableHitlGate: vi.fn<(runId: string) => Promise<unknown>>(async () => null),
+  recordSuccessfulContinue: vi.fn(async (_input: { submittedValues: unknown }) => {}),
+}));
+const currentIsTheAnsweredGate = (runId: string) => continueMock.readDurableHitlGateForContinue(runId, "current");
+continueMock.readCurrentDurableHitlGate.mockImplementation(currentIsTheAnsweredGate);
 vi.mock("../agent-run-hitl-prompts", () => ({
   captureHitlPromptForContinue: async (input: never) => {
     await storeMock.writeHitlPrompt(input); return "captured-prompt";
   },
-  recordSuccessfulContinue: async () => {},
+  readDurableHitlGateForContinue: continueMock.readDurableHitlGateForContinue,
+  readCurrentDurableHitlGate: continueMock.readCurrentDurableHitlGate,
+  recordSuccessfulContinue: continueMock.recordSuccessfulContinue,
   continueBindingDigest: () => "", continueGateDigest: () => "",
 }));
 
@@ -105,10 +117,42 @@ vi.mock("../wayflow-url", () => ({
   createWayflowFetch: () => globalThis.fetch,
 }));
 
+// What declares a package's screen on the server: the bindings of this build
+// (here filtered by `packScreens.dropped`, as a newer bundled pack that no longer
+// ships the screen) and those of packages installed at run time (none by default).
+const packScreens = vi.hoisted(() => ({
+  dropped: [] as string[],
+  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
+}));
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    get GENERATED_FIELD_RENDERER_BINDINGS() {
+      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
+    },
+  };
+});
+vi.mock("../field-renderer-bindings.server", () => ({
+  collectInstalledFieldRendererBindings: () => packScreens.installed,
+}));
+/** The two publish packs' own confirmation screens, as their old pins declared them. */
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+
+// The run's latest-task key and the reverse task-run map: none by default.
+const runKeys = vi.hoisted(() => ({
+  latest: vi.fn<(runId: string) => Promise<string | null>>(async () => null),
+  runOfTask: vi.fn<(taskId: string) => Promise<string | null>>(async () => null),
+}));
 vi.mock("@cinatra-ai/a2a", () => ({
   createExternalA2AClient: vi.fn(async () => ({
     sendTask: sendTaskMock,
   })),
+  resolveLatestWayflowGateTaskId: runKeys.latest,
+  resolveRunIdByWayflowTaskId: runKeys.runOfTask,
   // #1987 — the wayflow- resume mints answered-gate provenance (and re-asserts
   // the latest-task join key) before dispatch; stub both so the resume proceeds.
   rememberLatestWayflowGateTask: vi.fn(async () => {}),
@@ -132,8 +176,12 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 
 import { approveReviewTaskInternal } from "../review-task-actions";
 import * as gateSubmit from "../hitl-gate-submit";
+import { pauseClaimFake } from "./pause-claim-test-fake";
 import { applyAttachmentEnvelope } from "../attachment-envelope-payload";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import * as midRun from "../orchestrator-mid-run-hitl";
+import { fieldRendererRegistry } from "../field-renderer-registry";
+import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
 
 const REF = {
   artifactId: "art-1",
@@ -155,6 +203,7 @@ function setupRun(): void {
     templateId: "tpl-int",
     status: "pending_approval",
     a2aContextId: "ctx-r1",
+    orgId: "org-r1",
   });
   storeMock.readAgentTemplateById.mockResolvedValue({
     id: "tpl-int",
@@ -286,4 +335,675 @@ describe("a list step's picks reach the run (cinatra#3562)", () => {
     expect(envelope.attachments).toEqual([REF]);
     expect(JSON.parse(envelope.text)).toMatchObject({ type: "list", listIds: ["L1"] });
   });
+});
+
+// A step recorded under the plain form's own id (a step that declares no screen
+// of its own, as the publish packs' review step does) is drawn by the schema
+// floor. END TO END from the answer a host builds for it (the floor's own
+// payload) to the text WayFlow receives: the written note, not
+// "[Approved by operator]". A step whose id no entry claims gets no renderer.
+const FLOOR_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
+
+function registerFloorOnly(): void {
+  fieldRendererRegistry.clear();
+  fieldRendererRegistry.register({
+    id: FLOOR_ID,
+    priority: 1,
+    condition: (_f, schema) => schema["x-renderer"] === FLOOR_ID,
+    renderer: () => null,
+    drawsOwnSubmit: true,
+  });
+}
+
+function wayflowText(): string | undefined {
+  const call = sendTaskMock.mock.calls[0]?.[0] as unknown as {
+    message?: { parts?: Array<{ kind?: string; text?: string }> };
+  };
+  return call?.message?.parts?.[0]?.text;
+}
+
+const floorFor = (schema: Record<string, unknown>, xRenderer: string = FLOOR_ID) =>
+  midRun.resolveHitlGateRenderer("hitl", { ...schema, "x-renderer": xRenderer }, { connectedApps: [] });
+
+describe("a gate the schema floor draws resumes with the written note", () => {
+  const SCHEMA = { type: "object", properties: { note: { type: "string", title: "Note" } } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("the host's answer for the floor-drawn gate reaches WayFlow as the note", async () => {
+    const entry = floorFor(SCHEMA);
+    expect(entry?.id).toBe(FLOOR_ID);
+    const { payload, payloadFieldName } = gateSubmit.buildFieldGateAnswer({
+      drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, entry),
+      reviewTaskId: "wayflow-task-r1",
+      fieldName: undefined,
+      next: { note: "Go ahead." },
+      schema: SCHEMA,
+    });
+    expect(payloadFieldName).toBeUndefined();
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", payload as Record<string, unknown>);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("Go ahead.");
+  });
+
+  it("the raw field answer (the setup-loop shape) would resume with the bare marker", async () => {
+    await approveReviewTaskInternal("wayflow-task-r1", "actor-1", { note: "Go ahead." });
+    expect(wayflowText()).toBe("[Approved by operator]");
+  });
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("a step whose id no entry claims gets no renderer, so no answer is built for it", () => {
+    for (const id of [
+      "@cinatra-test/never-seen-agent:screen",
+      "@cinatra-ai/blog-pipeline-agent:idea-selection",
+    ]) {
+      expect(floorFor(SCHEMA, id), id).toBeNull();
+    }
+  });
+});
+
+// Every shape the schema floor answers: the answer each host builds (the run
+// panel and the card through `buildFieldGateAnswer`, the stepper through
+// `buildSchemaFloorGatePayload`) is the same, and through the real server
+// boundary WayFlow receives the entered value, never the marker.
+describe("a gate the schema floor draws resumes with the entered value, for every shape", () => {
+  const TASK = "wayflow-task-r1";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+  });
+
+  const CASES: Array<{ shape: string; schema: Record<string, unknown>; next: unknown; text: string }> = [
+    { shape: "string", schema: { type: "string", title: "Answer" }, next: "Ship it.", text: "Ship it." },
+    { shape: "number", schema: { type: "number", title: "Count" }, next: 42, text: "42" },
+    { shape: "integer", schema: { type: "integer", title: "Count" }, next: 0, text: "0" },
+    { shape: "boolean", schema: { type: "boolean", title: "Agree" }, next: false, text: "false" },
+    {
+      shape: "array",
+      schema: { type: "array", items: { type: "string" } },
+      next: ["alpha", "beta"],
+      text: '["alpha","beta"]',
+    },
+    {
+      shape: "object",
+      schema: {
+        type: "object",
+        properties: { note: { type: "string" }, count: { type: "number" } },
+      },
+      next: { note: "Go", count: 2 },
+      text: '{"note":"Go","count":2}',
+    },
+  ];
+
+  for (const c of CASES) {
+    // red-first-expect: resolveHitlGateRenderer is not a function
+    it(`a ${c.shape} gate delivers the entered value, and the three hosts build the same answer`, async () => {
+      const entry = floorFor(c.schema);
+      expect(entry?.id).toBe(FLOOR_ID);
+      // The run panel and the card.
+      const { payload, payloadFieldName } = gateSubmit.buildFieldGateAnswer({
+        drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, entry),
+        reviewTaskId: TASK,
+        fieldName: undefined,
+        next: c.next,
+        schema: c.schema,
+      });
+      expect(payloadFieldName).toBeUndefined();
+      // The stepper.
+      const stepper = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.next });
+      const { approvedAt: _a, ...hostAnswer } = payload as Record<string, unknown>;
+      const { approvedAt: _b, ...stepperAnswer } = stepper;
+      void _a;
+      void _b;
+      expect(hostAnswer).toEqual(stepperAnswer);
+      expect(hostAnswer).toMatchObject({ approved: true, userResponse: c.text });
+      await approveReviewTaskInternal(TASK, "actor-1", payload as Record<string, unknown>);
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      expect(wayflowText()).toBe(c.text);
+    });
+  }
+
+  // red-first-expect: resolveHitlGateRenderer is not a function
+  it("a text gate with a field name records the answer under it", async () => {
+    const schema = { type: "string", title: "Answer" };
+    const { payload } = gateSubmit.buildFieldGateAnswer({
+      drawnByFloor: midRun.gateDrawnBySchemaFloor(FLOOR_ID, floorFor(schema)),
+      reviewTaskId: TASK,
+      fieldName: "answer",
+      next: "Ship it.",
+      schema,
+    });
+    expect(payload).toMatchObject({
+      answer: "Ship it.",
+      userResponse: "Ship it.",
+      userResponseFieldName: "answer",
+    });
+    expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ answer: "Ship it." });
+    await approveReviewTaskInternal(TASK, "actor-1", payload as Record<string, unknown>);
+    expect(wayflowText()).toBe("Ship it.");
+  });
+
+  // red-first-expect: buildSchemaFloorGatePayload is not a function
+  it("a blank text or an empty list carries no resume text", () => {
+    expect(
+      gateSubmit.buildSchemaFloorGatePayload({ schema: { type: "string" }, next: "  " }),
+    ).not.toHaveProperty("userResponse");
+    expect(
+      gateSubmit.buildSchemaFloorGatePayload({
+        schema: { type: "array", items: { type: "string" } },
+        next: [],
+      }),
+    ).not.toHaveProperty("userResponse");
+  });
+});
+
+// A NAMED number, boolean or list answer keeps its field in the durable record,
+// as a named text does: the prompt record's submitted values and the Continue
+// receipt carry `{ answer: <value> }`, while WayFlow receives the same resume
+// text as without the name.
+describe("a named number, boolean or list answer survives in the durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const GATE = {
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer: FLOOR_ID,
+    inputSchema: {},
+    values: {},
+    materializedAt: "2026-11-24T00:00:00.000Z",
+  };
+  const NAMED: Array<{ shape: string; schema: Record<string, unknown>; value: unknown; text: string }> = [
+    { shape: "number", schema: { type: "number" }, value: 42, text: "42" },
+    { shape: "boolean", schema: { type: "boolean" }, value: false, text: "false" },
+    { shape: "list", schema: { type: "array", items: { type: "string" } }, value: ["a"], text: '["a"]' },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue({ ...GATE });
+  });
+
+  for (const c of NAMED) {
+    // red-first-expect: buildSchemaFloorGatePayload is not a function
+    it(`a ${c.shape} answer under a field name is written, read back and receipted under that name`, async () => {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({
+        schema: c.schema,
+        next: c.value,
+        fieldName: "answer",
+      });
+      expect(payload).toMatchObject({ userResponse: c.text, userResponseFieldName: "answer" });
+      expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ answer: c.value });
+      // A read of a stored copy (the record is JSON in the database).
+      expect(gateSubmit.readWayflowSubmittedValues(JSON.parse(JSON.stringify(payload)))).toEqual({
+        answer: c.value,
+      });
+      await approveReviewTaskInternal(TASK, "actor-1", payload);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual({ answer: c.value });
+      expect(continueMock.recordSuccessfulContinue).toHaveBeenCalledTimes(1);
+      const receipted = continueMock.recordSuccessfulContinue.mock.calls[0]?.[0];
+      expect(receipted?.submittedValues).toEqual({ answer: c.value });
+    });
+  }
+
+  // red-first-expect: buildSchemaFloorGatePayload is not a function
+  it("without a field name the resume text is the same", async () => {
+    for (const c of NAMED) {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.value });
+      expect(payload.userResponse).toBe(c.text);
+    }
+  });
+});
+
+// AN UNNAMED ANSWER IS KEPT TOO. An ordinary WayFlow gate carries no field
+// name, so the floor's answer is written under `hitl-field` (the name the plain
+// form and the read-only replay give a single field with no name of its own),
+// with its own type. The prompt record and the Continue receipt carry it, and
+// WayFlow receives the same resume text as before. `null`, a blank text and an
+// empty list send the marker, as before, and are still kept in the record.
+describe("an unnamed answer of any type survives in the durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const KEY = "hitl-field";
+  const GATE = {
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer: FLOOR_ID,
+    inputSchema: {},
+    values: {},
+    materializedAt: "2026-11-24T00:00:00.000Z",
+  };
+  const UNNAMED: Array<{ label: string; schema: Record<string, unknown>; value: unknown; text: string }> = [
+    { label: "42", schema: { type: "number" }, value: 42, text: "42" },
+    { label: "0", schema: { type: "integer" }, value: 0, text: "0" },
+    { label: "false", schema: { type: "boolean" }, value: false, text: "false" },
+    { label: '["a"]', schema: { type: "array", items: { type: "string" } }, value: ["a"], text: '["a"]' },
+    { label: "empty text", schema: { type: "string" }, value: "", text: "[Approved by operator]" },
+    { label: "null", schema: { type: "string" }, value: null, text: "[Approved by operator]" },
+    { label: "a text", schema: { type: "string" }, value: "Ship it.", text: "Ship it." },
+    { label: "a JSON-looking text", schema: { type: "string" }, value: "42", text: "42" },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    registerFloorOnly();
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue({ ...GATE });
+  });
+
+  for (const c of UNNAMED) {
+    // red-first-expect: buildSchemaFloorGatePayload is not a function
+    it(`an unnamed ${c.label} answer is written, read back and receipted`, async () => {
+      const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: c.schema, next: c.value });
+      expect(gateSubmit.readWayflowSubmittedValues(payload)).toEqual({ [KEY]: c.value });
+      expect(gateSubmit.readWayflowSubmittedValues(JSON.parse(JSON.stringify(payload)))).toEqual({
+        [KEY]: c.value,
+      });
+      await approveReviewTaskInternal(TASK, "actor-1", payload);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual({ [KEY]: c.value });
+      // The stored record read back through a JSON copy keeps the value and its type.
+      expect(JSON.parse(JSON.stringify(written?.submittedValues))).toEqual({ [KEY]: c.value });
+      expect(continueMock.recordSuccessfulContinue).toHaveBeenCalledTimes(1);
+      expect(continueMock.recordSuccessfulContinue.mock.calls[0]?.[0]?.submittedValues).toEqual({
+        [KEY]: c.value,
+      });
+    });
+  }
+
+  // red-first-expect: buildSchemaFloorGatePayload is not a function
+  it("nothing entered writes no answer", () => {
+    const payload = gateSubmit.buildSchemaFloorGatePayload({ schema: { type: "number" }, next: undefined });
+    expect(payload).not.toHaveProperty(KEY);
+    expect(payload).not.toHaveProperty("userResponse");
+  });
+});
+
+// A DISPLAY-ONLY CARD AND AN UNREADABLE RECORD ARE REFUSED BY THE GENERIC ANSWER.
+// The artifact-review redirect draws no answer of its own: only its review's
+// decision consumes the pause (the resume delivery, which never takes this
+// action). A durable record that cannot be read refuses with a fixed text; only a
+// real absence (`null`) goes on as before. Nothing is claimed, recorded or sent
+// on a refusal.
+describe("the generic answer and the paused step's durable record", () => {
+  const TASK = "wayflow-task-r1";
+  const gateFor = (xRenderer: string) => ({
+    runId: "run-r1",
+    reviewTaskId: TASK,
+    xRenderer,
+    inputSchema: { type: "object" },
+    values: {},
+    materializedAt: "2026-11-25T00:00:00.000Z",
+  });
+  const nothingMoved = () => {
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+    continueMock.readCurrentDurableHitlGate.mockReset().mockImplementation(currentIsTheAnsweredGate);
+    runKeys.latest.mockReset().mockResolvedValue(null);
+    runKeys.runOfTask.mockReset().mockResolvedValue(null);
+  });
+
+  // A RUN PARKED AT AN ARTIFACT REVIEW, AS PRODUCTION RECORDS IT: the review's
+  // gate in the review store, the pause's task as the run's latest, and NO
+  // durable step row (the review park writes none). Pending: the review holds
+  // the pause; resolved: it was decided and its delivery has not yet moved the run.
+  for (const status of ["pending", "resolved"] as const) {
+    // red-first-expect: promise resolved "undefined" instead of rejecting
+    it(`a run parked at an artifact review (no durable row, review ${status}) is refused and not consumed`, async () => {
+      reviewStore.gates = [{ reviewTaskId: TASK, status, orgId: "org-r1" }];
+      reviewStore.deliveries = status === "resolved" ? [{ reviewTaskId: TASK, status: "delivering", deadLettered: false }] : [];
+      runKeys.latest.mockResolvedValue("task-r1");
+      continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(null);
+      await expect(
+        approveReviewTaskInternal(TASK, "actor-1", { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" }),
+      ).rejects.toMatchObject({
+        name: "HitlStepNotAnswerableError",
+        message: "WayFlow approval rejected: gate task-r1 on run run-r1 is an artifact review; it goes on only when that review is decided",
+      });
+      nothingMoved();
+    });
+  }
+
+  // THE EXECUTOR'S FALLBACK: a review gate that does not hold the pause (decided
+  // and delivered earlier, or another organization's) makes the executor park the
+  // pause as an ordinary step. Its durable row is best-effort: with it or without
+  // it (the write failed), the step is answered, once.
+  for (const review of [
+    { why: "decided and delivered earlier", status: "resolved", orgId: "org-r1", delivery: "done" },
+    { why: "another organization's", status: "pending", orgId: "org-other", delivery: null },
+  ]) {
+    for (const withRow of [true, false]) {
+      it(`the fallback's ordinary step beside a review gate ${review.why} is answered once (${withRow ? "with" : "without"} its durable row)`, async () => {
+        reviewStore.gates = [{ reviewTaskId: TASK, status: review.status, orgId: review.orgId }];
+        reviewStore.deliveries = review.delivery ? [{ reviewTaskId: TASK, status: review.delivery, deadLettered: false }] : [];
+        runKeys.latest.mockResolvedValue("task-r1");
+        const row = withRow ? gateFor("@cinatra-ai/agent-builder:schema-field-fallback") : null;
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(row);
+        continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(row);
+        await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+        expect(sendTaskMock).toHaveBeenCalledTimes(1);
+        expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a durable record that cannot be read refuses with a fixed text; nothing is claimed or sent", async () => {
+    continueMock.readDurableHitlGateForContinue.mockRejectedValue(
+      new Error("permission denied for table agent_run_hitl_gates"),
+    );
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toThrow(
+      /^WayFlow approval rejected: the paused step of gate task-r1 on run run-r1 could not be read$/,
+    );
+    nothingMoved();
+  });
+
+  it("no durable record (a real null) is answered as before", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+    expect(continueMock.readDurableHitlGateForContinue).toHaveBeenCalledWith("run-r1", TASK);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("go");
+  });
+
+  // THE RUN'S CURRENT GATE DECIDES (its newest durable row), and an answer to
+  // another task is refused as no longer the pause the run waits at.
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("an answer to an older gate is refused when the run's current gate is a display-only card", async () => {
+    // The run's latest-task key names the newer task: the run waits there.
+    runKeys.latest.mockResolvedValue("task-r2");
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-r2",
+    });
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is no longer the pause the run waits at",
+    });
+    nothingMoved();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("an answer to an older display-only gate is refused as stale, not as that card", async () => {
+    runKeys.latest.mockResolvedValue("task-r2");
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
+      reviewTaskId: "wayflow-task-r2",
+    });
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-r1 on run run-r1 is no longer the pause the run waits at",
+    });
+    nothingMoved();
+  });
+
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("the current gate is read for the run, and its refusal stands whatever the named row says", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({ name: "HitlStepNotAnswerableError" });
+    expect(continueMock.readCurrentDurableHitlGate).toHaveBeenCalledWith("run-r1");
+    nothingMoved();
+  });
+
+  it("an ordinary builder input step still answers", async () => {
+    for (const id of [
+      "@cinatra-ai/agent-builder:schema-field-fallback",
+      "@cinatra-ai/agent-builder:grouped-setup-form",
+      "@cinatra-ai/agent-builder:skill-selector",
+    ]) {
+      sendTaskMock.mockClear();
+      continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(id));
+      await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+      expect(sendTaskMock, id).toHaveBeenCalledTimes(1);
+      expect(wayflowText(), id).toBe("go");
+    }
+  });
+
+  // A PACKAGE'S OWN SCREEN THAT NO PACKAGE DECLARES ANY MORE IS RETIRED: the
+  // flow installed under the run changed (`hitlStepIsRetired`).
+  // red-first-expect: promise resolved "undefined" instead of rejecting
+  it("a package screen that no binding declares is refused as retired", async () => {
+    continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor("@acme/removed:output"));
+    await expect(
+      approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({ name: "HitlStepNotAnswerableError" });
+    nothingMoved();
+  });
+
+  describe("a publish pack's own confirmation screen, parked before an upgrade", () => {
+    afterEach(() => {
+      packScreens.dropped = [];
+      packScreens.installed = [];
+    });
+    for (const screen of OLD_PUBLISH_SCREENS) {
+      // red-first-expect: promise resolved "undefined" instead of rejecting
+      it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
+        packScreens.dropped = [screen.id];
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await expect(
+          approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+        ).rejects.toMatchObject({
+          name: "HitlStepNotAnswerableError",
+          message: "WayFlow approval rejected: gate task-r1 on run run-r1 is a retired step; it can no longer be answered",
+        });
+        nothingMoved();
+      });
+      it(`${screen.id}: answered where an installed older pack still declares it (its old flow runs)`, async () => {
+        packScreens.dropped = [screen.id];
+        packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+        expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      });
+      it(`${screen.id}: answered while the bundled pack still declares it`, async () => {
+        continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(screen.id));
+        await approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" });
+        expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      });
+    }
+  });
+
+  // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every
+  // host draws no Continue for) is answered by nothing, under any id of it.
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("a pause on any retired step is refused and not consumed", async () => {
+    const retired = [
+      ...midRun.TOMBSTONED_HITL_RENDERER_IDS,
+      `${[...midRun.TOMBSTONED_HITL_RENDERER_PACKAGES][0]}:any-step`,
+    ];
+    for (const id of retired) {
+      expect(midRun.parkedHitlStepIsAnswerable(id, null), id).toBe(false);
+      continueMock.readDurableHitlGateForContinue.mockResolvedValue(gateFor(id));
+      await expect(
+        approveReviewTaskInternal(TASK, "actor-1", { approved: true, userResponse: "go" }),
+        id,
+      ).rejects.toMatchObject({
+        name: "HitlStepNotAnswerableError",
+        message: "WayFlow approval rejected: gate task-r1 on run run-r1 is a retired step; it can no longer be answered",
+      });
+      nothingMoved();
+    }
+  });
+});
+
+// WHICH STEP THE RUN WAITS AT IS DECIDED BY THE RUN ROW AND ITS LATEST-TASK KEY,
+// never by a durable step row: that row's write is best-effort, so step A's row
+// can be the newest while the run waits at step B, whose row was never written.
+describe("the generic answer when the step's durable row was not written", () => {
+  const STEP_A = "task-a";
+  const STEP_B = "task-b";
+  const rowOfA = {
+    runId: "run-r1",
+    reviewTaskId: `wayflow-${STEP_A}`,
+    xRenderer: "@cinatra-ai/agent-builder:schema-field-fallback",
+    inputSchema: { type: "object" },
+    values: {},
+  };
+  const runAtB = {
+    id: "run-r1",
+    templateId: "tpl-int",
+    status: "pending_approval",
+    a2aTaskId: STEP_B,
+    a2aContextId: "ctx-r1",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    // The run waits at B: its row names B, and so does its latest-task key.
+    storeMock.readAgentRunByTaskId.mockImplementation(async (taskId: string) => (taskId === STEP_B ? runAtB : null));
+    storeMock.readAgentRunById.mockResolvedValue(runAtB);
+    runKeys.latest.mockReset().mockResolvedValue(STEP_B);
+    runKeys.runOfTask.mockReset().mockImplementation(async () => "run-r1");
+    // Step A's row was written; step B's write failed, so A's row is the newest.
+    continueMock.readDurableHitlGateForContinue.mockReset().mockImplementation(
+      async (_runId?: string, reviewTaskId?: string) => (reviewTaskId === rowOfA.reviewTaskId ? rowOfA : null),
+    );
+    continueMock.readCurrentDurableHitlGate.mockReset().mockResolvedValue(rowOfA);
+  });
+  afterEach(() => {
+    runKeys.latest.mockReset().mockResolvedValue(null);
+    runKeys.runOfTask.mockReset().mockResolvedValue(null);
+    storeMock.readAgentRunById.mockReset();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+    continueMock.readCurrentDurableHitlGate.mockReset().mockImplementation(currentIsTheAnsweredGate);
+  });
+
+  it("answering the step the run waits at is accepted", async () => {
+    await approveReviewTaskInternal(`wayflow-${STEP_B}`, "actor-1", { approved: true, userResponse: "go" });
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+    expect(wayflowText()).toBe("go");
+  });
+
+  it("answering the older step whose row was written is refused", async () => {
+    await expect(
+      approveReviewTaskInternal(`wayflow-${STEP_A}`, "actor-1", { approved: true, userResponse: "go" }),
+    ).rejects.toMatchObject({
+      name: "GateNotPendingError",
+      message: "WayFlow approval rejected: gate task-a on run run-r1 is no longer the pause the run waits at",
+    });
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(sendTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("an older display-only row does not refuse the step the run waits at", async () => {
+    continueMock.readCurrentDurableHitlGate.mockResolvedValue({
+      ...rowOfA,
+      xRenderer: "@cinatra-ai/agent-builder:artifact-review-redirect",
+    });
+    await approveReviewTaskInternal(`wayflow-${STEP_B}`, "actor-1", { approved: true, userResponse: "go" });
+    expect(sendTaskMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A ONE-VALUE ANSWER WITH NO RESUME TEXT OF ITS OWN IS NOT AN APPROVAL. A text,
+// a number, a boolean or a list that reaches a WayFlow gate bare, or under the
+// field it names (the setup-loop shape), is sent as the plain form sends it: the
+// run receives what was written. The approval marker stays for a submission that
+// carries no answer: no values, an approval flag or note, or a structured record.
+describe("a one-value answer without a resume text reaches the run", () => {
+  const TASK = "wayflow-task-r1";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setupRun();
+    continueMock.readDurableHitlGateForContinue.mockReset().mockResolvedValue(null);
+  });
+
+  const KEPT: Array<{ label: string; values: unknown; fieldName?: string; text: string; recorded: unknown }> = [
+    { label: "a named text", values: { answer: "Ship it." }, fieldName: "answer", text: "Ship it.", recorded: { answer: "Ship it." } },
+    { label: "a named number", values: { answer: 42 }, fieldName: "answer", text: "42", recorded: { answer: 42 } },
+    { label: "a named boolean", values: { answer: false }, fieldName: "answer", text: "false", recorded: { answer: false } },
+    { label: "a named list", values: { answer: ["a", "b"] }, fieldName: "answer", text: '["a","b"]', recorded: { answer: ["a", "b"] } },
+    { label: "a bare text", values: "Ship it.", text: "Ship it.", recorded: { "hitl-field": "Ship it." } },
+    { label: "a bare number", values: 0, text: "0", recorded: { "hitl-field": 0 } },
+  ];
+
+  for (const c of KEPT) {
+    // red-first-expect: expected '[Approved by operator]' to be
+    it(`${c.label} is the resume text and is recorded under its field`, async () => {
+      await approveReviewTaskInternal(TASK, "actor-1", c.values, c.fieldName);
+      expect(sendTaskMock).toHaveBeenCalledTimes(1);
+      expect(wayflowText()).toBe(c.text);
+      const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+      expect(written?.submittedValues).toEqual(c.recorded);
+    });
+  }
+
+  it("a named blank answer sends the marker and is kept as a blank answer", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { answer: null }, "answer");
+    expect(wayflowText()).toBe("[Approved by operator]");
+    const written = storeMock.writeHitlPrompt.mock.calls[0]?.[0] as { submittedValues?: unknown };
+    expect(written?.submittedValues).toEqual({ answer: null });
+  });
+
+  it("a submission that carries no answer keeps the approval marker", async () => {
+    for (const values of [
+      undefined,
+      { approved: true, approvedAt: "2026-11-25T00:00:00.000Z" },
+      { note: "Go ahead." },
+      { answer: "Ship it.", other: "x" },
+    ]) {
+      sendTaskMock.mockClear();
+      await approveReviewTaskInternal(TASK, "actor-1", values, values && "answer" in values ? "answer" : undefined);
+      expect(wayflowText(), JSON.stringify(values)).toBe("[Approved by operator]");
+    }
+  });
+
+  it("an approval note keeps its own text", async () => {
+    await approveReviewTaskInternal(TASK, "actor-1", { approvalNote: " Looks good. " });
+    expect(wayflowText()).toBe("Looks good.");
+  });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

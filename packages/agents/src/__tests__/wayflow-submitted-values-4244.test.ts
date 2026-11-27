@@ -17,7 +17,14 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+// The WayFlow answer reads the paused step's durable record and refuses when that
+// read fails. These cases are about other questions: the run has no such record.
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: async () => null,
+  readCurrentDurableHitlGate: async () => null,
+}));
 
 type Reader = (values: unknown) => Record<string, unknown> | null;
 
@@ -42,6 +49,39 @@ describe("readWayflowSubmittedValues (cinatra#4244)", () => {
         text,
       ).toEqual({ brandVoice: text });
     }
+  });
+
+  // red-first-expect: expected null to deeply equal { answer: 42 }
+  it("records a named number, boolean or list answer under its field, with its own type", async () => {
+    const read = await reader();
+    for (const [value, text] of [
+      [42, "42"],
+      [false, "false"],
+      [["a"], '["a"]'],
+    ] as const) {
+      expect(
+        read({ answer: value, ...STAMP, userResponse: text, userResponseFieldName: "answer" }),
+        text,
+      ).toEqual({ answer: value });
+    }
+    // A named value whose JSON text is not the resume text is not believed.
+    expect(read({ answer: 41, ...STAMP, userResponse: "42", userResponseFieldName: "answer" })).toBeNull();
+  });
+
+  // red-first-expect: to deeply equal { answer: null }
+  it("records a named blank answer under its field, told apart from no submission", async () => {
+    const read = await reader();
+    for (const value of [null, "", "  ", []] as const) {
+      expect(read({ answer: value, ...STAMP, userResponseFieldName: "answer" }), JSON.stringify(value)).toEqual({
+        answer: value,
+      });
+    }
+    // A name over a value that is not blank, with no resume text, is not believed.
+    expect(read({ answer: "x", ...STAMP, userResponseFieldName: "answer" })).toEqual({
+      answer: "x",
+      ...STAMP,
+      userResponseFieldName: "answer",
+    });
   });
 
   it("records a named answer to a field called __proto__ as an own key", async () => {

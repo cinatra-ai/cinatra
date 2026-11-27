@@ -65,7 +65,7 @@ import {
   type SetTriggerForActorArgs,
 } from "../trigger-service";
 import { randomUUID, createHash } from "node:crypto";
-import { resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
+import { currentHitlGateRefusal, resumeWayflowUnderPauseClaim, stopRunRespectingPauseClaim } from "../run-resume-under-claim";
 import { readdir, readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, sep } from "node:path";
@@ -2147,6 +2147,21 @@ async function handleAgentBuilderRunResume(
       // retries from the beginning instead of continuing from the checkpoint.
       if (!run.a2aContextId) {
         return { error: `Run ${runId} has no a2aContextId. Cannot resume WayFlow task without context ID.` };
+      }
+      // A retired step or a display-only card is not answered here, and the run stays parked
+      // (`currentHitlGateRefusal`, both generic roads' reading: the run row and latest-task key name
+      // the step, a durable row only confirms it). An unreadable record refuses; only an absence goes on.
+      let parked: Awaited<ReturnType<typeof currentHitlGateRefusal>>;
+      try {
+        parked = await currentHitlGateRefusal({ run });
+      } catch {
+        return { error: `Run ${runId} cannot be resumed: its paused step could not be read.` };
+      }
+      if (parked.refusal === "retired") {
+        return { error: `Run ${runId} is paused at a retired step; it can no longer be answered.` };
+      }
+      if (parked.refusal === "display-only") {
+        return { error: `Run ${runId} is paused at an artifact review; it goes on only when that review is decided.` };
       }
       // cinatra#4150: a run held at a publish decision goes on only by that decision.
       const publishHold = await import("../publish-decision-actions");

@@ -28,14 +28,169 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
-import { captureHitlPromptForContinue } from "./agent-run-hitl-prompts";
+import { captureHitlPromptForContinue, readCurrentDurableHitlGate } from "./agent-run-hitl-prompts";
+import { AGENT_BUILDER_ID_SCOPE, ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { hitlStepIsRetired } from "./orchestrator-mid-run-hitl";
+import { baseReviewTaskId, reviewDecisionAwaitsDelivery, reviewGateHoldsPause } from "@/lib/artifacts/artifact-review-target";
+import type { DurableHitlGateArtifact } from "./store";
 import type { AgentRunRecord } from "./agent-run-record";
 import { claimPause, PauseClaimReleaseError, releasePauseClaim, settlePauseSend } from "./run-pause-claim";
-import { PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
+import { gateTaskIsCurrentPause, PAUSE_SEND_LEASE_SECONDS, RunTransitionError, TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { transitionRunStatus } from "./store";
 
 type ClaimRef = { runId: string; orgId: string; token: string };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * THE DISPLAY-ONLY STEP IDS: a step parked under one of them is drawn as a card
+ * with no answer of its own. The artifact-review redirect is one: the host draws
+ * it inline with no approve control (cinatra#1796), and the paused run goes on
+ * only by the review's own typed decision. A generic answer is never taken for it.
+ */
+const DISPLAY_ONLY_HITL_RENDERER_IDS: ReadonlySet<string> = new Set([
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+]);
+
+const FLOW_GATE_TASK_PREFIX = "wayflow-";
+
+/** The run's latest-task key; a read fault, or a missing export, reads as no key. */
+export async function readLatestGateTaskId(runId: string): Promise<string | null> {
+  return (async () => (await import("@cinatra-ai/a2a")).resolveLatestWayflowGateTaskId(runId))()
+    .then((latest) => latest ?? null)
+    .catch(() => null);
+}
+
+/**
+ * Does a binding declare exactly this renderer id on the server: one of this
+ * build (the generated bindings) or one of a package installed at run time?
+ * The sources a page's registry is filled from. Read only for a package's own
+ * screen (`<package>:<screen>`); a read that fails throws, and each road
+ * refuses with its own fixed text.
+ */
+async function packageScreenIsDeclared(xRenderer: string): Promise<boolean> {
+  const colon = xRenderer.indexOf(":");
+  if (colon <= 0 || xRenderer.slice(0, colon) === AGENT_BUILDER_ID_SCOPE) return false;
+  const { GENERATED_FIELD_RENDERER_BINDINGS } = await import("@/lib/generated/agent-bindings");
+  if (GENERATED_FIELD_RENDERER_BINDINGS.some((b) => b.id === xRenderer)) return true;
+  const { collectInstalledFieldRendererBindings } = await import("./field-renderer-bindings.server");
+  return collectInstalledFieldRendererBindings().some((b) => b.id === xRenderer);
+}
+
+/**
+ * The run's artifact review gates (task id, status, organization), read through the review
+ * store's seam as the run executor reaches it (execution.ts): the store is never
+ * imported here, so no route's graph grows. An unbound seam is a read error.
+ */
+type ReviewGateOfRun = { reviewTaskId: string; status: string; orgId: string };
+type ResumeDeliveryOfRun = { reviewTaskId: string; status: string; deadLettered: boolean };
+type ReviewStoreReads = {
+  listGates?: (runId: string) => Promise<ReviewGateOfRun[]>;
+  listResumeDeliveries?: (runId: string) => Promise<ResumeDeliveryOfRun[]>;
+};
+function reviewStore(): ReviewStoreReads {
+  const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: ReviewStoreReads }).__cinatraArtifactReviewGateSeam;
+  if (!seam) throw new Error("the review store is not bound");
+  return seam;
+}
+async function reviewGatesOfRun(runId: string): Promise<ReadonlyArray<ReviewGateOfRun>> {
+  const { listGates } = reviewStore();
+  if (typeof listGates !== "function") throw new Error("the review store is not bound");
+  return listGates(runId);
+}
+/** The resume delivery each decided review of the run owes it, by the gate's task id. */
+async function resumeDeliveriesOfRun(runId: string): Promise<ReadonlyArray<ResumeDeliveryOfRun>> {
+  const { listResumeDeliveries } = reviewStore();
+  if (typeof listResumeDeliveries !== "function") throw new Error("the review store is not bound");
+  return listResumeDeliveries(runId);
+}
+
+/**
+ * WHAT A GENERIC ANSWER MAY NOT CONSUME, read for both generic roads (the MCP
+ * resume and the generic answer action). Returns the durable row of the step
+ * the answer reaches, when there is one, and why the answer is refused, or
+ * `null`.
+ *
+ * WHICH STEP THE RUN WAITS AT is not the durable row's to say: its write is
+ * best-effort (human-gate-park.ts), so the run can wait at a step whose row was
+ * never written while an older step's row is the newest. It is decided as the
+ * answer road decides it everywhere else (`gateTaskIsCurrentPause`): the run's
+ * latest-task key and the run row. The newest durable row
+ * (`readCurrentDurableHitlGate`) only CONFIRMS:
+ *   - it names the gate the caller names (`namedReviewTaskId`): it is that
+ *     gate's row;
+ *   - it names another task that the run waits at by those sources: the row is
+ *     the current step's. A caller that named a gate is refused as `stale`;
+ *   - anything else (an older row, a row the sources do not name): it says
+ *     nothing, and is not used (`gate: null`). It never makes a current step
+ *     stale.
+ * Then, on the row it confirmed:
+ *   - `retired`: a retired step (`hitlStepIsRetired`, the definition every
+ *     host withholds its Continue by: `parkedHitlStepIsAnswerable`): a
+ *     tombstoned id, or a package's own screen that no binding of this build
+ *     and no installed package declares (`packageScreenIsDeclared`); nothing
+ *     answers it any more;
+ *   - `display-only`: a display-only card (`DISPLAY_ONLY_HITL_RENDERER_IDS`);
+ *     only its own decision consumes it.
+ * Every other recorded renderer id is left to the road, as before.
+ *
+ * AN ARTIFACT REVIEW IS DECIDED BY WHAT THE REVIEW RECORDS, never by a durable
+ * row (the review park writes none, and the fallback's write is best-effort).
+ * For a review gate whose task is the current pause (`gateTaskIsCurrentPause`,
+ * by the same run row and latest-task key):
+ *   - a gate that holds the pause (`reviewGateHoldsPause`, the predicate the
+ *     executor routes the pause to the display-only review by) refuses as
+ *     `display-only` (`gate: null`);
+ *   - a decided gate whose resume delivery has not yet moved the run on
+ *     (`reviewDecisionAwaitsDelivery`: the intent its decision wrote is not
+ *     `done`) refuses the same way: the delivery continues the pause, so nothing
+ *     resumes it twice;
+ *   - anything else (a review decided and delivered earlier, or another
+ *     organization's, where the executor fell back to an ordinary step) refuses
+ *     nothing: the ordinary rules below decide, with or without a durable row.
+ *
+ * A row or a gate that cannot be read throws; each road refuses with its own
+ * fixed text. `latestTaskId`: the key as the road read it; left out, it is read
+ * here when a row or a gate needs it.
+ */
+export async function currentHitlGateRefusal(input: {
+  readonly run: { readonly id: string; readonly orgId: string; readonly status: string; readonly a2aTaskId?: string | null };
+  readonly namedReviewTaskId?: string;
+  readonly latestTaskId?: string | null;
+}): Promise<{ gate: DurableHitlGateArtifact | null; refusal: "stale" | "retired" | "display-only" | null }> {
+  const { run, namedReviewTaskId } = input;
+  const pause = { status: run.status, a2aTaskId: run.a2aTaskId ?? null };
+  let latestRead: Promise<string | null> | undefined;
+  const latestKey = (): Promise<string | null> =>
+    (latestRead ??= input.latestTaskId !== undefined ? Promise.resolve(input.latestTaskId) : readLatestGateTaskId(run.id));
+  const flowTask = (reviewTaskId: string): string =>
+    reviewTaskId.startsWith(FLOW_GATE_TASK_PREFIX) ? reviewTaskId.slice(FLOW_GATE_TASK_PREFIX.length) : "";
+  const gate = await readCurrentDurableHitlGate(run.id);
+  if (run.status === "pending_approval") {
+    const reviews = await reviewGatesOfRun(run.id);
+    const latest = reviews.length > 0 ? await latestKey() : null;
+    const atPause = reviews.filter((review) => gateTaskIsCurrentPause(pause, flowTask(baseReviewTaskId(review.reviewTaskId)), latest));
+    if (atPause.some((review) => reviewGateHoldsPause(review, run.orgId))) return { gate: null, refusal: "display-only" };
+    if (atPause.length > 0) {
+      const tasks = new Set(atPause.map((review) => review.reviewTaskId));
+      const deliveries = await resumeDeliveriesOfRun(run.id);
+      if (deliveries.some((delivery) => tasks.has(delivery.reviewTaskId) && reviewDecisionAwaitsDelivery(delivery))) {
+        return { gate: null, refusal: "display-only" };
+      }
+    }
+  }
+  if (!gate) return { gate: null, refusal: null };
+  if (namedReviewTaskId === undefined || gate.reviewTaskId !== namedReviewTaskId) {
+    const rowTask = flowTask(gate.reviewTaskId);
+    const latest = await latestKey();
+    if (!gateTaskIsCurrentPause(pause, rowTask, latest)) {
+      return { gate: null, refusal: null };
+    }
+    if (namedReviewTaskId !== undefined) return { gate, refusal: "stale" };
+  }
+  const declared = await packageScreenIsDeclared(gate.xRenderer);
+  if (hitlStepIsRetired(gate.xRenderer, gate.values, () => declared)) return { gate, refusal: "retired" };
+  return { gate, refusal: DISPLAY_ONLY_HITL_RENDERER_IDS.has(gate.xRenderer) ? "display-only" : null };
+}
 
 /** A pre-send step failed: give the lease back and throw the step's error, or
  * PauseClaimReleaseError when the release failed too. A `lost` release needs

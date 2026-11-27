@@ -70,7 +70,12 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 
-import { classifyMidRunHitl } from "./orchestrator-mid-run-hitl";
+import {
+  classifyMidRunHitl,
+  gateDrawnBySchemaFloor,
+  parkedHitlStepIsAnswerable,
+  resolveHitlGateRenderer,
+} from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
 import { useRunWindowScreen } from "./run-window-screen-context";
 import { useRunWindowConversation } from "./use-run-window-conversation";
@@ -115,7 +120,7 @@ import {
 } from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
-import { GateContinueHoldContext, RendererFloorReportContext, useGateRendererFloor } from "./schema-field-renderer";
+import { FloorAnswerMarkContext, FloorOwnsContinueReportContext, GateContinueHoldContext, RendererFloorReportContext, useFloorAnswerMark, useGateRendererFloor } from "./schema-field-renderer";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
 // shape when paperclip attachments are pending. Refs persist attachments
 // captured at Suggest time; consumed at gate Continue.
@@ -127,13 +132,14 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 import {
   applyRendererApprovalNote,
   createGateValidityStore,
-  buildSchemaFieldGatePayload,
+  buildSchemaFloorGatePayload,
   gateAwaitsRendererValue,
   hitlRendererFieldName,
   isAlreadyResolvedError,
   hitlGateIdentityKey,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  submittedAnswerValue,
   liftRendererApprovalNote,
   midRunBooleanFieldHidesSubmit,
   setupFieldRendererValue,
@@ -163,10 +169,7 @@ import { useRunRowWatch } from "./use-run-row-watch";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { continueAwaitsAPick, fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext, FieldRendererProps } from "./field-renderer-registry";
-import {
-  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
-  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
-} from "./agent-builder-ids";
+import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import type { RunStepRailEntry } from "./run-step-rail";
 // DOES THE RUN SURFACE'S FRAME ALREADY DRAW THE RAIL (cinatra#3478)? Asked of
 // the composition itself, so this column and the frame's can never both draw.
@@ -792,6 +795,12 @@ function HitlApprovalCard({
   // cinatra#3035: the mounted gate renderer reports here when it settles on the
   // floor, for this gate only: a later gate reads its own hold from its first frame.
   const [rendererFloored, setRendererFloored] = useGateRendererFloor(bufferKey);
+  // The plain form an extension wrapper shows draws this step's one Continue
+  // (`FloorOwnsContinueReportContext`): the outer Continue is not drawn.
+  const [floorOwnsContinue, setFloorOwnsContinue] = useGateRendererFloor(bufferKey);
+  // An answer the plain form hands up from inside an extension wrapper
+  // (`FloorAnswerMarkContext`) is answered as the floor's, whatever the entry says.
+  const [floorAnswerKind, markFloorAnswer] = useFloorAnswerMark();
   const [prevBufferKey, setPrevBufferKey] = useState<string | null>(null);
   if (bufferKey !== null && bufferKey !== prevBufferKey) {
     setPrevBufferKey(bufferKey);
@@ -936,7 +945,7 @@ function HitlApprovalCard({
   // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
   // gate, which is a different behaviour change than fixing a label. Only the
   // rendered field IDENTITY below carries the real name.
-  const entry = fieldRendererRegistry.resolve(
+  const entry = resolveHitlGateRenderer(
     HITL_PLACEHOLDER_FIELD_NAME,
     fieldSchema,
     context,
@@ -944,7 +953,19 @@ function HitlApprovalCard({
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
-  const isMidRunHitl = classifyMidRunHitl(interruptContext.xRenderer);
+  // MAY THIS STEP BE ANSWERED HERE? Only when a screen draws it
+  // (`parkedHitlStepIsAnswerable`): a step whose recorded id no entry claims
+  // shows "no renderer configured for this step" and no Continue, whatever
+  // its id's name says.
+  const stepIsAnswerable = parkedHitlStepIsAnswerable(interruptContext.xRenderer, entry);
+  // A non-setup step the plain form draws (`gateDrawnBySchemaFloor`: what is
+  // mounted, not the id) is answered as the plain form's own step, so it is
+  // never read as mid-run, whatever its id's name or flag says.
+  const drawnByFloor = gateDrawnBySchemaFloor(interruptContext.xRenderer, entry);
+  const onNonSetupFallbackGate =
+    drawnByFloor && !isSetupGateTaskId(interruptContext.reviewTaskId);
+  const isMidRunHitl =
+    classifyMidRunHitl(interruptContext.xRenderer) && !onNonSetupFallbackGate;
   // Narrower classifier than isMidRunHitl: matches output renderers only,
   // excluding input forms. Drives the `data-hitl-output` attribute on the
   // HitlApprovalCard root Card element, which AgentPageLayout's outer wrapper
@@ -1057,6 +1078,8 @@ function HitlApprovalCard({
   );
 
   const handleContinue = async () => {
+    // A step no screen draws is never answered from here.
+    if (!stepIsAnswerable) return;
     // Reported unsendable (see `gateValidity`): the press sends nothing, before
     // the run-name check and the optimistic spinner below.
     if (gateValidity.isHeld(setupGateKey)) return;
@@ -1198,12 +1221,12 @@ function HitlApprovalCard({
   // submits through `submitSchemaFieldGate` below. A MALFORMED schema fails
   // closed: no renderer and no Continue, only the "no renderer configured"
   // paragraph - an approval is never sent for a gate nobody could read.
+  //
+  // A gate the floor draws because no entry claims its id is answered the same
+  // way: the drawn entry decides, not the original `x-renderer` id.
   const gateReading = readSchemaFieldGate(interruptContext.schema);
-  const onNonSetupFallbackGate =
-    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
-    !isSetupGateTaskId(interruptContext.reviewTaskId);
   const isGenericObjectSchema =
-    interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
+    drawnByFloor &&
     (interruptContext.schema as { type?: string })?.type === "object" &&
     !isSetupGateTaskId(interruptContext.reviewTaskId) &&
     gateReading.kind === "bare";
@@ -1211,6 +1234,10 @@ function HitlApprovalCard({
   const fallbackGateIsMalformed = onNonSetupFallbackGate && gateReading.kind === "malformed";
   const fallbackGateRenderSchema =
     fallbackGateAsksForFields && gateReading.kind === "fields" ? gateReading.renderSchema : null;
+  // A non-setup floor gate whose schema is not an object (a text, a number, a
+  // boolean, a list) asks for one value: it is answered as an approval with
+  // that value as the resume text, never through the setup-loop wrap.
+  const fallbackGateAsksForOneValue = onNonSetupFallbackGate && gateReading.kind === "not-object";
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -1218,7 +1245,8 @@ function HitlApprovalCard({
   // calls approveReviewTask. Renderers that own their own action surface
   // coexist fine; their inner button still works and the outer button is a
   // redundant alternate.
-  const showContinueButton = isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup);
+  const showContinueButton =
+    stepIsAnswerable && (isGenericObjectSchema || (isMidRunHitl && !isGroupedSetup));
 
   // ---------------------------------------------------------------------------
   // cinatra#3532 — THE SETUP FIELD THAT DRAWS NO CONTROL OF ITS OWN.
@@ -1336,7 +1364,8 @@ function HitlApprovalCard({
   // answer, and the spinner released when the send is refused or fails. A
   // failed send is told the way that card told it (a toast), because the
   // field that pressed was unmounted behind the spinner. The payload is the
-  // approval with every declared answer in it (`buildSchemaFieldGatePayload`).
+  // approval with every declared answer in it, or, for a gate that asks for one
+  // value, that value as the resume text (`buildSchemaFloorGatePayload`).
   // ONE SEND PER GATE AT A TIME: the field sets its own `submitting` only after
   // its flush, so two presses in one tick both reach here; the ref (keyed by
   // the gate, so the next gate on this mounted card is never refused) turns
@@ -1351,7 +1380,11 @@ function HitlApprovalCard({
       // that is not finite) is refused here, the card stays, nothing is sent.
       let gatePayload: Record<string, unknown>;
       try {
-        gatePayload = buildSchemaFieldGatePayload({ schema: interruptContext.schema, next });
+        gatePayload = buildSchemaFloorGatePayload({
+          schema: interruptContext.schema,
+          next,
+          fieldName: interruptContext.fieldName,
+        });
       } catch {
         toast.error("Could not continue this run.");
         return;
@@ -1482,6 +1515,7 @@ function HitlApprovalCard({
     stepId: interruptContext.xRenderer ?? null,
     gateRef: interruptContext.reviewTaskId ?? null,
     canManipulate:
+      stepIsAnswerable &&
       !gateBlocked &&
       !isGenericObjectSchema &&
       // cinatra#2933 — the run's access decides who sees the box.
@@ -1498,6 +1532,8 @@ function HitlApprovalCard({
         {/* The renderer reports this gate's validity as its own. */}
         {RendererComponent && !isGenericObjectSchema && !fallbackGateIsMalformed ? (
           <GateContinueHoldContext.Provider value={fallbackGateAsksForFields}>
+          <FloorAnswerMarkContext.Provider value={markFloorAnswer}>
+          <FloorOwnsContinueReportContext.Provider value={setFloorOwnsContinue}>
           <RendererFloorReportContext.Provider value={setRendererFloored}>
           <GateValidityOwner
             renderer={RendererComponent}
@@ -1548,6 +1584,33 @@ function HitlApprovalCard({
             onChange={
               isMidRunHitl
                 ? async (next: unknown) => {
+                    // A value the plain form hands up from inside an
+                    // extension wrapper (`FloorAnswerMarkContext`, read before
+                    // anything is awaited) takes the plain form's shape,
+                    // whatever the registry entry says. Its own submit sends
+                    // it; a change (a box, a pick) is held for the Continue
+                    // below and sends nothing by itself.
+                    const floorAnswer = floorAnswerKind();
+                    if (floorAnswer !== null && !isSetupGateTaskId(interruptContext.reviewTaskId)) {
+                      if (floorAnswer === "change") {
+                        let held: Record<string, unknown>;
+                        try {
+                          held = buildSchemaFloorGatePayload({
+                            schema: interruptContext.schema,
+                            next,
+                            fieldName: interruptContext.fieldName,
+                          });
+                        } catch {
+                          return;
+                        }
+                        if (isGateOnScreen(rendererGateKey)) {
+                          setBufferedHitlValue({ ...bufferedHitlValue, ...held });
+                        }
+                        return;
+                      }
+                      await submitSchemaFieldGate(next);
+                      return;
+                    }
                     // Compute nextBuffered synchronously, pass to
                     // approveReviewTask (if grouped-setup immediate-submit), then setState
                     // for the visual update. Reading `bufferedHitlValue` after `setBufferedHitlValue`
@@ -1615,9 +1678,16 @@ function HitlApprovalCard({
                   }
                 : async (next: unknown) => {
                     // cinatra#4244 - a non-setup gate whose declared fields the
-                    // fallback draws is answered as an approval, never through
-                    // the setup-loop wrap below.
-                    if (fallbackGateAsksForFields) {
+                    // fallback draws, or whose one value it draws, is answered
+                    // as an approval, never through the setup-loop wrap below.
+                    // So is an answer the plain form hands up from inside an
+                    // extension wrapper on a non-setup gate
+                    // (`FloorAnswerMarkContext`, read before anything is awaited).
+                    if (
+                      fallbackGateAsksForFields ||
+                      fallbackGateAsksForOneValue ||
+                      (floorAnswerKind() !== null && !isSetupGateTaskId(interruptContext.reviewTaskId))
+                    ) {
                       await submitSchemaFieldGate(next);
                       return;
                     }
@@ -1695,6 +1765,8 @@ function HitlApprovalCard({
             }
           />
           </RendererFloorReportContext.Provider>
+          </FloorOwnsContinueReportContext.Provider>
+          </FloorAnswerMarkContext.Provider>
           </GateContinueHoldContext.Provider>
         ) : !isGenericObjectSchema ? (
           <p className="text-sm text-muted-foreground">
@@ -1716,7 +1788,7 @@ function HitlApprovalCard({
           />
         ) : null}
 
-        {showContinueButton && (
+        {showContinueButton && !floorOwnsContinue && (
           <div className="flex justify-end pt-2 border-t border-line">
             {/* cinatra#3380: held while the gate's declared renderer value is unwritten.
                 cinatra#3035: held while a gate whose kind declares the hold has no pick. */}
@@ -2231,7 +2303,9 @@ function ReadOnlyHitlReplay(props: {
                 // snapshot's schema title, then to a neutral label.
                 fieldName={HITL_PLACEHOLDER_FIELD_NAME}
                 schema={renderSchema}
-                value={props.submittedValues}
+                // A one-value answer is kept as a keyed record; the field reads
+                // the value itself, unwrapped by the writer's own key rule.
+                value={submittedAnswerValue({ schema: renderSchema, values: props.submittedValues })}
                 disabled={true}
                 mode="view"
                 onChange={() => undefined}

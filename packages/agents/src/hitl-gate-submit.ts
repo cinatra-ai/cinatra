@@ -80,6 +80,38 @@ export function isGroupedSetupRenderer(
 }
 
 /**
+ * The answer a field renderer's `onChange` hands a host on a gate that is not
+ * mid-run. A NON-SETUP gate the schema floor draws (`drawnByFloor`: the
+ * floor's own id, or an unclaimed id the floor took over) is a WayFlow gate:
+ * its answer is the floor's approval with the written answer as the resume
+ * text (`buildSchemaFloorGatePayload`, for every shape the floor draws), so
+ * the run receives what was written, not "[Approved by operator]". Every
+ * other gate keeps the setup-loop shape (`wrapPrimitiveSetupPayload`).
+ */
+export function buildFieldGateAnswer(args: {
+  drawnByFloor: boolean;
+  reviewTaskId: string;
+  fieldName: string | undefined;
+  next: unknown;
+  schema: unknown;
+  objectTypedField?: boolean;
+}): { payload: unknown; payloadFieldName: string | undefined } {
+  if (args.drawnByFloor && !isSetupGateTaskId(args.reviewTaskId)) {
+    return {
+      payload: buildSchemaFloorGatePayload({
+        schema: args.schema,
+        next: args.next,
+        fieldName: args.fieldName,
+      }),
+      payloadFieldName: undefined,
+    };
+  }
+  return wrapPrimitiveSetupPayload(args.fieldName, args.next, {
+    objectTypedField: args.objectTypedField === true,
+  });
+}
+
+/**
  * "Review task … already resolved" is an expected race (double-click,
  * external resolution, chat + form submitting the same gate), tolerated
  * at every submit site — same message-matching idiom in both panels.
@@ -1125,6 +1157,176 @@ export function buildSchemaFieldGatePayload(args: {
   return payload;
 }
 
+/** Keys of the approval itself: a field of one of these names is never written beside it. */
+const FLOOR_RESERVED_KEYS: ReadonlySet<string> = new Set([
+  "approved",
+  "approvedAt",
+  "userResponse",
+  "userResponseFieldName",
+  "__proto__",
+]);
+
+/**
+ * The approval payload for a NON-SETUP gate the schema floor draws, for every
+ * shape the floor answers. The server forwards
+ * `userResponse` to the paused WayFlow node as its resume text; without it the
+ * node is handed "[Approved by operator]".
+ *
+ *  - An OBJECT schema: `buildSchemaFieldGatePayload` (its declared fields; a
+ *    bare confirmation sends the marker).
+ *  - Any other schema, the one value the floor emits:
+ *      - a text: the text verbatim;
+ *      - a number or a boolean: its JSON text (`42`, `true`, `false`); a
+ *        number that is not finite is refused with `NonFiniteAnswerError`;
+ *      - a list: its JSON text (`["a","b"]`).
+ *    The value itself (of whatever type) is also written under the gate's
+ *    `fieldName`, or, when the gate has none, under `HITL_PLACEHOLDER_FIELD_NAME`
+ *    (`hitl-field`, the name the plain form and the read-only replay give a
+ *    single field with no name of its own), and that key is given in
+ *    `userResponseFieldName`, so the server records the answer under it
+ *    (`readWayflowSubmittedValues`), with its own type, named or not. The
+ *    resume text is the same with or without the name.
+ *    A blank text, an empty list and `null` carry no resume text, so the flow
+ *    receives the marker, as for an object gate answered with nothing; the
+ *    value is still written under its key, so the record keeps the answer.
+ *    No value (`undefined`) writes nothing.
+ */
+export function buildSchemaFloorGatePayload(args: {
+  schema: unknown;
+  next: unknown;
+  fieldName?: string;
+  now?: string;
+}): Record<string, unknown> {
+  const value = args.next;
+  if (
+    (isPlainSchemaObject(args.schema) && args.schema.type === "object") ||
+    isPlainSchemaObject(value)
+  ) {
+    return buildSchemaFieldGatePayload({ schema: args.schema, next: value, now: args.now });
+  }
+  const payload: Record<string, unknown> = {
+    approved: true,
+    approvedAt: args.now ?? new Date().toISOString(),
+  };
+  if (value === undefined) return payload;
+  const field = floorAnswerFieldName(args.fieldName);
+  const key = field ?? HITL_PLACEHOLDER_FIELD_NAME;
+  let resumeText: string | null;
+  if (value === null) {
+    resumeText = null;
+  } else if (typeof value === "string") {
+    resumeText = value.trim() === "" ? null : value;
+  } else if (typeof value === "number" || typeof value === "boolean") {
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
+    resumeText = JSON.stringify(value);
+  } else if (Array.isArray(value)) {
+    if (holdsNonFiniteNumber(value)) throw new NonFiniteAnswerError(field ?? "answer");
+    resumeText = value.length === 0 ? null : JSON.stringify(value);
+  } else {
+    return payload;
+  }
+  if (resumeText !== null) payload.userResponse = resumeText;
+  setOwn(payload, key, value);
+  payload.userResponseFieldName = key;
+  return payload;
+}
+
+/**
+ * A ONE-VALUE ANSWER LEFT IN THE SETUP SHAPE, AS THE PLAIN FORM SENDS IT.
+ * The WayFlow continue road takes `userResponse` as the run's resume text and
+ * sends "[Approved by operator]" when there is none. A one-value answer (a
+ * text, a number, a boolean, a list) that reaches that road with no resume text
+ * of its own (a host that answered a floor-drawn gate with the setup-loop
+ * shape, `wrapPrimitiveSetupPayload`) would therefore be replaced by the
+ * approval marker. Such a submission is rebuilt here with
+ * `buildSchemaFloorGatePayload`, so the run receives what was written, under
+ * the same rules as the plain form (a blank text, `null` and an empty list send
+ * the marker and are kept as a named blank answer):
+ *   - the values ARE the value (a text, a number, a boolean or a list), named by
+ *     `fieldName` or, without one, `hitl-field`; or
+ *   - the values are a record whose only own key is `fieldName` (the field the
+ *     setup-loop shape names), holding such a value or `null`.
+ * `null` for everything else, which keeps its meaning: no values (a bare
+ * approval), a record with an approval note, an approval flag or a resume text,
+ * and a structured record, whose fields are recorded as they are.
+ */
+export function unsentOneValueAnswerAsFloorPayload(
+  values: unknown,
+  fieldName: string | undefined,
+): Record<string, unknown> | null {
+  const oneValue = (value: unknown): boolean =>
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    Array.isArray(value);
+  if (oneValue(values)) {
+    return buildSchemaFloorGatePayload({ schema: undefined, next: values, fieldName });
+  }
+  const field = floorAnswerFieldName(fieldName);
+  if (!isPlainSchemaObject(values) || field === null) return null;
+  const keys = Object.keys(values);
+  if (keys.length !== 1 || keys[0] !== field) return null;
+  const value = ownValue(values, field);
+  if (value !== null && !oneValue(value)) return null;
+  return buildSchemaFloorGatePayload({ schema: undefined, next: value, fieldName: field });
+}
+
+/**
+ * The gate's own field name as the key a one-value answer is written under,
+ * or `null` when it has none that may be used (blank, the placeholder, or a
+ * key of the approval itself); the answer is then written under
+ * `HITL_PLACEHOLDER_FIELD_NAME`. ONE RULE for the writer
+ * (`buildSchemaFloorGatePayload`) and the replay (`submittedAnswerValue`).
+ */
+function floorAnswerFieldName(fieldName: string | undefined): string | null {
+  return typeof fieldName === "string" &&
+    fieldName !== "" &&
+    fieldName !== HITL_PLACEHOLDER_FIELD_NAME &&
+    !FLOOR_RESERVED_KEYS.has(fieldName)
+    ? fieldName
+    : null;
+}
+
+/**
+ * The value a completed step's field shows again, read from the submitted
+ * values that were kept for it.
+ *
+ * A one-value answer (a text, a number, a boolean, a list) is kept as a keyed
+ * record, `{ [key]: value }` (`buildSchemaFloorGatePayload` writes it,
+ * `readWayflowSubmittedValues` records it), but the field that draws it reads
+ * the value itself. So for a step whose schema is not an object the value is
+ * read back under the key it was written under, by the writer's rule:
+ *   1. the key the record names in `userResponseFieldName`, when it holds it;
+ *   2. the step's own field name (`floorAnswerFieldName`), when the record
+ *      holds it;
+ *   3. `HITL_PLACEHOLDER_FIELD_NAME` (`hitl-field`), when the record holds it;
+ *   4. the record's only key, when it has exactly one that is not a key of the
+ *      approval itself: the recorded answer is kept under its field alone.
+ * An object-schema step gets the whole record, as before; so does a record no
+ * rule reads, and a value that is not a record.
+ */
+export function submittedAnswerValue(args: {
+  schema: unknown;
+  values: unknown;
+  fieldName?: string;
+}): unknown {
+  const values = args.values;
+  if (!isPlainSchemaObject(values)) return values;
+  if (isPlainSchemaObject(args.schema) && args.schema.type === "object") return values;
+  const holds = (key: unknown): key is string =>
+    typeof key === "string" &&
+    !FLOOR_RESERVED_KEYS.has(key) &&
+    Object.prototype.hasOwnProperty.call(values, key);
+  const named = ownValue(values, "userResponseFieldName");
+  if (holds(named)) return ownValue(values, named);
+  const field = floorAnswerFieldName(args.fieldName);
+  if (holds(field)) return ownValue(values, field);
+  if (holds(HITL_PLACEHOLDER_FIELD_NAME)) return ownValue(values, HITL_PLACEHOLDER_FIELD_NAME);
+  const keys = Object.keys(values);
+  if (keys.length === 1 && holds(keys[0])) return ownValue(values, keys[0]!);
+  return values;
+}
+
 // ---------------------------------------------------------------------------
 // The values the WayFlow continue road records (cinatra#4244)
 // ---------------------------------------------------------------------------
@@ -1134,14 +1336,24 @@ export function buildSchemaFieldGatePayload(args: {
  * answer (cinatra#4244). The resume text itself (`userResponse`) goes to the
  * flow verbatim; this reading only decides what is recorded beside it.
  *
- *  1. A NAMED SINGLE TEXT ANSWER. A schema-drawn gate that asks for one text
- *     field sends that text verbatim as `userResponse` and names its field in
- *     `userResponseFieldName`. When the values carry that field as an own key
- *     whose value IS the resume text, the answer is recorded under that field
- *     alone - even when the text reads as JSON (`42`, `{"tone":"warm"}`), which
- *     the reading below would otherwise take for the submitted values. A name
- *     whose value is not the resume text is not believed.
- *  2. Otherwise, as before: a `userResponse` that parses as a JSON object is the
+ *  1. A NAMED SINGLE ANSWER. A schema-drawn gate that asks for one value
+ *     sends it as `userResponse` (a text verbatim, a number, a boolean or a
+ *     list as its JSON text) and names its field in `userResponseFieldName`.
+ *     When the values carry that field as an own key whose value IS the resume
+ *     text (a text), or whose JSON text IS the resume text (a number, a
+ *     boolean, a list), the answer is recorded under that field alone, with
+ *     the value of its own type - even when a text reads as JSON (`42`,
+ *     `{"tone":"warm"}`), and although the reading below keeps only a JSON
+ *     object. A name whose value is not the resume text is not believed.
+ *     An unnamed answer is named `hitl-field` (`HITL_PLACEHOLDER_FIELD_NAME`)
+ *     by `buildSchemaFloorGatePayload`, so it is read the same way:
+ *     `{ "hitl-field": 42 }`.
+ *  2. A NAMED BLANK ANSWER. No resume text, and `userResponseFieldName` names
+ *     an own key whose value is `null`, a blank text or an empty list (the
+ *     answers that send the flow the marker): recorded under that key alone,
+ *     so a blank answer is told apart from no submission. Any other value
+ *     under such a name is not believed.
+ *  3. Otherwise, as before: a `userResponse` that parses as a JSON object is the
  *     submitted values; one that is not JSON leaves the values without
  *     `userResponse`; no `userResponse` leaves the values themselves; nothing
  *     left is `null`.
@@ -1162,15 +1374,18 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
   const userResponseRaw = own("userResponse");
   if (typeof userResponseRaw === "string" && userResponseRaw.trim().length > 0) {
     const fieldName = own("userResponseFieldName");
+    const named = typeof fieldName === "string" ? own(fieldName) : undefined;
     if (
       typeof fieldName === "string" &&
       fieldName !== "userResponse" &&
       fieldName !== "userResponseFieldName" &&
-      own(fieldName) === userResponseRaw
+      (named === userResponseRaw ||
+        ((typeof named === "number" || typeof named === "boolean" || Array.isArray(named)) &&
+          JSON.stringify(named) === userResponseRaw))
     ) {
       const recorded: Record<string, unknown> = {};
       Object.defineProperty(recorded, fieldName, {
-        value: userResponseRaw,
+        value: named,
         enumerable: true,
         writable: true,
         configurable: true,
@@ -1187,6 +1402,29 @@ export function readWayflowSubmittedValues(values: unknown): Record<string, unkn
       const { userResponse: _u, ...rest } = valuesObj;
       void _u;
       return Object.keys(rest).length > 0 ? rest : null;
+    }
+  }
+  const blankName = own("userResponseFieldName");
+  if (
+    typeof blankName === "string" &&
+    blankName !== "userResponse" &&
+    blankName !== "userResponseFieldName" &&
+    Object.prototype.hasOwnProperty.call(valuesObj, blankName)
+  ) {
+    const blank = own(blankName);
+    if (
+      blank === null ||
+      (typeof blank === "string" && blank.trim() === "") ||
+      (Array.isArray(blank) && blank.length === 0)
+    ) {
+      const recorded: Record<string, unknown> = {};
+      Object.defineProperty(recorded, blankName, {
+        value: blank,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+      return recorded;
     }
   }
   const { userResponse: _u, ...rest } = valuesObj;

@@ -4,8 +4,11 @@
 // Since cinatra#4245 the road takes the pause claim before its fence; the hold is read
 // before the claim and, on a publishing template or for a run with a decision, again
 // under the claim and before the fence.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { pauseClaimFake } from "./pause-claim-test-fake";
+import * as midRun from "../orchestrator-mid-run-hitl";
 
 // cinatra#4245: the resume road's pause claim always wins here unless a case says otherwise.
 vi.mock("../run-pause-claim", async (orig) => ({
@@ -183,12 +186,60 @@ vi.mock("../../../a2a/src/external-client", () => ({
   createExternalA2AClient: vi.fn(async () => ({ sendTask: sendTaskSpy })),
 }));
 
+// What declares a package's screen on the server: the bindings of this build
+// (here filtered by `packScreens.dropped`, as a newer bundled pack that no longer
+// ships the screen) and those of packages installed at run time (none by default).
+const packScreens = vi.hoisted(() => ({
+  dropped: [] as string[],
+  installed: [] as Array<{ id: string; kind: string; priority: number; declaredBy: string }>,
+}));
+vi.mock("@/lib/generated/agent-bindings", async (orig) => {
+  const real = await orig<typeof import("@/lib/generated/agent-bindings")>();
+  return {
+    ...real,
+    get GENERATED_FIELD_RENDERER_BINDINGS() {
+      return real.GENERATED_FIELD_RENDERER_BINDINGS.filter((b) => !packScreens.dropped.includes(b.id));
+    },
+  };
+});
+vi.mock("../field-renderer-bindings.server", () => ({
+  collectInstalledFieldRendererBindings: () => packScreens.installed,
+}));
+/** The two publish packs' own confirmation screens, as their old pins declared them. */
+const OLD_PUBLISH_SCREENS = [
+  { id: "@cinatra-ai/blog-wordpress-publish-agent:draft-confirm", kind: "wordpress-draft-confirm" },
+  { id: "@cinatra-ai/blog-linkedin-publish-agent:draft-review", kind: "linkedin-draft-review" },
+];
+
+// The run's latest-task key, stubbed at its leaf as the transport is: none by default.
+const latestKey = vi.hoisted(() => vi.fn<(runId: string) => Promise<string | null>>(async () => null));
+vi.mock("../../../a2a/src/event-log", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveLatestWayflowGateTaskId: latestKey,
+}));
+
 const decisions = vi.hoisted(() => ({
   readLatestDecisionForRun: vi.fn(async (): Promise<unknown> => null),
 }));
 vi.mock("../publish-decision-store", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   readLatestDecisionForRun: decisions.readLatestDecisionForRun,
+}));
+
+// The paused step's durable record: none by default (a real absence), so the
+// resume road goes on to the checks this suite is about.
+const durableGate = vi.hoisted(() => ({
+  read: vi.fn<(runId?: string, reviewTaskId?: string) => Promise<unknown>>(async () => null),
+  // The run's current gate (its newest durable row): by default the record the
+  // suite gives for the run's own task.
+  current: vi.fn<(runId: string) => Promise<unknown>>(async () => null),
+}));
+const currentIsTheRunsTask = (runId: string) => durableGate.read(runId, "wayflow-task-1");
+durableGate.current.mockImplementation(currentIsTheRunsTask);
+vi.mock("../agent-run-hitl-prompts", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  readDurableHitlGateForContinue: durableGate.read,
+  readCurrentDurableHitlGate: durableGate.current,
 }));
 
 const ACTOR = { actorType: "human" as const, source: "ui" as const, userId: "user-a" };
@@ -475,4 +526,319 @@ describe("agent_run_resume on a template that lists no publishing step, for a ru
     expect(moves()[0]).toEqual(["run-1", "pending_approval", "running"]);
     expect(sendTaskSpy).toHaveBeenCalledTimes(1);
   });
+});
+
+// THE PAUSED STEP'S DURABLE RECORD DECIDES WHETHER `agent_run_resume` MAY ANSWER IT.
+// A display-only card (the artifact-review redirect) is consumed only by its
+// review's own decision; a record that cannot be read refuses; only a real
+// absence (`null`) goes on as before. Nothing is claimed, fenced, recorded or sent
+// on a refusal, and the run stays parked.
+describe("agent_run_resume and the paused step's durable record", () => {
+  const gateFor = (xRenderer: string) => ({
+    runId: "run-1",
+    reviewTaskId: "wayflow-task-1",
+    xRenderer,
+    inputSchema: { type: "object" },
+    values: {},
+    materializedAt: "2026-11-25T00:00:00.000Z",
+  });
+  const nothingMoved = () => {
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(storeMock.transitionRunStatus).not.toHaveBeenCalled();
+    expect(storeMock.writeHitlPrompt).not.toHaveBeenCalled();
+    expect(sendTaskSpy).not.toHaveBeenCalled();
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Implementations an earlier suite left (its fence's row) must not feed this one.
+    for (const m of [storeMock.readAgentRunById, storeMock.transitionRunStatus, decisions.readLatestDecisionForRun, sendTaskSpy]) m.mockReset();
+    storeMock.transitionRunStatus.mockResolvedValue(undefined);
+    pauseClaimFake.claimPause.mockReset().mockImplementation(async () => ({ kind: "claimed", token: "tok-fake", generation: 1, expiresAt: new Date(0) }));
+    authSessionMock.resolveOrgRoleForUser.mockResolvedValue("member");
+    enforceRunAccessSpy.mockResolvedValue(undefined);
+    storeMock.readAgentRunById.mockResolvedValue(pausedRun());
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tmpl-1",
+      packageName: "@cinatra-ai/web-research-agent",
+      sourceType: "internal",
+      agentAuthPolicy: null,
+    });
+    sendTaskSpy.mockResolvedValue({
+      id: "task-1",
+      contextId: "ctx-1",
+      status: { state: "completed", message: { parts: [] } },
+      metadata: {},
+      history: [{ role: "agent", parts: [{ kind: "text", text: "done" }] }],
+    });
+    holdSpy.mockResolvedValue({ held: false, reason: "no-review" });
+    decisions.readLatestDecisionForRun.mockResolvedValue(null);
+    durableGate.read.mockReset().mockResolvedValue(null);
+    durableGate.current.mockReset().mockImplementation(currentIsTheRunsTask);
+    latestKey.mockReset().mockResolvedValue(null);
+  });
+
+  // THE RUN'S CURRENT GATE DECIDES (its newest durable row), never the row its
+  // task column names: that column can be stale, and the resume reaches the
+  // current gate through the run's context.
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("an answerable row under the run's stale task does not open a display-only current gate", async () => {
+    // The run's latest-task key names the newer task: the task column is stale.
+    latestKey.mockResolvedValue("task-2");
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-2",
+    });
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    nothingMoved();
+  });
+
+  // red-first-expect: to be called with arguments: [ 'run-1' ]
+  it("a display-only row under the run's stale task does not refuse an answerable current gate", async () => {
+    // The run's latest-task key names the newer task: the task column (task-1) is stale.
+    latestKey.mockResolvedValue("task-2");
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:schema-field-fallback"),
+      reviewTaskId: "wayflow-task-2",
+    });
+    const answer = (await resume()) as { error?: string };
+    expect(durableGate.current).toHaveBeenCalledWith("run-1");
+    // The resume goes on to the claim and the send (what follows the send is
+    // other suites' concern).
+    expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: to be called with arguments: [ 'run-1' ]
+  it("the current gate is read for the run, and its refusal stands whatever the task's row says", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:schema-field-fallback"));
+    durableGate.current.mockResolvedValue(gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"));
+    const answer = (await resume()) as { error?: string };
+    expect(durableGate.current).toHaveBeenCalledWith("run-1");
+    expect(answer.error).toBe("Run run-1 is paused at an artifact review; it goes on only when that review is decided.");
+    nothingMoved();
+  });
+
+  // A RUN PARKED AT AN ARTIFACT REVIEW, AS PRODUCTION RECORDS IT: the review
+  // park opens the review's gate in the review store, keys the pause's task as
+  // the run's latest and parks the run under it, and writes NO durable step row.
+  const REVIEW_REFUSAL = "Run run-1 is paused at an artifact review; it goes on only when that review is decided.";
+  const parkAtReview = (status: "pending" | "resolved" = "pending") => {
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status, orgId: "org-1" }];
+    // A decided review's decision wrote its resume intent; its delivery has not run yet.
+    reviewStore.deliveries = status === "resolved" ? [{ reviewTaskId: "wayflow-task-1", status: "pending", deadLettered: false }] : [];
+    latestKey.mockResolvedValue("task-1");
+    durableGate.read.mockResolvedValue(null);
+    durableGate.current.mockResolvedValue(null);
+  };
+
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a run parked at an artifact review (no durable row) is refused and nothing is dispatched", async () => {
+    parkAtReview();
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a review of several artifacts (a gate per artifact) refuses the same way", async () => {
+    parkAtReview();
+    reviewStore.gates = [
+      { reviewTaskId: "wayflow-task-1", status: "resolved", orgId: "org-1" },
+      { reviewTaskId: "wayflow-task-1#2", status: "pending", orgId: "org-1" },
+    ];
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  // AFTER THE DECISION: the review's resume delivery alone moves the run on.
+  // Until it has, a late resume is refused, so the pause is never resumed twice.
+  // red-first-expect: to be 'Run run-1 is paused at an artifact
+  it("a late resume after the review is decided, before its delivery moved the run, is refused", async () => {
+    parkAtReview("resolved");
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe(REVIEW_REFUSAL);
+    nothingMoved();
+  });
+
+  it("once the delivery moved the run to its next pause, a resume answers that pause, not the review", async () => {
+    parkAtReview("resolved");
+    reviewStore.deliveries = [{ reviewTaskId: "wayflow-task-1", status: "done", deadLettered: false }];
+    storeMock.readAgentRunById.mockResolvedValue({ ...pausedRun(), a2aTaskId: "task-2" });
+    latestKey.mockResolvedValue("task-2");
+    await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("the review's own decision road does not take this refusal: its delivery is the one road that continues the run", () => {
+    const delivery = readFileSync(join(__dirname, "../artifact-review-resume-delivery.ts"), "utf8");
+    expect(delivery).not.toMatch(/currentHitlGateRefusal/);
+    expect(delivery).toMatch(/claimPause\(/);
+  });
+
+  // THE EXECUTOR'S FALLBACK: a review gate that does not hold the pause (decided
+  // and delivered earlier, or another organization's) makes the executor park the
+  // pause as an ordinary step. Its durable row is best-effort: with it or without
+  // it (the write failed), the step is resumed, once.
+  for (const review of [
+    { why: "decided and delivered earlier", status: "resolved", orgId: "org-1", delivery: "done" },
+    { why: "another organization's", status: "pending", orgId: "org-other", delivery: null },
+  ]) {
+    for (const withRow of [true, false]) {
+      it(`the fallback's ordinary step beside a review gate ${review.why} is resumed once (${withRow ? "with" : "without"} its durable row)`, async () => {
+        reviewStore.gates = [{ reviewTaskId: "wayflow-task-1", status: review.status, orgId: review.orgId }];
+        reviewStore.deliveries = review.delivery ? [{ reviewTaskId: "wayflow-task-1", status: review.delivery, deadLettered: false }] : [];
+        latestKey.mockResolvedValue("task-1");
+        const row = withRow ? gateFor("@cinatra-ai/agent-builder:schema-field-fallback") : null;
+        durableGate.read.mockResolvedValue(row);
+        durableGate.current.mockResolvedValue(row);
+        const answer = (await resume()) as { error?: string };
+        expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
+        expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+        expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+      });
+    }
+  }
+
+  it("a review gate of an earlier pause does not refuse the step the run waits at now", async () => {
+    reviewStore.gates = [{ reviewTaskId: "wayflow-task-0", status: "resolved", orgId: "org-1" }];
+    latestKey.mockResolvedValue("task-1");
+    await resume();
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // red-first-expect: to be 'Run run-1 cannot be resumed: its paus
+  it("an unreadable review store refuses with the fixed text; nothing is claimed or sent", async () => {
+    const seam = (globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> }).__cinatraArtifactReviewGateSeam!;
+    seam.listGates = async () => { throw new Error("permission denied for table artifact_review_gates"); };
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe("Run run-1 cannot be resumed: its paused step could not be read.");
+    nothingMoved();
+  });
+
+  // red-first-expect: to not be called at all, but actually been called 1 times
+  it("a durable record that cannot be read refuses with a fixed text; nothing is claimed or sent", async () => {
+    durableGate.read.mockRejectedValue(new Error("permission denied for table agent_run_hitl_gates"));
+    const answer = (await resume()) as { error?: string };
+    expect(pauseClaimFake.claimPause).not.toHaveBeenCalled();
+    expect(answer.error).toBe("Run run-1 cannot be resumed: its paused step could not be read.");
+    nothingMoved();
+  });
+
+  it("no durable record (a real null) and no review gate is resumed as before", async () => {
+    await resume();
+    expect(durableGate.read).toHaveBeenCalledWith("run-1", "wayflow-task-1");
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("an ordinary builder input step still answers", async () => {
+    for (const id of [
+      "@cinatra-ai/agent-builder:schema-field-fallback",
+      "@cinatra-ai/agent-builder:grouped-setup-form",
+      "@cinatra-ai/agent-builder:personal-skill",
+    ]) {
+      sendTaskSpy.mockClear();
+      durableGate.read.mockResolvedValue(gateFor(id));
+      await resume();
+      expect(sendTaskSpy, id).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  // A PACKAGE'S OWN SCREEN THAT NO PACKAGE DECLARES ANY MORE IS RETIRED: the
+  // flow installed under the run changed (`hitlStepIsRetired`).
+  // red-first-expect: to be 'Run run-1 is paused at a retired step
+  it("a package screen that no binding declares is refused as retired", async () => {
+    durableGate.read.mockResolvedValue(gateFor("@acme/removed:output"));
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+    nothingMoved();
+  });
+
+  for (const screen of OLD_PUBLISH_SCREENS) {
+    // red-first-expect: to be 'Run run-1 is paused at a retired step
+    it(`${screen.id}: refused once the bundled pack no longer declares it and no installed pack does`, async () => {
+      packScreens.dropped = [screen.id];
+      packScreens.installed = [];
+      durableGate.read.mockResolvedValue(gateFor(screen.id));
+      const answer = (await resume()) as { error?: string };
+      packScreens.dropped = [];
+      expect(answer.error).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+      nothingMoved();
+    });
+    it(`${screen.id}: resumed where an installed older pack still declares it (its old flow runs)`, async () => {
+      packScreens.dropped = [screen.id];
+      packScreens.installed = [{ id: screen.id, kind: screen.kind, priority: 90, declaredBy: "installed" }];
+      durableGate.read.mockResolvedValue(gateFor(screen.id));
+      await resume();
+      packScreens.dropped = [];
+      packScreens.installed = [];
+      expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+      expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+    });
+  }
+
+  // THE SERVER REFUSES WHAT THE HOSTS WITHHOLD: a retired step (the set every
+  // host draws no Continue for) is answered by nothing, under any id of it.
+  // red-first-expect: TOMBSTONED_HITL_RENDERER_IDS is not iterable
+  it("a pause on any retired step is refused and not consumed", async () => {
+    const retired = [
+      ...midRun.TOMBSTONED_HITL_RENDERER_IDS,
+      `${[...midRun.TOMBSTONED_HITL_RENDERER_PACKAGES][0]}:any-step`,
+    ];
+    for (const id of retired) {
+      expect(midRun.parkedHitlStepIsAnswerable(id, null), id).toBe(false);
+      durableGate.read.mockResolvedValue(gateFor(id));
+      const answer = (await resume()) as { error?: string };
+      expect(answer.error, id).toBe("Run run-1 is paused at a retired step; it can no longer be answered.");
+      nothingMoved();
+    }
+  });
+
+  // WHICH STEP THE RUN WAITS AT is decided by its row and latest-task key; a
+  // durable row only confirms it. An older step's display-only row, newest
+  // because the current step's row was never written, refuses nothing.
+  it("an older step's display-only row does not refuse the step the run waits at", async () => {
+    durableGate.current.mockResolvedValue({
+      ...gateFor("@cinatra-ai/agent-builder:artifact-review-redirect"),
+      reviewTaskId: "wayflow-task-0",
+    });
+    latestKey.mockResolvedValue("task-1");
+    const answer = (await resume()) as { error?: string };
+    expect(answer.error ?? "").not.toMatch(/artifact review|could not be read/);
+    expect(pauseClaimFake.claimPause).toHaveBeenCalledTimes(1);
+    expect(sendTaskSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// THE REVIEW STORE, as the generic answer roads read it (`currentHitlGateRefusal`:
+// the run's artifact review gates and their resume deliveries through the bound
+// seam). `reviewStore.gates` / `.deliveries`: what the store holds for the run,
+// none by default.
+const reviewStore = {
+  gates: [] as Array<{ reviewTaskId: string; status: string; orgId: string }>,
+  deliveries: [] as Array<{ reviewTaskId: string; status: string; deadLettered: boolean }>,
+};
+const reviewSeamSlot = globalThis as { __cinatraArtifactReviewGateSeam?: Record<string, unknown> };
+let seamBeforeTest: Record<string, unknown> | undefined;
+beforeEach(() => {
+  seamBeforeTest = reviewSeamSlot.__cinatraArtifactReviewGateSeam;
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = {
+    ...seamBeforeTest,
+    listGates: seamBeforeTest?.listGates ?? (async () => reviewStore.gates),
+    listResumeDeliveries: seamBeforeTest?.listResumeDeliveries ?? (async () => reviewStore.deliveries),
+  };
+});
+afterEach(() => {
+  reviewSeamSlot.__cinatraArtifactReviewGateSeam = seamBeforeTest;
+  reviewStore.gates = [];
+  reviewStore.deliveries = [];
 });

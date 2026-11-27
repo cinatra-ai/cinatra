@@ -82,6 +82,7 @@ import {
   readReviewGateTimesForRun,
   updateHitlPromptsExcludedForRunAgent,
   readNonExcludedAgentIdsForRun,
+  readCurrentDurableHitlGate,
 } from "./agent-run-hitl-prompts";
 export {
   writeHitlPrompt,
@@ -2531,38 +2532,14 @@ export async function writeDurableHitlGateArtifact(
  * The newest durable gate row for a run, or null when the run has none.
  *
  * A run that walked several gates keeps one row per gate; the newest is the gate
- * the run is parked on, which is the only one a surface may answer.
+ * the run is parked on, which is the only one a surface may answer. Read by
+ * `readCurrentDurableHitlGate`, the one reading of it.
  */
 export async function readLatestDurableHitlGateArtifact(
   runId: string,
   deps: HitlGateStoreDeps = {},
 ): Promise<DurableHitlGateArtifact | null> {
-  const query = deps.query ?? defaultHitlGateQuery;
-  const rows = await query<{
-    run_id: string;
-    review_task_id: string;
-    x_renderer: string;
-    input_schema: Record<string, unknown> | null;
-    gate_values: Record<string, unknown> | null;
-    field_name: string | null;
-  }>(
-    `SELECT run_id, review_task_id, x_renderer, input_schema, gate_values, field_name
-       FROM ${hitlGateTable()}
-      WHERE run_id = $1
-      ORDER BY materialized_at DESC
-      LIMIT 1`,
-    [runId],
-  );
-  const row = rows[0];
-  if (!row) return null;
-  return {
-    runId: row.run_id,
-    reviewTaskId: row.review_task_id,
-    xRenderer: row.x_renderer,
-    inputSchema: row.input_schema ?? {},
-    values: row.gate_values ?? {},
-    ...(row.field_name ? { fieldName: row.field_name } : {}),
-  };
+  return readCurrentDurableHitlGate(runId, { query: deps.query ?? defaultHitlGateQuery });
 }
 
 // ---------------------------------------------------------------------------
