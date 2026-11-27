@@ -35,9 +35,13 @@
 // exit 2 -> the gate itself could not run.
 //
 // FLOOR COMPARED WITH THE BASE (cinatra#3832): the rollout file is this gate's
-// floor. A pull request may not loosen it in its own change: it may not name a
-// new grandfathered branch or a new known finding, lower the enforcement mode,
-// move `gateLandedAt` later or change `trunkBranch`. The base comes from
+// floor. A pull request may not loosen it in its own change. "Loosen" is
+// defined on the policy the check would actually apply (one reading, shared
+// with the check: `effectiveRolloutPolicy`), never on the file's spelling: a
+// weaker effective mode, a new known finding, and under `warn-first` a new
+// grandfathered branch, another trunk or a later `gateLandedAt`. A field the
+// head's effective mode does not read (every branch field under `enforce-all`)
+// and an explicit `null` (the check's own default) change nothing. The base comes from
 // CHAT_HITL_EVIDENCE_BASE when a workflow sets it, else from the pull request's
 // base branch (fetched one commit deep when the checkout does not hold it); a
 // base that cannot be read fails closed (the shared guard,
@@ -58,7 +62,7 @@ import {
   parseCellName,
   validateCaptureIndex,
 } from "./lib/capture-record-contract.mjs";
-import { decideOutcome } from "./lib/evidence-gate-rollout.mjs";
+import { decideOutcome, effectiveRolloutPolicy } from "./lib/evidence-gate-rollout.mjs";
 import { compareFloorWithBase, newKeys, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -80,63 +84,68 @@ export const FLOOR_FILE = "scripts/ci/chat-hitl-evidence-gate.rollout.json";
 /** The variable a workflow may set to name the base revision. */
 export const FLOOR_BASE_VAR = "CHAT_HITL_EVIDENCE_BASE";
 
-// How strongly each enforcement mode holds; an unknown mode only warns.
-const MODE_RANK = { off: 0, "warn-first": 1, "enforce-all": 2 };
-const modeRank = (mode) => (Object.hasOwn(MODE_RANK, mode) ? MODE_RANK[mode] : 0);
+// How strongly each EFFECTIVE mode holds (`effectiveRolloutPolicy`): an unknown
+// mode is `disabled` and enforces nothing, like `off`.
+const MODE_RANK = { disabled: 0, off: 0, "warn-first": 1, "enforce-all": 2 };
 
 /**
- * A rollout file's text -> the parts of it that decide what is enforced;
- * throws, naming the field, when the text is not a rollout file.
- *
- * Every field the comparison reads is checked for its SHAPE with strict type
- * checks, because the runtime (`lib/evidence-gate-rollout.mjs`) compares with
- * `===` and reads `includes`/`Set`: a value of another shape (an array holding
- * the mode, a number, a null) is "unknown" there and DISABLES enforcement, yet
- * can rank like the real value when it is used as a property key. A field that
- * is absent takes the runtime's own default; any other shape is refused.
+ * A rollout file's text -> its EFFECTIVE policy, read the way the check itself
+ * reads it (`effectiveRolloutPolicy` in `lib/evidence-gate-rollout.mjs`, the
+ * same reading `resolveEnforcement` and `partitionFindings` use): defaults
+ * applied, and only the fields the effective mode reads. Throws, naming the
+ * field, when the text is not JSON, is not an object, or holds a list field
+ * that the check would read only by accident (a string, a number, an object)
+ * in a mode that reads it. Nothing else is refused: what the check accepts,
+ * this accepts.
  */
 export function parseRolloutFloor(text) {
   const doc = JSON.parse(text);
   if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a rollout object");
-  const names = (key) => {
-    const list = doc[key] === undefined ? [] : doc[key];
-    if (!Array.isArray(list) || !list.every((k) => typeof k === "string")) {
-      throw new Error(`${key} is not a list of names`);
-    }
-    return list;
-  };
-  const grandfatheredBranches = names("grandfatheredBranches");
-  const knownFindings = names("knownFindings");
-  const enforcement = doc.enforcement === undefined ? "warn-first" : doc.enforcement;
-  if (typeof enforcement !== "string" || !Object.hasOwn(MODE_RANK, enforcement)) {
-    throw new Error(`enforcement is not one of ${Object.keys(MODE_RANK).join(", ")}`);
+  const effective = effectiveRolloutPolicy(doc);
+  for (const key of ["grandfatheredBranches", "knownFindings"]) {
+    if (key in effective && effective[key] === null) throw new Error(`${key} is not a list of names`);
   }
-  const trunkBranch = doc.trunkBranch === undefined ? "main" : doc.trunkBranch;
-  if (typeof trunkBranch !== "string" || trunkBranch.trim() === "") {
-    throw new Error("trunkBranch is not a non-empty branch name");
-  }
-  const gateLandedAt = doc.gateLandedAt;
-  if (typeof gateLandedAt !== "string" || !Number.isFinite(Date.parse(gateLandedAt))) {
-    throw new Error("gateLandedAt is not a date string");
-  }
-  return { enforcement, trunkBranch, gateLandedAt, grandfatheredBranches, knownFindings };
+  return effective;
 }
 
-/** One line per loosening of the rollout file against the base. */
+/** Does the effective policy enforce on any case at all? */
+const enforcesAnything = (p) => p.mode === "enforce-all" || (p.mode === "warn-first" && p.startMs !== null);
+
+/** The branches a warn-first policy never enforces on: the trunk and the listed ones. */
+const exceptedBranches = (p) => new Set([...p.grandfatheredBranches, ...(p.trunk === null ? [] : [p.trunk])]);
+
+const isoOrUnset = (ms) => (ms === null ? "unset" : new Date(ms).toISOString());
+
+/**
+ * One line per way the HEAD policy fails on fewer cases than the BASE policy,
+ * both in their effective form (`parseRolloutFloor`). A case is (branch, first
+ * commit date, finding); a policy fails it when it enforces on the branch and
+ * the finding is not known. So the head is looser when, for a base that
+ * enforces anything:
+ *   - its mode is weaker (`disabled` and `off` enforce nothing);
+ *   - it knows a finding the base does not (both modes read the list);
+ *   - under `warn-first` on both sides: it excepts a branch the base does not
+ *     (a listed branch, or another trunk), or it starts later.
+ * A field the head's effective mode does not read never counts, and a base that
+ * enforces nothing has nothing to loosen. Removing an entry is never looser.
+ */
 export function loosenings(base, head) {
-  const out = [
-    ...newKeys(base.grandfatheredBranches, head.grandfatheredBranches).map((b) => `grandfathered branch ${b}`),
-    ...newKeys(base.knownFindings, head.knownFindings).map((k) => `known finding ${k}`),
-  ];
-  if (modeRank(head.enforcement) < modeRank(base.enforcement)) {
-    out.push(`enforcement (${base.enforcement} -> ${head.enforcement})`);
+  if (!enforcesAnything(base)) return [];
+  const out = [];
+  if (MODE_RANK[head.mode] < MODE_RANK[base.mode]) out.push(`enforcement (${base.mode} -> ${head.mode})`);
+  if (head.knownFindings) {
+    out.push(...newKeys(base.knownFindings, head.knownFindings).map((k) => `known finding ${k}`));
   }
-  const was = Date.parse(base.gateLandedAt ?? "");
-  const now = Date.parse(head.gateLandedAt ?? "");
-  if (Number.isFinite(was) && !(Number.isFinite(now) && now <= was)) {
-    out.push(`gateLandedAt (${base.gateLandedAt} -> ${head.gateLandedAt})`);
+  if (base.mode === "warn-first" && head.mode === "warn-first") {
+    const was = exceptedBranches(base);
+    for (const b of [...exceptedBranches(head)].filter((x) => !was.has(x))) {
+      if (head.grandfatheredBranches.includes(b)) out.push(`grandfathered branch ${b}`);
+      if (b === head.trunk) out.push(`trunkBranch (${base.trunk} -> ${head.trunk})`);
+    }
+    if (head.startMs === null || head.startMs > base.startMs) {
+      out.push(`gateLandedAt (${isoOrUnset(base.startMs)} -> ${isoOrUnset(head.startMs)})`);
+    }
   }
-  if (head.trunkBranch !== base.trunkBranch) out.push(`trunkBranch (${base.trunkBranch} -> ${head.trunkBranch})`);
   return out.sort();
 }
 
@@ -149,8 +158,8 @@ export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = proc
   try {
     headFloor = parseRolloutFloor(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
   } catch (err) {
-    // A malformed head cannot count as "not looser": the runtime would treat it
-    // as unknown and disable enforcement.
+    // A head that is no JSON object, or whose list the check would read only by
+    // accident, cannot count as "not looser": fail closed.
     return {
       status: "malformed",
       ok: false,

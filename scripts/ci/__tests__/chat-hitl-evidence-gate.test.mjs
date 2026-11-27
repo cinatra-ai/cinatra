@@ -27,6 +27,10 @@ import {
   partitionFindings,
   resolveEnforcement,
 } from "../lib/evidence-gate-rollout.mjs";
+// Namespace imports for what cinatra#3832 adds, so that a tree without it still
+// loads this file and fails by assertion.
+import * as rolloutLib from "../lib/evidence-gate-rollout.mjs";
+import * as gateLib from "../chat-hitl-evidence-gate.mjs";
 import {
   discoverDispatchSources,
   extractStringLiterals,
@@ -400,15 +404,19 @@ describe("chat-hitl-evidence-gate — floor compared with the base", () => {
   });
 
   it("a raised floor FAILS: a new grandfathered branch, a new known finding, a lower mode, a later cut", () => {
-    const base = rollout({ enforcement: "enforce-all", knownFindings: [] });
+    // Under warn-first every field is read; under enforce-all only the mode and
+    // the known findings are (see the table below for the ignored ones).
+    const warn = rollout({ enforcement: "warn-first", knownFindings: [] });
+    const enforceAll = rollout({ enforcement: "enforce-all", knownFindings: [] });
     const cases = [
-      [rollout({ enforcement: "enforce-all", grandfatheredBranches: [...POLICY.grandfatheredBranches, "feat/mine"] }), /grandfathered branch feat\/mine/],
-      [rollout({ enforcement: "enforce-all", knownFindings: ["pointer-text:a.ts:1"] }), /known finding pointer-text:a\.ts:1/],
-      [rollout({ enforcement: "warn-first" }), /enforcement \(enforce-all -> warn-first\)/],
-      [rollout({ enforcement: "enforce-all", gateLandedAt: "2030-01-01T00:00:00Z" }), /gateLandedAt/],
-      [rollout({ enforcement: "enforce-all", trunkBranch: "feat/mine" }), /trunkBranch \(main -> feat\/mine\)/],
+      [warn, rollout({ grandfatheredBranches: [...POLICY.grandfatheredBranches, "feat/mine"] }), /grandfathered branch feat\/mine/],
+      [warn, rollout({ knownFindings: ["pointer-text:a.ts:1"] }), /known finding pointer-text:a\.ts:1/],
+      [warn, rollout({ gateLandedAt: "2030-01-01T00:00:00Z" }), /gateLandedAt/],
+      [warn, rollout({ trunkBranch: "feat/mine" }), /trunkBranch \(main -> feat\/mine\)/],
+      [enforceAll, rollout({ enforcement: "warn-first" }), /enforcement \(enforce-all -> warn-first\)/],
+      [enforceAll, rollout({ enforcement: "enforce-all", knownFindings: ["pointer-text:a.ts:1"] }), /known finding pointer-text:a\.ts:1/],
     ];
-    for (const [head, line] of cases) {
+    for (const [base, head, line] of cases) {
       const r = guard(base, head);
       expect(r.status).toBe("grew");
       expect(r.ok).toBe(false);
@@ -431,6 +439,7 @@ describe("chat-hitl-evidence-gate — floor compared with the base", () => {
   it("a base that cannot be read FAILS with its reason: unresolved, not a rollout file", () => {
     const f = makeFloorRepo({ base: { [FLOOR_FILE]: rollout() }, head: { [FLOOR_FILE]: rollout() } });
     cleanups.push(f.cleanup);
+    expect(typeof checkFloorAgainstBase).toBe("function");
     const r = checkFloorAgainstBase({ repoRoot: f.root, env: UNREADABLE_BASE_RUN });
     expect(r).toMatchObject({ ok: false, status: "unreadable" });
     expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
@@ -439,31 +448,29 @@ describe("chat-hitl-evidence-gate — floor compared with the base", () => {
     expect(bad.lines[0]).toMatch(/not a readable floor \(grandfatheredBranches is not a list of names\)/);
   });
 
-  it("a malformed rollout file FAILS closed with the field named, on the head and on the base", () => {
+  it("an unreadable rollout file FAILS closed with the field named, on the head and on the base", () => {
+    // Only what the check itself cannot read as the list it means: a list field
+    // that is a string, a number or an object (read in a mode that reads it).
     const cases = [
-      ["enforcement", { enforcement: ["warn-first"] }],
-      ["enforcement", { enforcement: 1 }],
-      ["enforcement", { enforcement: null }],
-      ["enforcement", { enforcement: "strict" }],
-      ["enforcement", { enforcement: "toString" }],
       ["grandfatheredBranches", { grandfatheredBranches: "feat/x" }],
-      ["grandfatheredBranches", { grandfatheredBranches: ["feat/x", 3] }],
+      ["grandfatheredBranches", { grandfatheredBranches: 3 }],
       ["knownFindings", { knownFindings: { a: 1 } }],
-      ["knownFindings", { knownFindings: [null] }],
-      ["gateLandedAt", { gateLandedAt: "not a date" }],
-      ["gateLandedAt", { gateLandedAt: 1787000000000 }],
-      ["gateLandedAt", { gateLandedAt: null }],
-      ["trunkBranch", { trunkBranch: "" }],
-      ["trunkBranch", { trunkBranch: null }],
-      ["trunkBranch", { trunkBranch: ["main"] }],
+      ["knownFindings", { knownFindings: "pointer-text" }],
     ];
     for (const [field, over] of cases) {
+      // POLICY is warn-first, which reads both lists, so head and base are both refused.
       const head = guard(rollout({ enforcement: "enforce-all" }), rollout(over));
       expect(head.ok, JSON.stringify(over)).toBe(false);
       expect(head.lines.join("\n"), JSON.stringify(over)).toContain(field);
       const base = guard(rollout(over), rollout());
       expect(base.ok, JSON.stringify(over)).toBe(false);
       expect(base.lines.join("\n"), JSON.stringify(over)).toContain(field);
+    }
+    for (const text of ["not json", "[]", "null", "5"]) {
+      const f = makeFloorRepo({ base: { [FLOOR_FILE]: rollout() }, head: { [FLOOR_FILE]: text } });
+      cleanups.push(f.cleanup);
+      const r = checkFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+      expect(r, text).toMatchObject({ ok: false, status: "malformed" });
     }
   });
 
@@ -490,5 +497,180 @@ describe("chat-hitl-evidence-gate — floor compared with the base", () => {
       /\[chat-hitl-evidence-gate\] FAIL — the floor scripts\/ci\/chat-hitl-evidence-gate\.rollout\.json cannot be compared with the base/,
     );
     expect(run.stdout).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE READING (cinatra#3832): "looser" is defined on the policy the check
+// itself would apply, never on how the file spells it.
+// ---------------------------------------------------------------------------
+
+describe("chat-hitl-evidence-gate — the base comparison reads the rollout file the way the check does", () => {
+  const R = (over = {}) => ({ ...POLICY, grandfatheredBranches: ["feat/a", "feat/b"], knownFindings: ["k:1"], ...over });
+  const parse = (doc) => {
+    expect(typeof gateLib.parseRolloutFloor).toBe("function");
+    return gateLib.parseRolloutFloor(JSON.stringify(doc));
+  };
+  const looser = (base, head) => {
+    expect(typeof gateLib.loosenings).toBe("function");
+    return gateLib.loosenings(parse(base), parse(head));
+  };
+
+  it("exports the shared reading and the comparison", () => {
+    expect(typeof rolloutLib.effectiveRolloutPolicy).toBe("function");
+    expect(typeof rolloutLib.readRolloutPolicy).toBe("function");
+    expect(typeof gateLib.parseRolloutFloor).toBe("function");
+    expect(typeof gateLib.loosenings).toBe("function");
+  });
+
+  it("a switch to enforce-all PASSES whichever field the check ignores there is changed", () => {
+    const base = R();
+    const changes = [
+      { grandfatheredBranches: [...base.grandfatheredBranches, "feat/more"] },
+      { grandfatheredBranches: "not a list" },
+      { gateLandedAt: "2031-01-01T00:00:00Z" },
+      { gateLandedAt: "garbage" },
+      { trunkBranch: "feat/other" },
+      { trunkBranch: ["x"] },
+    ];
+    for (const change of changes) {
+      expect(looser(base, R({ enforcement: "enforce-all", ...change })), JSON.stringify(change)).toEqual([]);
+      // ... and the same under enforce-all on both sides.
+      expect(looser(R({ enforcement: "enforce-all" }), R({ enforcement: "enforce-all", ...change })), JSON.stringify(change)).toEqual([]);
+    }
+  });
+
+  it("an explicit null behaves exactly like an omitted field, in both directions", () => {
+    const omit = (key) => {
+      const { [key]: _gone, ...rest } = R();
+      return rest;
+    };
+    for (const key of ["enforcement", "trunkBranch", "grandfatheredBranches", "knownFindings", "gateLandedAt"]) {
+      const omitted = omit(key);
+      const nulled = { ...omitted, [key]: null };
+      expect(parse(nulled), key).toEqual(parse(omitted));
+      expect(looser(omitted, nulled), key).toEqual([]);
+      expect(looser(nulled, omitted), key).toEqual([]);
+      // and it is not malformed on the repository road either
+      expect(() => parse(nulled), key).not.toThrow();
+    }
+    // the omitted/null defaults are the check's own
+    expect(parse({ gateLandedAt: "2026-08-19T00:00:00Z" })).toMatchObject({ mode: "warn-first", trunk: "main", grandfatheredBranches: [], knownFindings: [] });
+  });
+
+  it("a mode the check does not know DISABLES enforcement and is looser: wrapped, number, unknown, inherited name", () => {
+    for (const mode of [["warn-first"], ["enforce-all"], 1, 0, true, "strict", "Warn-First", "toString", "constructor", {}, ""]) {
+      expect(parse(R({ enforcement: mode })).mode, JSON.stringify(mode)).toBe("disabled");
+      expect(looser(R(), R({ enforcement: mode })).join("\n"), JSON.stringify(mode)).toMatch(/enforcement \(warn-first -> disabled\)/);
+      expect(looser(R({ enforcement: "enforce-all" }), R({ enforcement: mode })).join("\n"), JSON.stringify(mode)).toMatch(/-> disabled/);
+    }
+    expect(looser(R(), R({ enforcement: "off" })).join("\n")).toMatch(/enforcement \(warn-first -> off\)/);
+    // a base that enforces nothing has nothing to loosen
+    expect(looser(R({ enforcement: "off" }), R({ enforcement: ["off"] }))).toEqual([]);
+    expect(looser(R({ enforcement: "off" }), R({ enforcement: "off", knownFindings: ["k:1", "k:2"] }))).toEqual([]);
+  });
+
+  it("each way to loosen under warn-first FAILS, each way to tighten PASSES", () => {
+    const base = R();
+    const failing = [
+      [{ grandfatheredBranches: ["feat/a", "feat/b", "feat/c"] }, /grandfathered branch feat\/c/],
+      [{ knownFindings: ["k:1", "k:2"] }, /known finding k:2/],
+      [{ gateLandedAt: "2027-01-01T00:00:00Z" }, /gateLandedAt/],
+      [{ gateLandedAt: null }, /gateLandedAt .* -> unset/],
+      [{ gateLandedAt: "not a date" }, /gateLandedAt/],
+      [{ trunkBranch: "feat/c" }, /trunkBranch \(main -> feat\/c\)/],
+    ];
+    for (const [change, line] of failing) {
+      expect(looser(base, R(change)).join("\n"), JSON.stringify(change)).toMatch(line);
+    }
+    const passing = [
+      { grandfatheredBranches: ["feat/a"] },
+      { grandfatheredBranches: [] },
+      { knownFindings: [] },
+      { gateLandedAt: "2026-01-01T00:00:00Z" },
+      { enforcement: "enforce-all" },
+      { enforcement: "enforce-all", knownFindings: [] },
+      { grandfatheredBranches: ["feat/b", "feat/a", "feat/a"] }, // order and repeats are not growth
+      { trunkBranch: "feat/b" }, // an already excepted name is no new exception; "main" drops out
+    ];
+    for (const change of passing) {
+      expect(looser(base, R(change)), JSON.stringify(change)).toEqual([]);
+    }
+    expect(looser(R({ enforcement: "enforce-all" }), R({ enforcement: "warn-first" })).join("\n")).toMatch(/enforcement \(enforce-all -> warn-first\)/);
+  });
+
+  it("a list that holds something that is no name changes nothing: it can equal no branch and no finding", () => {
+    expect(looser(R(), R({ grandfatheredBranches: ["feat/a", "feat/b", 3, null, { x: 1 }] }))).toEqual([]);
+    expect(looser(R(), R({ knownFindings: ["k:1", null, 5] }))).toEqual([]);
+  });
+
+  // The property that makes the two readings impossible to drift apart: the
+  // verdict of the comparison equals "the check itself fails on fewer cases".
+  it("PROPERTY: the comparison says looser exactly when the check fails on fewer cases", () => {
+    const D0 = "2026-08-19T00:00:00Z";
+    const D1 = "2026-09-01T00:00:00Z";
+    const samples = [
+      R(),
+      R({ enforcement: "enforce-all" }),
+      R({ enforcement: "enforce-all", grandfatheredBranches: ["feat/z"], gateLandedAt: "2035-01-01T00:00:00Z", trunkBranch: "release" }),
+      R({ enforcement: "enforce-all", knownFindings: ["k:1", "k:2"] }),
+      R({ enforcement: "off" }),
+      R({ enforcement: ["warn-first"] }),
+      R({ enforcement: 1 }),
+      R({ enforcement: null }),
+      R({ enforcement: "bogus", knownFindings: ["k:9"] }),
+      R({ knownFindings: [] }),
+      R({ knownFindings: ["k:1", "k:2"] }),
+      R({ grandfatheredBranches: [] }),
+      R({ grandfatheredBranches: ["feat/a", "feat/b", "feat/c"] }),
+      R({ grandfatheredBranches: ["feat/a", "feat/b", 7, null] }),
+      R({ gateLandedAt: D1 }),
+      R({ gateLandedAt: "2026-01-01T00:00:00Z" }),
+      R({ gateLandedAt: null }),
+      R({ gateLandedAt: "garbage" }),
+      R({ trunkBranch: "release" }),
+      R({ trunkBranch: "feat/a" }),
+      R({ trunkBranch: null }),
+      R({ trunkBranch: ["main"] }),
+      R({ trunkBranch: "release", gateLandedAt: D1, knownFindings: [] }),
+    ];
+    const names = new Set(["main", "release", "feat/a", "feat/b", "feat/c", "feat/z", "feat/fresh-branch", "zzz"]);
+    const keys = new Set(["k:fresh"]);
+    const created = new Set([null, "garbage", "2020-01-01T00:00:00Z"]);
+    const day = 86_400_000;
+    for (const doc of samples) {
+      for (const n of [doc.trunkBranch, ...(Array.isArray(doc.grandfatheredBranches) ? doc.grandfatheredBranches : [])]) {
+        if (typeof n === "string") names.add(n);
+      }
+      for (const k of Array.isArray(doc.knownFindings) ? doc.knownFindings : []) if (typeof k === "string") keys.add(k);
+      const t = Date.parse(doc.gateLandedAt ?? "");
+      if (Number.isFinite(t)) for (const d of [-day, 0, day]) created.add(new Date(t + d).toISOString());
+    }
+    const NOW = new Date("2100-01-01T00:00:00Z");
+    const fails = (policy, branch, branchCreatedAt, key) =>
+      rolloutLib.decideOutcome({
+        findings: [{ key, code: "x", detail: "" }],
+        policy,
+        branch,
+        branchCreatedAt,
+        now: NOW,
+      }).failing.length > 0;
+    const failsOnFewer = (base, head) => {
+      for (const branch of names) for (const at of created) for (const key of keys) {
+        if (fails(base, branch, at, key) && !fails(head, branch, at, key)) return true;
+      }
+      return false;
+    };
+    let looserPairs = 0;
+    for (const base of samples) {
+      for (const head of samples) {
+        const verdict = looser(base, head).length > 0;
+        if (verdict) looserPairs += 1;
+        expect(verdict, `${JSON.stringify(base)} -> ${JSON.stringify(head)}`).toBe(failsOnFewer(base, head));
+      }
+    }
+    // the sample set exercises both outcomes
+    expect(looserPairs).toBeGreaterThan(20);
+    expect(looserPairs).toBeLessThan(samples.length * samples.length - samples.length);
   });
 });
