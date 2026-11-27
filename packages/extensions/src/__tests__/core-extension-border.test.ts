@@ -1307,21 +1307,46 @@ describe("core/extension border — unbounded-port-member", () => {
     });
   });
 
-  describe("a rest parameter is read conservatively, with no expansion", () => {
+  // A rest parameter of a plain array type or of a fixed tuple is read EXACTLY (as ordinary
+  // parameters); every other rest type is read conservatively (a possible free name AND a possible
+  // untyped payload), so its signature is a finding. Each case compares the whole list of findings.
+  describe("a rest parameter: a list or a fixed tuple is read exactly, anything else conservatively", () => {
     it.each([
-      ["a union of tuples (review example)", 'run(...args: [name: string, input: unknown] | [name: "a", input: { id: string }]): void'],
-      ["a variadic tuple with a generic spread (review example)", "run<A extends [unknown]>(name: string, ...rest: [boolean, ...A]): void"],
-      ["a fixed free name and a typed list: the rest part counts as untyped", "run(name: string, ...ids: number[]): void"],
-      ["a list of free names", "run(...names: string[]): void"],
+      ["a free name and an untyped list", "run(name: string, ...rest: unknown[]): void"],
+      ["a free name and an any list", "run(name: string, ...rest: any[]): void"],
+      ["a free name and a readonly untyped list", "run(name: string, ...rest: readonly unknown[]): void"],
       ["an untyped fixed payload and a list of free names", "run(input: unknown, ...names: string[]): void"],
-      ["a tuple", "run(...args: [id: number]): void"],
-      ["a generic rest", "run<A extends number[]>(...args: A): void"],
-      ["a list of unknown", 'run(name: "a", ...rest: unknown[]): void'],
-    ])("%s is reported", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
+      ["a tuple of a free name and an untyped payload", "run(...args: [name: string, input: unknown]): void"],
+      ["a tuple of an optional free name and an optional payload", "run(...args: [name?: string, input?: unknown]): void"],
+      ["a readonly tuple of a free name and an untyped payload", "run(...args: readonly [name: string, input: unknown]): void"],
+      ["a free name and a tuple payload", "run(name: string, ...args: [input: unknown]): void"],
+      ["an untyped payload and a tuple name", "run(input: unknown, ...args: [name: string]): void"],
+      ["the event tunnel: a free event name and an untyped list", "run(event: string, ...args: unknown[]): void"],
+    ])("%s is reported (read exactly)", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
     it.each([
+      ["a union of tuples (review example)", 'run(...args: [name: string, input: unknown] | [name: "known", input: { id: string }]): void'],
+      ["a union of tuples with no free name", "run(...args: [a: number] | [b: boolean]): void"],
+      ["a variadic tuple with a generic spread (review example)", "run<A extends [unknown]>(name: string, ...rest: [boolean, ...A]): void"],
+      ["a type parameter", "run<A extends number[]>(...args: A): void"],
+      ["a tuple with a type parameter element", "run<T>(...args: [T]): void"],
+      ["a tuple with a rest element", "run(...args: [id: number, ...rest: string[]]): void"],
+      ["a tuple with a leading rest element", "run(...args: [...rest: string[], id: number]): void"],
+      ["an any rest", "run(...args: any): void"],
+      ["a conditional rest type", "run<T>(...args: T extends string ? [id: number] : [id: string]): void"],
+      ["an intersection rest type", "run(...args: [id: number] & { tag: string }): void"],
+    ])("%s is reported (read conservatively)", (_n, m) => expect(jobs(m)).toEqual(["jobs.run"]));
+    it.each([
+      ["a free name and a typed list (review example)", "run(name: string, ...ids: number[]): void"],
+      ["a typed fixed tuple (review example)", "run(...args: [id: number]): void"],
+      ["a message and a typed list", "run(message: string, ...values: number[]): void"],
+      ["a list of free names", "run(...parts: string[]): void"],
       ["a plain list of one typed kind", "run(...ids: number[]): void"],
       ["a readonly list of objects after a literal name", 'run(name: "a", ...ids: readonly { id: string }[]): void'],
       ["an untyped fixed payload and a typed list", "run(input: unknown, ...ids: number[]): void"],
+      ["a free name and a list of records", "run(name: string, ...rest: Record<string, unknown>[]): void"],
+      ["a free name and a fixed tuple of typed elements", "run(name: string, ...args: [id: number, flag?: boolean]): void"],
+      ["a tuple of a free name and a typed payload", "run(...args: [name: string, input: { id: string }]): void"],
+      ["a tuple of a literal-union name and an untyped payload", 'run(...args: [name: "a" | "b", input: unknown]): void'],
     ])("%s passes", (_n, m) => expect(jobs(m)).toEqual([]));
     it("a variadic registration context fails closed with a plain line", () => {
       const register = REGISTER.replace("register(ctx: ExtensionHostContext)", "register(...ctx: [ExtensionHostContext])");

@@ -750,10 +750,12 @@ function productCompilerOptions(repoRoot) {
 /** `unbounded-port-member` (cinatra#4872): a host port member that takes a FREE NAME (a parameter of
  *  the plain `string` type) together with an UNTYPED PAYLOAD (another parameter of type `any` or
  *  `unknown`), the shape `run(name: string, input: unknown)`. Decided on the checker's resolved
- *  types, never on how a type is written. A signature with a REST parameter is read conservatively,
- *  with no expansion: a fixed free name makes it a finding (the rest part could be the payload);
- *  without one, it is a finding unless the rest is a plain array whose element is neither a free
- *  name nor untyped. The anchor is the registration contract: the module's exports, aliases
+ *  types, never on how a type is written. A REST parameter is read EXACTLY when its type is a plain
+ *  array `T[]` / `readonly T[]` (one more parameter of type T) or a tuple of fixed shape (its
+ *  elements as parameters); every other rest type (a union, a type parameter or a type still holding
+ *  one, a tuple with a rest or variadic element, `any`, `unknown`, an intersection, a conditional or
+ *  indexed type) is read conservatively: it counts as both a possible free name and a possible
+ *  untyped payload, so the signature is a finding. The anchor is the registration contract: the module's exports, aliases
  *  followed, the entry type's `register` property, the first parameter of each call signature (the
  *  context). Every property of the context is walked on its own, and so is every member of its
  *  type, and every member of such a member that is an object (two levels down). A finding is keyed `<context property>.<member>`, the grant name the product itself uses;
@@ -797,17 +799,31 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     }
     return t.isUnion() && t.types.some((c) => untyped(c, seen));
   };
-  // The shape of one call signature. Fixed parameters: a free name and, in another parameter, an
-  // untyped payload. A rest parameter is never expanded (see the function comment).
+  // The parameter types of a rest parameter that is read EXACTLY: a plain array `T[]` / `readonly T[]`
+  // is one more parameter of type T; a tuple of FIXED shape (required and optional elements only, none
+  // of them a type parameter or another type still to be instantiated) is its elements. Anything else
+  // gives `undefined`: the caller reads it conservatively.
+  const exactRest = (t) => {
+    if (checker.isArrayType(t)) return [checker.getTypeArguments(t)[0]];
+    if (!checker.isTupleType(t) || t.target.elementFlags.some((f) => f & (ts.ElementFlags.Rest | ts.ElementFlags.Variadic))) return undefined;
+    const elements = checker.getTypeArguments(t);
+    return elements.some((e) => flat(e).some((c) => c.flags & (F.TypeParameter | F.IndexedAccess | F.Conditional | F.Substitution))) ? undefined : elements;
+  };
+  // The shape of one call signature: a free name and, in another parameter, an untyped payload. A rest
+  // parameter read exactly is more ordinary parameters. A rest parameter read conservatively counts as
+  // BOTH a possible free name and a possible untyped payload: the signature is then a finding.
   const hasShape = (sig) => {
-    const params = sig.getParameters();
-    const rest = params.find(isRest);
-    const fixed = params.filter((p) => p !== rest).map(typeOf);
-    if (!rest) return fixed.some((t, i) => freeString(t) && fixed.some((u, j) => i !== j && untyped(u)));
-    if (fixed.some((t) => freeString(t))) return true;
-    const t = typeOf(rest);
-    const element = checker.isArrayType(t) ? checker.getTypeArguments(t)[0] : undefined;
-    return !element || freeString(element) || untyped(element);
+    const types = [];
+    for (const p of sig.getParameters()) {
+      if (!isRest(p)) {
+        types.push(typeOf(p));
+        continue;
+      }
+      const exact = exactRest(typeOf(p));
+      if (!exact) return true;
+      types.push(...exact);
+    }
+    return types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
   };
 
   // The anchor: the entry type through the module's exports, then its `register`, then the context.

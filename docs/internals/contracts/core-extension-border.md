@@ -71,13 +71,20 @@ product's `tsconfig.json`. An unresolved type, a missing anchor, an untyped cont
 written as a rest parameter ("the registration context is variadic; the border check cannot read
 it") fail the check with a plain line.
 
-A rest parameter is never expanded; a variadic port member is judged as if its rest part could
-be anything, unless it is a plain list of one typed kind. A signature with a rest parameter is a
-finding when a fixed parameter is a free name (the rest part then counts as the untyped payload,
-so `(name: string, ...ids: number[])` is reported: this is the conservative reading), or, with no
-fixed free name, when the rest type is not a plain array `T[]` whose element is neither a free
-name nor untyped. So `(...ids: number[])` passes; `(...names: string[])`, a tuple rest, a union of
-tuples and a generic rest are reported. No member on `main` has a rest parameter.
+A rest parameter is read exactly in two cases, as ordinary parameters, and then the normal test
+applies (a free name and an untyped payload in the same signature): a plain array `T[]` or
+`readonly T[]` is one more parameter of type `T`, and a tuple of fixed shape (required and optional
+elements only, no rest or variadic element, no element that is a type parameter) is its elements.
+So `(name: string, ...ids: number[])`, `(...parts: string[])` and `(...args: [id: number])` pass;
+`(name: string, ...rest: unknown[])` and `(...args: [name: string, input: unknown])` are reported.
+
+Every other rest type is read conservatively: a union (of tuples or of anything), a type parameter
+or a type that still holds one, a tuple with a rest or variadic element, `any`, `unknown`, an
+intersection, a conditional or an indexed type. Such a rest part counts as both a possible free
+name and a possible untyped payload, so the signature is a finding whatever its fixed parameters
+are. The check does not try to read every way a variadic list can be written; a port member that
+needs one of these forms is recorded with its reason. This over-reports on purpose, for example
+`(...args: [a: number] | [b: boolean])`. No member on `main` has a rest parameter.
 
 Stated limits. A member typed `any` or `Function`, a name written as a template literal
 (`` `job:${string}` ``) and an index signature are not this rule's business. A payload typed
