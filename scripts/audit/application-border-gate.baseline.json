@@ -319,10 +319,6 @@
       "count": 1,
       "owner": "@cinatra-ai/wordpress-mcp-connector"
     },
-    "src/lib/campaign-type-catalog.ts :: name :: campaign": {
-      "count": 1,
-      "owner": "@cinatra-ai/email-outreach-agent"
-    },
     "src/lib/crm-integration-providers.ts :: name :: crm": {
       "count": 1,
       "owner": "@cinatra-ai/crm-connector"
@@ -612,10 +608,6 @@
     "src/lib/blog/wordpress.ts": {
       "count": 10,
       "owner": "@cinatra-ai/wordpress-mcp-connector"
-    },
-    "src/lib/campaign-type-catalog.ts": {
-      "count": 9,
-      "owner": "@cinatra-ai/email-outreach-agent"
     },
     "src/lib/crm-integration-providers.ts": {
       "count": 6,
