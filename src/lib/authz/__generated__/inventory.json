@@ -680,42 +680,47 @@
     {
       "primitiveName": "drupal_content_editor_run",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 112
+      "line": 120
     },
     {
       "primitiveName": "drupal_instances_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 82
+      "line": 85
     },
     {
       "primitiveName": "drupal_node_create_draft_revision",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 97
+      "line": 105
     },
     {
       "primitiveName": "drupal_node_get",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 87
+      "line": 90
     },
     {
       "primitiveName": "drupal_node_list",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 102
+      "line": 110
     },
     {
       "primitiveName": "drupal_node_publish",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 107
+      "line": 115
+    },
+    {
+      "primitiveName": "drupal_node_read_for_edit",
+      "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
+      "line": 95
     },
     {
       "primitiveName": "drupal_node_update",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 92
+      "line": 100
     },
     {
       "primitiveName": "drupal_status",
       "file": "extensions/cinatra-ai/drupal-mcp-connector/src/mcp/registry.ts",
-      "line": 76
+      "line": 79
     },
     {
       "primitiveName": "email_outreach_initial_drafts_update",

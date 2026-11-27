@@ -309,6 +309,10 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   drupal_node_get:                    { resourceType: "connector_instance", action: "execute", status: "enforced" },
   drupal_node_list:                   { resourceType: "connector_instance", action: "execute", status: "enforced" },
   drupal_node_publish:                { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  // cinatra#3745: the page read for an edit (every editable field value and the
+  // binding). Classified like `drupal_node_get`, the other page read
+  // (`connector.use`). Its registration declares no `outward`: it reads only.
+  drupal_node_read_for_edit:          { resourceType: "connector_instance", action: "execute", status: "enforced" },
   drupal_node_update:                 { resourceType: "connector_instance", action: "execute", status: "enforced" },
   drupal_status:                      { resourceType: "connector_instance", action: "read",    status: "enforced" },
 
