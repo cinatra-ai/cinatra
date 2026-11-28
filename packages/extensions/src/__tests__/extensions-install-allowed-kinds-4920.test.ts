@@ -105,10 +105,12 @@ describe("extensions_install allowedKinds (cinatra#4920)", () => {
     );
     expect(result).toEqual({ success: true, packageName: "@example-org/thing", packageVersion: "1.2.3" });
     expect(installBatchMock).toHaveBeenCalledTimes(1);
+    // The binding check runs in the batch on the PLANNED root kind.
     expect(installBatchMock).toHaveBeenCalledWith({
       packageName: "@example-org/thing",
       version: "1.2.3",
       actor,
+      allowedRootKinds: ["agent", "skill"],
     });
   });
 
@@ -119,6 +121,7 @@ describe("extensions_install allowedKinds (cinatra#4920)", () => {
       actor,
     );
     expect(installBatchMock).toHaveBeenCalledTimes(1);
+    expect(installBatchMock.mock.calls[0]![0]).not.toHaveProperty("allowedRootKinds");
   });
 
   it("gatekept: the marketplace authorize runs first, and its kind refuses a connector before the batch", async () => {

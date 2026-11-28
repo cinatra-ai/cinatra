@@ -165,6 +165,24 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(_internalDeleteInstalledExtension).toHaveBeenCalledTimes(1);
   });
 
+  it("cinatra#4920: a FAILED placeholder rollback carries compensationFailures naming the package", async () => {
+    extensionRegistry.register(makeHandler("agent"));
+    fireExtensionActivate.mockResolvedValue({ finalized: false, activated: false, reason: "anchor-refused" });
+    _internalDeleteInstalledExtension.mockRejectedValueOnce(new Error("delete write failed"));
+
+    let caught: unknown;
+    try {
+      await extensionRegistry.install("agent", makeRef("@v/rb-fail-agent"), orgActor);
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as { code?: string }).code).toBe("CANONICAL_ROW_COMPENSATION_FAILED");
+    expect((caught as Error).message).toMatch(/RECOVERY REQUIRED/);
+    expect((caught as { compensationFailures?: string[] }).compensationFailures).toEqual([
+      "@v/rb-fail-agent",
+    ]);
+  });
+
   it("Finding 3: a re-install after a BROKEN (placeholder) prior row RE-RUNS the pipeline", async () => {
     // Seed a broken prior row (placeholder integrity = pipeline never finalized).
     rows = [
@@ -283,6 +301,28 @@ describe("dispatcher host-install ordering + rollback", () => {
         reason: expect.stringMatching(/handler failed after store-pipeline finalize/),
       }),
     );
+  });
+
+  it("cinatra#4920: a FAILED archive after a finalized pipeline carries compensationFailures naming the package", async () => {
+    const handler = makeHandler("agent");
+    (handler.install as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("handler boom"));
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false, reason: "metadata-only-kind" });
+    transitionExtensionLifecycle.mockRejectedValueOnce(new Error("archive write failed"));
+
+    let caught: unknown;
+    try {
+      await extensionRegistry.install("agent", makeRef("@v/comp-fail-agent"), orgActor);
+    } catch (e) {
+      caught = e;
+    }
+    // The message callers match on is unchanged…
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toMatch(/compensation ALSO failed .*manual recovery required/);
+    // …and the failed rollback is carried in the batch's shape.
+    expect((caught as { compensationFailures?: string[] }).compensationFailures).toEqual([
+      "@v/comp-fail-agent",
+    ]);
   });
 
   it("cinatra#793 COMPENSATION (update): a handler.update throw AFTER a finalized pipeline RE-FIRES the pipeline at the CAPTURED PRIOR version", async () => {

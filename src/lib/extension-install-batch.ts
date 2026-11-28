@@ -97,6 +97,19 @@ export type BatchInstallResult = {
   batchId: string | null; // null = root-only fast path (no ledger row)
 };
 
+/**
+ * `code` of the refusal `allowedRootKinds` raises (cinatra#4920). The same
+ * token the install primitive's early check uses
+ * (`EXTENSION_KIND_NOT_ALLOWED` in `@cinatra-ai/extensions/mcp-handlers`).
+ */
+export const EXTENSION_KIND_NOT_ALLOWED = "EXTENSION_KIND_NOT_ALLOWED";
+/**
+ * `code` of the refusal when the kind the marketplace authorized for the root
+ * differs from the kind the plan derives from the served manifest
+ * (cinatra#4920; checked for `allowedRootKinds` callers).
+ */
+export const EXTENSION_KIND_MISMATCH = "EXTENSION_KIND_MISMATCH";
+
 export class BatchMemberInstallError extends Error {
   constructor(
     message: string,
@@ -970,6 +983,14 @@ export async function installExtensionWithDependencies(
      * route is unreachable from compensation by construction.
      */
     rowScopedCompensation?: boolean;
+    /**
+     * cinatra#4920: restrict the ROOT to these kinds. Checked on the kind the
+     * PLAN derives for the root (the kind the batch dispatches), inside the
+     * global lock right after planning and before any install work. On the
+     * gatekept path a root whose authorized kind differs from the planned kind
+     * is refused too. Absent for every other caller (unchanged).
+     */
+    allowedRootKinds?: readonly string[];
   },
   depsOverride?: InstallBatchSagaDeps,
 ): Promise<BatchInstallResult> {
@@ -1092,6 +1113,32 @@ export async function installExtensionWithDependencies(
         // gatekept path the planner defensively ignores this (closure != null).
         rootAction: input.rootAction ?? "install",
       });
+
+      // cinatra#4920: the root-kind allow list binds on the PLANNED kind — the
+      // type the root member is dispatched as — not on an earlier reading.
+      if (input.allowedRootKinds) {
+        const plannedRoot = plan.ordered.find((m) => m.packageName === input.packageName);
+        const plannedKind = plannedRoot?.typeId ?? null;
+        if (resolution && plannedKind !== resolution.authorize.kind) {
+          throw Object.assign(
+            new Error(
+              `[extension-install-batch] ${input.packageName}: the marketplace authorized kind ` +
+                `"${resolution.authorize.kind}" but the package manifest declares ` +
+                `"${plannedKind ?? "none"}" — nothing was installed.`,
+            ),
+            { code: EXTENSION_KIND_MISMATCH, kind: plannedKind, authorizedKind: resolution.authorize.kind },
+          );
+        }
+        if (plannedKind === null || !input.allowedRootKinds.includes(plannedKind)) {
+          throw Object.assign(
+            new Error(
+              `[extension-install-batch] ${input.packageName} is of kind "${plannedKind ?? "none"}", ` +
+                `which this install surface does not accept — nothing was installed.`,
+            ),
+            { code: EXTENSION_KIND_NOT_ALLOWED, kind: plannedKind },
+          );
+        }
+      }
 
       const toInstall = plan.ordered.filter((m) => !m.alreadyInstalled);
       const alreadyInstalled = plan.ordered
@@ -1671,8 +1718,19 @@ export async function installExtensionWithDependencies(
       // installed. The same `compensationFailures` field is attached to the raw
       // error (class and `code` unchanged, so callers matching on the code keep
       // working). A complete rollback attaches nothing.
-      if (failures.length > 0 && cause !== null && typeof cause === "object") {
-        Object.assign(cause, { compensationFailures: [...failures] });
+      // The failed member's own dispatcher rollback can have failed too; the
+      // dispatcher then carries its package on the cause already. Keep it,
+      // unless this batch's own teardown of that member just succeeded.
+      const carriedRaw =
+        cause !== null && typeof cause === "object"
+          ? (cause as { compensationFailures?: unknown }).compensationFailures
+          : undefined;
+      const carried = Array.isArray(carriedRaw)
+        ? carriedRaw.filter((n): n is string => typeof n === "string" && !compensated.includes(n))
+        : [];
+      const allFailures = [...new Set([...carried, ...failures])];
+      if (allFailures.length > 0 && cause !== null && typeof cause === "object") {
+        Object.assign(cause, { compensationFailures: [...allFailures] });
       }
       // REQUIRES_REBUILD: the refusing kind needs a host rebuild before this
       // install can proceed — compensation has run; rethrow the RAW error so
@@ -1699,13 +1757,13 @@ export async function installExtensionWithDependencies(
           (compensated.length > 0
             ? `Rolled back the dependencies this install had added (${compensated.join(", ")}); `
             : `No dependencies needed rollback; `) +
-          (failures.length > 0
-            ? `ROLLBACK INCOMPLETE for ${failures.join(", ")} — these may need manual removal. `
+          (allFailures.length > 0
+            ? `ROLLBACK INCOMPLETE for ${allFailures.join(", ")} — these may need manual removal. `
             : ``) +
           `Previously-installed extensions were not touched.`,
         failedMember,
         compensated,
-        failures,
+        allFailures,
         cause,
       );
     }

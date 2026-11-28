@@ -1167,7 +1167,7 @@ async function syncCanonicalManifestInstall(
 // row stays non-anchorable; a later install detects the placeholder integrity and
 // re-runs the pipeline anyway). Re-reads the row first so a row another path
 // finalized concurrently is NEVER dropped.
-async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
+async function rollbackNonFinalizedCanonicalRow(rowId: string, packageName?: string): Promise<void> {
   try {
     const { readInstalledExtensionById } = await import("./canonical-store");
     const { deleteNonFinalizedCanonicalRow } = await import("./lifecycle-primitive");
@@ -1195,7 +1195,7 @@ async function rollbackNonFinalizedCanonicalRow(rowId: string): Promise<void> {
     // row survive silently. The caller re-throws it as a recovery-required
     // failure, so the operator is told the row needs removing instead of finding
     // out when every action starts to 404.
-    throw new CanonicalRowCompensationFailedError(rowId, err);
+    throw new CanonicalRowCompensationFailedError(rowId, err, packageName);
   }
 }
 
@@ -1210,9 +1210,16 @@ export const CANONICAL_ROW_COMPENSATION_FAILED = "CANONICAL_ROW_COMPENSATION_FAI
  */
 export class CanonicalRowCompensationFailedError extends Error {
   readonly code = CANONICAL_ROW_COMPENSATION_FAILED;
+  /**
+   * cinatra#4920: the package whose row is left, in the install batch's
+   * `compensationFailures` shape, so a caller that reports an incomplete
+   * rollback sees it. Absent when the package is not known.
+   */
+  readonly compensationFailures?: string[];
   constructor(
     public readonly rowId: string,
     public readonly cause?: unknown,
+    packageName?: string,
   ) {
     super(
       `the install did not commit, but its placeholder install row '${rowId}' could not be ` +
@@ -1221,6 +1228,7 @@ export class CanonicalRowCompensationFailedError extends Error {
         `version from serving until it is removed.`,
     );
     this.name = "CanonicalRowCompensationFailedError";
+    if (packageName) this.compensationFailures = [packageName];
   }
 }
 
@@ -1789,7 +1797,7 @@ class ExtensionRegistryImpl {
         // re-runs the pipeline; an update's previously-working install is left
         // intact (the pipeline's own compensation already restored it).
         if (ensure.ownsRollback && ensure.rowId) {
-          await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+          await rollbackNonFinalizedCanonicalRow(ensure.rowId, ref.packageName);
           throw new Error(
             `${op} of ${ref.packageName} did not finalize the store install pipeline ` +
               `(${result.reason ?? "unknown"}) — no store payload was materialized; the placeholder ` +
@@ -1813,7 +1821,7 @@ class ExtensionRegistryImpl {
           // native handler to consume, so proceeding would re-open the
           // placeholder-as-success hole for these kinds.
           if (ensure.ownsRollback && ensure.rowId) {
-            await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+            await rollbackNonFinalizedCanonicalRow(ensure.rowId, ref.packageName);
           }
           throw new Error(
             `${op} of ${ref.packageName} could not run the store install pipeline ` +
@@ -1865,15 +1873,21 @@ class ExtensionRegistryImpl {
           actor,
         });
         if (!comp.ok) {
-          throw new Error(
-            `${op} of ${ref.packageName} failed in the ${typeId} handler AFTER the store ` +
-              `pipeline finalized (${err instanceof Error ? err.message : String(err)}) — AND the ` +
-              `dispatcher compensation ALSO failed (${comp.detail}); manual recovery required: the ` +
-              `canonical row may be ACTIVE with no run surface.`,
+          // cinatra#4920: carry the failed rollback as `compensationFailures`
+          // (the shape the install batch uses), so a caller that reports an
+          // incomplete rollback sees it for a root-only install too.
+          throw Object.assign(
+            new Error(
+              `${op} of ${ref.packageName} failed in the ${typeId} handler AFTER the store ` +
+                `pipeline finalized (${err instanceof Error ? err.message : String(err)}) — AND the ` +
+                `dispatcher compensation ALSO failed (${comp.detail}); manual recovery required: the ` +
+                `canonical row may be ACTIVE with no run surface.`,
+            ),
+            { compensationFailures: [ref.packageName] },
           );
         }
       } else if (ensure.ownsRollback && ensure.rowId) {
-        await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+        await rollbackNonFinalizedCanonicalRow(ensure.rowId, ref.packageName);
       }
       throw err;
     }
@@ -1955,7 +1969,7 @@ class ExtensionRegistryImpl {
     //   so update does not report success.
     if (result.finalized === false) {
       if (ensure.ownsRollback && ensure.rowId) {
-        await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+        await rollbackNonFinalizedCanonicalRow(ensure.rowId, ref.packageName);
         throw new Error(
           `${op} of ${ref.packageName} did not finalize the real-integrity pipeline ` +
             `(${result.reason ?? "unknown"}) — the package is not anchorable; the placeholder ` +
@@ -1979,7 +1993,7 @@ class ExtensionRegistryImpl {
     //   reports the truth (the placeholder-as-success path is closed).
     if (result.finalized === undefined) {
       if (ensure.ownsRollback && ensure.rowId) {
-        await rollbackNonFinalizedCanonicalRow(ensure.rowId);
+        await rollbackNonFinalizedCanonicalRow(ensure.rowId, ref.packageName);
       }
       throw new Error(
         `${op} of ${ref.packageName} could not hot-activate in-process ` +

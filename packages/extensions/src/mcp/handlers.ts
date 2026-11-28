@@ -138,9 +138,12 @@ type ExtensionsInstallResult =
 
 /**
  * Options of a non-MCP caller of `extensions_install` (cinatra#4920). The MCP
- * tool passes none. `allowedKinds` restricts the ROOT to these kinds: the kind
- * is read from the primitive's own lifecycle resolution, so a refusal happens
- * after resolution and the visibility gate and BEFORE any install work.
+ * tool passes none. `allowedKinds` restricts the ROOT to these kinds. An early
+ * check reads the kind from the primitive's own lifecycle resolution (after the
+ * visibility gate, before any install work); the BINDING check runs in the
+ * dependency batch on the kind the plan derives from the served manifest
+ * (`allowedRootKinds`), which also refuses a root whose authorized and planned
+ * kinds differ.
  */
 export type ExtensionsInstallOptions = {
   allowedKinds?: readonly string[];
@@ -192,6 +195,8 @@ async function extensionsInstallBody(
       packageName: input.packageName,
       version: dispatchVersion,
       actor,
+      // cinatra#4920: the binding kind check runs on the PLANNED root kind.
+      ...(options?.allowedKinds ? { allowedRootKinds: options.allowedKinds } : {}),
     });
   } catch (err) {
     // Connector model-B / hot-install: a `requires-rebuild` outcome is a

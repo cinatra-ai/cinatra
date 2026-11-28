@@ -407,7 +407,98 @@ describe("POST /api/cli/extensions/install", () => {
     const res = await POST(post(OK_BODY));
     expect(res.status).toBe(500);
     expect((await res.json()).error).toBe("Failed to install the extension package.");
-    expect(errorSpy).toHaveBeenCalledWith("[cli-api/extensions/install] failed", expect.any(Error));
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]!.slice(1)).toEqual([
+      "failed",
+      "@example-org/agent-hello@1.2.3",
+      "Error",
+      "none",
+      "unrecoverable",
+      "none",
+      "no",
+    ]);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toMatch(/internal detail/);
+    errorSpy.mockRestore();
+  });
+
+  it.each([
+    ["a plain marketplace-style error", (e: Error) => e],
+    ["a failed batch member", (e: Error) => new BatchMemberInstallError(`failed: ${e.message}`, "@example-org/dep", [], [], e)],
+    [
+      "a failed batch member with an incomplete rollback",
+      (e: Error) => new BatchMemberInstallError(`failed: ${e.message}`, "@example-org/dep", [], ["@example-org/dep"], e),
+    ],
+  ])("%s: no upstream message or body text reaches the log (cinatra#4920)", async (_label, wrap) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const upstream = Object.assign(
+      new Error("marketplace call failed: token=sk-live-SECRET123 upstream said no"),
+      {
+        name: "MarketplaceMcpError",
+        code: "cinatra.install_unavailable token=sk-live-SECRET123",
+        httpStatus: 502,
+        responseBody: '{"error":"internal","debug":"Bearer sk-live-SECRET123"}',
+      },
+    );
+    extensionsInstallMock.mockRejectedValue(wrap(upstream));
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBeGreaterThanOrEqual(500);
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(errorSpy).toHaveBeenCalled();
+    expect(logged).not.toMatch(/SECRET123|upstream said no|debug/);
+    for (const call of errorSpy.mock.calls) {
+      for (const arg of call) expect(typeof arg === "string" || typeof arg === "number").toBe(true);
+    }
+    expect(JSON.stringify(await res.json())).not.toMatch(/SECRET123/);
+    errorSpy.mockRestore();
+  });
+
+  it("a root whose authorized kind differs from its manifest kind → 422, nothing installed (cinatra#4920)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    extensionsInstallMock.mockRejectedValue(
+      Object.assign(new Error("internal detail"), {
+        code: "EXTENSION_KIND_MISMATCH",
+        kind: "connector",
+        authorizedKind: "agent",
+      }),
+    );
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(422);
+    const { error } = await res.json();
+    expect(error).toBe(
+      "@example-org/agent-hello@1.2.3 was not installed: the kind the marketplace authorized differs from the kind in the package manifest.",
+    );
+    errorSpy.mockRestore();
+  });
+
+  it("a kind refusal does not echo an unknown kind string (cinatra#4920)", async () => {
+    extensionsInstallMock.mockRejectedValue(
+      Object.assign(new Error("x"), { code: "EXTENSION_KIND_NOT_ALLOWED", kind: "<script>sk-live-SECRET" }),
+    );
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(422);
+    const { error } = await res.json();
+    expect(error).toMatch(/is an extension package/);
+    expect(error).not.toMatch(/SECRET|script/);
+  });
+
+  it("a root-only install whose dispatcher rollback failed (compensationFailures on the dispatcher error) → the incomplete-rollback 500 (cinatra#4920)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    extensionsInstallMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "install of @example-org/agent-hello failed in the agent handler AFTER the store pipeline finalized (x) — AND the dispatcher compensation ALSO failed (archive threw); manual recovery required",
+        ),
+        { compensationFailures: ["@example-org/agent-hello"] },
+      ),
+    );
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error:
+        "Installing @example-org/agent-hello@1.2.3 failed and its rollback is incomplete; these packages may need manual removal: @example-org/agent-hello.",
+      needsManualRemoval: ["@example-org/agent-hello"],
+    });
+    expect(errorSpy.mock.calls[0]!.at(-1)).toBe("@example-org/agent-hello");
     errorSpy.mockRestore();
   });
 });

@@ -22,8 +22,11 @@
 //
 // KINDS: only `agent` and `skill`. Connector, artifact and workflow roots need
 // an explicit access target (install-access-target.ts), which only the
-// product's marketplace page collects; the primitive refuses them through
-// `allowedKinds` right after its own resolution, before any install work.
+// product's marketplace page collects. The primitive refuses them through
+// `allowedKinds`: early on its own resolution, and BINDING in the dependency
+// batch on the kind the plan derives from the served manifest (the kind the
+// root is dispatched as), before any install work. A root whose authorized
+// kind differs from that planned kind is refused as well (422).
 //
 // VERSION: required and exact, checked with the repository's canonical
 // validator (`isExactVersion`); a range, a dist-tag or "latest" is refused with
@@ -56,10 +59,17 @@
 // An incomplete rollback always answers 500 naming the packages that may need
 // manual removal (names only), whatever else the failure says: the batch
 // carries `compensationFailures` on its `BatchMemberInstallError` and on the
-// raw requires-rebuild / contract-violation errors it rethrows, and the
-// primitive passes the field through on its structured result. A failed batch
+// raw requires-rebuild / contract-violation errors it rethrows, the dispatcher
+// carries it on its errors when a root-only install's own row rollback fails
+// (archive after finalize, or placeholder removal), and the primitive passes
+// the field through on its structured result. A failed batch
 // member with a complete rollback is the generic 500. Anything else returns a
-// fixed message with 500 and is logged server-side only.
+// fixed message with 500. LOGGING follows the canonical install path's
+// operator-log convention (`classifyAndLogInstallFailure` in the extensions
+// actions): a constant format string with bounded values only (stage, package,
+// version, error class, a short code token, classifier category, HTTP status,
+// the package names a rollback left). Never an error message, stack or
+// upstream body: a marketplace error embeds the upstream response detail.
 // ---------------------------------------------------------------------------
 
 import "@cinatra-ai/extensions/handler-bootstrap";
@@ -71,11 +81,15 @@ import {
   createExtensionsPrimitiveHandlers,
   EXTENSION_KIND_NOT_ALLOWED,
 } from "@cinatra-ai/extensions/mcp-handlers";
-import { classifyMarketplaceFailure } from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
+import {
+  classifyMarketplaceFailure,
+  extractContractCode,
+  extractHttpStatus,
+} from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
 import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
 import { rejectCrossOrigin } from "@/lib/admin-origin-guard";
 import { authorizeCliRequest } from "@/lib/cli-api/route-guard";
-import { BatchMemberInstallError } from "@/lib/extension-install-batch";
+import { BatchMemberInstallError, EXTENSION_KIND_MISMATCH } from "@/lib/extension-install-batch";
 import { isGatekeptInstallEnabled } from "@/lib/gatekept-install";
 
 export const runtime = "nodejs";
@@ -90,6 +104,10 @@ const PACKAGE_NAME_RE = /^@[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
 // The body is two short strings; a larger body is refused before parsing.
 const MAX_BODY_BYTES = 16 * 1024;
 const MAX_CAUSE_DEPTH = 6;
+// The kinds a refusal may name in a response (anything else is not echoed).
+const KNOWN_KINDS = new Set(["agent", "skill", "connector", "artifact", "workflow"]);
+const CODE_TOKEN_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const CLASS_NAME_RE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 
 const GENERIC_FAILURE = "Failed to install the extension package.";
 const NOT_GATEKEPT =
@@ -122,6 +140,38 @@ function readBatchFailure(error: unknown): { isBatchError: boolean; leftOver: st
     node = (node as { cause?: unknown }).cause;
   }
   return { isBatchError, leftOver };
+}
+
+/** The error's class name, when it is a plain identifier. */
+function classNameOf(error: unknown): string {
+  if (error === null || typeof error !== "object") return typeof error;
+  const name = (error as { constructor?: { name?: unknown } }).constructor?.name;
+  return typeof name === "string" && CLASS_NAME_RE.test(name) ? name : "unknown";
+}
+
+/** The error's own `code` when it is a short token, else the contract code. */
+function codeOf(error: unknown): string {
+  const own = (error as { code?: unknown } | null)?.code;
+  if (typeof own === "string" && CODE_TOKEN_RE.test(own)) return own;
+  return extractContractCode(error) ?? "none";
+}
+
+/**
+ * Operator log of a failed install: a constant format string and bounded
+ * values only (the name and version were validated by the route). No error
+ * message, stack or upstream body.
+ */
+function logFailure(stage: string, target: string, error: unknown, leftOver: string[] | null): void {
+  console.error(
+    "[cli-api/extensions/install] %s target=%s error=%s code=%s category=%s httpStatus=%s rollbackIncomplete=%s",
+    stage,
+    target,
+    classNameOf(error),
+    codeOf(error),
+    classifyMarketplaceFailure(error),
+    extractHttpStatus(error) ?? "none",
+    leftOver ? leftOver.filter((name) => PACKAGE_NAME_RE.test(name)).join(",") || "unnamed" : "no",
+  );
 }
 
 function incompleteRollback(target: string, leftOver: string[]): Response {
@@ -218,7 +268,7 @@ export async function POST(request: Request): Promise<Response> {
     // A refusal after a failed rollback is not an ordinary refusal.
     const leftOverAfterRefusal = namesOf(result.compensationFailures);
     if (leftOverAfterRefusal) {
-      console.error("[cli-api/extensions/install] rollback incomplete", result.packageName);
+      logFailure("refused", target, result, leftOverAfterRefusal);
       return incompleteRollback(target, leftOverAfterRefusal);
     }
     if ("contractViolation" in result) {
@@ -230,19 +280,29 @@ export async function POST(request: Request): Promise<Response> {
     // 4xx. When the rollback was incomplete, say so and name the packages.
     const batchFailure = readBatchFailure(error);
     if (batchFailure.leftOver) {
-      console.error("[cli-api/extensions/install] failed", error);
+      logFailure("failed", target, error, batchFailure.leftOver);
       return incompleteRollback(target, batchFailure.leftOver);
     }
     if (batchFailure.isBatchError) {
-      console.error("[cli-api/extensions/install] failed", error);
+      logFailure("failed", target, error, null);
       return json({ error: GENERIC_FAILURE }, 500);
     }
 
-    if ((error as { code?: unknown } | null)?.code === EXTENSION_KIND_NOT_ALLOWED) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === EXTENSION_KIND_NOT_ALLOWED) {
       const kind = (error as { kind?: unknown }).kind;
       return json(
         {
-          error: `${packageName} is ${typeof kind === "string" ? `a ${kind}` : "an extension"} package. Only agent and skill packages install over this route; install it from the product's marketplace page, which collects its access target.`,
+          error: `${packageName} is ${typeof kind === "string" && KNOWN_KINDS.has(kind) ? `a ${kind}` : "an extension"} package. Only agent and skill packages install over this route; install it from the product's marketplace page, which collects its access target.`,
+        },
+        422,
+      );
+    }
+    if (code === EXTENSION_KIND_MISMATCH) {
+      logFailure("refused", target, error, null);
+      return json(
+        {
+          error: `${target} was not installed: the kind the marketplace authorized differs from the kind in the package manifest.`,
         },
         422,
       );
@@ -257,7 +317,7 @@ export async function POST(request: Request): Promise<Response> {
     if (category === "retryable") {
       return json({ error: "The marketplace is temporarily unavailable. Retry later." }, 503);
     }
-    console.error("[cli-api/extensions/install] failed", error);
+    logFailure("failed", target, error, null);
     return json({ error: GENERIC_FAILURE }, 500);
   }
 }
