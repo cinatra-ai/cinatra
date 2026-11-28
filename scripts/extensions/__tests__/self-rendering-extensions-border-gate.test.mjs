@@ -1540,3 +1540,103 @@ describe("self-rendering-extensions border gate — (g) no import of the SDK's s
     });
   });
 });
+
+// cinatra#3968: rule (g) reads every pinned package of every known kind; the
+// other rules keep their connector-and-artifact scope.
+describe("self-rendering-extensions border gate — (g) reads every kind of extension package (cinatra#3968)", () => {
+  const PANELS = "@cinatra-ai/sdk-ui/connector-sharing-panels";
+  const line = (dir, rel) => `  ! ${dir} :: ${rel} imports the SDK's sharing panels (${PANELS})`;
+  const findingLines = (stderr) => stderr.split("\n").filter((l) => l.includes(" imports the SDK's sharing panels"));
+  const IMPORT = `import { ConnectorSharingPanels } from "${PANELS}";\nexport { ConnectorSharingPanels };\n`;
+
+  it("a skill, an agent and a workflow pack that import the sharing panels are found", () => {
+    const tree = makeTree(
+      [
+        { dir: "example-org-sample-skill", kind: "skill", files: { "scripts/panel.tsx": IMPORT, "tests/panel.test.ts": IMPORT } },
+        { dir: "example-org-sample-agent", kind: "agent", files: { "src/view.tsx": `export const load = () => import("${PANELS}");\n` } },
+        { dir: "example-org-sample-workflow", kind: "workflow", files: { "lib/step.cjs": `module.exports = require("${PANELS}");\n` } },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr).sort()).toEqual(
+      [
+        line("example-org-sample-agent", "src/view.tsx"),
+        line("example-org-sample-skill", "scripts/panel.tsx"),
+        line("example-org-sample-workflow", "lib/step.cjs"),
+      ].sort(),
+    );
+  });
+
+  it("a skill pack's source that does not parse is REFUSED by name", () => {
+    const tree = makeTree([{ dir: "example-org-broken-skill", kind: "skill", files: { "scripts/run.mjs": "export const = ;\n" } }], {});
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("[self-rendering-border] REFUSED: example-org-broken-skill/scripts/run.mjs: does not parse (");
+  });
+
+  it("a skill pack is still not judged by the other rules: its primitive copy, host reach and review words stay unreported", () => {
+    const tree = makeTree(
+      [
+        {
+          dir: "example-org-quiet-skill",
+          kind: "skill",
+          files: {
+            "src/components/ui/button.tsx": BUTTON_COPY,
+            "src/reach.tsx": 'import { Button } from "@/components/ui/button";\nexport const label = "Regenerate";\nexport default Button;\n',
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stdout, stderr } = runGate(tree);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+    expect(stdout).toContain("0 baselined primitive copy/copies across 0 package(s) of 0 self-rendering package(s) read");
+    const census = gate.scanBorder({ extRoot: tree.extRoot });
+    expect(census.packages).toEqual([]);
+    expect(census.copies).toEqual({});
+    expect(census.coupling).toEqual([]);
+    expect(census.reviewControls).toEqual([]);
+  });
+
+  it("a relative path to the SDK's panel source, through the workspace or node_modules, is found", () => {
+    const dir = "example-org-relative-connector";
+    const tree = makeTree(
+      [
+        {
+          dir,
+          kind: "connector",
+          files: {
+            "src/workspace.tsx": 'import { ConnectorSharingPanels } from "../../../../packages/sdk-ui/src/connector-sharing-panels";\nexport { ConnectorSharingPanels };\n',
+            "src/hoisted.tsx": 'export * from "../../../../node_modules/@cinatra-ai/sdk-ui/src/connector-sharing-panels.tsx";\n',
+            "src/local.tsx": 'export * from "../node_modules/@cinatra-ai/sdk-ui/src/connector-sharing-panels";\n',
+            "src/own.tsx": 'export * from "./sdk-ui/src/connector-sharing-panels";\n',
+            "src/sibling.tsx": 'export * from "../../../../packages/sdk-ui/src/connector-setup-page";\n',
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr).sort()).toEqual(
+      ["src/hoisted.tsx", "src/local.tsx", "src/workspace.tsx"].map((rel) => line(dir, rel)).sort(),
+    );
+  });
+
+  it("the OK line says which rules read which kinds and how much rule (g) read", () => {
+    const tree = makeTree(
+      [
+        { dir: "example-org-ok-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } },
+        { dir: "example-org-ok-skill", kind: "skill", files: { "scripts/a.mjs": "export const a = 1;\n", "scripts/b.ts": "export const b = 2;\n" } },
+      ],
+      {},
+    );
+    const { status, stdout } = runGate(tree);
+    expect(status).toBe(0);
+    expect(stdout).toContain("rules (a)-(f) read 1 connector/artifact package(s)");
+    expect(stdout).toContain("rule (g) read 2 package(s) of every kind, 3 source file(s)");
+  });
+});

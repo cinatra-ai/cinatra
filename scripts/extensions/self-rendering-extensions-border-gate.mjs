@@ -55,16 +55,22 @@
 //       named `*.test.*` / `*.spec.*`: a pack's own tests assert the absence of
 //       these words and so must name them;
 //   (g) NO SHARING PANELS (cinatra#3968) — the application supplies the Sharing
-//       tab of a connection; a package never draws it. A source file of a
-//       kind:connector or kind:artifact package (its tests excepted, as in (f))
-//       that imports the SDK's sharing panels, `@cinatra-ai/sdk-ui/connector-sharing-panels`,
+//       tab of a connection; a package never draws it. Unlike (a)-(f), this rule
+//       reads every package of every known kind (agent, connector, artifact,
+//       skill, workflow), with the same walk and the same fail-closed reads. A
+//       source file of such a package (its tests excepted, as in (f)) that
+//       imports the SDK's sharing panels, `@cinatra-ai/sdk-ui/connector-sharing-panels`,
 //       fails unless the floor's `sharingPanelImports` list records its
 //       "<package> :: <file>" pair. That list started empty, is SHRINK-ONLY like
 //       the copies (a recorded pair whose import is gone is stale) and is
 //       compared with the base by the same guard as (d). The SDK's exports map
 //       lists that subpath exactly and has no pattern, so no other specifier
 //       (a deeper path, an explicit extension) resolves to the module; only the
-//       exact specifier is matched. Imports are read with the TypeScript parser:
+//       exact specifier is matched. The package root `@cinatra-ai/sdk-ui` does
+//       not re-export the panels. A RELATIVE specifier that lands on the panel
+//       source `sdk-ui/src/connector-sharing-panels` outside the package (the
+//       workspace's packages/sdk-ui) or under a node_modules folder is the same
+//       import and is matched too. Imports are read with the TypeScript parser:
 //       `import … from`, a side-effect `import`, `import type`, `export … from`,
 //       `import x = require(…)`, `import(…)` and `require(…)` with a literal
 //       argument (any quote form, a template without substitution included),
@@ -79,8 +85,9 @@
 //       conformance check's `imports.core-internal`; a pack that copies the
 //       panel component into its own source is not this rule's subject.
 //
-// kind:agent packages are OUT OF SCOPE here — the agent border has its own gate
-// (cinatra-ai/cinatra#3470).
+// kind:agent, kind:skill and kind:workflow packages are OUT OF SCOPE of (a)-(f)
+// — the agent border has its own gate (cinatra-ai/cinatra#3470); only (g) reads
+// them.
 //
 // The baseline is the ONLY record of the remaining copies: the vendoring
 // manifest in scripts/extensions/vendor-extension-primitives.mjs no longer
@@ -241,6 +248,22 @@ export function moduleSpecifiersOf(rel, text) {
   };
   visit(sf);
   return specs;
+}
+
+// (g) The panel source file, with any code extension stripped, as a resolved path's tail.
+const PANEL_SOURCE_TAIL = "/sdk-ui/src/connector-sharing-panels";
+
+/**
+ * (g) True when a specifier of the file at `fileAbs` loads the SDK's sharing
+ * panels: the exact package specifier, or a relative path to the panel source
+ * that leaves the package or passes through a node_modules folder.
+ */
+export function loadsSharingPanels(spec, fileAbs, packageDir) {
+  if (spec === SHARING_PANELS_SPECIFIER) return true;
+  if (!spec.startsWith(".")) return false;
+  const resolved = toPosix(resolve(dirname(fileAbs), spec)).replace(CODE_FILE_RE, "");
+  if (!resolved.endsWith(PANEL_SOURCE_TAIL)) return false;
+  return relative(packageDir, resolve(dirname(fileAbs), spec)).startsWith("..") || resolved.includes("/node_modules/");
 }
 
 const IMPORT_SPECIFIER_RE =
@@ -429,6 +452,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
   }
 
   const packages = [];
+  const allPackages = [];
   const declaredDirs = new Set();
   for (const { name, dir } of declared ?? []) {
     declaredDirs.add(dir);
@@ -460,6 +484,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
       refusals.push(`${REFUSED} ${name} has an unknown cinatra.kind ${JSON.stringify(kind)}`);
       continue;
     }
+    allPackages.push({ name: dir, dir: pkgDir, kind });
     if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
   }
 
@@ -496,8 +521,10 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
       refusals.push(`${REFUSED} ${where} is not declared and has an unknown cinatra.kind ${JSON.stringify(kind)}`);
       continue;
     }
+    allPackages.push({ name: dir, dir: pkgDir, kind });
     if (SELF_RENDERING_KINDS.has(kind)) packages.push({ name: dir, dir: pkgDir, kind });
   }
+  allPackages.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   packages.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 
   const unreadableIn = (pkg) => (rel, err) =>
@@ -520,7 +547,11 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
   const coupling = [];
   const reviewControls = [];
   const sharingPanelImports = [];
-  for (const pkg of packages) {
+  let sharingFilesRead = 0;
+  // One walk per package of every kind: (a)-(f) judge only the self-rendering
+  // ones, (g) judges all of them.
+  for (const pkg of allPackages) {
+    const selfRendering = SELF_RENDERING_KINDS.has(pkg.kind);
     for (const rel of walkFiles(pkg.dir, pkg.dir, { io, unreadable: unreadableIn(pkg) })) {
       if (!CODE_FILE_RE.test(rel)) continue;
       const abs = join(pkg.dir, rel);
@@ -532,17 +563,18 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
         continue;
       }
       const seen = new Set();
-      for (const spec of extractImportSpecifiers(source)) {
+      for (const spec of selfRendering ? extractImportSpecifiers(source) : []) {
         const banned = forbiddenImport(spec, abs, pkg.dir);
         if (!banned || seen.has(banned)) continue;
         seen.add(banned);
         coupling.push({ package: pkg.name, file: rel, specifier: banned });
       }
-      if (pkg.kind === "artifact" && !isPackageTestFile(rel)) {
+      if (selfRendering && pkg.kind === "artifact" && !isPackageTestFile(rel)) {
         const words = reviewControlWords(source);
         if (words.length > 0) reviewControls.push({ package: pkg.name, file: rel, words });
       }
       if (!isPackageTestFile(rel)) {
+        sharingFilesRead += 1;
         let specs;
         try {
           specs = moduleSpecifiersOf(rel, source);
@@ -550,7 +582,7 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
           refusals.push(`${REFUSED} ${pkg.name}/${rel}: ${err?.message ?? err}`);
           continue;
         }
-        if (specs.includes(SHARING_PANELS_SPECIFIER)) sharingPanelImports.push(`${pkg.name} :: ${rel}`);
+        if (specs.some((spec) => loadsSharingPanels(spec, abs, pkg.dir))) sharingPanelImports.push(`${pkg.name} :: ${rel}`);
       }
     }
   }
@@ -560,7 +592,15 @@ export function scanBorder({ extRoot = EXT_ROOT, declaredRoot = declaredRootOf(e
     `${a.package}/${a.file}/${a.specifier}` < `${b.package}/${b.file}/${b.specifier}` ? -1 : 1,
   );
 
-  return { packages, copies, coupling, reviewControls, sharingPanelImports, refusals: [...new Set(refusals)] };
+  return {
+    packages,
+    copies,
+    coupling,
+    reviewControls,
+    sharingPanelImports,
+    sharingScope: { packages: allPackages.length, files: sharingFilesRead },
+    refusals: [...new Set(refusals)],
+  };
 }
 
 /** One census for the exported single-purpose reads: a refusal throws, it never reads as clean. */
@@ -727,7 +767,8 @@ function writeBaselineFile(copies, sharing) {
           "stale until it is ratcheted down with " +
           "`node scripts/extensions/self-rendering-extensions-border-gate.mjs --write-baseline` " +
           "(which refuses to write a baseline that grows). " +
-          "sharingPanelImports (cinatra#3968) records the \"<package> :: <file>\" pairs whose source " +
+          "sharingPanelImports (cinatra#3968) records the \"<package> :: <file>\" pairs, in a package of " +
+          "any kind, whose source " +
           "imports @cinatra-ai/sdk-ui/connector-sharing-panels; it started empty and is shrink-only " +
           "in the same way.",
         copies: sorted,
@@ -856,7 +897,7 @@ function main() {
   const unlistedSharing = sharingGrowth(baseline.sharing, census.sharingPanelImports);
   if (unlistedSharing.length > 0) {
     problems.push(
-      "  (g) SHARING PANELS IMPORTED (cinatra#3968) — a kind:connector / kind:artifact source file " +
+      "  (g) SHARING PANELS IMPORTED (cinatra#3968) — a source file of an extension package (any kind) " +
         `imports ${SHARING_PANELS_SPECIFIER}. The application supplies the Sharing tab; a package ` +
         "renders its own setup page and never draws the Sharing panel:",
     );
@@ -884,7 +925,9 @@ function main() {
     `[self-rendering-extensions-border-gate] OK — ${total} baselined primitive copy/copies across ` +
       `${Object.keys(current).length} package(s) of ${census.packages.length} self-rendering ` +
       "package(s) read; no unlisted copy, no stale entry, no direct reach, no review control " +
-      "in a display, no sharing-panel import outside the recorded list, nothing unread.",
+      "in a display, no sharing-panel import outside the recorded list, nothing unread; " +
+      `rules (a)-(f) read ${census.packages.length} connector/artifact package(s); rule (g) read ` +
+      `${census.sharingScope.packages} package(s) of every kind, ${census.sharingScope.files} source file(s).`,
   );
 }
 

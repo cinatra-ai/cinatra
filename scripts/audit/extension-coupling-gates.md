@@ -873,7 +873,7 @@ for its floor:
 
 | Gate | Floor compared with the base | Growth (fails) | Own base variable |
 | --- | --- | --- | --- |
-| `scripts/extensions/self-rendering-extensions-border-gate.mjs` | `self-rendering-extensions-border.baseline.json` | a new (package, path) copy, or a new recorded sharing-panel import (`sharingPanelImports`, cinatra#3968) | `SELF_RENDERING_BORDER_BASE` |
+| `scripts/extensions/self-rendering-extensions-border-gate.mjs` | `self-rendering-extensions-border.baseline.json` | a new (package, path) copy in a connector or artifact pack (rules (a)-(f) read those two kinds), or a new recorded sharing-panel import (`sharingPanelImports`, cinatra#3968; rule (g) reads packs of every kind) | `SELF_RENDERING_BORDER_BASE` |
 | `extension-fs-import-ban.mjs` | `extension-fs-import-ban.baseline.json` | a new (extension, file) hit | `EXTENSION_FS_IMPORT_BAN_BASE` |
 | `ci-pinned-tests-exist.mjs` | `package-suite-runner-exceptions.json` and `root-tier-runner-exceptions.json` | a new item in either file | `CI_PINNED_TESTS_BASE` |
 | `org-archive-bypass-scan.mjs` | `org-archive-bypass-allowlist.json` | a new row or a raised count | `ORG_ARCHIVE_BYPASS_BASE` |
