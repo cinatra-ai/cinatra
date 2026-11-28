@@ -7,13 +7,14 @@
 // The cases below are not hypotheticals — each one is a shape observed on the
 // materialized tree at the pins this gate landed against, named in the test
 // title so a future reader can tell a real regression from a fixture edit.
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { parse as parseYaml } from "yaml";
 import { afterAll, describe, expect, it } from "vitest";
 
 import nodeTopLevelReporter, {
@@ -51,6 +52,9 @@ import nodeTopLevelReporter, {
   stopLiveNodeRuns,
   TEST_FILE_RE,
 } from "../extension-suite-gate.mjs";
+// The rule of the connector conformance caller (cinatra#3828) is reached by name through the namespace,
+// so that a gate without it fails an assertion in each case and not at the import.
+import * as gate from "../extension-suite-gate.mjs";
 
 const SKIP_CI = `
       - name: Test
@@ -2168,5 +2172,640 @@ describe("renderManifest — every package is visible, so truncation cannot be s
     const results = resultsFor([["bumped", green(["a.test.ts"])]]);
     const out = renderManifest({ packages, results, carveOuts: [carve("bumped")] });
     expect(out).toMatch(/bumped .* ok$/m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The connector conformance caller (cinatra#3828, leg 4). The fixtures use the
+// made-up scope example-org; the reusable workflow they call is the one the
+// rule is about, so that path is the real one.
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
+const SHA_A = "a".repeat(40);
+const SHA_B = "b".repeat(40);
+const REUSABLE = "cinatra-ai/cinatra/.github/workflows/extension-conformance-gate-reusable.yml";
+const LIST_FILE = "scripts/ci/connector-conformance-caller-baseline.json";
+
+// A function of the gate by name: a gate that lacks it fails the assertion, not the call.
+const need = (name) => {
+  expect(typeof gate[name], `${name} is exported by extension-suite-gate.mjs`).toBe("function");
+  return gate[name];
+};
+
+const ON_BOTH = "on:\n  pull_request:\n  push:\n    branches: [main]\n";
+const workflowText = ({ on = ON_BOTH, uses = `${REUSABLE}@${SHA_A}`, withText = `      ref: ${SHA_A}\n      enforce: true\n` } = {}) =>
+  `name: Extension Conformance Gate\n${on}jobs:\n  extension-conformance-gate:\n    uses: ${uses}\n    with:\n${withText}`;
+
+const job = (uses, withObj) => ({ uses, ...(withObj === undefined ? {} : { with: withObj }) });
+
+describe("connector caller — the constants name the real reusable workflow and its real input", () => {
+  it("names the reusable workflow file of this repository, and the input it declares", () => {
+    expect(typeof gate.CONFORMANCE_REUSABLE, "CONFORMANCE_REUSABLE is exported").toBe("string");
+    expect(typeof gate.CONFORMANCE_INPUT, "CONFORMANCE_INPUT is exported").toBe("string");
+    const [owner, repo, ...file] = gate.CONFORMANCE_REUSABLE.split("/");
+    expect(`${owner}/${repo}`).toBe("cinatra-ai/cinatra");
+    const wf = parseYaml(fs.readFileSync(path.join(REPO_ROOT, file.join("/")), "utf8"));
+    const inputs = wf.on.workflow_call.inputs;
+    expect(Object.keys(inputs)).toContain(gate.CONFORMANCE_INPUT);
+    expect(inputs[gate.CONFORMANCE_INPUT].required).toBe(true);
+  });
+
+  it("names main as the default branch and a list file that exists", () => {
+    expect(gate.CONNECTOR_DEFAULT_BRANCH).toBe("main");
+    expect(gate.CONNECTOR_CALLER_LIST_FILE).toBe(LIST_FILE);
+    expect(fs.existsSync(path.join(REPO_ROOT, LIST_FILE))).toBe(true);
+  });
+});
+
+describe("callsConformanceGate — a job that uses the reusable workflow at a full commit, with ref equal to it", () => {
+  it("accepts the caller text of the fleet", () => {
+    const call = need("callsConformanceGate");
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { ref: SHA_A, enforce: true }))).toBe(true);
+  });
+
+  it("accepts a different case in the owner, the repository and the hex digits", () => {
+    const call = need("callsConformanceGate");
+    expect(call(job(`Cinatra-AI/Cinatra/${REUSABLE.split("/").slice(2).join("/")}@${SHA_A.toUpperCase()}`, { ref: SHA_A }))).toBe(true);
+  });
+
+  it("refuses a ref that is not a full 40-character commit", () => {
+    const call = need("callsConformanceGate");
+    for (const ref of ["v1", "main", "a".repeat(39), "a".repeat(41), "a".repeat(7), `${"a".repeat(39)}g`, ""]) {
+      expect(call(job(`${REUSABLE}@${ref}`, { ref })), ref).toBe(false);
+    }
+  });
+
+  it("refuses a with.ref that is not the commit of the uses line, absent, or not a string", () => {
+    const call = need("callsConformanceGate");
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { ref: SHA_B }))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { enforce: true }))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, null))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, [SHA_A]))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { ref: 12345 }))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { ref: "${{ github.sha }}" }))).toBe(false);
+  });
+
+  it("refuses an input of another name", () => {
+    const call = need("callsConformanceGate");
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { sha: SHA_A }))).toBe(false);
+    expect(call(job(`${REUSABLE}@${SHA_A}`, { Ref: SHA_A }))).toBe(false);
+  });
+
+  it("refuses another repository, another workflow file, a file of other case, a local path and a missing @", () => {
+    const call = need("callsConformanceGate");
+    const file = REUSABLE.split("/").slice(2).join("/");
+    expect(call(job(`example-org/cinatra/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(`cinatra-ai/example-repo/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(`cinatra-ai/cinatra/.github/workflows/merge-readiness-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(`cinatra-ai/cinatra/.github/workflows/Extension-Conformance-Gate-Reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(`./.github/workflows/extension-conformance-gate-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(REUSABLE, { ref: SHA_A }))).toBe(false);
+  });
+
+  it("refuses what is not a job with a uses line", () => {
+    const call = need("callsConformanceGate");
+    expect(call(null)).toBe(false);
+    expect(call("x")).toBe(false);
+    expect(call([])).toBe(false);
+    expect(call({ steps: [{ uses: `${REUSABLE}@${SHA_A}`, with: { ref: SHA_A } }] })).toBe(false);
+    expect(call({ uses: 7, with: { ref: SHA_A } })).toBe(false);
+  });
+});
+
+describe("runsOnPullRequestsAndDefaultPushes — `on:` as a string, a list or a map", () => {
+  const runs = (on) => need("runsOnPullRequestsAndDefaultPushes")(on);
+
+  it("string form: one event is never both", () => {
+    expect(runs("push")).toBe(false);
+    expect(runs("pull_request")).toBe(false);
+  });
+
+  it("list form: both events must be named", () => {
+    expect(runs(["push", "pull_request"])).toBe(true);
+    expect(runs(["pull_request", "workflow_dispatch", "push"])).toBe(true);
+    expect(runs(["push"])).toBe(false);
+    expect(runs(["pull_request", "workflow_dispatch"])).toBe(false);
+    expect(runs(["push", 1])).toBe(false);
+    expect(runs([])).toBe(false);
+  });
+
+  it("map form: both keys, with no filter or a filter that covers main", () => {
+    expect(runs({ pull_request: null, push: { branches: ["main"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: null })).toBe(true);
+    expect(runs({ pull_request: {}, push: {} })).toBe(true);
+    expect(runs({ pull_request: { types: ["opened"] }, push: { paths: ["src/**"] } })).toBe(true);
+    expect(runs({ pull_request: { branches: ["main"] }, push: { branches: "main" } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["**"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["*"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["ma*"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["release/*", "main"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["develop", "release/**"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["main"], tags: ["v*"] } })).toBe(true);
+  });
+
+  it("map form: a missing event, another event in its place, or an empty map", () => {
+    expect(runs({ push: null })).toBe(false);
+    expect(runs({ pull_request: null })).toBe(false);
+    expect(runs({ pull_request_target: null, push: null })).toBe(false);
+    expect(runs({ workflow_dispatch: null })).toBe(false);
+    expect(runs({})).toBe(false);
+  });
+
+  it("a filter that leaves main out is not a run on the default branch", () => {
+    expect(runs({ pull_request: null, push: { branches: ["develop"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["main-*"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: [] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["*"] } })).toBe(false);
+    expect(runs({ pull_request: { branches: ["develop"] }, push: null })).toBe(false);
+    expect(runs({ pull_request: { "branches-ignore": ["main"] }, push: null })).toBe(false);
+  });
+
+  it("a push with only a tags filter runs for no branch", () => {
+    expect(runs({ pull_request: null, push: { tags: ["v*"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "tags-ignore": ["v*"] } })).toBe(false);
+  });
+
+  it("a filter this check does not read, or two filters at once, count as not covering main", () => {
+    expect(runs({ pull_request: null, push: { branches: ["!develop"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["m?in"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["ma+in"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["[m]ain"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["main"], "branches-ignore": ["develop"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: 5 } })).toBe(false);
+    expect(runs({ pull_request: null, push: "main" })).toBe(false);
+    expect(runs({ pull_request: null, push: ["main"] })).toBe(false);
+  });
+
+  it("anything that is not a string, a list or a map runs on nothing", () => {
+    expect(runs(undefined)).toBe(false);
+    expect(runs(null)).toBe(false);
+    expect(runs(true)).toBe(false);
+    expect(runs(3)).toBe(false);
+  });
+});
+
+describe("conformanceCallerJob — a parsed workflow file", () => {
+  const callerJob = (text) => need("conformanceCallerJob")(parseYaml(text));
+
+  it("finds the caller job of the caller text of the fleet", () => {
+    expect(callerJob(workflowText())).toBe("extension-conformance-gate");
+  });
+
+  it("reads `on:` as the YAML parser does: a string, a list, a map", () => {
+    expect(callerJob(workflowText({ on: "on: [push, pull_request]\n" }))).toBe("extension-conformance-gate");
+    expect(callerJob(workflowText({ on: "on:\n  - push\n  - pull_request\n" }))).toBe("extension-conformance-gate");
+    expect(callerJob(workflowText({ on: "on: push\n" }))).toBe(null);
+    expect(callerJob(workflowText({ on: "on: pull_request\n" }))).toBe(null);
+    expect(callerJob(workflowText({ on: "on:\n  pull_request:\n  push:\n    branches: [develop]\n" }))).toBe(null);
+  });
+
+  it("is the id of the job that calls, among other jobs", () => {
+    const text = `${ON_BOTH}jobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n  conformance:\n    uses: ${REUSABLE}@${SHA_B}\n    with:\n      ref: ${SHA_B}\n`;
+    expect(callerJob(text)).toBe("conformance");
+  });
+
+  it("does not take a step that uses the workflow's path, or a job with the wrong ref", () => {
+    const step = `${ON_BOTH}jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ${REUSABLE}@${SHA_A}\n        with:\n          ref: ${SHA_A}\n`;
+    expect(callerJob(step)).toBe(null);
+    expect(callerJob(workflowText({ withText: `      ref: ${SHA_B}\n` }))).toBe(null);
+    expect(callerJob(workflowText({ uses: `${REUSABLE}@v1`, withText: "      ref: v1\n" }))).toBe(null);
+  });
+
+  it("is null for a workflow with no jobs and for a document that is not a mapping", () => {
+    const f = need("conformanceCallerJob");
+    expect(f(parseYaml(`${ON_BOTH}`))).toBe(null);
+    expect(f(null)).toBe(null);
+    expect(f([])).toBe(null);
+    expect(f("x")).toBe(null);
+  });
+});
+
+// A git repository of one pack with committed files, under the system's temporary folder.
+const callerDirs = [];
+afterAll(() => {
+  for (const d of callerDirs) fs.rmSync(d, { recursive: true, force: true });
+});
+const git = (cwd, ...args) =>
+  execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=Test", "-c", "user.email=test@example.org", ...args], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+const makeRepo = (files, links = {}) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-callers-"));
+  callerDirs.push(dir);
+  git(dir, "init", "-q", "-b", "main");
+  for (const [rel, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.writeFileSync(path.join(dir, rel), text);
+  }
+  for (const [rel, target] of Object.entries(links)) {
+    fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    fs.symlinkSync(target, path.join(dir, rel));
+  }
+  git(dir, "add", "-A");
+  git(dir, "commit", "-q", "-m", "pin");
+  return { dir, sha: git(dir, "rev-parse", "HEAD") };
+};
+
+describe("readWorkflowFilesAtPin — the workflow files of a pack at its pinned commit", () => {
+  it("reads the yml and yaml files directly under .github/workflows, from the commit and not the working tree", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const { dir, sha } = makeRepo({
+      ".github/workflows/ci.yml": "name: ci\n",
+      ".github/workflows/caller.yaml": "name: caller\n",
+      ".github/workflows/notes.md": "not a workflow\n",
+      ".github/workflows/ci.yml.bak": "name: bak\n",
+      ".github/workflows/nested/deep.yml": "name: deep\n",
+      ".github/other.yml": "name: other\n",
+      "README.md": "x\n",
+    });
+    fs.writeFileSync(path.join(dir, ".github/workflows/ci.yml"), "name: edited in the working tree\n");
+    fs.writeFileSync(path.join(dir, ".github/workflows/new.yml"), "name: untracked\n");
+    const r = read({ pkgDir: dir, sha });
+    expect(r.ok).toBe(true);
+    expect(r.files).toEqual([
+      { path: ".github/workflows/caller.yaml", text: "name: caller\n" },
+      { path: ".github/workflows/ci.yml", text: "name: ci\n" },
+    ]);
+  });
+
+  it("reads the pin, not a later commit", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const { dir, sha } = makeRepo({ ".github/workflows/ci.yml": "name: first\n" });
+    fs.writeFileSync(path.join(dir, ".github/workflows/ci.yml"), "name: second\n");
+    git(dir, "commit", "-q", "-am", "later");
+    expect(read({ pkgDir: dir, sha }).files[0].text).toBe("name: first\n");
+  });
+
+  it("does not read a symbolic link as a workflow", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const { dir, sha } = makeRepo({ ".github/workflows/ci.yml": "name: ci\n" }, { ".github/workflows/link.yml": "ci.yml" });
+    expect(read({ pkgDir: dir, sha }).files.map((f) => f.path)).toEqual([".github/workflows/ci.yml"]);
+  });
+
+  it("is ok with no files when the pin has no workflow folder", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const { dir, sha } = makeRepo({ "package.json": "{}\n" });
+    expect(read({ pkgDir: dir, sha })).toEqual({ ok: true, files: [] });
+  });
+
+  it("fails closed when the pin is unknown, unresolvable, or the folder is no repository", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const { dir } = makeRepo({ ".github/workflows/ci.yml": "name: ci\n" });
+    const unknown = read({ pkgDir: dir, sha: null });
+    expect(unknown.ok).toBe(false);
+    expect(unknown.reason).toMatch(/identity could not be established/);
+    expect(read({ pkgDir: dir, sha: "abc" }).ok).toBe(false);
+    const missing = read({ pkgDir: dir, sha: "c".repeat(40) });
+    expect(missing.ok).toBe(false);
+    expect(missing.reason).toMatch(/cannot be listed at cccccccccccc/);
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-callers-"));
+    callerDirs.push(bare);
+    expect(read({ pkgDir: bare, sha: SHA_A }).ok).toBe(false);
+  });
+
+  it("fails closed when a file cannot be read or a listing line is not understood", () => {
+    const read = need("readWorkflowFilesAtPin");
+    const oid = "1".repeat(40);
+    const listing = `100644 blob ${oid}\t.github/workflows/ci.yml\0`;
+    const failing = (dir, args) => {
+      if (args[0] === "ls-tree") return listing;
+      throw Object.assign(new Error("boom"), { stderr: "fatal: bad object\n" });
+    };
+    const a = read({ pkgDir: "/x", sha: SHA_A, run: failing });
+    expect(a.ok).toBe(false);
+    expect(a.reason).toMatch(/\.github\/workflows\/ci\.yml cannot be read at aaaaaaaaaaaa \(fatal: bad object\)/);
+    const b = read({ pkgDir: "/x", sha: SHA_A, run: () => "garbage line\0" });
+    expect(b.ok).toBe(false);
+    expect(b.reason).toMatch(/not read/);
+  });
+});
+
+describe("scanConnectorCallers — the rule over the fleet", () => {
+  const pack = (slug, files, over = {}) => ({
+    id: `example-org/${slug}`,
+    slug,
+    kind: "connector",
+    sha: SHA_A,
+    workflowsAtPin: { ok: true, files: files.map(([p, text]) => ({ path: `.github/workflows/${p}`, text })) },
+    ...over,
+  });
+  const scan = (packages) => need("scanConnectorCallers")(packages);
+
+  it("takes a connector with the caller job as having it", () => {
+    const r = scan([pack("one-connector", [["gate.yml", workflowText()]])]);
+    expect(r).toEqual({ missing: [], unreadable: [] });
+  });
+
+  it("reports a connector with no workflow, or none that calls, as missing with its pin", () => {
+    const r = scan([
+      pack("none-connector", []),
+      pack("ci-only-connector", [["ci.yml", "name: ci\non: [push]\njobs:\n  t:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ok\n"]]),
+      pack("push-only-connector", [["gate.yml", workflowText({ on: "on: push\n" })]]),
+    ]);
+    expect(r.unreadable).toEqual([]);
+    expect(r.missing).toEqual([
+      { id: "example-org/ci-only-connector", sha: SHA_A },
+      { id: "example-org/none-connector", sha: SHA_A },
+      { id: "example-org/push-only-connector", sha: SHA_A },
+    ]);
+  });
+
+  it("finds the caller in any file of the folder", () => {
+    const r = scan([pack("two-connector", [["a.yml", "name: a\non: [push]\njobs: {}\n"], ["z.yaml", workflowText()]])]);
+    expect(r).toEqual({ missing: [], unreadable: [] });
+  });
+
+  it("does not read a pack of another kind", () => {
+    const r = scan(["agent", "skill", "artifact", "workflow", null].map((kind, i) => pack(`other-${i}`, [], { kind })));
+    expect(r).toEqual({ missing: [], unreadable: [] });
+  });
+
+  it("makes a connector whose workflows were not read unreadable, with the reason", () => {
+    const r = scan([
+      pack("a-connector", [], { workflowsAtPin: { ok: false, reason: "its workflow folder cannot be listed" } }),
+      pack("b-connector", [], { workflowsAtPin: undefined }),
+      pack("c-connector", [], { sha: null, workflowsAtPin: { ok: false, reason: "the pinned commit is unknown" } }),
+    ]);
+    expect(r.missing).toEqual([]);
+    expect(r.unreadable.map((u) => [u.id, u.reason])).toEqual([
+      ["example-org/a-connector", "its workflow folder cannot be listed"],
+      ["example-org/b-connector", "its workflow files were not read"],
+      ["example-org/c-connector", "the pinned commit is unknown"],
+    ]);
+  });
+
+  it("makes a connector unreadable when a file does not parse, is not a mapping, or repeats a key", () => {
+    const r = scan([
+      pack("bad-connector", [["x.yml", "jobs: [unclosed\n"]]),
+      pack("list-connector", [["x.yml", "- a\n- b\n"]]),
+      pack("empty-connector", [["x.yml", "# nothing\n"]]),
+      pack("dup-connector", [["x.yml", "on: push\non: pull_request\n"]]),
+    ]);
+    expect(r.missing).toEqual([]);
+    expect(r.unreadable.map((u) => u.id)).toEqual(["example-org/bad-connector", "example-org/dup-connector", "example-org/empty-connector", "example-org/list-connector"]);
+    expect(r.unreadable.find((u) => u.id.endsWith("bad-connector")).reason).toMatch(/^\.github\/workflows\/x\.yml does not parse as YAML/);
+    expect(r.unreadable.find((u) => u.id.endsWith("list-connector")).reason).toMatch(/top level is not a mapping/);
+  });
+
+  it("makes a connector unreadable when one file is broken even though another holds the caller", () => {
+    const r = scan([pack("mixed-connector", [["a.yml", workflowText()], ["b.yml", "jobs: [unclosed\n"]])]);
+    expect(r.missing).toEqual([]);
+    expect(r.unreadable.map((u) => u.id)).toEqual(["example-org/mixed-connector"]);
+  });
+});
+
+describe("judgeConnectorCallers — the rule against the recorded list", () => {
+  const withCaller = { ok: true, files: [{ path: ".github/workflows/gate.yml", text: workflowText() }] };
+  const without = { ok: true, files: [] };
+  const c = (slug, workflowsAtPin) => ({ id: `example-org/${slug}`, slug, kind: "connector", sha: SHA_B, workflowsAtPin });
+  const judgeIt = (packages, recorded) => need("judgeConnectorCallers")({ packages, recorded });
+
+  it("fails a connector without the caller that is not recorded, naming it, its pin and what it needs", () => {
+    const r = judgeIt([c("new-connector", without)], []);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].kind).toBe("connector-caller-missing");
+    expect(r.findings[0].slug).toBe("example-org/new-connector");
+    expect(r.findings[0].message).toContain("example-org/new-connector");
+    expect(r.findings[0].message).toContain("bbbbbbbbbbbb");
+    expect(r.findings[0].message).toContain(`${REUSABLE}@<full 40-character commit>`);
+    expect(r.findings[0].message).toContain("ref:");
+    expect(r.notices).toEqual([]);
+  });
+
+  it("lets a recorded connector without the caller pass", () => {
+    const r = judgeIt([c("old-connector", without)], ["example-org/old-connector"]);
+    expect(r.findings).toEqual([]);
+    expect(r.notices).toEqual([]);
+  });
+
+  it("reports a recorded connector that now has the caller as stale, and does not fail on it", () => {
+    const r = judgeIt([c("fixed-connector", withCaller)], ["example-org/fixed-connector"]);
+    expect(r.findings).toEqual([]);
+    expect(r.notices).toHaveLength(1);
+    expect(r.notices[0].kind).toBe("stale-connector-caller-entry");
+    expect(r.notices[0].message).toContain("example-org/fixed-connector");
+  });
+
+  it("reports a recorded id that is no longer a pinned connector as stale", () => {
+    const r = judgeIt([c("other-connector", withCaller)], ["example-org/gone-connector"]);
+    expect(r.findings).toEqual([]);
+    expect(r.notices.map((n) => n.slug)).toEqual(["example-org/gone-connector"]);
+  });
+
+  it("fails an unreadable connector even when it is recorded, and does not call its row stale", () => {
+    const r = judgeIt([c("bad-connector", { ok: false, reason: "boom" })], ["example-org/bad-connector"]);
+    expect(r.findings).toHaveLength(1);
+    expect(r.findings[0].kind).toBe("connector-caller-unreadable");
+    expect(r.findings[0].message).toContain("example-org/bad-connector");
+    expect(r.findings[0].message).toContain("boom");
+    expect(r.notices).toEqual([]);
+  });
+
+  it("judges each connector alone, in any order", () => {
+    const fleet = [c("a-connector", withCaller), c("b-connector", without), c("c-connector", without), c("d-connector", { ok: false, reason: "x" })];
+    const r = judgeIt(fleet, ["example-org/b-connector"]);
+    expect(r.findings.map((f) => `${f.kind} ${f.slug}`).sort()).toEqual([
+      "connector-caller-missing example-org/c-connector",
+      "connector-caller-unreadable example-org/d-connector",
+    ]);
+    const again = judgeIt([...fleet].reverse(), ["example-org/b-connector"]);
+    expect(again.findings.map((f) => `${f.kind} ${f.slug}`).sort()).toEqual(r.findings.map((f) => `${f.kind} ${f.slug}`).sort());
+  });
+});
+
+describe("parseConnectorCallerList and the recorded list", () => {
+  it("reads the form { note, connectors: [ids] } and refuses what is not that", () => {
+    const parse = need("parseConnectorCallerList");
+    expect(parse(JSON.stringify({ note: "n", connectors: ["example-org/a-connector", "example-org/b-connector"] }))).toEqual(["example-org/a-connector", "example-org/b-connector"]);
+    expect(parse(JSON.stringify({ connectors: [] }))).toEqual([]);
+    for (const bad of ["[]", "null", "{}", '{"connectors":"x"}', '{"connectors":[1]}', '{"connectors":[""]}', '{"connectors":["a/b","a/b"]}', "not json"]) {
+      expect(() => parse(bad), bad).toThrow();
+    }
+  });
+
+  it("the committed list parses, is sorted, holds ids of the form scope/directory, and no pack is named by the gate's logic", () => {
+    const parse = need("parseConnectorCallerList");
+    const file = path.join(REPO_ROOT, LIST_FILE);
+    expect(fs.existsSync(file), `${LIST_FILE} exists`).toBe(true);
+    const ids = parse(fs.readFileSync(file, "utf8"));
+    expect(ids).toEqual([...ids].sort());
+    // The rule's own text: its paragraph in the header and its section. (The carve-out ledger of the
+    // suites names packs of today, and is not the rule.)
+    const text = fs.readFileSync(fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url)), "utf8");
+    const between = (from, to) => text.slice(text.indexOf(from), text.indexOf(to, text.indexOf(from)));
+    const rule = between("// A SIXTH RULE", "// USAGE") + between("// The connector conformance caller (cinatra#3828", "// IO + CLI");
+    expect(rule.length).toBeGreaterThan(2000);
+    for (const id of ids) {
+      expect(id).toMatch(/^[^/]+\/[^/]+$/);
+      expect(rule, `the rule names ${id}`).not.toContain(id.split("/")[1]);
+    }
+  });
+});
+
+describe("checkConnectorCallerList — the recorded list against the base branch", () => {
+  const GATE_SRC = "scripts/ci/extension-suite-gate.mjs";
+  const listText = (ids) => `${JSON.stringify({ note: "n", connectors: ids })}\n`;
+  // The base is the committed state; the head is the working tree of the same repository.
+  const repoWith = ({ base, head, script = "// the gate\n" }) => {
+    const files = { [GATE_SRC]: script };
+    if (base) files[LIST_FILE] = listText(base);
+    const { dir } = makeRepo(files);
+    if (head === null) fs.rmSync(path.join(dir, LIST_FILE), { force: true });
+    else if (head) {
+      fs.mkdirSync(path.dirname(path.join(dir, LIST_FILE)), { recursive: true });
+      fs.writeFileSync(path.join(dir, LIST_FILE), typeof head === "string" ? head : listText(head));
+    }
+    return dir;
+  };
+  const check = (dir, env) => need("checkConnectorCallerList")({ repoRoot: dir, env: { EXTENSION_SUITE_GATE_BASE: "HEAD", ...env } });
+  const A = "example-org/a-connector";
+  const B = "example-org/b-connector";
+  const C = "example-org/c-connector";
+
+  it("passes a list that is the base's, and one that shrank", () => {
+    expect(check(repoWith({ base: [A, B], head: [A, B] })).ok).toBe(true);
+    const r = check(repoWith({ base: [A, B], head: [A] }));
+    expect(r.ok).toBe(true);
+    expect(r.recorded).toEqual([A]);
+  });
+
+  it("fails a list with a row the base does not have, naming the row", () => {
+    const r = check(repoWith({ base: [A], head: [A, C] }));
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain(C);
+    expect(r.lines.join("\n")).toMatch(/GREW/);
+  });
+
+  it("fails a list that swaps a row for another", () => {
+    expect(check(repoWith({ base: [A, B], head: [A, C] })).ok).toBe(false);
+  });
+
+  it("treats a base with neither the list nor the rule as the introducing change", () => {
+    const r = check(repoWith({ base: null, head: [A, B] }));
+    expect(r.ok).toBe(true);
+    expect(r.status).toBe("introducing");
+    expect(r.recorded).toEqual([A, B]);
+  });
+
+  it("fails closed when the base holds this rule but no list", () => {
+    const r = check(repoWith({ base: null, head: [A], script: "export const CONNECTOR_CALLER_LIST_FILE = 'x';\n" }));
+    expect(r.ok).toBe(false);
+  });
+
+  it("fails when the list in the checkout is missing or not a list, whatever the base holds", () => {
+    expect(check(repoWith({ base: [A], head: null })).ok).toBe(false);
+    expect(check(repoWith({ base: [A], head: "not json" })).ok).toBe(false);
+    expect(check(repoWith({ base: [A], head: '{"connectors":["a/b","a/b"]}' })).ok).toBe(false);
+    const missing = check(repoWith({ base: null, head: null }));
+    expect(missing.ok).toBe(false);
+    expect(missing.lines.join("\n")).toMatch(/missing or not readable/);
+  });
+
+  it("fails closed when the base named does not resolve, and says so", () => {
+    const r = check(repoWith({ base: [A], head: [A] }), { EXTENSION_SUITE_GATE_BASE: "no-such-ref" });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toMatch(/did not resolve/);
+  });
+
+  it("passes without a comparison when no pull request and no base is named", () => {
+    const r = need("checkConnectorCallerList")({ repoRoot: repoWith({ base: [A], head: [A, B, C] }), env: {} });
+    expect(r.ok).toBe(true);
+    expect(r.lines.join("\n")).toMatch(/not compared with a base/);
+  });
+});
+
+describe("checkConnectorCallers — the rule as the gate runs it", () => {
+  const GATE_SRC = "scripts/ci/extension-suite-gate.mjs";
+  const gateRepo = (ids) => makeRepo({ [GATE_SRC]: "// the gate\n", [LIST_FILE]: `${JSON.stringify({ note: "n", connectors: ids })}\n` }).dir;
+  const conn = (slug) => ({ id: `example-org/${slug}`, slug, kind: "connector", sha: SHA_A, dir: `extensions/example-org/${slug}` });
+  const reads = (map) => ({ pkgDir, sha }) => {
+    expect(sha).toBe(SHA_A);
+    return map[path.basename(pkgDir)] ?? { ok: true, files: [] };
+  };
+  const run = (o) => need("checkConnectorCallers")({ env: {}, ...o });
+  const caller = { ok: true, files: [{ path: ".github/workflows/gate.yml", text: workflowText() }] };
+
+  it("reads nothing, not even the list, when the fleet holds no connector", () => {
+    const r = run({
+      packages: [{ id: "example-org/x-agent", slug: "x-agent", kind: "agent", sha: SHA_A, dir: "extensions/example-org/x-agent" }],
+      packRoot: "/nowhere",
+      gateRoot: "/nowhere",
+      read: () => {
+        throw new Error("must not read");
+      },
+    });
+    expect(r.findings).toEqual([]);
+    expect(r.connectors).toBe(0);
+  });
+
+  it("reads each connector at its pin under the pack root and judges it against the list", () => {
+    const r = run({
+      packages: [conn("a-connector"), conn("b-connector"), conn("c-connector")],
+      packRoot: "/root",
+      gateRoot: gateRepo(["example-org/a-connector"]),
+      read: reads({ "a-connector": { ok: true, files: [] }, "b-connector": caller, "c-connector": { ok: true, files: [] } }),
+    });
+    expect(r.connectors).toBe(3);
+    expect(r.missing.map((m) => m.id)).toEqual(["example-org/a-connector", "example-org/c-connector"]);
+    expect(r.findings.map((f) => f.slug)).toEqual(["example-org/c-connector"]);
+    expect(r.notices).toEqual([]);
+  });
+
+  it("fails on a list that grew against the base, besides judging the fleet", () => {
+    const dir = gateRepo(["example-org/a-connector"]);
+    fs.writeFileSync(path.join(dir, LIST_FILE), `${JSON.stringify({ note: "n", connectors: ["example-org/a-connector", "example-org/c-connector"] })}\n`);
+    const r = run({
+      packages: [conn("a-connector"), conn("c-connector")],
+      packRoot: "/root",
+      gateRoot: dir,
+      env: { EXTENSION_SUITE_GATE_BASE: "HEAD" },
+      read: reads({}),
+    });
+    expect(r.findings.map((f) => f.kind)).toEqual(["connector-caller-list"]);
+    expect(r.findings[0].message).toContain("example-org/c-connector");
+  });
+
+  it("fails when the list is missing, and still reports the fleet", () => {
+    const dir = makeRepo({ [GATE_SRC]: "// the gate\n" }).dir;
+    const r = run({ packages: [conn("a-connector")], packRoot: "/root", gateRoot: dir, read: reads({}) });
+    expect(r.findings.map((f) => f.kind).sort()).toEqual(["connector-caller-list", "connector-caller-missing"]);
+  });
+});
+
+describe("main — the connector caller rule in the gate process", () => {
+  // A pack that is no repository of its own: its pinned commit is unknown, so its workflows cannot be read.
+  const fixture = () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ext-suite-callers-main-"));
+    callerDirs.push(root);
+    const dir = path.join(root, "extensions", "example-org", "widget-connector");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name: "@example-org/widget-connector", version: "0.0.0", cinatra: { kind: "connector" } }));
+    return root;
+  };
+  const gateProcess = (root, ...args) =>
+    spawnSync(process.execPath, [fileURLToPath(new URL("../extension-suite-gate.mjs", import.meta.url)), ...args], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, EXTENSION_SUITE_JOBS: "1", GITHUB_BASE_REF: "", GITHUB_EVENT_NAME: "push", EXTENSION_SUITE_GATE_BASE: "", FLOOR_BASE_FETCH: "0" },
+    });
+
+  it("--list prints the verdict as information and exits 0", () => {
+    const r = gateProcess(fixture(), "--list");
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/CONNECTOR CONFORMANCE CALLERS \(cinatra#3828\): 1 pinned connector\(s\), 0 without the caller job at their pin, 1 unreadable/);
+    expect(out).toMatch(/example-org\/widget-connector — UNREADABLE: the checkout's own repository identity could not be established/);
+    expect(r.status, out).toBe(0);
+  });
+
+  it("the judging run fails on an unreadable connector, naming the pack in an error line", () => {
+    const r = gateProcess(fixture());
+    const out = `${r.stdout}${r.stderr}`;
+    expect(out).toMatch(/::error title=extension-suite-gate::example-org\/widget-connector: the workflows of this connector at its pinned commit cannot be read/);
+    expect(r.status, out).toBe(1);
   });
 });
