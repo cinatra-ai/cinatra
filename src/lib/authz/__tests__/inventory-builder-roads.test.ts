@@ -8,7 +8,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -358,8 +358,8 @@ const REFUSED: Array<{ form: string; files: Record<string, string>; file: string
 
 type Row = { primitiveName: string; file: string; line: number; road?: string };
 
-function writeTree(files: Record<string, string>): string {
-  const dir = mkdtempSync(join(tmpdir(), "authz-inventory-roads-"));
+function writeTree(files: Record<string, string>, at?: string): string {
+  const dir = at ?? mkdtempSync(join(tmpdir(), "authz-inventory-roads-"));
   for (const [rel, body] of Object.entries({ "tsconfig.json": TSCONFIG, ...files })) {
     mkdirSync(dirname(join(dir, rel)), { recursive: true });
     writeFileSync(join(dir, rel), body);
@@ -490,6 +490,70 @@ describe("authz inventory builder: every other form fails (cinatra#4895)", () =>
     refusedDirs.push(dir);
     const failure = builderFailure(dir);
     expect(failure).toContain(`${file}:${lineOf(files[file], needle)}: `);
+    expect(failure).toContain(NOT_READ);
+  });
+});
+
+describe("authz inventory builder: an import counts by the real path of its file (cinatra#4895)", () => {
+  // A workspace package as the repository resolves one: a package under
+  // packages/ with an `exports` map to its TypeScript source, reached through a
+  // `node_modules/<scope>/<name>` symlink, the way `@cinatra-ai/mcp-server/...`
+  // resolves in src/app/api/llm-bridge/route.ts. TypeScript marks it
+  // `isExternalLibraryImport`; its real path is inside the root.
+  const WS_PKG = "packages/fixture-names-pkg";
+  const WS_FILE = `${WS_PKG}/src/tools.ts`;
+  const workspaceFiles: Record<string, string> = {
+    [`${WS_PKG}/package.json`]: JSON.stringify({
+      name: "@example-org/fixture-names",
+      private: true,
+      exports: { "./tools": "./src/tools.ts" },
+    }),
+    [WS_FILE]: 'export const FIXTURE_WS_TOOLS = new Set(["fixture_workspace_tool"]);\n',
+    [ROUTE]: route(['  "fixture_ok",', "  ...FIXTURE_WS_TOOLS,"], [
+      'import { FIXTURE_WS_TOOLS } from "@example-org/fixture-names/tools";',
+    ]),
+  };
+
+  it("reads a set of a workspace package reached through a node_modules symlink, by its real path", () => {
+    const dir = writeTree(workspaceFiles);
+    refusedDirs.push(dir);
+    mkdirSync(join(dir, "node_modules/@example-org"), { recursive: true });
+    symlinkSync("../../" + WS_PKG, join(dir, "node_modules/@example-org/fixture-names"), "dir");
+    expect(builderFailure(dir)).toBe("");
+    const ws = rowsAt(dir).filter((r) => r.primitiveName === "fixture_workspace_tool");
+    expect(ws.map(({ file, road }) => ({ file, road }))).toEqual([{ file: WS_FILE, road: "passthrough" }]);
+  });
+
+  it("refuses an import whose real path lies outside the repository root, with its file and line", () => {
+    // The fixture root is <parent>/root; the imported file is <parent>/outside/names.ts.
+    const parent = mkdtempSync(join(tmpdir(), "authz-inventory-roads-outside-"));
+    refusedDirs.push(parent);
+    mkdirSync(join(parent, "outside"), { recursive: true });
+    writeFileSync(join(parent, "outside/names.ts"), 'export const OUTSIDE_TOOLS = new Set(["fixture_outside_tool"]);\n');
+    const needle = 'import { OUTSIDE_TOOLS } from "../../../../../../outside/names";';
+    const files = { [ROUTE]: route(['  "fixture_ok",', "  ...OUTSIDE_TOOLS,"], [needle]) };
+    const dir = writeTree(files, join(parent, "root"));
+    const failure = builderFailure(dir);
+    expect(failure).toContain(`${ROUTE}:${lineOf(files[ROUTE], needle)}: `);
+    expect(failure).toContain("does not resolve to a source module of the repository");
+    expect(failure).toContain(NOT_READ);
+    expect(rowsAt(dir).some((r) => r.primitiveName === "fixture_outside_tool")).toBe(false);
+  });
+
+  it("refuses an import whose real path lies inside a node_modules directory of the root", () => {
+    const needle = 'import { MODULE_TOOLS } from "@example-org/fixture-installed";';
+    const files = {
+      "node_modules/@example-org/fixture-installed/package.json": JSON.stringify({
+        name: "@example-org/fixture-installed",
+        exports: { ".": "./index.ts" },
+      }),
+      "node_modules/@example-org/fixture-installed/index.ts": 'export const MODULE_TOOLS = new Set(["fixture_installed_tool"]);\n',
+      [ROUTE]: route(['  "fixture_ok",', "  ...MODULE_TOOLS,"], [needle]),
+    };
+    const dir = writeTree(files);
+    refusedDirs.push(dir);
+    const failure = builderFailure(dir);
+    expect(failure).toContain(`${ROUTE}:${lineOf(files[ROUTE], needle)}: `);
     expect(failure).toContain(NOT_READ);
   });
 });

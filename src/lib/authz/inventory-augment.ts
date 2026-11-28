@@ -626,9 +626,13 @@ export type PassthroughToolClassification = {
   status: "passthrough_route" | "host_handler_via_passthrough";
 };
 
-/** A name the route forwards to its host handler: the host classification's resource and action. */
-function viaHostHandler(name: string): PassthroughToolClassification {
-  const host = PRIMITIVE_CLASSIFICATIONS[name];
+/**
+ * A name the route forwards to its host handler: the host classification's
+ * resource and action. Only an OWN entry of the host map counts: an inherited
+ * key (`constructor`, `toString`, `__proto__`) is no host classification.
+ */
+export function viaHostHandler(name: string): PassthroughToolClassification {
+  const host = Object.hasOwn(PRIMITIVE_CLASSIFICATIONS, name) ? PRIMITIVE_CLASSIFICATIONS[name] : undefined;
   return {
     resourceType: host?.resourceType as ResourceType,
     action: host?.action as Action,

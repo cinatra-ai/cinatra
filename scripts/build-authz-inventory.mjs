@@ -35,7 +35,10 @@
  *     `new Set<T>(...)` are accepted (the route's sets use both).
  *     Refused, among others: an imported ALLOWED_TOOLS; a type-only import; a
  *     default or namespace import; a re-export or barrel between the import
- *     and the declaration; `let` or `var`; a wrapper around an element or an
+ *     and the declaration; an import whose resolved file's real path lies
+ *     outside the real repository root or inside a `node_modules` directory
+ *     (a workspace package reached through a `node_modules` symlink counts by
+ *     its real path); `let` or `var`; a wrapper around an element or an
  *     initializer other than `as const` on an array literal (parentheses,
  *     `as T`, `<T>`, `satisfies`, `!`); a call, a computed value, a
  *     conditional; a second top-level binding of the same name; a top-level
@@ -65,7 +68,7 @@
  *   pnpm authz:inventory --check  (fail if file is stale)
  */
 import { readFileSync, writeFileSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
@@ -304,6 +307,31 @@ function onlyBinding(sf, name, use) {
   return b;
 }
 
+/** @param {string} file @returns {string | null} */
+function realPathOf(file) {
+  try {
+    return realpathSync(file);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Membership is decided on one fact, the REAL path of the resolved file: it is
+ * a source module of the repository when it lies inside the real repository
+ * root (compared by path segments) and inside no `node_modules` directory
+ * there. How TypeScript reached it (a relative path, a path alias, a
+ * `node_modules` symlink of a workspace package, `isExternalLibraryImport`)
+ * does not count.
+ * @param {string} real an absolute real path
+ */
+function isRepositorySource(real) {
+  const rel = relative(ROOT, real);
+  if (rel === "" || isAbsolute(rel)) return false;
+  const segments = rel.split(sep);
+  return segments[0] !== ".." && !segments.includes("node_modules");
+}
+
 /** @param {ts.Node} stmt */
 const isExported = (stmt) =>
   !!ts.canHaveModifiers(stmt) && !!ts.getModifiers(stmt)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
@@ -326,10 +354,11 @@ function constDeclaration(sf, name, use, options) {
     if (imp.importClause?.isTypeOnly || spec.isTypeOnly) refuse(spec, `${name} is a type-only import`);
     const from = /** @type {ts.StringLiteral} */ (imp.moduleSpecifier).text;
     const resolved = ts.resolveModuleName(from, sf.fileName, options, ts.sys).resolvedModule;
-    if (!resolved || resolved.isExternalLibraryImport || resolved.extension === ts.Extension.Dts) {
+    const real = resolved && resolved.extension !== ts.Extension.Dts ? realPathOf(resolved.resolvedFileName) : null;
+    if (!real || !isRepositorySource(real)) {
       refuse(imp, `"${from}" does not resolve to a source module of the repository`);
     }
-    const target = parse(realpathSync(resolved.resolvedFileName));
+    const target = parse(/** @type {string} */ (real));
     const original = (spec.propertyName ?? spec.name).text;
     const there = topLevel(target, original);
     if (there.length !== 1 || there[0].kind !== "const" || !isExported(/** @type {ts.Node} */ (there[0].stmt))) {

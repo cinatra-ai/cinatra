@@ -43,10 +43,15 @@ type RowClassification = { resourceType: string; action: string; status: string 
 const PASSTHROUGH_CLASSIFICATIONS = ((augmentModule as Record<string, unknown>).PASSTHROUGH_TOOL_CLASSIFICATIONS ??
   {}) as Record<string, RowClassification>;
 
+/** The own entry of `name` in `map`: an inherited key (`constructor`, `toString`, `__proto__`) is no entry. */
+function ownEntry<T>(map: Record<string, T>, name: string): T | undefined {
+  return Object.hasOwn(map, name) ? map[name] : undefined;
+}
+
 function classificationOfRow(p: { primitiveName: string; road?: string }): unknown {
   return p.road === "passthrough"
-    ? PASSTHROUGH_CLASSIFICATIONS[p.primitiveName]
-    : PRIMITIVE_CLASSIFICATIONS[p.primitiveName];
+    ? ownEntry(PASSTHROUGH_CLASSIFICATIONS, p.primitiveName)
+    : ownEntry(PRIMITIVE_CLASSIFICATIONS, p.primitiveName);
 }
 
 function loadInventory(): InventoryFile {
@@ -70,6 +75,17 @@ describe("authz invariant coverage", () => {
       );
     }
     expect(missing).toEqual([]);
+  });
+
+  it("a name counts as classified only by an own entry, never by an inherited key", () => {
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      for (const road of ["mcp", "passthrough"]) {
+        expect(classificationOfRow({ primitiveName: name, road }), `${name} on ${road}`).toBeUndefined();
+      }
+      // An own entry of that name does count.
+      const own = JSON.parse(`{"${name}": {"resourceType": "artifact", "action": "read", "status": "x"}}`);
+      expect(ownEntry(own, name), `own ${name}`).toEqual({ resourceType: "artifact", action: "read", status: "x" });
+    }
   });
 
   it("every classification's (resourceType, action) exists in the registry", () => {
@@ -111,7 +127,7 @@ describe("authz invariant coverage", () => {
     const driftedFromHost = Object.entries(PASSTHROUGH_CLASSIFICATIONS)
       .filter(([, c]) => c.status === "host_handler_via_passthrough")
       .filter(([n, c]) => {
-        const host = PRIMITIVE_CLASSIFICATIONS[n];
+        const host = ownEntry(PRIMITIVE_CLASSIFICATIONS, n);
         return !mcpRows.has(n) || !host || host.resourceType !== c.resourceType || host.action !== c.action;
       })
       .map(([n]) => n);

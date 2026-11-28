@@ -43,4 +43,31 @@ describe("passthrough classifications stay off the MCP boundary", () => {
     });
     expect(d).toMatchObject({ allowed: false, shouldBlock: true, reason: "unclassified_primitive" });
   });
+
+  it("takes a host classification only from an own entry of the host map", () => {
+    const viaHostHandler = (augmentModule as Record<string, unknown>).viaHostHandler as
+      | ((name: string) => { resourceType: unknown; action: unknown; status: string })
+      | undefined;
+    expect(typeof viaHostHandler).toBe("function");
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      const c = viaHostHandler!(name);
+      expect(c.resourceType, name).toBeUndefined();
+      expect(c.action, name).toBeUndefined();
+    }
+    // Even with a value reachable through the prototype chain, an inherited
+    // key gives none (the lookup is own-property, not a property access).
+    const proto = Object.prototype as Record<string, unknown>;
+    proto.resourceType = "artifact";
+    try {
+      expect(viaHostHandler!("constructor").resourceType).toBeUndefined();
+      expect(viaHostHandler!("__proto__").resourceType).toBeUndefined();
+    } finally {
+      delete proto.resourceType;
+    }
+    // An own entry still gives its resource and action.
+    expect(viaHostHandler!("objects_save")).toMatchObject({
+      resourceType: augmentModule.PRIMITIVE_CLASSIFICATIONS.objects_save.resourceType,
+      action: augmentModule.PRIMITIVE_CLASSIFICATIONS.objects_save.action,
+    });
+  });
 });
