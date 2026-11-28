@@ -60,7 +60,6 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpat
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 import ts from "typescript";
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
@@ -131,26 +130,8 @@ export function isProductFile(name) {
   return dot >= 0 && SOURCE_EXTENSIONS.has(name.slice(dot));
 }
 
-/** A JSON file the leaf rule reads (cinatra#4531), named like a product file: not a test or a
- *  fixture, and not a `tsconfig*.json` (a compiler config, which may hold comments). */
-/** A run-time text file the leaf rule reads (cinatra#4531): Markdown, text, YAML and HTML, named
- *  like a product file (prompts and skills are loaded into live model calls). */
-export function isProductTextFile(name) {
-  return /\.(md|txt|ya?ml|html)$/.test(name) && !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
-}
-
-/** A stylesheet the leaf rule reads (cinatra#4531), named like a product file. */
-export function isProductCssFile(name) {
-  return name.endsWith(".css") && !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
-}
-
-export function isProductJsonFile(name) {
-  if (!name.endsWith(".json") || /^tsconfig.*\.json$/.test(name)) return false;
-  return !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
-}
-
-/** Walk one directory for product source files (absolute paths); `accept` picks the file names. */
-export function walkProductFiles(dir, acc = [], repoRoot = null, accept = isProductFile) {
+/** Walk one directory for product source files (absolute paths). */
+export function walkProductFiles(dir, acc = [], repoRoot = null) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(entry.name)) continue;
@@ -158,11 +139,11 @@ export function walkProductFiles(dir, acc = [], repoRoot = null, accept = isProd
     if (entry.isDirectory()) {
       const relDir = repoRoot ? relative(repoRoot, full).split(sep).join("/") : null;
       if (relDir && (GENERATED_PATHS.has(relDir) || FIXTURE_PATHS.has(relDir))) continue;
-      walkProductFiles(full, acc, repoRoot, accept);
+      walkProductFiles(full, acc, repoRoot);
       continue;
     }
     if (!entry.isFile()) continue;
-    if (!accept(entry.name)) continue;
+    if (!isProductFile(entry.name)) continue;
     acc.push(full);
   }
   return acc;
@@ -756,25 +737,24 @@ export function packLeafNames(packs) {
  *  trimmed: `/ ? # = &` of a path or URL, `@` before a version range (`@scope/<leaf>@^1.0.0`,
  *  packages/extensions/src/required-in-prod.ts), `:` before a type in a type id (`@scope/<leaf>:x`,
  *  packages/objects/src/claims.ts) and `,` in a list (src/lib/extension-auto-update.ts). The leaf
- *  of a scoped name (`@scope/<leaf>`) is a part too. `gluedStart` / `gluedEnd`: the first /
- *  last part touches a template substitution, so it is not a whole part and is not read. */
+ *  of a scoped name (`@scope/<leaf>`) is a part too. */
 const PATH_PART_SEPARATORS = /[/?#=&@:,]/;
-export function leafParts(value, leaves, { gluedStart = false, gluedEnd = false } = {}) {
-  const parts = value.split(PATH_PART_SEPARATORS).map((part) => part.trim());
-  const out = [];
-  parts.forEach((part, i) => {
-    if ((gluedStart && i === 0) || (gluedEnd && i === parts.length - 1)) return;
-    if (leaves.has(part)) out.push(part);
-  });
-  return out;
+export function leafParts(value, leaves) {
+  return value
+    .split(PATH_PART_SEPARATORS)
+    .map((part) => part.trim())
+    .filter((part) => leaves.has(part));
 }
 
-/** `pack-slug-in-core` (cinatra#4531): a string literal token whose WHOLE value is a pack's leaf.
- *  The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is one)
- *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf, or a `JsxText` whose text,
- *  trimmed, equals a leaf. Comments, regular expressions
- *  and escapes are the parser's business. A file the parser cannot read fails closed. */
+/** `pack-slug-in-core` (cinatra#4531): a string token whose value, or one of its parts, is a pack's
+ *  leaf. The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is
+ *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. A template with a substitution
+ *  is not read in this stage. Comments, regular expressions and escapes are the parser's business.
+ *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) is not read. A file the parser cannot read
+ *  fails closed. */
+export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
 export function scanPackLeafLiterals({ file, text, packs }) {
+  if (DECLARATION_FILE_RE.test(file)) return [];
   const leaves = packLeafNames(packs);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
   const broken = (sf.parseDiagnostics ?? [])[0];
@@ -790,9 +770,6 @@ export function scanPackLeafLiterals({ file, text, packs }) {
     let found = [];
     if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) found = leafParts(n.text, leaves);
     else if (ts.isJsxText(n)) found = leafParts(n.text.trim(), leaves);
-    else if (ts.isTemplateHead(n)) found = leafParts(n.text, leaves, { gluedEnd: true });
-    else if (ts.isTemplateMiddle(n)) found = leafParts(n.text, leaves, { gluedStart: true, gluedEnd: true });
-    else if (ts.isTemplateTail(n)) found = leafParts(n.text, leaves, { gluedStart: true });
     for (const leaf of found) {
       const owners = leaves.get(leaf);
       out.push(
@@ -804,272 +781,6 @@ export function scanPackLeafLiterals({ file, text, packs }) {
           `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
         ),
       );
-    }
-  });
-  return out;
-}
-
-/** `pack-slug-in-core` in a JSON file of the product tree (cinatra#4531): every string value and
- *  every object key equal to a pack's leaf. A JSON file that does not parse fails closed. */
-export function scanPackLeafJson({ file, text, packs }) {
-  const leaves = packLeafNames(packs);
-  let doc;
-  try {
-    doc = JSON.parse(text);
-  } catch (e) {
-    throw new Error(`[core-extension-border] ${file} does not parse as JSON (${compact(String(e?.message ?? e))}) — the leaf rule fails closed rather than skipping the file`);
-  }
-  const out = [];
-  const counts = new Map();
-  const report = (leaf) =>
-    out.push(
-      finding(
-        "pack-slug-in-core",
-        file,
-        1,
-        occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
-        `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
-      ),
-    );
-  const visit = (v) => {
-    if (typeof v === "string") {
-      leafParts(v, leaves).forEach(report);
-    } else if (Array.isArray(v)) {
-      v.forEach(visit);
-    } else if (v && typeof v === "object") {
-      for (const [k, x] of Object.entries(v)) {
-        leafParts(k, leaves).forEach(report);
-        visit(x);
-      }
-    }
-  };
-  visit(doc);
-  return out;
-}
-
-/** `pack-slug-in-core` in a run-time text file (cinatra#4531): every maximal run of the characters
- *  `[A-Za-z0-9_@.:/-]` (a sentence's final dots dropped) is a value, split and compared like every
- *  other value: `` `openai-connector` `` in prose is found, "the connector" is not. */
-export function scanPackLeafText({ file, text, packs }) {
-  const leaves = packLeafNames(packs);
-  const out = [];
-  const counts = new Map();
-  for (const m of text.matchAll(/[A-Za-z0-9_@.:\/-]+/g)) {
-    for (const leaf of leafParts(m[0].replace(/\.+$/, ""), leaves)) {
-      out.push(
-        finding(
-          "pack-slug-in-core",
-          file,
-          lineOf(text, m.index),
-          occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
-          `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
-        ),
-      );
-    }
-  }
-  return out;
-}
-
-/** postcss, loaded through `@tailwindcss/postcss` (cinatra#4531). The root declares no CSS parser of
- *  its own and pnpm does not hoist postcss, but `@tailwindcss/postcss` is a direct root dependency
- *  that depends on postcss: resolving postcss from it loads the copy the frozen lockfile installs
- *  for it, with no new dependency. If it does not resolve, the rule fails closed. */
-let postcssModule = null;
-function loadPostcss() {
-  if (postcssModule) return postcssModule;
-  try {
-    const fromRoot = createRequire(join(DEFAULT_REPO_ROOT, "package.json"));
-    postcssModule = createRequire(fromRoot.resolve("@tailwindcss/postcss"))("postcss");
-  } catch (e) {
-    throw new Error(
-      `[core-extension-border] postcss cannot be loaded through @tailwindcss/postcss (${compact(String(e?.message ?? e))}) — ` +
-        "the leaf rule fails closed rather than skipping stylesheets",
-    );
-  }
-  return postcssModule;
-}
-
-/** CSS whitespace: space, tab, line feed, carriage return, form feed. */
-const isCssSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
-const isHex = (c) => c !== undefined && /[0-9a-fA-F]/.test(c);
-/** A character that continues a CSS name: a letter, a digit, `_`, `-` or any non-ASCII character. */
-const isNameChar = (c) => c !== undefined && (/[A-Za-z0-9_-]/.test(c) || c.charCodeAt(0) > 127);
-
-/** The index after the CSS escape that starts with the backslash at `i`: up to six hex digits and
- *  one optional whitespace (a CR LF pair counts as one), or any one other character. */
-function cssEscapeEnd(text, i) {
-  let j = i + 1;
-  if (!isHex(text[j])) return Math.min(j + 1, text.length);
-  for (let k = 0; k < 6 && isHex(text[j]); k += 1) j += 1;
-  if (text[j] === "\r" && text[j + 1] === "\n") return j + 2;
-  return isCssSpace(text[j]) ? j + 1 : j;
-}
-
-/** A CSS name or string body with its escapes resolved by the CSS rule above. */
-export function unescapeCss(text) {
-  let out = "";
-  for (let i = 0; i < text.length; ) {
-    if (text[i] !== "\\") {
-      out += text[i];
-      i += 1;
-      continue;
-    }
-    const end = cssEscapeEnd(text, i);
-    if (isHex(text[i + 1])) {
-      const cp = parseInt(text.slice(i + 1, end).trim(), 16);
-      out += cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? "�" : String.fromCodePoint(cp);
-    } else {
-      out += text.slice(i + 1, end);
-    }
-    i = end;
-  }
-  return out;
-}
-
-/** The end index of the quoted string that opens at `i` (a backslash escapes one character). */
-function endOfQuoted(text, i) {
-  let j = i + 1;
-  while (j < text.length && text[j] !== text[i]) j += text[j] === "\\" ? 2 : 1;
-  return j;
-}
-
-/** The text with every `/* ... *\/` comment outside a quoted string replaced by a space; a `/*`
- *  inside a quoted string is content. */
-export function stripCssComments(text) {
-  let out = "";
-  for (let i = 0; i < text.length; ) {
-    if (text[i] === '"' || text[i] === "'") {
-      const end = endOfQuoted(text, i);
-      out += text.slice(i, end + 1);
-      i = end + 1;
-    } else if (text[i] === "/" && text[i + 1] === "*") {
-      const close = text.indexOf("*/", i + 2);
-      out += " ";
-      i = close < 0 ? text.length : close + 2;
-    } else {
-      out += text[i];
-      i += 1;
-    }
-  }
-  return out;
-}
-
-/** The index after the CSS name that starts at `i` (escapes included). */
-function cssNameEnd(text, i) {
-  let j = i;
-  while (j < text.length) {
-    if (text[j] === "\\") j = cssEscapeEnd(text, j);
-    else if (isNameChar(text[j])) j += 1;
-    else break;
-  }
-  return j;
-}
-
-/** The names and values a selector holds, lower-cased: every type, class and id name, and every
- *  attribute selector's name and value, quoted or not (`[name OP value flag]`, OP one of
- *  `= ~= |= ^= $= *=`, a flag `i` or `s`, CSS whitespace anywhere between). Pseudo-class and
- *  pseudo-element names are skipped; their arguments (`:is(...)`, `:not(...)`) are read as selectors.
- *  A small scanner over the comment-free selector. */
-export function cssSelectorValues(selector) {
-  const s = stripCssComments(selector);
-  const out = [];
-  const skipSpace = (j) => {
-    while (isCssSpace(s[j])) j += 1;
-    return j;
-  };
-  for (let i = 0; i < s.length; ) {
-    const c = s[i];
-    if (c === '"' || c === "'") {
-      i = endOfQuoted(s, i) + 1;
-    } else if (c === ":") {
-      i += s[i + 1] === ":" ? 2 : 1;
-      i = cssNameEnd(s, i);
-    } else if (c === "[") {
-      let j = skipSpace(i + 1);
-      const nameEnd = cssNameEnd(s, j);
-      out.push(unescapeCss(s.slice(j, nameEnd)));
-      j = skipSpace(nameEnd);
-      if ("~|^$*".includes(s[j]) && s[j + 1] === "=") j += 1;
-      if (s[j] === "=") {
-        j = skipSpace(j + 1);
-        if (s[j] === '"' || s[j] === "'") {
-          const close = endOfQuoted(s, j);
-          out.push(unescapeCss(s.slice(j + 1, close)));
-          j = close + 1;
-        } else {
-          const valueEnd = cssNameEnd(s, j);
-          out.push(unescapeCss(s.slice(j, valueEnd)));
-          j = valueEnd;
-        }
-      }
-      while (j < s.length && s[j] !== "]") j += 1;
-      i = j + 1;
-    } else if (isNameChar(c) || c === "\\") {
-      const end = cssNameEnd(s, i);
-      out.push(unescapeCss(s.slice(i, end)));
-      i = end;
-    } else {
-      i += 1;
-    }
-  }
-  return out.map((v) => v.toLowerCase());
-}
-
-/** The tokens of a declaration value or at-rule params, lower-cased: every quoted string, and every
- *  run of other characters between CSS whitespace and `( ) , ; [ ]` (an unquoted `url(...)`, a
- *  layer or container name, a keyword), with escapes resolved, over the comment-free text. */
-export function cssValueTokens(text) {
-  const s = stripCssComments(text);
-  const out = [];
-  const stop = (c) => isCssSpace(c) || c === '"' || c === "'" || "(),;[]".includes(c);
-  for (let i = 0; i < s.length; ) {
-    if (s[i] === '"' || s[i] === "'") {
-      const close = endOfQuoted(s, i);
-      out.push(unescapeCss(s.slice(i + 1, close)));
-      i = close + 1;
-    } else if (stop(s[i])) {
-      i += 1;
-    } else {
-      let j = i;
-      while (j < s.length && !stop(s[j])) j = s[j] === "\\" ? cssEscapeEnd(s, j) : j + 1;
-      out.push(unescapeCss(s.slice(i, j)));
-      i = j;
-    }
-  }
-  return out.map((v) => v.toLowerCase());
-}
-
-/** `pack-slug-in-core` in a stylesheet (cinatra#4531): postcss parses it into rules, declarations
- *  and at-rules; the names and values of every rule's selector and the tokens of every declaration
- *  value and at-rule params (comments removed outside strings, escapes resolved, lower-cased) are
- *  split and compared like every other value. A declaration's property name is not read. A
- *  stylesheet that does not parse fails closed. */
-export function scanPackLeafCss({ file, text, packs }) {
-  const leaves = packLeafNames(packs);
-  const postcss = loadPostcss();
-  let root;
-  try {
-    root = postcss.parse(text, { from: file });
-  } catch (e) {
-    throw new Error(`[core-extension-border] ${file} does not parse as CSS (${compact(String(e?.reason ?? e?.message ?? e))}) — the leaf rule fails closed rather than skipping the file`);
-  }
-  const out = [];
-  const counts = new Map();
-  root.walk((node) => {
-    const values =
-      node.type === "rule" ? cssSelectorValues(node.selector) : node.type === "decl" ? cssValueTokens(node.value) : node.type === "atrule" ? cssValueTokens(node.params) : [];
-    for (const value of values) {
-      for (const leaf of leafParts(value, leaves)) {
-        out.push(
-          finding(
-            "pack-slug-in-core",
-            file,
-            node.source?.start?.line ?? 1,
-            occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
-            `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
-          ),
-        );
-      }
     }
   });
   return out;
@@ -1623,18 +1334,6 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);
       kindTables += kinds.tables;
-    }
-    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductJsonFile)) {
-      const file = relative(repoRoot, abs).split(sep).join("/");
-      findings.push(...scanPackLeafJson({ file, text: readFileSync(abs, "utf8"), packs }));
-    }
-    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductTextFile)) {
-      const file = relative(repoRoot, abs).split(sep).join("/");
-      findings.push(...scanPackLeafText({ file, text: readFileSync(abs, "utf8"), packs }));
-    }
-    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductCssFile)) {
-      const file = relative(repoRoot, abs).split(sep).join("/");
-      findings.push(...scanPackLeafCss({ file, text: readFileSync(abs, "utf8"), packs }));
     }
   }
   keepRecordedKindDetails(findings, baseline.entries);

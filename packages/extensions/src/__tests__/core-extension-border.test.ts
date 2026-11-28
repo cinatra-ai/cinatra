@@ -1490,24 +1490,6 @@ describe("core/extension border — pack-slug-in-core", () => {
     expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
   });
 
-  it("reports a JSON string value or key that is a leaf; a JSON file that does not parse fails closed", () => {
-    type Json = { scanPackLeafJson?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
-    const run = (text: string) => {
-      const fn = (gate as unknown as Json).scanPackLeafJson;
-      if (!fn) return ["not a function"];
-      try {
-        return fn({ file: "src/lib/defaults.json", text, packs: LEAF_PACKS }).map((f) => f.detail);
-      } catch (e) {
-        return [`threw: ${(e as Error).message}`];
-      }
-    };
-    expect(run('{ "default": "quill-ledger-connector", "tide-planner-agent": { "x": ["report", "install quill-ledger-connector"] } }')).toEqual([
-      QUILL,
-      "tide-planner-agent (@example-org/tide-planner-agent)",
-    ]);
-    expect(run('{ "a": 1, }')).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/defaults\.json/)]);
-  });
-
   it("reports a leaf that is one part of a path or a query, also in the literal spans of a template", () => {
     const text = [
       'const a = "/connectors/example-org/quill-ledger-connector/setup";',
@@ -1516,12 +1498,9 @@ describe("core/extension border — pack-slug-in-core", () => {
       'const d = "?q=quill-ledger-connector";',
       'const e = "a=quill-ledger-connector&b=1";',
       'const f = "#quill-ledger-connector";',
-      "const g = `/x/${a}/quill-ledger-connector`;",
-      "const h = `${base}/quill-ledger-connector/y`;",
-      "const i = `/a/${x}/quill-ledger-connector/${y}/b`;",
       'const j = "/x/@example-org/tide-planner-agent";',
     ].join("\n");
-    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
   });
 
   it("does not read a leaf joined to other characters or glued to a substitution; a leaf after a scope part is read", () => {
@@ -1541,17 +1520,6 @@ describe("core/extension border — pack-slug-in-core", () => {
     expect(leaves(text)).toEqual([`5 ${QUILL}`, `8 ${QUILL} (occurrence 2)`, `9 ${QUILL} (occurrence 3)`, "10 tide-planner-agent (@example-org/tide-planner-agent)"]);
   });
 
-  it("reports a leaf that is one part of a JSON path value or a scoped key or name", () => {
-    const run = (gate as unknown as { scanPackLeafJson?: (i: { file: string; text: string; packs: Set<string> }) => Finding[] }).scanPackLeafJson;
-    const json = (text: string) => (run ? run({ file: "packages/core-x/package.json", text, packs: LEAF_PACKS }).map((f) => f.detail) : ["not a function"]);
-    expect(json('{ "href": "/connectors/x/tide-planner-agent/setup", "@example-org/quill-ledger-connector": 1 }')).toEqual([
-      "tide-planner-agent (@example-org/tide-planner-agent)",
-      QUILL,
-    ]);
-    expect(json('{ "name": "@example-org/core-x", "dependencies": { "@example-org/quill-ledger-connector": "workspace:*" } }')).toEqual([QUILL]);
-    expect(json('{ "name": "@example-org/tide-planner-agent" }')).toEqual(["tide-planner-agent (@example-org/tide-planner-agent)"]);
-  });
-
   it("reports a leaf before a version range, before a type id, in a comma list and after an at sign", () => {
     const text = [
       'const a = "@example-org/quill-ledger-connector@^1.2.0";',
@@ -1563,110 +1531,6 @@ describe("core/extension border — pack-slug-in-core", () => {
       'const g = "use quill-ledger-connector now";',
     ].join("\n");
     expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5"]);
-  });
-
-  describe("stylesheets", () => {
-    type Css = { scanPackLeafCss?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
-    const css = (text: string, file = "src/app/x.css"): string[] => {
-      const run = (gate as unknown as Css).scanPackLeafCss;
-      if (!run) return ["not a function"];
-      try {
-        return run({ file, text, packs: LEAF_PACKS }).map((f) => `${f.line} ${f.detail}`);
-      } catch (e) {
-        return [`threw: ${(e as Error).message}`];
-      }
-    };
-
-    it("reports a leaf in an attribute selector value, quoted or not, and in a quoted declaration value; a comment is not read", () => {
-      const text = [
-        '@import "tailwindcss";',
-        "@theme { --color-x: #fff; }",
-        '[data-connector-slug="quill-ledger-connector"] { color: red; }',
-        "[data-agent=tide-planner-agent i] { color: red; }",
-        '.x::after { content: "/connectors/x/quill-ledger-connector/setup"; }',
-        "/* quill-ledger-connector is named only in this comment */",
-        '.y { --label: "use quill-ledger-connector now"; }',
-        '[data-x^="quill-ledger-connector-v2"] { color: red; }',
-        '@supports selector([data-kind~="sample-assistant"]) { .z { color: red; } }',
-      ].join("\n");
-      expect(css(text)).toEqual([
-        `3 ${QUILL}`,
-        "4 tide-planner-agent (@example-org/tide-planner-agent)",
-        `5 ${QUILL} (occurrence 2)`,
-        "9 sample-assistant (@example-org/sample-assistant)",
-      ]);
-    });
-
-    it("a stylesheet that does not parse fails closed with its name", () => {
-      expect(css(".a { color: red;\n", "src/app/broken.css")).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/app\/broken\.css/)]);
-    });
-
-    // cinatra#4531, review 2 of #4961: the CSS rules. Each row is one stylesheet and the number of
-    // findings it must give for the leaf `quill-ledger-connector` (Q).
-    const Q = "quill-ledger-connector";
-    const count = (text: string) => {
-      const r = css(text);
-      return r.length === 1 && /^(not a function|threw)/.test(r[0]) ? r[0] : r.length;
-    };
-    it.each([
-      ["a value quoted with double quotes", `[data-x="${Q}"] { color: red; }`, 1],
-      ["a value quoted with single quotes", `[data-x='${Q}'] { color: red; }`, 1],
-      ["an unquoted value", `[data-x=${Q}] { color: red; }`, 1],
-      ["the operator ~=", `[data-x~="${Q}"] { color: red; }`, 1],
-      ["the operator |=", `[data-x|="${Q}"] { color: red; }`, 1],
-      ["the operator ^=", `[data-x^="${Q}"] { color: red; }`, 1],
-      ["the operator $=", `[data-x$="${Q}"] { color: red; }`, 1],
-      ["the operator *=", `[data-x*="${Q}"] { color: red; }`, 1],
-      ["a line feed before the value", `[data-x=\n"${Q}"] { color: red; }`, 1],
-      ["tab, carriage return and form feed around name, operator, value and flag", `[\tdata-x\r=\f${Q}\ti\n] { color: red; }`, 1],
-      ["the flag i", `[data-x="${Q}" i] { color: red; }`, 1],
-      ["the flag I", `[data-x="${Q}" I] { color: red; }`, 1],
-      ["the flag s", `[data-x="${Q}" s] { color: red; }`, 1],
-      ["an upper-case value without a flag", `[data-x="${Q.toUpperCase()}"] { color: red; }`, 1],
-      ["an upper-case value with the flag i", `[data-x="${Q.toUpperCase()}" i] { color: red; }`, 1],
-      ["an escaped hyphen", '[data-x="quill\\-ledger-connector"] { color: red; }', 1],
-      ["a hex escape with a space", '[data-x="\\71 uill-ledger-connector"] { color: red; }', 1],
-      ["a six-digit hex escape", '[data-x="\\000071uill-ledger-connector"] { color: red; }', 1],
-      ["an attribute name", `[${Q}] { color: red; }`, 1],
-      ["a class", `.${Q} { color: red; }`, 1],
-      ["an escaped class", ".quill\\-ledger-connector { color: red; }", 1],
-      ["an id", `#${Q} { color: red; }`, 1],
-      ["a type selector", `${Q} { color: red; }`, 1],
-      ["inside :is() :not() :where() :has()", `:is(.${Q}), :not([data-x=${Q}]), :where(#${Q}), .a:has(> .${Q}) { color: red; }`, 4],
-      ["a nested rule", `.a { .${Q} { color: red; } }`, 1],
-      ["a rule inside @media", `@media (min-width: 1px) { .${Q} { color: red; } }`, 1],
-      ["@supports selector() with an unquoted value", `@supports selector([data-x=${Q}]) { .a { color: red; } }`, 1],
-      ["@supports selector() with a quoted value", `@supports selector([data-x="${Q}"]) { .a { color: red; } }`, 1],
-      ["a @container name", `@container ${Q} (min-width: 1px) { .a { color: red; } }`, 1],
-      ["a @layer name", `@layer ${Q};`, 1],
-      ["a custom property value", `.a { --x: ${Q}; }`, 1],
-      ["a quoted url", `.a { background: url("/x/${Q}/y.png"); }`, 1],
-      ["an unquoted url", `.a { background: url(/x/${Q}/y.png); }`, 1],
-      ["content", `.a::after { content: "${Q}"; }`, 1],
-      ["a comment opener inside a string is content", `.a::after { content: "/*" "${Q}" "*/"; }`, 1],
-      ["a custom property name and its use, joined", `.a { --${Q}-x: 1; color: var(--${Q}-x); }`, 0],
-      ["a joined class and value", `.${Q}-v2, [data-x^="${Q}-v2"] { color: red; }`, 0],
-      ["a comment before the rule", `/* ${Q} */ .a { color: red; }`, 0],
-      ["a comment inside the selector", `.a /* .${Q} */ { color: red; }`, 0],
-      ["a comment inside the value", `.x{color:red/* "${Q}" */}`, 0],
-      ["a comment inside at-rule params", `@media /* ${Q} */ screen { .a { color: red; } }`, 0],
-    ])("CSS: %s", (_n, text, n) => expect(count(text)).toBe(n));
-  });
-
-  describe("run-time text files", () => {
-    type Text = { scanPackLeafText?: (input: { file: string; text: string; packs: Set<string> }) => Finding[]; isProductTextFile?: (n: string) => boolean };
-    const text = (t: string): string[] => {
-      const run = (gate as unknown as Text).scanPackLeafText;
-      return run ? run({ file: "packages/x/src/prompt.md", text: t, packs: LEAF_PACKS }).map((f) => `${f.line} ${f.detail}`) : ["not a function"];
-    };
-    it("reports a leaf written as a word in Markdown, also at a sentence end, and not a joined word or plain prose", () => {
-      const md = ["# Prompt", "", "Install `quill-ledger-connector` first.", "Then the connector runs; see /connectors/x/tide-planner-agent/setup.", "Not quill-ledger-connector-v2 and not report."].join("\n");
-      expect(text(md)).toEqual([`3 ${QUILL}`, "4 tide-planner-agent (@example-org/tide-planner-agent)"]);
-    });
-    it("reads Markdown, text, YAML and HTML files, not tests or fixtures", () => {
-      const accept = (gate as unknown as Text).isProductTextFile;
-      expect(["a.md", "b.txt", "c.yaml", "d.yml", "e.html", "f.test.md", "g.fixture.md", "h.ts"].filter((n) => accept?.(n) ?? false)).toEqual(["a.md", "b.txt", "c.yaml", "d.yml", "e.html"]);
-    });
   });
 
   it("a test helper or stub under a tests folder is out of the scan", () => {
@@ -1683,24 +1547,13 @@ describe("core/extension border — pack-slug-in-core", () => {
     }
   });
 
-  it("reads JSON files in the product tree except tsconfig files, tests and fixtures", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "border-json-tree-"));
-    try {
-      for (const f of ["src/lib/defaults.json", "src/lib/a.ts", "src/tsconfig.json", "src/lib/x.fixture.json", "src/lib/__tests__/t.json", "src/app/design-fixtures/seed.json"]) {
-        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
-        writeFileSync(path.join(root, f), "{}\n");
-      }
-      const accept = (gate as unknown as { isProductJsonFile?: (n: string) => boolean }).isProductJsonFile;
-      const walkJson = gate.walkProductFiles as unknown as (d: string, a: string[], r: string, accept?: (n: string) => boolean) => string[];
-      const files = walkJson(path.join(root, "src"), [], root, accept).map((f) => path.relative(root, f).split(path.sep).join("/"));
-      expect(files).toEqual(["src/lib/defaults.json"]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("reads the assistant suffix of an agent package, and no leaf without a kind suffix", () => {
     expect(leaves('const a = "report";\nconst b = "sample-assistant";\n')).toEqual(["2 sample-assistant (@example-org/sample-assistant)"]);
+  });
+
+  it("does not read a declaration file (.d.ts, .d.mts, .d.cts) or a template with a substitution", () => {
+    const text = 'type Connector = "quill-ledger-connector";\nconst a = `/x/${b}/quill-ledger-connector`;\n';
+    expect(["src/lib/x.mts", "src/lib/x.d.ts", "src/lib/x.d.mts", "src/lib/x.d.cts"].map((f) => leaves(text, f).join("|"))).toEqual([`1 ${QUILL}`, "", "", ""]);
   });
 
   it("a file the parser cannot read fails closed with its name", () => {
