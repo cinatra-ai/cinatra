@@ -30,6 +30,7 @@ import {
   type RowOwnership,
 } from "@/lib/extension-dependency-plan";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
+import { summarizeBatchOutcome } from "@/lib/extension-dependency-ux";
 import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import type { GatekeptInstallResolution } from "@/lib/gatekept-install";
 import {
@@ -2631,5 +2632,77 @@ describe("installExtensionWithDependencies — a failed member's own dispatcher 
         ["@cinatra-ai/dep-a", ROOT].sort(),
       );
     }
+  });
+});
+
+// cinatra#4920 review: ONE list of what a rollback left behind decides the
+// ledger phase, the member records the admin view reads, and the error. A root
+// UPDATE with a fresh dependency whose handler fails: the dispatcher's restore
+// of the prior version can fail too (it then carries the root on the error).
+describe("installExtensionWithDependencies — the recorded phase and member states follow every rollback failure (cinatra#4920)", () => {
+  const DEP = "@cinatra-ai/new-dep";
+  function rootUpdate(opts: { restoreFails: boolean; depTeardownFails: boolean }) {
+    const h = makeHarness({
+      preInstalled: [ROOT],
+      plan: [member(DEP), member(ROOT, { action: "update" })],
+    });
+    (h.deps.updateMemberPackage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      throw Object.assign(new Error("handler failed; prior-version restore result attached"), {
+        ...(opts.restoreFails ? { compensationFailures: [ROOT] } : {}),
+      });
+    });
+    if (opts.depTeardownFails) {
+      (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("uninstall refused"),
+      );
+    }
+    return h;
+  }
+  async function run(h: ReturnType<typeof makeHarness>) {
+    try {
+      await installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, rootAction: "update" },
+        h.deps,
+      );
+    } catch (e) {
+      const batch = [...h.ledgerRows.values()][0]!;
+      return { error: e as BatchMemberInstallError, batch, view: summarizeBatchOutcome(batch) };
+    }
+    throw new Error("the root update failure must propagate");
+  }
+
+  it("(ii) only a carried failure: the prior-version restore failed, dependency cleanup succeeded", async () => {
+    const { error, batch, view } = await run(rootUpdate({ restoreFails: true, depTeardownFails: false }));
+    expect(batch.phase).toBe("failed");
+    expect(view.compensationFailed).toEqual([ROOT]);
+    expect(view.compensated).toEqual([DEP]);
+    expect(view.headline).toMatch(/rollback was incomplete/);
+    expect(error.compensationFailures).toEqual([ROOT]);
+    expect(error.message).toMatch(new RegExp(`ROLLBACK INCOMPLETE for ${ROOT}`));
+  });
+
+  it("(i) only a batch-owned failure: the dependency teardown failed, the restore succeeded", async () => {
+    const { error, batch, view } = await run(rootUpdate({ restoreFails: false, depTeardownFails: true }));
+    expect(batch.phase).toBe("failed");
+    expect(view.compensationFailed).toEqual([DEP]);
+    expect(view.failedMember).toBe(ROOT);
+    expect(error.compensationFailures).toEqual([DEP]);
+  });
+
+  it("(iii) both: the root and the dependency are named", async () => {
+    const { error, batch, view } = await run(rootUpdate({ restoreFails: true, depTeardownFails: true }));
+    expect(batch.phase).toBe("failed");
+    expect([...view.compensationFailed].sort()).toEqual([DEP, ROOT].sort());
+    expect([...error.compensationFailures].sort()).toEqual([DEP, ROOT].sort());
+  });
+
+  it("(iv) none: a clean rollback is recorded as compensated and the error carries no failure", async () => {
+    const { error, batch, view } = await run(rootUpdate({ restoreFails: false, depTeardownFails: false }));
+    expect(batch.phase).toBe("compensated");
+    expect(view.compensationFailed).toEqual([]);
+    expect(view.compensated).toEqual([DEP]);
+    expect(view.failedMember).toBe(ROOT);
+    expect(error.compensationFailures).toEqual([]);
+    expect(error.message).not.toMatch(/ROLLBACK INCOMPLETE/);
   });
 });

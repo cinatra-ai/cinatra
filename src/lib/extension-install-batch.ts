@@ -1757,18 +1757,13 @@ export async function installExtensionWithDependencies(
           );
         }
       }
-      await deps.ledger
-        .setPhase(batch!.batchId, failures.length === 0 ? "compensated" : "failed")
-        .catch(() => undefined);
-      // An INCOMPLETE rollback must leave this function on EVERY exit, not only
-      // inside BatchMemberInstallError (cinatra#4920): the two raw structured
-      // rethrows below would otherwise carry a refusal that hides packages left
-      // installed. The same `compensationFailures` field is attached to the raw
-      // error (class and `code` unchanged, so callers matching on the code keep
-      // working). A complete rollback attaches nothing.
-      // The failed member's own dispatcher rollback can have failed too; the
-      // dispatcher then carries its package on the cause already. Keep it,
-      // unless this batch's own teardown of that member just succeeded.
+      // ONE list of what the rollback left behind, built BEFORE anything is
+      // derived from it (cinatra#4920): this batch's own failed teardowns plus
+      // a rollback the failed member's dispatcher already reported as failed
+      // (it carries `compensationFailures` on the cause — e.g. a root update
+      // whose prior-version restore failed), unless this batch's own teardown
+      // of that member then succeeded. The ledger phase, the member records,
+      // the error's field and its ROLLBACK INCOMPLETE text all come from it.
       const carriedRaw =
         cause !== null && typeof cause === "object"
           ? (cause as { compensationFailures?: unknown }).compensationFailures
@@ -1776,7 +1771,26 @@ export async function installExtensionWithDependencies(
       const carried = Array.isArray(carriedRaw)
         ? carriedRaw.filter((n): n is string => typeof n === "string" && !compensated.includes(n))
         : [];
-      const allFailures = [...new Set([...carried, ...failures])];
+      const allFailures = [...new Set([...failures, ...carried])];
+      // A carried failure of a ledger member is recorded as that member's
+      // `compensation-failed` (its rollback failed; manual cleanup may be
+      // needed) — the state the batch already writes when its own teardown
+      // of the failed member fails. The member's `detail` keeps the error.
+      for (const name of carried) {
+        if (failures.includes(name)) continue;
+        if (!batch!.members.some((x) => x.packageName === name)) continue;
+        await deps.ledger
+          .updateMember(batch!.batchId, name, { status: "compensation-failed" })
+          .catch(() => undefined);
+      }
+      await deps.ledger
+        .setPhase(batch!.batchId, allFailures.length === 0 ? "compensated" : "failed")
+        .catch(() => undefined);
+      // An INCOMPLETE rollback must leave this function on EVERY exit, not only
+      // inside BatchMemberInstallError (cinatra#4920): the two raw structured
+      // rethrows below carry the same `compensationFailures` field (class and
+      // `code` unchanged, so callers matching on the code keep working). A
+      // complete rollback attaches nothing.
       if (allFailures.length > 0 && cause !== null && typeof cause === "object") {
         Object.assign(cause, { compensationFailures: [...allFailures] });
       }
