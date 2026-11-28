@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`, cinatra#4532) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`) and `cinatra.fieldRenderers` entries that carry a `component` (`rendererComponents`); in a skill, workflow or connector pack that is no agent, any `cinatra.fieldRenderers` entry (`hitlDeclarations`), all cinatra#4532 | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -852,7 +852,7 @@ connector, artifact or skill pack that adds a flow is judged as an agent; its
 program files are recorded like an agent's (the list records them; the
 connector's code is not judged here).
 
-**The five classes**, each a set of items that may only shrink:
+**The seven classes**, each a set of items that may only shrink:
 
 1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree,
    EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
@@ -931,20 +931,42 @@ connector's code is not judged here).
    On the day it landed (pins of main at c2662f78b): 10 items in 4 agent
    packs, 7 `peerDependencies` and 3 `devDependencies`; no skill pack
    declares one, and no workflow pack is pinned.
-
-**A sixth class**, `rendererComponents` (per pack, cinatra#4532): an agent, a
-skill or a workflow declares no `cinatra.fieldRenderers` entry that carries a
-`component`. It is judged for the same packs as class 5. Read, in the manifest
-at the pinned commit, as the product reads it
-(`validateFieldRendererDeclarations` in
-`scripts/extensions/agent-binding-kinds.mjs`): `cinatra.fieldRenderers` is an
-array of plain objects; an entry counts when it carries the key `component`
-(the product's own test is `component !== undefined`; a value it rejects is
-counted too). Absent or `null` declares nothing; a value that is not an array,
-or an entry that is not an object, is a scanner error that names the package.
-Items: `fieldRenderers: <id>` (`[<position>]` for an entry without a string
-id). On the day it landed (pins of main at ab9a95143): 4 items in 3 agent
-packs. A list may omit the class as it may omit class 5 (`LATER_CLASSES`).
+6. `rendererComponents` (per pack, cinatra#4532) — an agent, a skill or a
+   workflow declares no `cinatra.fieldRenderers` entry that carries a
+   `component`. It is judged for the same packs as class 5. Read, in the
+   manifest at the pinned commit, as the product reads it
+   (`validateFieldRendererDeclarations` in
+   `scripts/extensions/agent-binding-kinds.mjs`): `cinatra.fieldRenderers` is
+   an array of plain objects; an entry counts when it carries the key
+   `component` (the product's own test is `component !== undefined`; a value
+   it rejects is counted too). Absent or `null` declares nothing; a value that
+   is not an array, or an entry that is not an object, is a scanner error that
+   names the package. Items: `fieldRenderers: <id>` (`[<position>]` for an
+   entry without a string id). On the day it landed (pins of main at
+   ab9a95143): 4 items in 3 agent packs. A list may omit the class as it may
+   omit class 5 (`LATER_CLASSES`).
+7. `hitlDeclarations` (per pack, cinatra#4532) — a HITL step declaration
+   (`cinatra.fieldRenderers`) belongs to an agent, and to an artifact pack
+   that hosts the HITL renderers of agents (ruling 133-1: the artifact kind
+   admits the key in `packages/sdk-extensions/src/artifact-contract.ts`, and
+   the generator reads it from every record, whatever its kind). A pinned
+   pack of kind `skill`, `workflow` or `connector` declares no entry at all,
+   with or without a `component`. The kind is decided as for the classes
+   above: the manifest kind, and the agent rule, so a pack the agent rule
+   judges an agent (a connector whose pinned tree holds `cinatra/oas.json`
+   too) and an artifact pack are not read by this class. Read as class 6
+   reads it: an array of plain objects; absent, `null` and an empty array
+   declare nothing. **Both classes apply to a skill or workflow pack:** an
+   entry there that carries a `component` is one item of class 6 and one item
+   of class 7, and each class is recorded and shrunk on its own. A connector's
+   entry is an item of class 7 only, as class 6 does not read connectors. The
+   shape is read for EVERY pinned pack, whatever its kind: a value that is not
+   an array, or an entry that is not a plain object, is a scanner error that
+   names the package. Items as in class 6. Stated limit: a screen shipped
+   without a `fieldRenderers` declaration is not seen, and a pack of any other
+   kind is not judged for its entries. On the day it landed (pins of main at 9d2bd5f29): 0 items; the
+   class is recorded empty, so any entry that appears fails. A list may omit
+   the class as it may omit class 5 (`LATER_CLASSES`).
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:
@@ -960,7 +982,7 @@ it. `count` is the number of items, kept as information (a list whose
 `count` differs from its items is malformed). That writer refuses a missing
 or malformed list and any item the list does not hold; `--seed` writes the
 first list only when none exists. A class added after the list was seeded
-(`LATER_CLASSES`: `uiDependencies`) may be absent from a list, which then
+(`LATER_CLASSES`: `uiDependencies`, `rendererComponents`, `hitlDeclarations`) may be absent from a list, which then
 holds none of its items; a base list that does not carry such a class seeds
 it once, in the change that adds the class, and a head list that drops it
 after it reached the base fails as a removed class. The list is compared with its copy on the

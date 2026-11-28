@@ -16,7 +16,7 @@
  * Over the pinned extensions (both locks plus `cinatra.devExtensions`) it reads
  * each pack from its PINNED COMMIT (the lock's `resolvedSha`) in its git
  * checkout at `extensions/<scope>/<name>`, never from the working tree or the
- * index, and records, per key, the items of four classes that may only go
+ * index, and records, per key, the items of seven classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
  * by `isContent`, not under a `.git` folder, `isSkippedDir`,
@@ -27,7 +27,9 @@
  * declared dependencies on a UI package, see `uiDependencyItems`) and
  * `rendererComponents` (cinatra#4532: per agent, skill or workflow pack, its
  * `cinatra.fieldRenderers` entries that carry a `component`, see
- * `rendererComponentItems`).
+ * `rendererComponentItems`) and `hitlDeclarations` (cinatra#4532: per skill,
+ * workflow or connector pack that is not an agent, its `cinatra.fieldRenderers`
+ * entries, see `hitlDeclarationItems`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
  *
  * Usage: node scripts/audit/agent-extension-code-gate.mjs [--report | --write-baseline | --seed]
@@ -44,9 +46,9 @@ export const FLOOR_FILE = "scripts/audit/agent-extension-code-gate.baseline.json
 export const GATE_FILE = "scripts/audit/agent-extension-code-gate.mjs";
 export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
-export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents"];
+export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations"];
 /** Classes added after the list was seeded: a list without such a class holds none of its items, and a base list without it seeds it (`listGrowth`). */
-export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents"]);
+export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents", "hitlDeclarations"]);
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
@@ -130,33 +132,60 @@ export function uiDependencyItems(packageJson, label = "package.json") {
 }
 
 /**
- * THE RENDERER RULE (cinatra#4532). An agent, skill or workflow pack
- * (`isRolePack`) declares no `cinatra.fieldRenderers` entry that carries a
- * `component`: core draws a HITL step with its one generic gate, and a pack
- * that ships a screen of its own keeps a second renderer alive. The shapes are
- * the ones the product reads (`validateFieldRendererDeclarations` in
+ * The `cinatra.fieldRenderers` entries of a manifest, read as the product reads
+ * them (`validateFieldRendererDeclarations` in
  * scripts/extensions/agent-binding-kinds.mjs, which the generator and the
- * runtime collector both call): `cinatra.fieldRenderers` is an ARRAY of plain
- * objects, absent or `null` meaning none; an object map is not read. The key
- * the product takes a component from is `component`, and its own test of it is
- * `component !== undefined`. A JSON value is never `undefined`, so an entry
- * counts when it carries the key, whatever the value: the product rejects an
- * entry whose `component` is not an object holding an `entry`, and such a
- * declaration is no good one, so it is counted too. A `fieldRenderers` value
- * that is not an array, or an entry that is not a plain object, is a shape the
- * product does not read: a scanner error that names the package, never a
- * silent pass.
+ * runtime collector both call): an ARRAY of plain objects, absent or `null`
+ * meaning none; an object map is not read. Each entry as `{ item, entry }`,
+ * the item being `fieldRenderers: <id>` (`fieldRenderers: [<position>]` for an
+ * entry without a string id). A value that is not an array, or an entry that is
+ * not a plain object, is a shape the product does not read: a scanner error
+ * that names the package, never a silent pass.
  */
-export function rendererComponentItems(packageJson, label = "package.json") {
+function fieldRendererEntries(packageJson, label) {
   const declared = packageJson?.cinatra?.fieldRenderers;
   if (declared === undefined || declared === null) return [];
   if (!Array.isArray(declared)) throw new ScannerError(`${label}: cinatra.fieldRenderers is not an array`);
-  const items = [];
-  declared.forEach((entry, i) => {
+  return declared.map((entry, i) => {
     if (!isPlainObject(entry)) throw new ScannerError(`${label}: cinatra.fieldRenderers[${i}] is not an object`);
-    if (entry.component !== undefined) items.push(`fieldRenderers: ${typeof entry.id === "string" ? entry.id : `[${i}]`}`);
+    return { item: `fieldRenderers: ${typeof entry.id === "string" ? entry.id : `[${i}]`}`, entry };
   });
-  return items.sort();
+}
+
+/**
+ * THE RENDERER RULE (cinatra#4532). An agent, skill or workflow pack
+ * (`isRolePack`) declares no `cinatra.fieldRenderers` entry that carries a
+ * `component`: core draws a HITL step with its one generic gate, and a pack
+ * that ships a screen of its own keeps a second renderer alive. The key the
+ * product takes a component from is `component`, and its own test of it is
+ * `component !== undefined`. A JSON value is never `undefined`, so an entry
+ * counts when it carries the key, whatever the value: the product rejects an
+ * entry whose `component` is not an object holding an `entry`, and such a
+ * declaration is no good one, so it is counted too. The shapes are read by
+ * `fieldRendererEntries`.
+ */
+export function rendererComponentItems(packageJson, label = "package.json") {
+  return fieldRendererEntries(packageJson, label).filter(({ entry }) => entry.component !== undefined).map(({ item }) => item).sort();
+}
+
+/**
+ * THE HITL RULE (cinatra#4532). A HITL step declaration (`cinatra.fieldRenderers`)
+ * belongs to an agent, and to an artifact pack that hosts the HITL renderers of
+ * agents (ruling 133-1, packages/sdk-extensions/src/artifact-contract.ts: the
+ * artifact kind admits the key, and the generator collects it from every
+ * record). A pack of kind `skill`, `workflow` or `connector` that is not an
+ * agent (`isHitlFreePack`) declares no entry at all, with or without a
+ * `component`. An agent (kind `agent`, or a pinned tree with `cinatra/oas.json`)
+ * and an artifact pack are not read by this rule. The shapes are read by
+ * `fieldRendererEntries`; the caller reads them for EVERY pinned pack, so a
+ * shape the product does not read fails closed wherever it stands.
+ */
+export const HITL_FREE_KINDS = Object.freeze(["skill", "workflow", "connector"]);
+export function isHitlFreePack(kind, entries) {
+  return HITL_FREE_KINDS.includes(kind) && !isAgentPack(kind, entries);
+}
+export function hitlDeclarationItems(packageJson, label = "package.json") {
+  return fieldRendererEntries(packageJson, label).map(({ item }) => item).sort();
 }
 
 /**
@@ -441,12 +470,16 @@ export function scan(root) {
       const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
+    const declaredBy = `${name} (${rel}/package.json at the pinned commit ${sha})`;
     if (isRolePack(kind, entries)) {
       const ui = uiDependencyItems(pkg, `${rel}/package.json at the pinned commit ${sha}`);
       if (ui.length) findings.uiDependencies[name] = { count: ui.length, items: ui };
-      const renderers = rendererComponentItems(pkg, `${name} (${rel}/package.json at the pinned commit ${sha})`);
+      const renderers = rendererComponentItems(pkg, declaredBy);
       if (renderers.length) findings.rendererComponents[name] = { count: renderers.length, items: renderers };
     }
+    // Read for every pinned pack, so a shape the product does not read fails closed in any kind; recorded for a pack that is no agent or artifact.
+    const hitl = hitlDeclarationItems(pkg, declaredBy);
+    if (hitl.length && isHitlFreePack(kind, entries)) findings.hitlDeclarations[name] = { count: hitl.length, items: hitl };
   }
   return { findings, packCount: packs.length, oldLayout };
 }
@@ -469,6 +502,7 @@ const NOTE = "Agent extension code gate (cinatra#4885): per key, the recorded it
 const RULE_TEXT = {
   uiDependencies: "an agent, skill or workflow extension depends on no UI package",
   rendererComponents: "an agent, skill or workflow extension declares no field renderer component",
+  hitlDeclarations: "a skill, workflow or connector extension declares no HITL field renderer",
 };
 
 const OLD_LAYOUT_NOTE = "a pinned pack holds an old definition file and no cinatra/oas.json; the product reports it and does not load it:";
