@@ -42,8 +42,13 @@ values (never the keys) of:
 - `cinatra/**/*.json`;
 - every `*.oas.json` in the package (the HITL steps included).
 
-A path that the application border gate exempts (tests and fixtures),
-`node_modules/` and dot directories are not read.
+A test or fixture path is not read: a file with a directory segment
+`test`, `tests`, `__tests__`, `fixtures`, `__fixtures__`, `__mocks__` or
+`__stubs__` in its path inside the package, or a file whose base name is
+`*.test.json`, `*.spec.json` or `*.fixture.json` (also before `.oas.json`:
+`*.test.oas.json`, `*.spec.oas.json`, `*.fixture.oas.json`). `node_modules/`
+and dot directories are not read either. The package's own `package.json` is
+always read.
 
 ## The comparison
 

@@ -152,6 +152,32 @@ describe("the scan over a fixture tree", () => {
   });
 });
 
+describe("the extension side's test and fixture paths", () => {
+  const NORMAL_FLOW = "Pick the notes the weekly flow should gather first.";
+  const SKIPPED = "This sentence lives only in a skipped test or fixture file.";
+
+  /** The fixture repository plus a normal cinatra/flow.json and one skipped file; core spells both texts. */
+  function repoWithSkipped(skippedRel) {
+    const root = fixtureRepo();
+    put(root, "extensions/example-org/notes-agent/cinatra/flow.json", { steps: [{ title: NORMAL_FLOW }] });
+    put(root, `extensions/example-org/notes-agent/${skippedRel}`, { steps: [{ title: SKIPPED }] });
+    put(root, "src/lib/flow-texts.ts", `export const n = ${JSON.stringify(NORMAL_FLOW)};\nexport const s = ${JSON.stringify(SKIPPED)};\n`);
+    return root;
+  }
+
+  for (const skippedRel of ["cinatra/flow.test.json", "fixtures/sample.oas.json", "cinatra/__mocks__/x.json"]) {
+    it(`does not read ${skippedRel}, and reads the normal cinatra/flow.json beside it`, async () => {
+      const m = await gate();
+      const root = repoWithSkipped(skippedRel);
+      const declared = m.readDeclaredTexts(m.locatePinnedPackages(root));
+      expect(declared.has(SKIPPED), `${skippedRel} was read`).toBe(false);
+      expect(declared.get(NORMAL_FLOW)).toEqual(["@example-org/notes-agent"]);
+      const scan = m.scanDeclaredTextCore(root);
+      expect(scan.matches).toEqual({ ...EXPECTED_MATCHES, [`src/lib/flow-texts.ts :: ${NORMAL_FLOW}`]: 1 });
+    });
+  }
+});
+
 describe("the floor", () => {
   it("refuses a new or grown match, reports a fallen one stale, and is never raised by the writer", async () => {
     const m = await gate();

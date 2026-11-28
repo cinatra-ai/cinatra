@@ -18,9 +18,12 @@
 //     found under `extensions/` by its manifest name (the produces gate's
 //     `discoverExtensionDirs`): `package.json` `description` and every string
 //     value under its `cinatra` field; every string value of `cinatra/**/*.json`
-//     and of every `*.oas.json` in the package (HITL steps included). A path the
-//     application border gate exempts (tests, fixtures, doubles) is not read,
-//     and neither is `node_modules/` or a dot directory.
+//     and of every `*.oas.json` in the package (HITL steps included). A test or
+//     fixture path is not read (`isExtensionTestOrFixturePath`: a directory
+//     segment `test`, `tests`, `__tests__`, `fixtures`, `__fixtures__`,
+//     `__mocks__` or `__stubs__`, or a base name `*.test.json`, `*.spec.json`,
+//     `*.fixture.json`, also before `.oas.json`), and neither is `node_modules/`
+//     or a dot directory. The package's own `package.json` is always read.
 //
 // THE COMPARISON. Both sides collapse every run of whitespace to one space and
 // trim. A text counts only with at least 20 characters, at least 4 words, a
@@ -146,9 +149,26 @@ export function locatePinnedPackages(repoRoot, extensionsRoot = join(repoRoot, "
   return [...found.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, dir]) => ({ name, dir }));
 }
 
+/** Directory segments that make a package-relative path a test or fixture path. */
+export const TEST_FIXTURE_DIRS = new Set(["test", "tests", "__tests__", "fixtures", "__fixtures__", "__mocks__", "__stubs__"]);
+/** Base names of a test or fixture JSON file (also before `.oas.json`). */
+const TEST_FIXTURE_JSON_RE = /\.(?:test|spec|fixture)(?:\.oas)?\.json$/;
+
+/**
+ * Is a package-relative JSON path a test or fixture path (extension side only)?
+ * True when any directory segment is in TEST_FIXTURE_DIRS, or when the base
+ * name is `*.test.json`, `*.spec.json`, `*.fixture.json` (also `*.test.oas.json`,
+ * `*.spec.oas.json`, `*.fixture.oas.json`).
+ */
+export function isExtensionTestOrFixturePath(rel) {
+  const segments = rel.split("/");
+  const base = segments.pop();
+  return segments.some((s) => TEST_FIXTURE_DIRS.has(s)) || TEST_FIXTURE_JSON_RE.test(base);
+}
+
 /** Is a package-relative JSON path a declaration stage 1 reads (beside package.json)? */
 export function isDeclarationPath(rel) {
-  if (!rel.endsWith(".json") || isExemptFile(rel)) return false;
+  if (!rel.endsWith(".json") || isExtensionTestOrFixturePath(rel)) return false;
   return rel.startsWith("cinatra/") || rel.endsWith(".oas.json");
 }
 
