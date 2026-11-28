@@ -80,8 +80,10 @@ export type FieldRendererBindingInput = {
 // A repo test pins set-equality between these keys and
 // KNOWN_FIELD_RENDERER_KINDS (scripts/extensions/agent-binding-kinds.mjs) so
 // the validator vocabulary and this table cannot drift.
+// Readonly (cinatra#4852): no entry is added after this declaration (tsc
+// refuses one), so the border gate judges every kind from this literal.
 // ---------------------------------------------------------------------------
-const RENDERER_KIND_TABLE: Record<
+const RENDERER_KIND_TABLE: Readonly<Record<
   string,
   {
     renderer: ComponentType<FieldRendererProps>;
@@ -111,7 +113,7 @@ const RENDERER_KIND_TABLE: Record<
      */
     makeCondition?: (matchIds: readonly string[]) => FieldRendererCondition;
   }
-> = {
+>> = {
   // MIGRATED (cinatra#3380): blog-pipeline's `idea_selection_gate` chooser is
   // shipped by @cinatra-ai/blog-pipeline-agent itself, activated by the binding
   // id `@cinatra-ai/blog-pipeline-agent:idea-selection`. The host's former

@@ -1867,6 +1867,30 @@ jobs:
       - name: Clone companion extension repos
         uses: ./.github/actions/clone-extensions
 
+      # An extension of kind agent ships no program code at all (cinatra#4885);
+      # a skill, with its scripts, is its own extension of kind skill. Over the
+      # pinned universe (both extension locks plus cinatra.devExtensions) it
+      # reads each pack from its PINNED COMMIT (the lock's resolvedSha, via git
+      # ls-tree / cat-file in the pack's own checkout), never from the working
+      # tree or the index, and RECORDS ITEMS per pack: files that are not
+      # content (a closed list of data and text kinds) of a pack the product
+      # treats as an agent (kind agent, or cinatra/oas.json or cinatra/agent.json
+      # in its tree), cinatra.tools declarations, and per flow file the steps
+      # calling extension_tool and the ApiNode steps whose data cannot be read.
+      # The head's items must be contained in the recorded ones (also compared
+      # with the base branch through the shared floor base guard). A
+      # pinned pack it cannot find, read or verify at its pin is a scanner error,
+      # never a pass. It and its tests run HERE, right after the clone and BEFORE
+      # any install, so no companion lifecycle script has run yet; both import
+      # only node built-ins and their own files.
+      - name: Agent extension code gate (shrink-only)
+        env:
+          AGENT_EXTENSION_CODE_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/agent-extension-code-gate.mjs
+
+      - name: Agent extension code gate tests
+        run: node --test scripts/audit/__tests__/agent-extension-code-gate.test.mjs
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 

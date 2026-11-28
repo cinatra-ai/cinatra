@@ -288,8 +288,7 @@ function revalidateBlogPostPaths(_projectIds: string[] = [], _postIds: Array<{ p
   // synchronously, so we revalidate the `/artifacts` surface (catches the
   // artifacts list + any same-org operator viewing it). Per-row revalidation of
   // the preserved `/dashboards/{id}` detail route is the caller's responsibility
-  // when it has the actor (e.g. `generation.ts` resolves via
-  // `resolveBlogDashboardUrl(actor, projectId)`).
+  // when it has the actor.
   safeRevalidatePath("/artifacts");
 }
 

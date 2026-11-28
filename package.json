@@ -52,6 +52,7 @@
       "@cinatra-ai/blog-linkedin-writer-agent": "https://github.com/cinatra-ai/blog-linkedin-writer-agent.git",
       "@cinatra-ai/blog-pipeline-agent": "https://github.com/cinatra-ai/blog-pipeline-agent.git",
       "@cinatra-ai/blog-post-artifact": "https://github.com/cinatra-ai/blog-post-artifact.git",
+      "@cinatra-ai/blog-post-html-skill": "https://github.com/cinatra-ai/blog-post-html-skill.git",
       "@cinatra-ai/blog-post-matcher-skill": "https://github.com/cinatra-ai/blog-post-matcher-skill.git",
       "@cinatra-ai/blog-wordpress-publish-agent": "https://github.com/cinatra-ai/blog-wordpress-publish-agent.git",
       "@cinatra-ai/blog-writing-skill": "https://github.com/cinatra-ai/blog-writing-skill.git",

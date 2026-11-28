@@ -6,7 +6,7 @@
 //   2. ensureAgentPackage / ensureAgentPackageFromGitFile (startup, no request)
 
 import { createHash, randomUUID } from "node:crypto";
-import { writeFile, mkdir, rm } from "node:fs/promises";
+import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { redirect } from "next/navigation";
@@ -37,7 +37,7 @@ import {
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
 import { assertStoredRegenerateHonoured } from "./retained-regenerate";
-import { scanOasForVisibleInputContractFindings } from "./validate-oas-runtime-invariants";
+import { scanOasForInstallFindings } from "./validate-oas-runtime-invariants";
 import { serializeArtifactBindingDeclaration } from "./artifact-binding";
 import {
   detectSpdxLicense,
@@ -54,11 +54,11 @@ import {
 import type { MaterializeResult } from "./materialize-agent-package";
 import type { ReloadResult } from "./wayflow-reload-client";
 
-// agent.json is a compact OAS Flow document. Per-step approval policy,
+// cinatra/oas.json is a compact OAS Flow document. Per-step approval policy,
 // inputSchema, outputSchema, prompt, and
 // packageName are DERIVED by compileOasAgentJson() rather than read as literal
 // fields. This type intentionally models only the Flow envelope consumed here.
-type AgentJsonOas = {
+type AgentOasDocument = {
   component_type?: "Flow";
   id?: string;
   name?: string;
@@ -71,6 +71,9 @@ type AgentJsonOas = {
     };
   };
 };
+
+/** The one definition file of an agent archive (cinatra#4920). */
+const OAS_ARCHIVE_ENTRY = "cinatra/oas.json";
 
 export async function importAgentTemplateCore(
   zipBase64: string,
@@ -170,8 +173,17 @@ export async function importAgentTemplateCore(
   const zipBuf = Buffer.from(zipBase64, "base64");
   const files = readZipFiles(zipBuf);
 
-  const agentRaw = files.get("agent.json");
-  if (!agentRaw) throw new Error("Invalid archive: agent.json not found.");
+  // cinatra#4920: `cinatra/oas.json` is the one definition file of an agent. A
+  // root `agent.json` is not read; an archive that has only that old file is
+  // refused with the name of the file to ship.
+  const agentRaw = files.get(OAS_ARCHIVE_ENTRY);
+  if (!agentRaw) {
+    throw new Error(
+      files.has("agent.json")
+        ? `Invalid archive: this archive has only a root agent.json, which is no longer read. Put the agent definition in ${OAS_ARCHIVE_ENTRY}.`
+        : `Invalid archive: ${OAS_ARCHIVE_ENTRY} not found.`,
+    );
+  }
 
   const manifestRaw = files.get("manifest.json");
   if (manifestRaw) {
@@ -179,14 +191,14 @@ export async function importAgentTemplateCore(
     if (m.version !== 1) throw new Error(`Unsupported manifest version: ${m.version}`);
   }
 
-  const agent = JSON.parse(agentRaw) as AgentJsonOas;
+  const agent = JSON.parse(agentRaw) as AgentOasDocument;
   const importedName = nameOverride?.trim() || agent.name || "Imported Agent";
 
   // Compile the OAS Flow to derive DB column values.
-  // The compiler reads the agent.json via a temp-dir fixture (callers already
-  // resolved the ZIP into base64). To avoid re-serializing, we write the ZIP
-  // contents to a tmp agents/<slug>/cinatra/agent.json path and let the compiler
-  // resolve via packageName.
+  // The compiler reads the definition via a temp-dir fixture (callers already
+  // resolved the ZIP into base64). To avoid re-serializing, we stage the ZIP
+  // contents under a tmp agents/<slug>/ path and hand the compiler its
+  // cinatra/oas.json.
   // The ZIP payload does NOT carry the sibling package.json; we need to derive
   // packageName/packageVersion some other way. Search the ZIP for a package.json.
   const siblingPkgRaw = files.get("package.json");
@@ -244,18 +256,15 @@ export async function importAgentTemplateCore(
   }
 
   // Stage a temp directory so the compiler's filesystem-based resolution works.
-  // Layout: <tmp>/agents/<slug>/cinatra/agent.json + <tmp>/agents/<slug>/package.json
+  // Layout: <tmp>/agents/<slug>/cinatra/oas.json + <tmp>/agents/<slug>/package.json
   const slug = siblingPkgName ? siblingPkgName.split("/").pop() ?? "imported" : "imported";
   const tmpRoot = join(tmpdir(), `oas-import-${randomUUID()}`);
   const cinatraDir = join(tmpRoot, "agents", slug, "cinatra");
   await mkdir(cinatraDir, { recursive: true });
-  // cinatra#3493 — the staged document is named `cinatra/oas.json`, THE one
-  // name the runtime mount is keyed by: `installed-oas-path.ts` resolves
-  // `<root>/<vendor>/<slug>/cinatra/oas.json` and deliberately offers no
-  // `agent.json` fallback, and `materializeAgentPackageToDisk` refuses a source
-  // directory that lacks it. The compiler is handed this path explicitly, so it
-  // reads exactly the bytes it always did; the rename is what lets this very
-  // staging directory be materialized into the mount below.
+  // cinatra#3493 — the staged document is `cinatra/oas.json`, THE one name the
+  // runtime mount is keyed by: `materializeAgentPackageToDisk` refuses a source
+  // directory that lacks it, and the compiler is handed this path explicitly, so
+  // this very staging directory can be materialized into the mount below.
   const tmpOasJson = join(cinatraDir, "oas.json");
   await writeFile(tmpOasJson, agentRaw, "utf8");
   if (siblingPkgRaw) {
@@ -267,12 +276,19 @@ export async function importAgentTemplateCore(
   // logo — materialize-agent-package.ts `_copyRuntimeFiles`) and atomically
   // REPLACES the mounted directory with the result, so anything the archive
   // carried that was never staged here would simply be absent from the mount.
-  // Staging only `agent.json` + `package.json` would have materialized a
-  // three-file reduction of the uploaded package. Entries whose path escapes
-  // the package directory are refused rather than written.
+  // Staging only the definition + `package.json` would have materialized a
+  // reduction of the uploaded package. Entries whose path escapes the package
+  // directory are refused rather than written. A root `agent.json` is not
+  // staged: it is not part of the package any more (cinatra#4920).
   const stagedAgentRoot = join(tmpRoot, "agents", slug);
   for (const [entryName, entryContent] of files) {
-    if (entryName === "agent.json" || entryName === "package.json") continue;
+    if (
+      entryName === "agent.json" ||
+      entryName === OAS_ARCHIVE_ENTRY ||
+      entryName === "package.json"
+    ) {
+      continue; // the definition and package.json are staged above
+    }
     if (entryName.endsWith("/")) continue;
     const stagedPath = join(stagedAgentRoot, entryName);
     if (isAbsolute(entryName) || !stagedPath.startsWith(stagedAgentRoot + sep)) {
@@ -311,19 +327,26 @@ export async function importAgentTemplateCore(
   try {
     const installPackageName = siblingPkgName ??
       `@cinatra-ai/${slug.endsWith("-agent") ? slug : `${slug}-agent`}`;
+    // cinatra#4897: the one source of the install. The archive's
+    // `cinatra/oas.json` is staged above, so the bytes are read from the staged
+    // file, handed to the compile, and scanned: what is compiled, materialized
+    // and mounted is what the scan read.
+    const oasBytes = await readFile(tmpOasJson);
     const compileResult = await compileOasAgentJson({
       packageName: installPackageName,
       oasSourcePath: tmpOasJson,
+      oasSource: oasBytes,
     });
     if (!compileResult.ok) {
       throw new Error(
-        `failed to compile OAS agent.json for ${siblingPkgName ?? slug}: ${compileResult.error}`,
+        `failed to compile OAS cinatra/oas.json for ${siblingPkgName ?? slug}: ${compileResult.error}`,
       );
     }
     compiled = compileResult.value;
     // Use the ZIP manifest/compiler identity, never the OAS's claimed identity.
-    const inputFindings = scanOasForVisibleInputContractFindings(
-      agent as unknown as Record<string, unknown>,
+    // The compile has parsed these same bytes, so they are valid JSON here.
+    const inputFindings = scanOasForInstallFindings(
+      JSON.parse(oasBytes.toString("utf8")) as Record<string, unknown>,
       installPackageName,
     );
     if (inputFindings.length > 0) {

@@ -726,11 +726,6 @@ export const CHECKBOX_CALL_SITE_READINGS: FileReading[] = [
   },
   // ---- G1: module objects handed on whole, and loads of modules outside the tree ----------------------------------
   {
-    file: "packages/agents/src/cli/extract-agent-package-cli.ts",
-    tokens: 0,
-    sites: [{ anchor: "createRedactingPacote(pacoteImpl)", tag: "pacoteImpl", drawn: "no checkbox", effect: "none", reading: SERVER_MODULE, tagIncludes: [], fileIncludes: ['import * as pacoteImpl from "pacote";'] }],
-  },
-  {
     file: "packages/agents/src/regenerate-segment.ts",
     tokens: 0,
     sites: [],

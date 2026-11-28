@@ -125,11 +125,40 @@
  * the CI base ref) additionally blocks the regenerate-to-pass bypass: the
  * committed baseline may only ever SHRINK relative to the base branch.
  *
+ * TOOL-OWNER RULE (cinatra#4874). A pack that DECLARES a use of a host tool
+ * (an MCP primitive) registered by ANOTHER pack must declare that pack in its
+ * own `cinatra.dependencies`. The rule judges declarations only; no pack and
+ * no tool is named in this file:
+ *   - USE: each `package.json#cinatra.consumes` entry `{ primitive, requirement }`,
+ *     read as `parseConsumedPrimitives` (packages/sdk-extensions/src/consumes.ts)
+ *     reads it. Nothing is read from `cinatra/oas.json` or from code: a tool a
+ *     flow or code calls without declaring it is outside this rule (the
+ *     product's own validator and the run-time check of cinatra#4894);
+ *   - OWNER: the file the generated authz inventory
+ *     (`src/lib/authz/__generated__/inventory.json`) names for the tool: a file
+ *     under `extensions/<scope>/<pack>/` is that pack, any other file is core.
+ *     A tool with no inventory row is printed as "owner not recorded" and not
+ *     judged (cinatra#4895). A row that names two owners, or a file in no pack
+ *     of the tree, contradicts itself and fails (never listed);
+ *   - DEPENDENCY: the first entry of the consumer's `cinatra.dependencies`
+ *     whose `packageName` is the owner, judged like `validateDependencyDeclarations`
+ *     (packages/extensions/src/dependency-declaration-validator.ts): a REQUIRED
+ *     use needs an install-blocking edge (`isInstallBlockingEdge`), an OPTIONAL
+ *     use accepts any declared edge.
+ * One class, `undeclaredToolOwnerDeps`, a map `{ consumer: { tool: reason } }`
+ * in the baseline. Every map keyed by a name from data is a `Map` or a
+ * null-prototype object. A NEW or STALE entry fails, an entry needs a reason,
+ * the class is never removed, and the list may only shrink against the base
+ * branch (the shared `lib/floor-base-guard.mjs`; a class absent from the base
+ * copy is the introducing change's one-time seed). A consumes entry or an
+ * inventory the rule cannot read fails.
+ *
  * Exit codes: 0 = clean, 1 = findings / baseline growth, 2 = scanner error.
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
+import { compareFloorWithBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const REPO_ROOT = process.cwd();
 const EXTENSIONS_ROOT = join(REPO_ROOT, "extensions");
@@ -144,7 +173,11 @@ const BASELINE_NOTE =
   "`unresolvedProducesTargets` = a produced target that does not resolve to a real artifact extension in the " +
   "synced catalog (absent / wrong kind / unclaimed objectTypeId) — so declaring it as a dependency would not " +
   "fix anything. `notes` carries the REASON each grandfathered (package, target) pair is tolerated — a manual, " +
-  "version-controlled record; NOT diffed by the gate. These are CURRENT tolerated misses; the gate fails on " +
+  "version-controlled record; NOT diffed by the gate. The tool-owner class (cinatra#4874) maps consumer -> tool -> reason: " +
+  "`undeclaredToolOwnerDeps` = a tool the consumer declares in package.json cinatra.consumes whose owner (per the " +
+  "authz inventory) is another pack that is not in its cinatra.dependencies (or is declared optional/peer for a " +
+  "required use). Its entries fail on NEW and on STALE and " +
+  "only shrink against the base branch. These are CURRENT tolerated misses; the gate fails on " +
   "NEW/GROWN entries. Regenerate the data with " +
   "`node scripts/audit/extension-produces-deps-gate.mjs --write-baseline` — every data entry should only ever " +
   "be REMOVED (fix the producing repo, then bump its pin), never added; carry `notes` forward by hand for " +
@@ -442,6 +475,265 @@ export function classGrowth(baseBaseline, committedBaseline, key) {
 }
 
 // ---------------------------------------------------------------------------
+// Tool-owner dependency rule (cinatra#4874) — pure helpers
+// ---------------------------------------------------------------------------
+//
+// A pack that declares a use of a host tool (an MCP primitive) registered by
+// ANOTHER pack must declare that pack in its own `cinatra.dependencies`. Read
+// from declarations only: the pack's `package.json` and the authz inventory,
+// which names the file that registers every primitive. No pack and no tool is
+// named here.
+
+/** The tool-owner finding classes, in report order. Each is a map
+ *  `{ "<consumer>": { "<tool>": "<reason>" } }` in the baseline: every
+ *  tolerated entry carries its reason. */
+export const TOOL_CLASSES = ["undeclaredToolOwnerDeps"];
+
+/** The issue that completes the authz inventory; until then a tool without an
+ *  inventory row is listed as "owner not recorded" and not judged. */
+export const INVENTORY_COMPLETION_ISSUE = "cinatra#4895";
+
+/** Mirror of `DEPENDENCY_REQUIREMENTS` (packages/sdk-extensions/src/dependencies.ts),
+ *  the requirements a consumes entry may carry. A drift test reads the source. */
+export const CONSUME_REQUIREMENTS = ["required", "optional"];
+
+/** Mirror of `isInstallBlockingEdge` (packages/extensions/src/dependency-closure.ts,
+ *  restated in dependency-declaration-validator.ts): a required edge that is
+ *  not a peer. A drift test reads both sources. */
+export function isInstallBlockingEdge(dep) {
+  return dep.requirement === "required" && dep.edgeType !== "peer";
+}
+
+/** The generated authz inventory: every registered primitive and its file. */
+export const INVENTORY_REL = "src/lib/authz/__generated__/inventory.json";
+
+/**
+ * Read who owns each primitive from the parsed authz inventory.
+ *
+ *   - `inventory`: the parsed `inventory.json` (`{ primitives: [{ primitiveName, file }] }`).
+ *   - `packDirToName`: Map from a pack directory, repo-relative with forward
+ *     slashes (`extensions/<scope>/<pack>`), to the pack's package name.
+ *
+ * A file under `extensions/<scope>/<pack>/` is owned by that pack; any other
+ * file is core. Returns `{ owners, problems }`: `owners` maps a primitive to
+ * `{ kind: "core" | "pack" | "unknown", pack?, file?, reason? }`; `problems`
+ * lists what the reader could not read (a hard failure, never skipped).
+ */
+export function readInventoryOwners({ inventory, packDirToName }) {
+  const owners = new Map();
+  const problems = [];
+  const list = inventory?.primitives;
+  if (!Array.isArray(list)) {
+    problems.push(`${INVENTORY_REL}: \`primitives\` must be a list (got ${list === null ? "null" : typeof list})`);
+    return { owners, problems };
+  }
+  list.forEach((entry, i) => {
+    const name = entry?.primitiveName;
+    const file = entry?.file;
+    if (typeof name !== "string" || name === "" || typeof file !== "string" || file === "") {
+      problems.push(`${INVENTORY_REL}: primitives[${i}] has no primitiveName or file (${JSON.stringify(entry)})`);
+      return;
+    }
+    const parts = file.split("/");
+    let owner;
+    if (parts[0] !== "extensions") {
+      owner = { kind: "core", file };
+    } else {
+      const packDir = parts.slice(0, 3).join("/");
+      const pack = parts.length > 3 ? packDirToName.get(packDir) : undefined;
+      owner = pack
+        ? { kind: "pack", pack, file }
+        : {
+            kind: "unknown",
+            file,
+            reason: `the inventory names ${file}, which is in no pack of the synced extension tree`,
+          };
+    }
+    const prior = owners.get(name);
+    if (!prior) {
+      owners.set(name, owner);
+      return;
+    }
+    const same = prior.kind === owner.kind && (prior.kind !== "pack" || prior.pack === owner.pack);
+    if (!same) {
+      owners.set(name, {
+        kind: "unknown",
+        file: `${prior.file}, ${file}`,
+        reason: `the inventory registers it in more than one owner (${prior.file} and ${file})`,
+      });
+    }
+  });
+  return { owners, problems };
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * The tools a pack DECLARES it uses: its `package.json#cinatra.consumes`
+ * entries, read as `parseConsumedPrimitives` (packages/sdk-extensions/src/consumes.ts)
+ * reads them. PURE. An entry whose `primitive` is a non-empty string is a
+ * consumed tool; it must carry a `requirement` of `CONSUME_REQUIREMENTS`, and a
+ * tool may be declared once. Any other entry is left to `collectProducesEdges`
+ * (a consumed-extension shape, or a malformed entry it reports), as is a
+ * `consumes` that is not a list. Nothing else is read: not the OAS mirror, not
+ * a flow, not code. Returns `{ uses, malformed }`, `uses` =
+ * `[{ primitive, requirement, source }]`.
+ */
+export function collectConsumedTools(packageJson) {
+  const uses = [];
+  const malformed = [];
+  const block = packageJson?.cinatra;
+  const raw = isPlainObject(block) ? block.consumes : undefined;
+  if (!Array.isArray(raw)) return { uses, malformed };
+  const seen = new Set();
+  raw.forEach((entry, i) => {
+    if (!isPlainObject(entry)) return;
+    const { primitive, requirement } = entry;
+    if (typeof primitive !== "string" || primitive.trim() === "") return;
+    const source = `package.json cinatra.consumes[${i}]`;
+    if (!CONSUME_REQUIREMENTS.includes(requirement)) {
+      malformed.push(
+        `${source}: the requirement of "${primitive}" must be one of ${CONSUME_REQUIREMENTS.join("|")} ` +
+          `(got ${JSON.stringify(requirement ?? null)})`,
+      );
+      return;
+    }
+    if (seen.has(primitive)) {
+      malformed.push(`${source}: "${primitive}" is declared more than once`);
+      return;
+    }
+    seen.add(primitive);
+    uses.push({ primitive, requirement, source });
+  });
+  return { uses, malformed };
+}
+
+/**
+ * Classify ONE declared tool use of `consumer`. PURE. Returns `null` (own tool, a core
+ * tool, or an owner declared as the validator accepts it), or one of:
+ *   - `{ notRecorded: true, key, reason }`: the inventory has no row for the
+ *     tool, so the rule cannot judge it (listed, not failing; the inventory is
+ *     completed in cinatra#4895);
+ *   - `{ contradiction: true, key, reason }`: the inventory row names two
+ *     owners or a file in no pack of the tree (a hard failure, never listed);
+ *   - `{ cls, key, reason }`: a finding of a tool class.
+ * `declared` maps a package name to its first `cinatra.dependencies` entry.
+ */
+export function classifyToolUse({ consumer, use, owners, declared }) {
+  const owner = owners.get(use.primitive);
+  if (!owner) {
+    return {
+      notRecorded: true,
+      key: use.primitive,
+      reason:
+        `${use.source} names the tool "${use.primitive}", which has no row in the authz inventory ` +
+        `(${INVENTORY_REL}); not judged until the inventory is complete (${INVENTORY_COMPLETION_ISSUE})`,
+    };
+  }
+  if (owner.kind === "unknown") {
+    return {
+      contradiction: true,
+      key: use.primitive,
+      reason: `${use.source} names the tool "${use.primitive}", and the inventory contradicts itself: ${owner.reason}`,
+    };
+  }
+  if (owner.kind === "core" || owner.pack === consumer) return null;
+  const edge = declared.get(owner.pack);
+  if (edge) {
+    // The validator's REQUIREMENT_MISMATCH: a required use needs an
+    // install-blocking edge; an optional use is backed by any edge.
+    if (use.requirement === "optional" || isInstallBlockingEdge(edge)) return null;
+    return {
+      cls: "undeclaredToolOwnerDeps",
+      key: use.primitive,
+      reason:
+        `${use.source} names the REQUIRED tool "${use.primitive}", registered by ${owner.pack} (${owner.file}), ` +
+        `and this pack declares ${owner.pack} as ${edge.edgeType}/${edge.requirement}, which is not install-blocking`,
+    };
+  }
+  return {
+    cls: "undeclaredToolOwnerDeps",
+    key: use.primitive,
+    reason:
+      `${use.source} names the tool "${use.primitive}", registered by ${owner.pack} (${owner.file}), and ` +
+      `${owner.pack} is not in this pack's cinatra.dependencies`,
+  };
+}
+
+/** The (consumer, key) pairs of a tool-class map, as `consumer :: key`. */
+function toolPairs(map) {
+  const pairs = new Set();
+  if (!isPlainObject(map)) return pairs;
+  for (const [pkg, entries] of Object.entries(map)) {
+    if (!isPlainObject(entries)) continue;
+    for (const key of Object.keys(entries)) pairs.add(`${pkg} :: ${key}`);
+  }
+  return pairs;
+}
+
+/**
+ * Check the committed tool-class baseline against the scan. PURE. Returns
+ * failure lines: a class missing from the baseline (an empty class is
+ * written `{}`; a class is never removed, so it cannot be seeded again), an
+ * entry without a reason, a NEW finding, and a STALE entry (listed, no longer
+ * found: remove it).
+ */
+export function checkToolBaseline(findings, baseline) {
+  const lines = [];
+  for (const cls of TOOL_CLASSES) {
+    const map = baseline?.[cls];
+    if (!isPlainObject(map)) {
+      lines.push(`[${cls}] the baseline has no \`${cls}\` map (write {} when the class is clean; it is never removed)`);
+      continue;
+    }
+    for (const [pkg, entries] of Object.entries(map)) {
+      if (!isPlainObject(entries)) {
+        lines.push(`[${cls}] ${pkg}: the entry must be a map of key -> reason`);
+        continue;
+      }
+      for (const [key, reason] of Object.entries(entries)) {
+        if (typeof reason !== "string" || reason.trim() === "") lines.push(`[${cls}] ${pkg} :: ${key} has no reason`);
+      }
+    }
+    const listed = toolPairs(map);
+    const found = toolPairs(findings[cls]);
+    for (const [pkg, entries] of Object.entries(findings[cls] ?? {}).sort(([a], [b]) => a.localeCompare(b))) {
+      for (const [key, reason] of Object.entries(entries).sort(([a], [b]) => a.localeCompare(b))) {
+        if (!listed.has(`${pkg} :: ${key}`)) lines.push(`[${cls}] NEW ${pkg} :: ${key} — ${reason}`);
+      }
+    }
+    for (const pair of [...listed].sort()) {
+      if (!found.has(pair)) lines.push(`[${cls}] STALE ${pair} — no longer found; remove it from the baseline`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * The base guard's growth reading for the tool classes (passed to the shared
+ * `compareFloorWithBase`). A pair listed in `head` and not in `base` is
+ * growth. A class ABSENT from the base copy is the one-time seed of the
+ * introducing change and is not growth; once on the base it can only shrink
+ * (`checkToolBaseline` refuses removing the class, so it is never seeded twice).
+ */
+export function toolClassGrowth(base, head) {
+  const lines = [];
+  for (const cls of TOOL_CLASSES) {
+    if (!isPlainObject(base) || !Object.hasOwn(base, cls)) continue;
+    const known = toolPairs(base[cls]);
+    for (const pair of [...toolPairs(head?.[cls])].sort()) if (!known.has(pair)) lines.push(`[${cls}] ${pair}`);
+  }
+  return lines;
+}
+
+/** The tool classes the base copy does not hold yet (the one-time seed). */
+export function toolClassesSeeded(base) {
+  return TOOL_CLASSES.filter((cls) => !isPlainObject(base) || !Object.hasOwn(base, cls));
+}
+
+// ---------------------------------------------------------------------------
 // Filesystem scan
 // ---------------------------------------------------------------------------
 
@@ -484,6 +776,44 @@ export function discoverExtensionDirs(extensionsRoot) {
   return dirs.sort();
 }
 
+/** A map keyed by names from data: no prototype, so no name is "already there". */
+function nameMap() {
+  return Object.create(null);
+}
+
+/** The tool findings of one pack, from its declared `cinatra.consumes`. */
+function scanPackTools({ packageJson, owners }) {
+  const name = packageJson.name;
+  const { uses, malformed: shapeProblems } = collectConsumedTools(packageJson);
+  const malformed = shapeProblems.map((m) => `${name}: ${m}`);
+  const findings = nameMap();
+  for (const c of TOOL_CLASSES) findings[c] = nameMap();
+  const declared = declaredDependencyMap(packageJson);
+  const notRecorded = [];
+  for (const use of uses) {
+    const verdict = classifyToolUse({ consumer: name, use, owners, declared });
+    if (!verdict) continue;
+    if (verdict.notRecorded) notRecorded.push(`${name} :: ${verdict.key} — ${verdict.reason}`);
+    else if (verdict.contradiction) malformed.push(`${name}: ${verdict.reason}`);
+    else {
+      const entries = Object.hasOwn(findings[verdict.cls], name)
+        ? findings[verdict.cls][name]
+        : (findings[verdict.cls][name] = nameMap());
+      entries[verdict.key] = verdict.reason;
+    }
+  }
+  return { findings, malformed, notRecorded, useCount: uses.length };
+}
+
+function sortToolMap(map) {
+  const out = nameMap();
+  for (const pkg of Object.keys(map).sort()) {
+    out[pkg] = nameMap();
+    for (const key of Object.keys(map[pkg]).sort()) out[pkg][key] = map[pkg][key];
+  }
+  return out;
+}
+
 function scan() {
   const dirs = discoverExtensionDirs(EXTENSIONS_ROOT);
   if (dirs.length === 0) {
@@ -500,9 +830,13 @@ function scan() {
   // Pass 1 — the catalog (every scanned extension's kind + declared claims).
   const catalog = new Map();
   const manifests = [];
+  const unnamed = [];
   for (const dir of dirs) {
     const packageJson = readJsonIfPresent(join(dir, "package.json"));
-    if (!packageJson || typeof packageJson.name !== "string") continue;
+    if (!packageJson || typeof packageJson.name !== "string") {
+      unnamed.push(`${relative(REPO_ROOT, dir)}/package.json: no package name, so the pack cannot be read`);
+      continue;
+    }
     const oasJson = readJsonIfPresent(join(dir, "cinatra", "oas.json"));
     manifests.push({ dir, packageJson, oasJson });
     catalog.set(packageJson.name, {
@@ -514,7 +848,7 @@ function scan() {
   // Pass 2 — classify every produced/consumed extension edge.
   const findings = Object.fromEntries(FINDING_CLASSES.map((c) => [c, {}]));
   const reasons = [];
-  const malformed = [];
+  const malformed = [...unnamed];
   let edgeCount = 0;
   for (const { packageJson, oasJson } of manifests) {
     const name = packageJson.name;
@@ -542,7 +876,33 @@ function scan() {
   for (const cls of FINDING_CLASSES) {
     for (const pkg of Object.keys(findings[cls])) findings[cls][pkg].sort();
   }
-  return { findings, reasons, malformed, extensionCount: manifests.length, edgeCount };
+
+  // Pass 3 — the tool-owner rule (cinatra#4874): every tool a pack declares in
+  // cinatra.consumes whose owner is another pack needs that pack in its
+  // cinatra.dependencies.
+  const inventoryPath = join(REPO_ROOT, INVENTORY_REL);
+  if (!existsSync(inventoryPath)) {
+    throw new Error(`the authz inventory ${INVENTORY_REL} is missing, so no tool owner can be read`);
+  }
+  const inventory = readJsonIfPresent(inventoryPath);
+  const packDirToName = new Map(
+    manifests.map(({ dir, packageJson }) => [relative(REPO_ROOT, dir).split(sep).join("/"), packageJson.name]),
+  );
+  const { owners, problems } = readInventoryOwners({ inventory, packDirToName });
+  malformed.push(...problems);
+  const toolFindings = nameMap();
+  for (const c of TOOL_CLASSES) toolFindings[c] = nameMap();
+  let toolUseCount = 0;
+  const notRecorded = [];
+  for (const { packageJson } of manifests) {
+    const res = scanPackTools({ packageJson, owners });
+    malformed.push(...res.malformed);
+    notRecorded.push(...res.notRecorded);
+    toolUseCount += res.useCount;
+    for (const cls of TOOL_CLASSES) Object.assign(toolFindings[cls], res.findings[cls]);
+  }
+  for (const cls of TOOL_CLASSES) toolFindings[cls] = sortToolMap(toolFindings[cls]);
+  return { findings, reasons, malformed, extensionCount: manifests.length, edgeCount, toolFindings, toolUseCount, notRecorded };
 }
 
 function reasonFor(reasons, cls, pkg, key) {
@@ -565,8 +925,16 @@ function main() {
     console.error(`[extension-produces-deps] scanner error: ${err?.stack ?? err}`);
     process.exit(2);
   }
-  const { findings, reasons, malformed, extensionCount, edgeCount } = result;
+  const { findings, reasons, malformed, extensionCount, edgeCount, toolFindings, toolUseCount, notRecorded } = result;
   const totals = Object.fromEntries(FINDING_CLASSES.map((c) => [c, countPairs(findings[c])]));
+  const toolTotals = Object.fromEntries(TOOL_CLASSES.map((c) => [c, toolPairs(toolFindings[c]).size]));
+  const toolSummary =
+    TOOL_CLASSES.map((c) => `${toolTotals[c]} ${c}`).join(", ") +
+    `; ${notRecorded.length} declared uses whose owner is not recorded (not judged, ${INVENTORY_COMPLETION_ISSUE})`;
+  // Printed on every run, so a use the rule cannot judge yet stays visible.
+  const printNotRecorded = () => {
+    for (const line of notRecorded) console.log(`  owner not recorded: ${line}`);
+  };
 
   if (write) {
     // Refuse to write a baseline over a shape the scan could not READ: the
@@ -583,12 +951,27 @@ function main() {
     const existing = existsSync(BASELINE_FILE) ? JSON.parse(readFileSync(BASELINE_FILE, "utf8")) : {};
     const baseline = { note: BASELINE_NOTE };
     for (const cls of FINDING_CLASSES) baseline[cls] = findings[cls];
+    // Tool classes: a listed entry keeps its written reason; a new one gets
+    // the finding's own reason (the base guard refuses it on a pull request).
+    const own = (obj, key) => (isPlainObject(obj) && Object.hasOwn(obj, key) ? obj[key] : undefined);
+    for (const cls of TOOL_CLASSES) {
+      const map = nameMap();
+      for (const [pkg, entries] of Object.entries(toolFindings[cls])) {
+        map[pkg] = nameMap();
+        for (const [key, reason] of Object.entries(entries)) {
+          const kept = own(own(own(existing, cls), pkg), key);
+          map[pkg][key] = typeof kept === "string" && kept.trim() !== "" ? kept : reason;
+        }
+      }
+      baseline[cls] = map;
+    }
     baseline.notes = existing.notes ?? {};
     writeFileSync(BASELINE_FILE, JSON.stringify(baseline, null, 2) + "\n");
     console.log(
       `[extension-produces-deps] wrote baseline: ` +
         FINDING_CLASSES.map((c) => `${totals[c]} ${c}`).join(", ") +
-        ` (scanned ${extensionCount} extensions / ${edgeCount} produces-consumes edges).`,
+        `, ${toolSummary}` +
+        ` (scanned ${extensionCount} extensions / ${edgeCount} produces-consumes edges / ${toolUseCount} declared tool uses).`,
     );
     return;
   }
@@ -610,6 +993,17 @@ function main() {
         for (const key of keys) console.log(`    - ${key}\n      ${reasonFor(reasons, cls, pkg, key)}`);
       }
     }
+    console.log(`\n[extension-produces-deps] tool-owner rule: ${toolUseCount} declared tool uses; ${toolSummary}.`);
+    printNotRecorded();
+    for (const cls of TOOL_CLASSES) {
+      const entries = Object.entries(toolFindings[cls]);
+      if (entries.length === 0) continue;
+      console.log(`\n${cls}:`);
+      for (const [pkg, keyed] of entries) {
+        console.log(`  ${pkg}`);
+        for (const [key, reason] of Object.entries(keyed)) console.log(`    - ${key}\n      ${reason}`);
+      }
+    }
     for (const m of malformed) console.log(`  ! ${m}`);
     return;
   }
@@ -624,6 +1018,7 @@ function main() {
   }
 
   const baseline = existsSync(BASELINE_FILE) ? JSON.parse(readFileSync(BASELINE_FILE, "utf8")) : {};
+  let baselineAbsentOnBase = false;
 
   // Base-ref ratchet: block the regenerate-to-pass bypass (add an undeclared
   // produces edge + `--write-baseline` in the same PR). Mirrors the sibling
@@ -662,6 +1057,7 @@ function main() {
       baseText = null; // ref resolves but the file is absent → this PR introduces the gate
     }
     if (baseText === null) {
+      baselineAbsentOnBase = true;
       console.log(
         `[extension-produces-deps] gate bootstrap: ${FINDING_CLASSES.reduce((n, c) => n + countPairs(baseline[c]), 0)} ` +
           `grandfathered entries (no baseline at ${baseRef} — the introducing PR's one-time write is exempt from ` +
@@ -688,6 +1084,46 @@ function main() {
     }
   }
 
+  // The tool-owner rule (cinatra#4874): the listed entries must match the scan
+  // exactly (new = fail, stale = fail), and the list may only shrink against
+  // the base branch (the shared floor base guard). The one-time seed is a
+  // class absent from the base copy; a base without the whole file is the
+  // gate's own bootstrap, read above.
+  const toolLines = checkToolBaseline(toolFindings, baseline);
+  let toolGuardOk = true;
+  if (!baselineAbsentOnBase) {
+    const guard = compareFloorWithBase({
+      gate: "extension-produces-deps",
+      envVar: "EXTENSION_PRODUCES_DEPS_BASE",
+      floorPath: BASELINE_REL,
+      headFloor: baseline,
+      parse: (text) => JSON.parse(text),
+      grown: toolClassGrowth,
+      repoRoot: REPO_ROOT,
+    });
+    toolGuardOk = reportFloorGuard(guard);
+    if (guard.baseFloor !== undefined) {
+      for (const cls of toolClassesSeeded(guard.baseFloor)) {
+        console.log(
+          `[extension-produces-deps] ${cls} seed: ${toolPairs(baseline[cls]).size} entries (the class is absent from ` +
+            `the base; the introducing change seeds it once, and it only shrinks afterwards).`,
+        );
+      }
+    }
+  }
+  if (toolLines.length > 0) {
+    console.error(
+      `[extension-produces-deps] FAIL — the tool-owner list ${BASELINE_REL} does not match the scan ` +
+        `(a pack's declared use of another pack's tool needs that pack in its cinatra.dependencies):`,
+    );
+    for (const line of toolLines) console.error(`  - ${line}`);
+    console.error(
+      `\n  Fix a NEW entry in the consuming pack's repository: add the owning pack to \`cinatra.dependencies\`\n` +
+        `  (or stop using its tool), then bump the pin. Remove a STALE entry from the list.`,
+    );
+  }
+  const toolFail = toolLines.length > 0 || !toolGuardOk;
+
   let newCount = 0;
   const newByClass = {};
   for (const cls of FINDING_CLASSES) {
@@ -696,12 +1132,14 @@ function main() {
     newCount += countPairs(newViolations);
   }
 
+  printNotRecorded();
+  if (newCount === 0 && toolFail) process.exit(1);
   if (newCount === 0) {
     console.log(
       `[extension-produces-deps] OK — no new undeclared produced-artifact dependencies (scanned ` +
         `${extensionCount} extensions / ${edgeCount} edges; ` +
         FINDING_CLASSES.map((c) => `${totals[c]} ${c}`).join(", ") +
-        ` baselined).`,
+        ` baselined); tool-owner rule: ${toolUseCount} declared tool uses, ${toolSummary}.`,
     );
     process.exit(0);
   }
