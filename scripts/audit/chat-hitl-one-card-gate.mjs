@@ -191,6 +191,24 @@
  *     string is flagged. A spurious red is one conversation; a miss is a second
  *     approval surface.
  *
+ * THE HOST PARITY FLOOR MAY NOT WEAKEN (cinatra#3832). The done-check (no flag
+ * or --complete, not --audit) also compares the host parity ratchet with its
+ * copy on the base branch (scripts/audit/lib/floor-base-guard.mjs). The ratchet
+ * lives in `src/lib/lifecycle/lifecycle-host-parity-ratchet.ts`; this gate reads
+ * its recorded copy, `domExpectations.hostParity` in
+ * `scripts/audit/chat-hitl-anchor-contract.json`, which the binding test
+ * (`src/lib/lifecycle/__tests__/anchor-contract-binding.test.ts`) keeps equal to
+ * the TypeScript. A host cell the base records that the head drops, or records
+ * by a weaker method (transcript is stronger than composition), fails the run,
+ * naming the cell. A new cell, a new kind, an owed row struck or added, and a
+ * kind the head no longer carries pass: the ratchet legitimately grows when a
+ * card is mounted on a host, and a retired kind leaves the declared set, which
+ * the binding test watches. A base that cannot be read, or whose copy is not a
+ * host parity record, fails closed. STATED LIMITS: a run with no pull request
+ * base (a push, a merge group, a local run) is not compared; and an edit that
+ * changes the TypeScript and the recorded copy apart is the binding test's
+ * catch, not this one's. The comparison prints only when it fails.
+ *
  * Exit 0 -> clean; exit 1 -> at least one violation; exit 2 -> scanner error.
  *
  * Usage: node scripts/audit/chat-hitl-one-card-gate.mjs
@@ -201,6 +219,7 @@ import { execSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
+import { compareFloorWithBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -2578,6 +2597,100 @@ export function collectViolations({
   return violations;
 }
 
+// ---------------------------------------------------------------------------
+// The host parity floor (cinatra#3832): it may not weaken against the base.
+// ---------------------------------------------------------------------------
+
+/** The recorded copy of the host parity ratchet, repo-relative. */
+export const HOST_PARITY_FLOOR_FILE = "scripts/audit/chat-hitl-anchor-contract.json";
+
+/** The variable a workflow may set to name the base revision. */
+export const HOST_PARITY_FLOOR_BASE_VAR = "CHAT_HITL_HOST_PARITY_BASE";
+
+/** The observation methods, weakest first. */
+const OBSERVATION_RANK = Object.freeze({ composition: 1, transcript: 2 });
+
+/**
+ * An anchor contract's text -> `{ kind: { host: method } }`, the recorded host
+ * cells of `domExpectations.hostParity`. Throws when the text holds no such
+ * record or a cell's method is not one of the two.
+ */
+export function parseHostParityFloor(text) {
+  const doc = JSON.parse(text);
+  const parity = doc?.domExpectations?.hostParity;
+  if (parity === null || typeof parity !== "object" || Array.isArray(parity)) {
+    throw new Error("domExpectations.hostParity is not an object");
+  }
+  const floor = {};
+  for (const [kind, row] of Object.entries(parity)) {
+    const hosts = row?.hosts;
+    if (hosts === null || typeof hosts !== "object" || Array.isArray(hosts)) {
+      throw new Error(`hostParity.${kind}.hosts is not an object`);
+    }
+    floor[kind] = {};
+    for (const [host, method] of Object.entries(hosts)) {
+      if (!Object.prototype.hasOwnProperty.call(OBSERVATION_RANK, method)) {
+        throw new Error(`hostParity.${kind}.hosts.${host} is not an observation method`);
+      }
+      floor[kind][host] = method;
+    }
+  }
+  return floor;
+}
+
+/** One line per host cell the base records and the head drops or weakens. */
+export function weakenedHostCells(base, head) {
+  const out = [];
+  for (const kind of Object.keys(base).sort()) {
+    if (!Object.prototype.hasOwnProperty.call(head, kind)) continue; // a retired kind
+    for (const host of Object.keys(base[kind]).sort()) {
+      const was = base[kind][host];
+      const now = head[kind][host];
+      if (now === undefined) {
+        out.push(`${kind} on ${host}: recorded by ${was} at the base, not recorded at the head`);
+      } else if (OBSERVATION_RANK[now] < OBSERVATION_RANK[was]) {
+        out.push(`${kind} on ${host}: recorded by ${was} at the base, by the weaker ${now} at the head`);
+      }
+    }
+  }
+  return out;
+}
+
+/** The floor base guard for the host parity ratchet. */
+export function checkHostParityFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env } = {}) {
+  let headFloor;
+  try {
+    headFloor = parseHostParityFloor(readFileSync(join(repoRoot, HOST_PARITY_FLOOR_FILE), "utf8"));
+  } catch (err) {
+    return {
+      status: "malformed",
+      ok: false,
+      lines: [`[${LABEL}] FAIL - the host parity floor ${HOST_PARITY_FLOOR_FILE} is not readable (${err.message}). Failing closed.`],
+    };
+  }
+  const result = compareFloorWithBase({
+    gate: LABEL,
+    envVar: HOST_PARITY_FLOOR_BASE_VAR,
+    floorPath: HOST_PARITY_FLOOR_FILE,
+    headFloor,
+    parse: parseHostParityFloor,
+    grown: weakenedHostCells,
+    repoRoot,
+    env,
+  });
+  if (result.status === "grew") {
+    // The shared guard words a failure as growth; this floor fails when it shrinks.
+    result.lines = [
+      `[${LABEL}] FAIL - the host parity floor in ${HOST_PARITY_FLOOR_FILE} WEAKENED against the base "${result.ref}" ` +
+        `(a recorded host cell is never dropped or weakened in a pull request):`,
+      ...result.growth.map((g) => `  - ${g}`),
+    ];
+  } else if (result.status === "held") {
+    result.lines = [`[${LABEL}] floor base guard: the host parity floor does not weaken against the base "${result.ref}".`];
+  }
+  return result;
+}
+
 function main(argv = []) {
   // THE REQUIRED GATE IS THE DONE-CHECK. It used to be opt-in, with the lenient
   // mode as the default — and a default that passes while two kinds are
@@ -2612,6 +2725,15 @@ function main(argv = []) {
     return 2;
   }
   const complete = !argv.includes("--audit");
+  if (complete) {
+    // Only a failure speaks: the done-check's output on a held floor stays what
+    // its recorded transcript holds, whatever base the run has.
+    const floor = checkHostParityFloorAgainstBase();
+    if (!floor.ok) {
+      reportFloorGuard(floor);
+      return 1;
+    }
+  }
   const violations = [
     ...collectViolations(),
     ...collectContractViolations({ complete }),
