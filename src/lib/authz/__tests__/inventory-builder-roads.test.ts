@@ -60,15 +60,21 @@ const FILES: Record<string, string> = {
     "",
   ].join("\n"),
   "src/lib/fixture-js-tools.mjs": ["export const FIXTURE_JS_TOOLS = new Set(['fixture_js_tool']);", ""].join("\n"),
+  "extensions/@example-org/fixture-pack/src/names.ts": ["export const FIXTURE_PACK_NAME = 'fixture_pack_const';", ""].join("\n"),
   [ROUTE]: route(
     [
       '  "fixture_mcp_tool",',
       "  // a comment naming `not_a_tool` is not an entry",
       "  'fixture_single_quoted', `fixture_template`,",
       "  LOCAL_TOOL,",
+      "  FIXTURE_PACK_NAME,",
       "  /* between entries */ ...FIXTURE_SCOPED_TOOLS,",
     ],
-    ['import { FIXTURE_SCOPED_TOOLS } from "@/lib/fixture-scoped-tools";', 'const LOCAL_TOOL = "fixture_local_const";'],
+    [
+      'import { FIXTURE_SCOPED_TOOLS } from "@/lib/fixture-scoped-tools";',
+      'import { FIXTURE_PACK_NAME } from "../../../../../extensions/@example-org/fixture-pack/src/names";',
+      'const LOCAL_TOOL = "fixture_local_const";',
+    ],
   ),
 };
 
@@ -179,6 +185,11 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(rowsOf("fixture_nested_tool")).toEqual([{ file: "src/lib/fixture-nested-tools.ts", road: "passthrough" }]);
     expect(rowsOf("fixture_js_tool")).toEqual([{ file: "src/lib/fixture-js-tools.mjs", road: "passthrough" }]);
     expect(rowsOf("not_a_tool")).toEqual([]);
+  });
+
+  it("names the list that admits an imported constant, not the constant's module", () => {
+    // The row's file is its owner (#4874): a pack's constant in the core list stays core.
+    expect(rowsOf("fixture_pack_const")).toEqual([{ file: ROUTE, road: "passthrough" }]);
   });
 
   it("lists a tool admitted on both roads with a row on each", () => {

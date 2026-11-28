@@ -34,7 +34,9 @@
  * sets built by code) is refused, not followed; a mutation of an exported set
  * from a module the builder does not read is not followed.
  * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
- * that pack, any other path is core.
+ * that pack, any other path is core. A passthrough row's file is the module
+ * of the set that holds the entry (the route or a spread set), never the
+ * module of an imported constant the entry names.
  *
  * Hand-augmentation of classification per primitive lives in:
  *   src/lib/authz/inventory-augment.ts
@@ -359,7 +361,9 @@ function namesOfSet(rel, name, depth, track) {
       if (!v || !(ts.isStringLiteral(v) || ts.isNoSubstitutionTemplateLiteral(v))) {
         fail(`${c.rel}: allow-list entry ${el.text} is not a const with a string literal value`);
       }
-      out.push({ primitiveName: v.text, file: c.rel, line: lineOf(c.sf, c.decl) });
+      // The row names the set that admits the name, never the constant's module:
+      // a constant imported from a pack into a core list is still core's admission.
+      out.push({ primitiveName: v.text, file: at, line: lineOf(sf, el) });
     } else {
       fail(`${at}: allow-list entry \`${el.getText(sf)}\` in ${name} is not a literal, a literal const or a spread set`);
     }
