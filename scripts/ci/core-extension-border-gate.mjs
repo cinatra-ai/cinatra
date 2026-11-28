@@ -838,7 +838,13 @@ export function specifierOwner(specifier, file, { workspaceDirs = new Map(), ali
     if (specifier.length < head.length + tail.length || !specifier.startsWith(head) || !specifier.endsWith(tail)) continue;
     if (!best || head.length > best.head.length) best = { head, tail, target: a.target };
   }
-  if (best) return ownerOfPath(best.target.replace("*", specifier.slice(best.head.length, specifier.length - best.tail.length)));
+  if (best) {
+    // A `paths` target holds at most one `*` (the compiler refuses more): the matched middle
+    // takes its place.
+    const middle = specifier.slice(best.head.length, specifier.length - best.tail.length);
+    const at = best.target.indexOf("*");
+    return ownerOfPath(at < 0 ? best.target : best.target.slice(0, at) + middle + best.target.slice(at + 1));
+  }
   const segs = specifier.split("/");
   const name = specifier.startsWith("@") ? segs.slice(0, 2).join("/") : segs[0];
   if (workspaceDirs.has(name)) return workspaceDirs.get(name);
