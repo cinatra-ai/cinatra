@@ -18,6 +18,8 @@
  *
  *   pnpm exec vitest run src/lib/blog/__tests__/publish-artifact-read-contract.test.ts
  */
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -91,18 +93,22 @@ describe("host-side reader helpers exist and have the documented `liveOnly: true
     expect(typeof module.materializeBlogPostBodyArtifact).toBe("function");
   });
 
-  it("readBlogIdeaArtifactBytes is exported from the idea-summary materializer", async () => {
-    const module = await import("@/lib/blog-idea-artifact-materializer");
-    expect(typeof module.readBlogIdeaArtifactBytes).toBe("function");
+  // cinatra#4865: the idea-summary materializer (the dormant writer went in
+  // #3034, its last reader here) had no caller on main and is deleted. This
+  // pins that it stays deleted: an idea is read through the binding road.
+  it("the idea-summary materializer module is gone", () => {
+    const path = fileURLToPath(new URL("../../blog-idea-artifact-materializer.ts", import.meta.url));
+    expect(existsSync(path)).toBe(false);
   });
 
-  // cinatra#3034: the in-core idea WRITER was dormant — a call-site census over
-  // the whole tree found no caller but this assertion, so it is deleted and the
-  // ideas are filed through the binding road. The reader stays: the publish
-  // path still reads an idea's bytes.
-  it("the dormant in-core idea writer is GONE — ideas are filed through the binding road", async () => {
-    const module = await import("@/lib/blog-idea-artifact-materializer");
-    expect("materializeBlogIdeaArtifact" in module).toBe(false);
+  // cinatra#4862: the blog plugin definition (src/lib/blog/plugin/definition)
+  // had no importer and is deleted; its barrel export went with it.
+  it("the src/lib/blog/plugin/definition module is gone and not re-exported", () => {
+    const path = fileURLToPath(new URL("../plugin/definition.ts", import.meta.url));
+    expect(existsSync(path)).toBe(false);
+    const indexPath = fileURLToPath(new URL("../index.ts", import.meta.url));
+    const indexText = readFileSync(indexPath, "utf8");
+    expect(indexText.includes("contentBlogPlugin")).toBe(false);
   });
 
   it("readBlogImageArtifactBytes is exported; WP image upload still flows through it", async () => {

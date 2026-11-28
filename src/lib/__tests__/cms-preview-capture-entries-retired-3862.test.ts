@@ -50,7 +50,7 @@ const RETIRED_NAME_RES = RETIRED_NAMES.map((name) => new RegExp(`\\b${name}\\b`)
 
 // A reference to either module: its file name, or an import specifier that ends
 // in the module name. The object type id `@cinatra-ai/objects:cms-preview-capture`
-// and the sibling module `cms-preview-capture-policy` are no match: they stay.
+// and the sibling module `page-capture-policy` are no match: they stay.
 const MODULE_REFERENCE_RES = [
   /cms-preview-capture\.ts/,
   /["'`](?:@\/lib\/artifacts\/|\.\.?\/(?:[\w.-]+\/)*)cms-preview-capture["'`]/,
@@ -87,7 +87,7 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
     const files = SCAN_ROOTS.flatMap((root) => scannedFiles(path.join(REPO_ROOT, root)));
     // The walk must reach the page capture, the policy module and the floor, or an empty scan passes.
     expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/registered-page-capture.ts"));
-    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/cms-preview-capture-policy.ts"));
+    expect(files).toContain(path.join(REPO_ROOT, "src/lib/artifacts/page-capture-policy.ts"));
     expect(files).toContain(path.join(REPO_ROOT, "scripts/audit/application-border-gate.baseline.json"));
     const namers = files
       .filter((file) => path.resolve(file) !== SELF)
@@ -129,8 +129,8 @@ describe("cinatra#3862 leg 8 l8a1 — the gate capture pipeline is gone", () => 
     expect(read("src/lib/artifacts/registered-page-capture.ts")).toContain('from "./registered-page-render"');
     expect(read("src/lib/artifact-page-capture-tool.ts")).toContain('from "@/lib/artifacts/registered-page-render"');
     for (const rel of [
-      "src/lib/artifacts/cms-preview-capture-policy.ts",
-      "src/lib/artifacts/cms-preview-inertness.ts",
+      "src/lib/artifacts/page-capture-policy.ts",
+      "src/lib/artifacts/page-capture-inertness.ts",
       "scripts/preview-capture/isolated-render.mjs",
     ]) {
       expect(existsSync(path.join(REPO_ROOT, rel))).toBe(true);

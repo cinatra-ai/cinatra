@@ -5,7 +5,8 @@
 // marketplace agent detail page 500'd for ALL 33 published `@cinatra-ai/*-agent`
 // packages because the extractor hardcoded a root `agent.json` read, while every
 // published agent ships its payload at `cinatra/oas.json`. These tests pin the
-// resolution order (cinatra/oas.json → legacy root agent.json → null) so a
+// resolution (cinatra/oas.json only; a root `agent.json` alone is refused with
+// an error naming `cinatra/oas.json`, #4920; neither file → null) so a
 // payload-less tarball degrades instead of throwing ENOENT.
 //
 // Mirrors `readme-extractor.test.ts`: write files into a temp dir, then assert
@@ -72,7 +73,7 @@ describe("readAgentPayloadFromExtractedPackage", () => {
     expect(payload).toEqual(OAS_PAYLOAD);
   });
 
-  it("falls back to a legacy root agent.json when no cinatra/oas.json exists", async () => {
+  it("refuses a package with only a root agent.json, with an error that names cinatra/oas.json", async () => {
     const pkgDir = await mkdtemp(join(workspace, "legacy-"));
     await writeFile(
       join(pkgDir, "agent.json"),
@@ -80,12 +81,13 @@ describe("readAgentPayloadFromExtractedPackage", () => {
       "utf8",
     );
 
-    const payload = await readAgentPayloadFromExtractedPackage(pkgDir);
-
-    expect(payload).toEqual(LEGACY_AGENT_PAYLOAD);
+    // red-first-expect: promise resolved
+    await expect(readAgentPayloadFromExtractedPackage(pkgDir)).rejects.toThrow(
+      /root agent\.json and no cinatra\/oas\.json\. An agent's definition is cinatra\/oas\.json/,
+    );
   });
 
-  it("prefers cinatra/oas.json over a legacy root agent.json when both exist", async () => {
+  it("reads only cinatra/oas.json when a root agent.json is also present", async () => {
     const pkgDir = await mkdtemp(join(workspace, "both-"));
     await mkdir(join(pkgDir, "cinatra"), { recursive: true });
     await writeFile(

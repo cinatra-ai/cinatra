@@ -254,21 +254,28 @@ describe("the WordPress publish pack reads the revision the review approved", ()
       targets: [successor],
     });
     if (resume.kind !== "approve") throw new Error("an approval resumes with approve text");
-    // The record the step in front of the read step answers (artifacts_get).
-    const values: Record<string, unknown> = {
+    const values: Record<string, string> = {
       reviewDecision: resume.userResponse,
       postArtifactId: START.postArtifactId,
-      postRecord: { id: START.postArtifactId, artifactId: START.postArtifactId, title: "The record's title" },
+    };
+    // The record the flow's record read hands on (the post's record as
+    // artifacts_get answered it). The step's template renders it as JSON text
+    // through `| tojson`, behind a comment that names the input.
+    const records: Record<string, unknown> = {
+      postRecord: { artifactId: START.postArtifactId, title: "The post" },
     };
     const fillFrom = (value: unknown): unknown => {
       if (typeof value === "string") {
-        // A `{# ... #}` hint is a template comment; `{{ name | tojson }}` renders JSON text.
         return value
           .replace(/\{#[\s\S]*?#\}/g, "")
-          .replace(/\{\{\s*(\w+)\s*(\|\s*tojson\s*)?\}\}/g, (_m, name: string, tojson?: string) => {
+          .replace(/\{\{\s*(\w+)\s*\|\s*tojson\s*\}\}/g, (_m, name: string) => {
+            if (!(name in records)) throw new Error(`no record for ${name}`);
+            return JSON.stringify(records[name]);
+          })
+          .replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, name: string) => {
             const v = values[name];
             if (v === undefined) throw new Error(`no value for ${name}`);
-            return tojson ? JSON.stringify(v) : String(v);
+            return v;
           });
       }
       if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -298,8 +305,7 @@ describe("the WordPress publish pack reads the revision the review approved", ()
       ...successor,
       text: "# The regenerated title\n\nThe regenerated words.",
       truncated: false,
-      // The page's title is the record's own title, not the words' heading.
-      title: "The record's title",
+      title: "The post",
     });
   });
 });

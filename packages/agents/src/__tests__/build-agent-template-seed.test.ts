@@ -27,6 +27,7 @@ import { describe, it, expect } from "vitest";
 
 import { buildAgentTemplateInstallSeed } from "../build-agent-template-seed";
 import type { AgentPackageManifest } from "../verdaccio/package-contract";
+import { UNREAD_MODEL_STEP_PATH, withUnreadModelStep } from "./helpers/unread-model-step-oas-4897";
 
 const OAS_FIXTURE = readFileSync(
   join(__dirname, "fixtures", "synthetic-gemini-agent.json"),
@@ -324,5 +325,28 @@ describe("visible start-input contract before an installable seed is returned", 
 
   it("a different package cannot claim a baseline identity through OAS metadata", async () => {
     await expect(prepare(PACKAGE_NAME, {}, false, "@cinatra-ai/wordpress-agent")).rejects.toThrow(/postId/);
+  });
+});
+
+describe("a model step the run does not read is refused before an installable seed is returned (cinatra#4897)", () => {
+  it("refuses a flow whose agent tool holds an inline flow with a model step, and names the step", async () => {
+    const dir = await stageOasOnlyPackage({ oas: JSON.stringify(withUnreadModelStep(JSON.parse(VALID_OAS_FIXTURE))) });
+    // red-first-expect: promise resolved
+    await expect(
+      buildAgentTemplateInstallSeed({
+        extractedTempDir: dir, packageName: PACKAGE_NAME, packageVersion: "0.1.0", manifest: manifest(),
+      }),
+    ).rejects.toThrow(`Model step "draft" at ${UNREAD_MODEL_STEP_PATH}`);
+  });
+
+  it("installs the same package when its agent node is only a registry entry nothing refers to", async () => {
+    const dir = await stageOasOnlyPackage({
+      oas: JSON.stringify(withUnreadModelStep(JSON.parse(VALID_OAS_FIXTURE), false)),
+    });
+    await expect(
+      buildAgentTemplateInstallSeed({
+        extractedTempDir: dir, packageName: PACKAGE_NAME, packageVersion: "0.1.0", manifest: manifest(),
+      }),
+    ).resolves.toMatchObject({ name: "Synthetic Gemini Agent" });
   });
 });

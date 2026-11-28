@@ -43,7 +43,6 @@
     "./screens": "./src/screens.tsx",
     "./pages": "./src/pages.tsx",
     "./client-entry": "./src/client-entry.ts",
-    "./cli": "./src/cli/index.ts",
     "./wayflow-url": "./src/wayflow-url.ts",
     "./run-status": "./src/run-status.ts",
     "./schema": "./src/schema.ts",

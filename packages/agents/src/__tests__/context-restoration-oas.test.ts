@@ -95,24 +95,21 @@ describe("context-selection-agent: autonomous-slot structural coverage", () => {
   });
 });
 
-// KNOWN_BROKEN_AGENTS only shrinks and is empty again: the WordPress publish
-// agent's cinatra#4150 entry left it in the PR that pins the cured pack.
+// KNOWN_BROKEN_AGENTS only shrinks: its last entry, the WordPress publish agent
+// pinned before its cinatra#4150 cure, was deleted in the PR that pinned the
+// cure. The list is empty and nothing may be added.
 describe("KNOWN_BROKEN_AGENTS only shrinks", () => {
-  it("the exception list is empty", async () => {
+  it("the exception list is empty: the WordPress publish agent's entry went with its cure (cinatra#4150)", async () => {
     const mod = await import("./__fixtures__/known-broken-agents");
     expect(Object.keys(mod.KNOWN_BROKEN_AGENTS)).toEqual([]);
-  });
-
-  it("the validator raises no finding for the pinned WordPress publish agent, no OAS-RUNTIME-013: its review step surfaces its targets (cinatra#4150)", () => {
-    // The real validator output for the pinned pack, so a pin that regresses
-    // to a review step without its targets fails here.
+    // The agent the entry was for raises no finding at its pin: a list entry
+    // the validator does not back is rot, so none is kept.
     const oas = JSON.parse(
       readFileSync(
         join(__dirname, "../../../../extensions/cinatra-ai/blog-wordpress-publish-agent/cinatra/oas.json"),
         "utf8",
       ),
     ) as Record<string, unknown>;
-    const codes = validateOasAgentJson(oas).map((m) => m.match(/^[A-Z]+(?:-[A-Z]+)+-\d+/)?.[0]);
-    expect(codes).toEqual([]);
+    expect(validateOasAgentJson(oas)).toEqual([]);
   });
 });

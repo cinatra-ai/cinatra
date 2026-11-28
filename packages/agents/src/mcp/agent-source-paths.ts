@@ -9,6 +9,7 @@ import "server-only";
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
+import { findAgentDefinition } from "../agent-definition-order";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import { isSafePathSegment, assertSafePathSegment } from "@cinatra-ai/registries";
 
@@ -91,6 +92,10 @@ export function safeVendorSegmentsForRead(): string[] {
   return out;
 }
 
+// LISTING ONLY (cinatra#4920): the by-slug readers use
+// resolveAgentOasPathForRead below. This four-rung probe stays exactly as it
+// was for the listing handler, which still enumerates old-layout directories;
+// that enumeration is a separate piece of #4920.
 export function resolveAgentJsonPathForRead(packageSlug: string): {
   path: string;
   relPath: string;
@@ -128,11 +133,38 @@ export function resolveAgentJsonPathForRead(packageSlug: string): {
   return null;
 }
 
+export type AgentOasRead = { path: string; relPath: string; rootDir: string };
+
+/**
+ * By-slug read of an agent definition (cinatra#4920): `cinatra/oas.json` only.
+ * The directory order and the old-layout error live in findAgentDefinition
+ * (../agent-definition-order), shared with the compiler: the first directory
+ * that holds ANY definition file decides (the operator's vendor segment, then
+ * first-party, then the legacy `<root>/<slug>/` directory). Returns `null`
+ * when nothing is there, and `{ error }` when that directory holds only an old
+ * definition file. Never reads an old file.
+ */
+export function resolveAgentOasPathForRead(packageSlug: string): AgentOasRead | { error: string } | null {
+  const root = resolveDevExtensionSourceRoot();
+  if (!isSafePathSegment(packageSlug)) return null;
+  const found = findAgentDefinition({
+    root,
+    vendors: safeVendorSegmentsForRead(),
+    slug: packageSlug,
+    legacySlug: LEGACY_SLUG_MAP[packageSlug] ?? packageSlug,
+  });
+  if (!found) return null;
+  if (found.kind === "old") return { error: found.message };
+  return { path: found.path, relPath: relative(process.cwd(), found.path), rootDir: found.rootDir };
+}
+
 // Resolves the on-disk directory that contains the agent (for sibling reads
-// like package.json, skills/). Delegates to resolveAgentJsonPathForRead so
-// the two resolvers can never disagree about which package a slug maps to.
+// like package.json, skills/). Delegates to resolveAgentOasPathForRead so the
+// two resolvers can never disagree about which package a slug maps to. An
+// old-layout directory has no root here (null), like an absent one.
 export function resolveAgentRootDirForRead(packageSlug: string): string | null {
-  return resolveAgentJsonPathForRead(packageSlug)?.rootDir ?? null;
+  const resolved = resolveAgentOasPathForRead(packageSlug);
+  return resolved && "rootDir" in resolved ? resolved.rootDir : null;
 }
 
 export function resolveAgentJsonPathForWrite(packageSlug: string): {

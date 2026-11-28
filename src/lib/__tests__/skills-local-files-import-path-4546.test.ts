@@ -1,17 +1,18 @@
+// red-first-expect: expected true to be false
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-// cinatra#4546 — `src/lib/mcp-instructions.ts` and `src/lib/openai-builder.ts`
-// call the local SKILL.md reader at module load. The `@cinatra-ai/skills`
+// cinatra#4546 — `src/lib/mcp-instructions.ts` calls the local SKILL.md reader
+// at module load. The `@cinatra-ai/skills`
 // package index re-exports `./skills-registry` (and other modules) before
 // `./local-skill-files`, and the registry's import chain leads back to
 // `src/lib/mcp-instructions.ts`. When the index is entered first, the reader
 // export is still undefined when the module-level call runs, and the webpack
 // dev server fails in the instrumentation hook.
 //
-// This static test pins the cycle-free road: both modules import the reader
+// This static test pins the cycle-free road: the module imports the reader
 // from the leaf subpath `@cinatra-ai/skills/local-skill-files`, the package
 // `exports` map serves that subpath from `./src/local-skill-files.ts`, and the
 // leaf itself imports only `server-only` and `node:*` modules, so it cannot
@@ -37,7 +38,7 @@ function importSpecifiers(source: string): string[] {
 }
 
 describe("cinatra#4546: local skill files are imported without the package index", () => {
-  for (const rel of ["src/lib/mcp-instructions.ts", "src/lib/openai-builder.ts"]) {
+  for (const rel of ["src/lib/mcp-instructions.ts"]) {
     it(`${rel} imports the reader from the leaf subpath, not the package index`, () => {
       const specs = importSpecifiers(read(rel));
       expect(specs).not.toContain(BARREL_SPECIFIER);
@@ -57,5 +58,14 @@ describe("cinatra#4546: local skill files are imported without the package index
     expect(specs.length).toBeGreaterThan(0);
     const foreign = specs.filter((s) => s !== "server-only" && !s.startsWith("node:"));
     expect(foreign).toEqual([]);
+  });
+
+  // cinatra#4887: the campaign type classifier and its catalog were deleted
+  // (nothing called them); the deleted classifier was the second module that
+  // read local skill files at module load.
+  it("the unused campaign type classifier and catalog stay deleted", () => {
+    for (const rel of ["src/lib/openai-builder.ts", "src/lib/campaign-type-catalog.ts"]) {
+      expect(fs.existsSync(path.join(REPO_ROOT, rel))).toBe(false);
+    }
   });
 });
