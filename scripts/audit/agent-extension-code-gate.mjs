@@ -24,7 +24,10 @@
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
  * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`), and
  * `uiDependencies` (cinatra#4532: per agent, skill or workflow pack, its
- * declared dependencies on a UI package, see `uiDependencyItems`).
+ * declared dependencies on a UI package, see `uiDependencyItems`) and
+ * `rendererComponents` (cinatra#4532: per agent, skill or workflow pack, its
+ * `cinatra.fieldRenderers` entries that carry a `component`, see
+ * `rendererComponentItems`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
  *
  * Usage: node scripts/audit/agent-extension-code-gate.mjs [--report | --write-baseline | --seed]
@@ -41,9 +44,9 @@ export const FLOOR_FILE = "scripts/audit/agent-extension-code-gate.baseline.json
 export const GATE_FILE = "scripts/audit/agent-extension-code-gate.mjs";
 export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
-export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies"];
+export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents"];
 /** Classes added after the list was seeded: a list without such a class holds none of its items, and a base list without it seeds it (`listGrowth`). */
-export const LATER_CLASSES = new Set(["uiDependencies"]);
+export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents"]);
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
@@ -123,6 +126,36 @@ export function uiDependencyItems(packageJson, label = "package.json") {
     if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new ScannerError(`${label}: ${field} is not a list of names`);
     for (const n of names) if (UI_PACKAGES.includes(n)) items.push(`${field}: ${n}`);
   }
+  return items.sort();
+}
+
+/**
+ * THE RENDERER RULE (cinatra#4532). An agent, skill or workflow pack
+ * (`isRolePack`) declares no `cinatra.fieldRenderers` entry that carries a
+ * `component`: core draws a HITL step with its one generic gate, and a pack
+ * that ships a screen of its own keeps a second renderer alive. The shapes are
+ * the ones the product reads (`validateFieldRendererDeclarations` in
+ * scripts/extensions/agent-binding-kinds.mjs, which the generator and the
+ * runtime collector both call): `cinatra.fieldRenderers` is an ARRAY of plain
+ * objects, absent or `null` meaning none; an object map is not read. The key
+ * the product takes a component from is `component`, and its own test of it is
+ * `component !== undefined`. A JSON value is never `undefined`, so an entry
+ * counts when it carries the key, whatever the value: the product rejects an
+ * entry whose `component` is not an object holding an `entry`, and such a
+ * declaration is no good one, so it is counted too. A `fieldRenderers` value
+ * that is not an array, or an entry that is not a plain object, is a shape the
+ * product does not read: a scanner error that names the package, never a
+ * silent pass.
+ */
+export function rendererComponentItems(packageJson, label = "package.json") {
+  const declared = packageJson?.cinatra?.fieldRenderers;
+  if (declared === undefined || declared === null) return [];
+  if (!Array.isArray(declared)) throw new ScannerError(`${label}: cinatra.fieldRenderers is not an array`);
+  const items = [];
+  declared.forEach((entry, i) => {
+    if (!isPlainObject(entry)) throw new ScannerError(`${label}: cinatra.fieldRenderers[${i}] is not an object`);
+    if (entry.component !== undefined) items.push(`fieldRenderers: ${typeof entry.id === "string" ? entry.id : `[${i}]`}`);
+  });
   return items.sort();
 }
 
@@ -411,6 +444,8 @@ export function scan(root) {
     if (isRolePack(kind, entries)) {
       const ui = uiDependencyItems(pkg, `${rel}/package.json at the pinned commit ${sha}`);
       if (ui.length) findings.uiDependencies[name] = { count: ui.length, items: ui };
+      const renderers = rendererComponentItems(pkg, `${name} (${rel}/package.json at the pinned commit ${sha})`);
+      if (renderers.length) findings.rendererComponents[name] = { count: renderers.length, items: renderers };
     }
   }
   return { findings, packCount: packs.length, oldLayout };
@@ -430,6 +465,11 @@ const total = (map) => Object.values(map).reduce((n, e) => n + e.count, 0);
 const totals = (f) => CLASSES.map((c) => `${total(f[c])} ${c} in ${Object.keys(f[c]).length} key(s)`).join(", ");
 const NOTE = "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, " +
   "a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.";
+
+const RULE_TEXT = {
+  uiDependencies: "an agent, skill or workflow extension depends on no UI package",
+  rendererComponents: "an agent, skill or workflow extension declares no field renderer component",
+};
 
 const OLD_LAYOUT_NOTE = "a pinned pack holds an old definition file and no cinatra/oas.json; the product reports it and does not load it:";
 
@@ -474,7 +514,7 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
   const diff = diffWithList(findings, list);
   for (const cls of CLASSES) {
     const { fresh, stale } = diff[cls];
-    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] items the list does not hold (${cls === "uiDependencies" ? "an agent, skill or workflow extension depends on no UI package" : "an agent extension ships no program code"}):`);
+    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] items the list does not hold (${RULE_TEXT[cls] ?? "an agent extension ships no program code"}):`);
     for (const p of fresh) err(`  + ${p}`);
     if (stale.length) err(`[${GATE}] FAIL — [${cls}] recorded items that are gone (shrink the list: --write-baseline):`);
     for (const p of stale) err(`  - ${p}`);
