@@ -771,8 +771,8 @@ pinned pack. Class 1 applies to every pack the product treats as an agent
 its pinned tree holds an entry at (or below) `cinatra/oas.json` or
 `cinatra/agent.json`. These are the paths the product's discovery tests at a
 pack root `extensions/<scope>/<name>`: `collectDefinitions` in
-`src/lib/git-native-agent-ingest.ts` (the vendor-namespace probe, `oas.json`
-then the transitional `agent.json`) and the production seed
+`src/lib/git-native-agent-ingest.ts` (it reads `cinatra/oas.json` and reports
+an old `cinatra/agent.json` without loading it) and the production seed
 `scripts/extensions/build-required-oas-seed.mjs` (`cinatra/oas.json`). The
 ingest's two fallback layouts lie one level higher, outside any pack root. A
 test reads both source files and fails when their condition changes. So a

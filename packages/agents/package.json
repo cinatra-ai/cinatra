@@ -11,6 +11,7 @@
     "./agent-runtime-mount": "./src/agent-runtime-mount.ts",
     "./wayflow-reload-client": "./src/wayflow-reload-client.ts",
     "./installed-oas-path": "./src/installed-oas-path.ts",
+    "./agent-source-dirs": "./src/agent-source-dirs.ts",
     "./read-llm-requirement-from-mount": "./src/read-llm-requirement-from-mount.ts",
     "./runtime-install-gate": "./src/runtime-install-gate.ts",
     "./agent-unavailable-action": "./src/agent-unavailable-action.ts",

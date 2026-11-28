@@ -1749,7 +1749,6 @@
       "@cinatra-ai/web-scrape-agent": 4
     },
     "src/lib/__tests__/agents-store-provider-declared.test.ts": {
-      "@cinatra-ai/drupal-agent": 2,
       "@cinatra-ai/email-drafting-agent": 10,
       "@cinatra-ai/web-scrape-agent": 4
     },

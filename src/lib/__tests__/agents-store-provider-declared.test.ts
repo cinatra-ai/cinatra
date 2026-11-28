@@ -33,6 +33,18 @@ import type { InstanceIdentity } from "@/lib/instance-identity-store";
 
 vi.mock("server-only", () => ({}));
 
+// Every path read through fs.readFileSync, in order (the table test below
+// observes which definition file the walker really opens).
+const readLog = vi.hoisted(() => [] as string[]);
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  const readFileSync = ((...args: Parameters<typeof actual.readFileSync>) => {
+    readLog.push(String(args[0]));
+    return actual.readFileSync(...args);
+  }) as typeof actual.readFileSync;
+  return { ...actual, readFileSync, default: { ...actual, readFileSync } };
+});
+
 vi.mock("@cinatra-ai/llm", () => ({
   runResolvedDeterministicLlmTask: vi.fn(),
   resolveConfiguredLlmRuntime: vi.fn(),
@@ -317,36 +329,80 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     expect(packageIds).toEqual(["@cinatra-ai/email-drafting-agent"]);
   });
 
-  it("walks transitional and legacy layouts (4-rung resolver parity with handleAgentBuilderGitList)", () => {
-    makeProviderAgentDir(tmpRoot, "agent-a", {
-      layout: "new-agent",
-      packageName: "@cinatra/agent-a",
-      name: "Agent A",
-      description: "Transitional layout",
-    });
-    makeProviderAgentDir(tmpRoot, "drupal-agent", {
-      layout: "legacy-cinatra",
-      legacyDirName: "drupal-content-editor",
-      packageName: "@cinatra-ai/drupal-agent",
-      name: "Drupal Agent",
-      description: "Legacy cinatra layout + legacy slug map",
-    });
-    makeProviderAgentDir(tmpRoot, "agent-c", {
-      layout: "legacy-flat",
-      packageName: "@cinatra/agent-c",
-      name: "Agent C",
-      description: "Legacy flat layout",
-    });
+  // Every agent source directory under the install root is READ (surfaced) or
+  // REPORTED (a warning naming the directory, the file found and the exact place
+  // the definition must be), keyed by path, with no directory name skipped
+  // (cinatra#4920). One table.
+  const S = "acme-agent";
+  const V = "cinatra-ai";
+  const OP = "acme-ops";
+  type Row = {
+    name: string;
+    files: string[];
+    read: string[];
+    reported?: Array<{ dir: string; found: string[]; at: string; also?: string }>;
+    /** directory -> the directory a by-slug read selects instead (report line only) */
+    shadowed?: Record<string, string>;
+  };
+  const ROWS: Row[] = [
+    { name: "scoped canonical", files: [`${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`] },
+    { name: "scoped old-only, cinatra/agent.json", files: [`${V}/${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped old-only, root agent.json", files: [`${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped old-only, both old forms", files: [`${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json", "agent.json"], at: `${V}/${S}/cinatra/oas.json` }] },
+    { name: "scoped both", files: [`${V}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/agent.json`, `${V}/${S}/agent.json`], read: [`${V}/${S}`] },
+    { name: "flat canonical", files: [`${S}/cinatra/oas.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/oas.json"], at: `${OP}/${S}/cinatra/oas.json` }] },
+    { name: "flat old-only, cinatra/agent.json", files: [`${S}/cinatra/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/agent.json"], at: `${OP}/${S}/cinatra/oas.json` }] },
+    { name: "flat old-only, root agent.json", files: [`${S}/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["agent.json"], at: `${OP}/${S}/cinatra/oas.json` }] },
+    { name: "flat both", files: [`${S}/cinatra/oas.json`, `${S}/cinatra/agent.json`, `${S}/agent.json`], read: [], reported: [{ dir: `${S}`, found: ["cinatra/oas.json", "cinatra/agent.json", "agent.json"], at: `${OP}/${S}/cinatra/oas.json` }] },
+    { name: "slug cinatra, scoped", files: [`${V}/cinatra/cinatra/oas.json`], read: [`${V}/cinatra`] },
+    { name: "a vendor directory that holds its own definition", files: [`${V}/agent.json`, `${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], reported: [{ dir: `${V}`, found: ["agent.json"], at: `${OP}/${V}/cinatra/oas.json` }] },
+    { name: "operator canonical + first-party canonical", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/oas.json`], read: [`${OP}/${S}`, `${V}/${S}`], shadowed: { [`${V}/${S}`]: `${OP}/${S}` } },
+    { name: "operator old + first-party canonical", files: [`${OP}/${S}/cinatra/agent.json`, `${V}/${S}/cinatra/oas.json`], read: [`${V}/${S}`], reported: [{ dir: `${OP}/${S}`, found: ["cinatra/agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], shadowed: { [`${V}/${S}`]: `${OP}/${S}` } },
+    { name: "operator canonical + first-party old", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/agent.json`], read: [`${OP}/${S}`], reported: [{ dir: `${V}/${S}`, found: ["cinatra/agent.json"], at: `${V}/${S}/cinatra/oas.json` }], shadowed: { [`${V}/${S}`]: `${OP}/${S}` } },
+    { name: "flat + scoped, same slug", files: [`${V}/${S}/cinatra/oas.json`, `${S}/agent.json`], read: [`${V}/${S}`], reported: [{ dir: `${S}`, found: ["agent.json"], at: `${OP}/${S}/cinatra/oas.json` }], shadowed: { [`${S}`]: `${V}/${S}` } },
+    { name: "operator, first-party and flat directories with one slug", files: [`${OP}/${S}/cinatra/oas.json`, `${V}/${S}/cinatra/oas.json`, `${S}/cinatra/oas.json`], read: [`${OP}/${S}`, `${V}/${S}`], reported: [{ dir: `${S}`, found: ["cinatra/oas.json"], at: `${OP}/${S}/cinatra/oas.json`, also: "already holds a definition" }], shadowed: { [`${V}/${S}`]: `${OP}/${S}`, [`${S}`]: `${OP}/${S}` } },
+    { name: "legacy renamed slug", files: [`drupal-content-editor/cinatra/agent.json`], read: [], reported: [{ dir: `drupal-content-editor`, found: ["cinatra/agent.json"], at: `${OP}/drupal-agent/cinatra/oas.json` }] },
+    { name: "a vendor directory the readers do not walk", files: [`other-vendor/${S}/cinatra/oas.json`], read: [] },
+  ];
 
-    const packageIds = readProviderDeclaredAgents()
-      .map((a) => a.packageId)
-      .sort();
-    expect(packageIds).toEqual([
-      "@cinatra-ai/drupal-agent",
-      "@cinatra/agent-a",
-      "@cinatra/agent-c",
-    ]);
-  });
+  for (const row of ROWS) {
+    it(`table: ${row.name}`, () => {
+      readInstanceIdentityMock.mockReturnValue(makeInstanceIdentity(OP, "Ops"));
+      const rel = (p: string) => path.relative(process.cwd(), path.join(tmpRoot, p));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      for (const f of row.files) {
+        mkdirSync(path.dirname(path.join(tmpRoot, f)), { recursive: true });
+        const isOas = f.endsWith("cinatra/oas.json");
+        writeFileSync(
+          path.join(tmpRoot, f),
+          JSON.stringify(isOas ? { name: f, metadata: { cinatra: { packageName: `@example-org/${path.dirname(path.dirname(f)).replace(/\//g, "--")}` } } } : { name: "OLD FILE MUST NOT BE READ" }),
+        );
+      }
+      readLog.length = 0;
+
+      const packageIds = readProviderDeclaredAgents().map((a) => a.packageId).sort();
+      expect(packageIds).toEqual(row.read.map((d) => `@example-org/${d.replace(/\//g, "--")}`).sort());
+      for (const d of row.read) expect(readLog).toContain(path.join(tmpRoot, d, "cinatra", "oas.json"));
+      expect(readLog.filter((p) => /[\\/]agent\.json$/.test(p))).toEqual([]);
+
+      const warnings = warn.mock.calls.map((c) => String(c[0]));
+      const reported = row.reported ?? [];
+      const shadowed = row.shadowed ?? {};
+      const shadowedRead = row.read.filter((d) => shadowed[d]);
+      expect(warnings.filter((w) => w.startsWith("[agents] "))).toHaveLength(reported.length + shadowedRead.length);
+      for (const r of reported) {
+        const warning = warnings.find((w) => w.startsWith(`[agents] ${rel(r.dir)} is an agent in the old layout`));
+        expect(warning).toBeDefined();
+        for (const text of [...r.found, rel(r.at), ...(r.also ? [r.also] : [])]) expect(warning).toContain(text);
+        if (shadowed[r.dir]) expect(warning).toContain(`is also shadowed: a read of slug`);
+      }
+      // A READ directory a by-slug read does not select is still surfaced (above) and has its line.
+      for (const d of shadowedRead) {
+        expect(warnings.find((w) => w.startsWith(`[agents] ${rel(d)} is shadowed: a read of slug`))).toContain(rel(shadowed[d]));
+      }
+      warn.mockRestore();
+    });
+  }
 
   it("falls back to sibling package.json for packageName + description", () => {
     makeProviderAgentDir(tmpRoot, "fallback-agent", {
@@ -436,6 +492,20 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     );
     // Default behavior swallows the error and returns [].
     expect(readProviderDeclaredAgents()).toEqual([]);
+  });
+
+  it("throwOnError does not fail on a vendor directory that does not exist (only an unreadable one does)", () => {
+    // The operator's vendor directory is absent: it is skipped, as it always
+    // was, and the first-party agent is still surfaced.
+    readInstanceIdentityMock.mockReturnValue(makeInstanceIdentity("marcushorndt-local", "Marcus Local"));
+    makeProviderAgentDir(tmpRoot, "sample-agent", {
+      layout: "new-oas",
+      metadataPackageName: "@example-org/sample-agent",
+      name: "Sample Agent",
+      description: "A sample agent.",
+    });
+    expect(() => readProviderDeclaredAgents({ throwOnError: true })).not.toThrow();
+    expect(readProviderDeclaredAgents({ throwOnError: true })).toHaveLength(1);
   });
 
   it("throwOnError propagates a malformed sibling package.json when it's the only packageName source", () => {

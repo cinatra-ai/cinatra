@@ -73,14 +73,19 @@ import { resolveDevExtensionSourceRoot } from "../agent-runtime-mount";
 // Agent-source on-disk path resolution + vendor-segment derivation (extracted
 // from this file to stay under the file-size ratchet; cinatra#537 path-safety).
 import {
-  LEGACY_SLUG_MAP,
   resolveInstanceVendorSegment,
   safeVendorSegmentsForRead,
-  resolveAgentJsonPathForRead,
   resolveAgentOasPathForRead,
   resolveAgentRootDirForRead,
   resolveAgentJsonPathForWrite,
 } from "./agent-source-paths";
+import {
+  DEFINITION_PLACES,
+  agentSourceMessage,
+  agentSourceShadowNote,
+  classifyAgentSourceDirs,
+  type AgentSourceCandidate,
+} from "../agent-source-dirs";
 import { createZipBuffer } from "../zip-helpers";
 import { AGENT_TEMPLATE_TYPE_ID } from "../agent-builder-ids";
 // read the chat-side projectContext frame
@@ -2723,11 +2728,11 @@ async function handleAgentBuilderVersionDiff(
 }
 
 // ---------------------------------------------------------------------------
-// 4-rung agent definition path resolution + vendor-segment derivation.
+// Agent definition path resolution + vendor-segment derivation.
 // Definitions live in ./agent-source-paths (extracted to keep this file under
 // the file-size ratchet; behavior is identical). The path-safety guard CALLS
 // remain at every join site BELOW in this file — only the helper definitions
-// moved. See that module for the full layout/rung documentation.
+// moved. See that module for the full layout documentation.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -2737,15 +2742,22 @@ async function handleAgentBuilderVersionDiff(
 async function handleAgentBuilderGitList(
   _request: PrimitiveRequest,
 ): Promise<unknown> {
-  // agents now live under <installDir>/<vendor>/<slug>/. Walk the operator's
-  // OWN vendor dir AND the first-party "cinatra-ai" dir (cinatra#537), then
-  // fall back to legacy <installDir>/<slug>/ for older installs.
+  // Every agent source directory under the source root is in one of two states
+  // (cinatra#4920, ./agent-source-dirs): READ (<vendor>/<slug>/cinatra/oas.json,
+  // for the operator's OWN vendor dir and the first-party "cinatra-ai" dir,
+  // cinatra#537) is listed; REPORTED (an old-layout or flat directory) is named
+  // in warnings[] with the directory, the file found and the place to move it.
+  // A directory a by-slug read does not select carries `shadowed` (the directory
+  // that read selects, and a note).
   const root = resolveDevExtensionSourceRoot();
-  const slugSet = new Set<string>();
-
-  // New layout: <installDir>/<vendor>/<slug>/ — probe both the instance vendor
-  // segment and the first-party segment (deduped, filesystem-safe only).
-  for (const vendorSegment of safeVendorSegmentsForRead()) {
+  // The instance identity is read first and a failure of it escapes (it is not
+  // an unreadable tree); only an unreadable source root lists nothing.
+  const vendors = safeVendorSegmentsForRead();
+  const present = (dir: string) => DEFINITION_PLACES.filter((place) => existsSync(join(dir, place)));
+  const looked: AgentSourceCandidate[] = [];
+  // Walk the operator's OWN vendor dir AND the first-party "cinatra-ai" dir
+  // (cinatra#537), then the top-level directories.
+  for (const vendorSegment of vendors) {
     const vendorDir = join(root, vendorSegment);
     if (!existsSync(vendorDir)) continue;
     try {
@@ -2754,41 +2766,35 @@ async function handleAgentBuilderGitList(
         isDirectory: () => boolean;
       }>;
       for (const sub of subEntries) {
-        if (sub.isDirectory()) slugSet.add(sub.name);
+        if (!sub.isDirectory()) continue;
+        const dir = join(vendorDir, sub.name);
+        looked.push({ dir, flat: false, present: present(dir) });
       }
     } catch {
       /* skip if unreadable */
     }
   }
-
-  // Legacy layout: <installDir>/<slug>/ (only entries that look like agent dirs).
-  let topEntries: Array<{ name: string; isDirectory: () => boolean }> = [];
   try {
-    topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
+    const topEntries = (await readdir(root, { withFileTypes: true })) as unknown as Array<{
       name: string;
       isDirectory: () => boolean;
     }>;
-  } catch {
-    /* root unreadable — items collected so far still returned */
-  }
-  for (const entry of topEntries) {
-    if (!entry.isDirectory()) continue;
-    if (entry.name === "cinatra") continue; // Vendor dir already walked above
-    // Probe legacy paths to filter non-agent dirs.
-    if (
-      existsSync(join(root, entry.name, "cinatra", "agent.json"))
-      || existsSync(join(root, entry.name, "agent.json"))
-) {
-      slugSet.add(entry.name);
+    for (const entry of topEntries) {
+      if (!entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      looked.push({ dir, flat: true, present: present(dir) });
     }
+  } catch {
+    /* root unreadable — what was collected so far is still listed */
   }
+  const sources = classifyAgentSourceDirs(looked, { root, vendors });
+  const warnings = sources.flatMap((state) => (state.state === "reported" ? [agentSourceMessage(state)] : []));
 
   const items: unknown[] = [];
-  for (const slug of slugSet) {
-    const resolved = resolveAgentJsonPathForRead(slug);
-    if (!resolved) continue;
+  for (const source of sources) {
+    if (source.state !== "read") continue;
     try {
-      const raw = (await readFile(resolved.path, "utf8")) as string;
+      const raw = (await readFile(source.definitionPath, "utf8")) as string;
       const content = JSON.parse(raw) as Record<string, unknown>;
       // packageName + packageVersion live under metadata.cinatra.
       const cinatra = (content.metadata as Record<string, unknown> | undefined)?.cinatra as Record<string, unknown> | undefined;
@@ -2798,46 +2804,31 @@ async function handleAgentBuilderGitList(
       let description = (content.description as string | null | undefined) ?? null;
       let siblingPkgName: string | null = null;
       let siblingPkgVersion: string | null = null;
-      const candidatePkgPaths = [
-        // New layout sibling: resolve against the SAME root dir the OAS
-        // resolver picked, so the sibling read tracks the actual vendor
-        // segment (instance vendor or first-party) instead of a hardcoded
-        // "cinatra-ai" (cinatra#537).
-        join(resolved.rootDir, "package.json"),
-        // Legacy layout sibling: <installDir>/<legacySlug>/package.json
-        join(
-          root,
-          (LEGACY_SLUG_MAP[slug] ?? slug),
-          "package.json",
-),
-      ];
-      for (const pkgPath of candidatePkgPaths) {
-        try {
-          const siblingPkg = JSON.parse((await readFile(pkgPath, "utf8")) as string) as { name?: unknown; version?: unknown; description?: unknown };
-          if (!description && typeof siblingPkg.description === "string" && siblingPkg.description) {
-            description = siblingPkg.description;
-          }
-          if (!siblingPkgName && typeof siblingPkg.name === "string" && siblingPkg.name) {
-            siblingPkgName = siblingPkg.name;
-          }
-          if (!siblingPkgVersion && typeof siblingPkg.version === "string" && siblingPkg.version) {
-            siblingPkgVersion = siblingPkg.version;
-          }
-          if (description && siblingPkgName && siblingPkgVersion) break;
-        } catch { /* try next candidate */ }
-      }
+      try {
+        const siblingPkg = JSON.parse((await readFile(join(source.dir, "package.json"), "utf8")) as string) as { name?: unknown; version?: unknown; description?: unknown };
+        if (!description && typeof siblingPkg.description === "string" && siblingPkg.description) {
+          description = siblingPkg.description;
+        }
+        if (typeof siblingPkg.name === "string" && siblingPkg.name) siblingPkgName = siblingPkg.name;
+        if (typeof siblingPkg.version === "string" && siblingPkg.version) siblingPkgVersion = siblingPkg.version;
+      } catch { /* no usable sibling package.json */ }
       items.push({
-        path: resolved.relPath,
+        path: relative(process.cwd(), source.definitionPath),
         packageName: cinatra?.packageName ?? content.packageName ?? siblingPkgName ?? null,
         packageVersion: cinatra?.packageVersion ?? content.packageVersion ?? siblingPkgVersion ?? null,
         name: content.name ?? null,
         description,
+        // A directory a by-slug read does not select (same slug as another one):
+        // `by` is the directory that read selects. Null for the selected one.
+        shadowed: source.shadowedBy
+          ? { by: relative(process.cwd(), source.shadowedBy.dir), note: agentSourceShadowNote(source) }
+          : null,
       });
     } catch {
       // Skip unreadable or invalid files — do not fail the entire list
     }
   }
-  return { items, total: items.length };
+  return { items, total: items.length, warnings };
 }
 
 // ---------------------------------------------------------------------------
@@ -5913,7 +5904,7 @@ export {
   // path resolvers, so a test can assert the agent-create writers agree.
   resolveInstanceVendorSegment as __resolveInstanceVendorSegment,
   resolveAgentJsonPathForWrite as __resolveAgentJsonPathForWrite,
-  resolveAgentJsonPathForRead as __resolveAgentJsonPathForRead,
+  resolveAgentOasPathForRead as __resolveAgentOasPathForRead,
 };
 
 // ---------------------------------------------------------------------------
