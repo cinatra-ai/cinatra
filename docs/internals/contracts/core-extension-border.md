@@ -56,7 +56,12 @@ A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connect
 `openai-connector`. The rule reads each product file with the TypeScript parser and reports a
 string literal token whose whole value is a pack's leaf: a `StringLiteral` in any quote (a JSX
 attribute value such as `slug="openai-connector"` is one) or a template literal without a
-substitution. Comments, regular expressions and escapes are the parser's: they are never read
+substitution, wherever the tree holds it (a quoted or computed object key, an import or export
+specifier, an enum initializer, a string or template literal type, a JSX expression container),
+and JSX text whose trimmed whole text is a leaf (`<code>openai-connector</code>`). The rule also
+reads the `.json` files of the same product tree (tests, fixtures and `tsconfig*.json` compiler
+configs left out) with `JSON.parse` and reports every string value and every object key equal to
+a leaf; a JSON file that does not parse fails the check with its name. Comments, regular expressions and escapes are the parser's: they are never read
 as a literal. A file the parser cannot read fails the check with its name. The vocabulary is
 the leaves of the pack universe above (the two committed locks, plus a pack the ledger names);
 the check names no pack itself. A finding's detail is the leaf with its package,
@@ -69,9 +74,9 @@ is read, the suffixes the naming rule accepts
 `-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`. Every pack in the locks carries
 one today; the filter keeps a future one-word pack from turning a generic word into a finding.
 
-Not part of this rule yet, tracked in the issue: a leaf inside a longer string (a path segment
-such as `"/agents/cinatra-ai/<leaf>/new"`, a query value), a template literal with a
-substitution, the role-suffix stem (`blog-content` of `blog-content-skill`) and a tool or table
+Not part of this rule yet, tracked in the issue: a leaf inside a longer string or a longer JSX
+text (a path segment such as `"/agents/cinatra-ai/<leaf>/new"`, a query value, a sentence), a
+template literal or template literal type with a substitution, the role-suffix stem (`blog-content` of `blog-content-skill`) and a tool or table
 name under a pack's stem. A scoped name `"@scope/<leaf>"` is not equal to the leaf; the
 package-name rule and the coupling checks read package names.
 

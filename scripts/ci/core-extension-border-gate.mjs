@@ -126,8 +126,15 @@ export function isProductFile(name) {
   return dot >= 0 && SOURCE_EXTENSIONS.has(name.slice(dot));
 }
 
-/** Walk one directory for product source files (absolute paths). */
-export function walkProductFiles(dir, acc = [], repoRoot = null) {
+/** A JSON file the leaf rule reads (cinatra#4531), named like a product file: not a test or a
+ *  fixture, and not a `tsconfig*.json` (a compiler config, which may hold comments). */
+export function isProductJsonFile(name) {
+  if (!name.endsWith(".json") || /^tsconfig.*\.json$/.test(name)) return false;
+  return !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
+}
+
+/** Walk one directory for product source files (absolute paths); `accept` picks the file names. */
+export function walkProductFiles(dir, acc = [], repoRoot = null, accept = isProductFile) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(entry.name)) continue;
@@ -135,11 +142,11 @@ export function walkProductFiles(dir, acc = [], repoRoot = null) {
     if (entry.isDirectory()) {
       const relDir = repoRoot ? relative(repoRoot, full).split(sep).join("/") : null;
       if (relDir && (GENERATED_PATHS.has(relDir) || FIXTURE_PATHS.has(relDir))) continue;
-      walkProductFiles(full, acc, repoRoot);
+      walkProductFiles(full, acc, repoRoot, accept);
       continue;
     }
     if (!entry.isFile()) continue;
-    if (!isProductFile(entry.name)) continue;
+    if (!accept(entry.name)) continue;
     acc.push(full);
   }
   return acc;
@@ -730,7 +737,8 @@ export function packLeafNames(packs) {
 
 /** `pack-slug-in-core` (cinatra#4531): a string literal token whose WHOLE value is a pack's leaf.
  *  The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is one)
- *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf. Comments, regular expressions
+ *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf, or a `JsxText` whose text,
+ *  trimmed, equals a leaf. Comments, regular expressions
  *  and escapes are the parser's business. A file the parser cannot read fails closed. */
 export function scanPackLeafLiterals({ file, text, packs }) {
   const leaves = packLeafNames(packs);
@@ -745,19 +753,57 @@ export function scanPackLeafLiterals({ file, text, packs }) {
   const out = [];
   const counts = new Map();
   walk(sf, (n) => {
-    if (!ts.isStringLiteral(n) && !ts.isNoSubstitutionTemplateLiteral(n)) return;
-    const owners = leaves.get(n.text);
+    const value = ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : ts.isJsxText(n) ? n.text.trim() : null;
+    const owners = value === null ? undefined : leaves.get(value);
     if (!owners) return;
     out.push(
       finding(
         "pack-slug-in-core",
         file,
         sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
-        occurrenceDetail(counts, "pack-slug-in-core", `${n.text} (${owners.join(", ")})`),
+        occurrenceDetail(counts, "pack-slug-in-core", `${value} (${owners.join(", ")})`),
         `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
       ),
     );
   });
+  return out;
+}
+
+/** `pack-slug-in-core` in a JSON file of the product tree (cinatra#4531): every string value and
+ *  every object key equal to a pack's leaf. A JSON file that does not parse fails closed. */
+export function scanPackLeafJson({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`[core-extension-border] ${file} does not parse as JSON (${compact(String(e?.message ?? e))}) — the leaf rule fails closed rather than skipping the file`);
+  }
+  const out = [];
+  const counts = new Map();
+  const report = (leaf) =>
+    out.push(
+      finding(
+        "pack-slug-in-core",
+        file,
+        1,
+        occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
+        `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+      ),
+    );
+  const visit = (v) => {
+    if (typeof v === "string") {
+      if (leaves.has(v)) report(v);
+    } else if (Array.isArray(v)) {
+      v.forEach(visit);
+    } else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        if (leaves.has(k)) report(k);
+        visit(x);
+      }
+    }
+  };
+  visit(doc);
   return out;
 }
 
@@ -1309,6 +1355,10 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);
       kindTables += kinds.tables;
+    }
+    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductJsonFile)) {
+      const file = relative(repoRoot, abs).split(sep).join("/");
+      findings.push(...scanPackLeafJson({ file, text: readFileSync(abs, "utf8"), packs }));
     }
   }
   keepRecordedKindDetails(findings, baseline.entries);

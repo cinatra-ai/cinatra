@@ -1461,6 +1461,68 @@ describe("core/extension border — pack-slug-in-core", () => {
     ]);
   });
 
+  it("reports JSX text whose trimmed whole text is a leaf, and no leaf inside a sentence", () => {
+    const text = [
+      "export const C = () => (",
+      "  <div>",
+      "    <code>tide-planner-agent</code>",
+      "    <p>install tide-planner-agent now</p>",
+      "    <span>",
+      "      quill-ledger-connector",
+      "    </span>",
+      "  </div>",
+      ");",
+    ].join("\n");
+    expect(leaves(text)).toEqual(["3 tide-planner-agent (@example-org/tide-planner-agent)", `6 ${QUILL}`]);
+  });
+
+  it("reports a whole-value string in every place the tree holds one", () => {
+    const text = [
+      'const a = { "quill-ledger-connector": 1 };',
+      'const b = { ["quill-ledger-connector"]: 1 };',
+      'import x from "quill-ledger-connector";',
+      'enum E { A = "quill-ledger-connector" }',
+      'type T = "quill-ledger-connector";',
+      "type U = `quill-ledger-connector`;",
+      'export const C = () => <Card slug={"quill-ledger-connector"} />;',
+    ].join("\n");
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
+  });
+
+  it("reports a JSON string value or key that is a leaf; a JSON file that does not parse fails closed", () => {
+    type Json = { scanPackLeafJson?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
+    const run = (text: string) => {
+      const fn = (gate as unknown as Json).scanPackLeafJson;
+      if (!fn) return ["not a function"];
+      try {
+        return fn({ file: "src/lib/defaults.json", text, packs: LEAF_PACKS }).map((f) => f.detail);
+      } catch (e) {
+        return [`threw: ${(e as Error).message}`];
+      }
+    };
+    expect(run('{ "default": "quill-ledger-connector", "tide-planner-agent": { "x": ["report", "install quill-ledger-connector"] } }')).toEqual([
+      QUILL,
+      "tide-planner-agent (@example-org/tide-planner-agent)",
+    ]);
+    expect(run('{ "a": 1, }')).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/defaults\.json/)]);
+  });
+
+  it("reads JSON files in the product tree except tsconfig files, tests and fixtures", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-json-tree-"));
+    try {
+      for (const f of ["src/lib/defaults.json", "src/lib/a.ts", "src/tsconfig.json", "src/lib/x.fixture.json", "src/lib/__tests__/t.json", "src/app/design-fixtures/seed.json"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), "{}\n");
+      }
+      const accept = (gate as unknown as { isProductJsonFile?: (n: string) => boolean }).isProductJsonFile;
+      const walkJson = gate.walkProductFiles as unknown as (d: string, a: string[], r: string, accept?: (n: string) => boolean) => string[];
+      const files = walkJson(path.join(root, "src"), [], root, accept).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files).toEqual(["src/lib/defaults.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("reads the assistant suffix of an agent package, and no leaf without a kind suffix", () => {
     expect(leaves('const a = "report";\nconst b = "sample-assistant";\n')).toEqual(["2 sample-assistant (@example-org/sample-assistant)"]);
   });
