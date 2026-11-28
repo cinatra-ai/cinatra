@@ -184,6 +184,7 @@ const DISPATCH_AUDIT_MAX_PENDING = 64;
 const DISPATCH_AUDIT_SETTLE_MS = 10_000;
 let pendingDispatchAudits = 0;
 const AUDIT_BACKLOG_REFUSAL = "extension_tool: the audit trail is not keeping up, so the call was not run";
+const RUN_FAIL_AUDIT_BACKLOG_REFUSAL = "run_fail: the audit trail is not keeping up, so the call was not run";
 
 /** Take a slot now, synchronously, or answer false when every slot is taken. */
 function takeDispatchAuditSlot(trail: DispatchTrail): boolean {
@@ -363,6 +364,11 @@ async function dispatchScopedTool(
       trail.branched = true;
       // The calling extension, for the dispatch event; the run's own package is the code that asked.
       trail.runPackage = trail.codePackage = context.packageName;
+      // As for extension_tool: the call takes its audit slot before it acts; every slot taken, it is refused.
+      if (!takeDispatchAuditSlot(trail)) {
+        trail.auditBacklog = true;
+        return { ok: false, status: 403, error: RUN_FAIL_AUDIT_BACKLOG_REFUSAL };
+      }
       return await runFailOutcome(input.input, input.run.verifiedStepId);
     }
     trail.branched = true;

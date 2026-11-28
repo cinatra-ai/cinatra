@@ -85,6 +85,10 @@
  *                     refuses calls of any other step (step_tool_step_unknown).
  *                     Also refused at install (`scanOasForInstallFindings`,
  *                     called by the ZIP import and the registry install).
+ *   OAS-RUNTIME-017 — a fixed passthrough step that calls `run_fail` and sets
+ *                     `ignore_bad_http_requests: true` (cinatra#4890). Such a
+ *                     step exists to end its run; taking bad answers itself can
+ *                     only be a mistake (the runtime stops it all the same).
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -221,6 +225,7 @@ export function scanOasForRuntimeInvariantFindings(
   findings.push(...scanInputMessageGateMountability(parsed));
   findings.push(...scanReviewStepTargets(parsed));
   findings.push(...scanModelStepsOutsideRunSteps(parsed));
+  findings.push(...scanRunFailStepsTakingBadAnswers(parsed));
   // Placeholder/inputs parity + agent_run_id propagation + EndNode source
   // all walk the per-Flow graph, so we compose them per-Flow component.
   for (const flow of iterFlowComponents(parsed)) {
@@ -841,6 +846,25 @@ export function findStepToolDeclaration(
     kind: "declared",
     tools: first!.filter((name) => rest.every((list) => list.includes(name))),
   };
+}
+
+// OAS-RUNTIME-017 (cinatra#4890): a step that ends its run never takes bad answers itself.
+function scanRunFailStepsTakingBadAnswers(parsed: Record<string, unknown>): ReviewFinding[] {
+  const findings: ReviewFinding[] = [];
+  forEachRunStep(parsed, ({ node, path }) => {
+    if (passthroughToolOf(node) !== "run_fail" || node.ignore_bad_http_requests !== true) return;
+    findings.push({
+      code: "OAS-RUNTIME-017",
+      severity: "blocker",
+      message:
+        `Step "${gateLabel(node)}" at ${path} calls run_fail, which ends the run with a stated sentence, ` +
+        `and sets ignore_bad_http_requests: true. A step that ends its run cannot take that answer itself: ` +
+        `remove ignore_bad_http_requests from the step.`,
+      location: path,
+      source: "deterministic",
+    });
+  });
+  return findings;
 }
 
 /**

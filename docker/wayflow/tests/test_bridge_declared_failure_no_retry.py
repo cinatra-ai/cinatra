@@ -782,3 +782,98 @@ def test_a_successful_answer_is_unchanged(
     assert len(bridge.requests) == 1
     assert result.outputs[step_class.HTTP_STATUS_CODE] == 200
     assert json.loads(result.outputs[step_class.HTTP_RESPONSE]) == bridge.body
+
+
+# ---------------------------------------------------------------------------
+# A fixed step that ends its run with a stated sentence (cinatra#4890): the
+# passthrough's 403 ``run_fail_stated`` answer stops the step on the same hook.
+# ---------------------------------------------------------------------------
+
+PASSTHROUGH = "/api/agents/passthrough"
+STATED_SENTENCE = "The reviewed proposal and the written page differ, so the run stops here."
+
+
+def test_a_stated_run_failure_is_requested_once_and_ends_with_its_sentence(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 403
+    bridge.body = {"error": STATED_SENTENCE, "code": "run_fail_stated"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, PASSTHROUGH)
+
+    assert len(bridge.requests) == 1, "a stated run failure is not sent again"
+    assert str(raised.value) == STATED_SENTENCE
+    assert bridge.requests[0].url.path == PASSTHROUGH
+
+
+def test_a_step_that_takes_bad_answers_itself_still_ends_with_the_stated_sentence(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 403
+    bridge.body = {"error": STATED_SENTENCE, "code": "run_fail_stated"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, PASSTHROUGH, ignore_bad_http_requests=True)
+
+    assert len(bridge.requests) == 1
+    assert str(raised.value) == STATED_SENTENCE
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    ["", "First line.\nSecond line.", "Stop\x07 here.", "a" * 401, 42],
+)
+def test_a_stated_answer_outside_the_bounds_ends_once_with_the_fixed_sentence(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, sentence: Any
+) -> None:
+    bridge.status = 403
+    bridge.body = {"error": sentence, "code": "run_fail_stated"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, PASSTHROUGH)
+
+    assert len(bridge.requests) == 1
+    assert str(raised.value) == "The step ended the run with a failure."
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (403, {"error": "extension_data: the table is not declared"}),
+        (403, {"error": STATED_SENTENCE, "code": "run_action_refused"}),
+        (422, {"error": STATED_SENTENCE, "code": "run_fail_stated"}),
+    ],
+)
+def test_every_other_passthrough_answer_keeps_three_tries(
+    monkeypatch: pytest.MonkeyPatch,
+    bridge: _CountingBridge,
+    status: int,
+    body: Dict[str, Any],
+) -> None:
+    bridge.status = status
+    bridge.body = body
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, PASSTHROUGH)
+
+    assert len(bridge.requests) == 3
+    assert str(raised.value).startswith("error executing POST request to ")
+
+
+def test_a_stated_answer_from_another_path_keeps_three_tries(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge
+) -> None:
+    bridge.status = 403
+    bridge.body = {"error": STATED_SENTENCE, "code": "run_fail_stated"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, "/api/other")
+
+    assert len(bridge.requests) == 3
+    assert str(raised.value).startswith("error executing POST request to ")

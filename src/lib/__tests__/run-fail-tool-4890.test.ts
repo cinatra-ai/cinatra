@@ -106,6 +106,32 @@ describe("run_fail ends the run as failed with the caller's sentence", () => {
     expect(h.stepTool).not.toHaveBeenCalled();
   });
 
+  it("refuses with the capacity answer, and states no failure, while every audit slot is taken", async () => {
+    h.stepTool.mockResolvedValue("run_fail");
+    const settle: Array<() => void> = [];
+    h.logAuditEvent.mockImplementation(() => new Promise<void>((resolve) => settle.push(resolve)));
+    try {
+      for (let i = 0; i < 64; i += 1) await call({ sentence: SENTENCE });
+      expect(settle).toHaveLength(64);
+      h.stepTool.mockClear();
+      const refused = await call({ sentence: SENTENCE });
+      expect(refused).toEqual({
+        ok: false,
+        status: 403,
+        error: "run_fail: the audit trail is not keeping up, so the call was not run",
+      });
+      expect(h.stepTool).not.toHaveBeenCalled();
+      expect(h.logAuditEvent).toHaveBeenCalledTimes(64);
+    } finally {
+      settle.forEach((resolve) => resolve());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      h.logAuditEvent.mockImplementation(async () => {});
+    }
+    h.logAuditEvent.mockClear();
+    expect(await call({ sentence: SENTENCE })).toEqual({ ok: false, status: 403, error: SENTENCE, code: "run_fail_stated" });
+    expect(h.logAuditEvent).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ["calls another tool", "extension_data"],
     ["is no fixed passthrough step of the bound flow", null],

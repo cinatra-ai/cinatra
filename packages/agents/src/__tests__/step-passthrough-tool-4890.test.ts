@@ -56,3 +56,17 @@ describe("findStepPassthroughTool", () => {
     expect(find(doc, "twin")).toBe(null);
   });
 });
+
+describe("OAS-RUNTIME-017: a step that ends its run never takes bad answers itself", () => {
+  const findings = (doc: Record<string, unknown>) =>
+    invariants.scanOasForRuntimeInvariantFindings(doc).filter((f) => f.code === "OAS-RUNTIME-017");
+
+  it("refuses a run_fail step that sets ignore_bad_http_requests, and only that step", () => {
+    const found = findings(flow({ ...step("stop", { tool: "run_fail" }), ignore_bad_http_requests: true }));
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ severity: "blocker", location: "$.$referenced_components.step_0" });
+    expect(found[0]!.message).toContain('Step "stop"');
+    expect(findings(flow(step("stop", { tool: "run_fail" })))).toEqual([]);
+    expect(findings(flow({ ...step("save", { tool: "objects_save" }), ignore_bad_http_requests: true }))).toEqual([]);
+  });
+});

@@ -916,16 +916,70 @@ class StepDeclaredFailureError(RuntimeError):
         return f"{type(self).__name__}({self._log_text()!r})"
 
 
-class _StepDeclaredFailureAnswer(Exception):
-    """The bridge answered 422 STEP_DECLARED_FAILURE: the step ended failed.
+class StatedRunFailureError(RuntimeError):
+    """A fixed step ended its run with a stated sentence (cinatra#4890).
 
-    Private: raised inside the httpx client and turned into
-    ``StepDeclaredFailureError`` at once. Its text is the code only too.
+    The host's ``run_fail`` tool answers 403 with ``code: run_fail_stated`` and
+    the sentence the pack wrote for a person to read, already held to one plain
+    line within the host's refusal bounds (src/lib/run-fail-tool.ts). The loader
+    checks the line again; the error's text is exactly that sentence, or a
+    fixed sentence when the answer breaks a bound.
     """
 
-    def __init__(self, step_error_code: Optional[str], sentence: str) -> None:
-        self.failure = StepDeclaredFailureError(step_error_code, sentence)
-        super().__init__(str(self.failure))
+    def __init__(self, sentence: str) -> None:
+        self.sentence = sentence
+        super().__init__(sentence)
+
+
+class _StepDeclaredFailureAnswer(Exception):
+    """A final answer stopped the step: the bridge's 422 STEP_DECLARED_FAILURE
+    or the passthrough's 403 ``run_fail_stated``.
+
+    Private: raised inside the httpx client and turned into its ``failure``
+    (a ``StepDeclaredFailureError`` or a ``StatedRunFailureError``) at once.
+    Its text is the failure's own text.
+    """
+
+    def __init__(self, failure: RuntimeError) -> None:
+        self.failure = failure
+        super().__init__(str(failure))
+
+
+#: The passthrough answer of a fixed step that ends its run (cinatra#4890).
+_RUN_FAIL_STATED_CODE = "run_fail_stated"
+#: The host's bound on that sentence (EXTENSION_TOOL_REFUSAL_SENTENCE_MAX).
+_RUN_FAIL_SENTENCE_MAX = 400
+_RUN_FAIL_FALLBACK = "The step ended the run with a failure."
+_RUN_FAIL_UNREADABLE = re.compile("[\u0000-\u001f\u007f-\u009f  ]")
+
+
+def _stated_run_failure_answer(response: Any) -> Optional[str]:
+    """The sentence of a 403 ``run_fail_stated`` answer; None for every other answer."""
+    if getattr(response, "status_code", None) != 403:
+        return None
+    try:
+        body = response.json()
+    except Exception:  # noqa: BLE001 — any decode/parse error → not that answer
+        return None
+    if not isinstance(body, dict) or body.get("code") != _RUN_FAIL_STATED_CODE:
+        return None
+    sentence = body.get("error")
+    if not isinstance(sentence, str):
+        return _RUN_FAIL_FALLBACK
+    sentence = sentence.strip()
+    if not sentence or len(sentence) > _RUN_FAIL_SENTENCE_MAX or _RUN_FAIL_UNREADABLE.search(sentence):
+        return _RUN_FAIL_FALLBACK
+    return sentence
+
+
+def _bridge_stop(response: Any) -> Optional[RuntimeError]:
+    answer = _step_declared_failure_answer(response)
+    return None if answer is None else StepDeclaredFailureError(*answer)
+
+
+def _passthrough_stop(response: Any) -> Optional[RuntimeError]:
+    sentence = _stated_run_failure_answer(response)
+    return None if sentence is None else StatedRunFailureError(sentence)
 
 
 def _step_declared_failure_answer(
@@ -970,8 +1024,12 @@ async def _one_request_async(request: Any) -> Any:
     yield request
 
 
-def _step_declared_failure_auth(own_auth: Any = None) -> Any:
-    """An httpx auth hook that stops the step at a STEP_DECLARED_FAILURE answer.
+def _step_declared_failure_auth(own_auth: Any = None, stop: Any = None) -> Any:
+    """An httpx auth hook that stops the step at a final answer.
+
+    ``stop`` reads one answer and gives the failure it ends the step with, or
+    None: the bridge's STEP_DECLARED_FAILURE (``_bridge_stop``, the default) or
+    the passthrough's ``run_fail_stated`` (``_passthrough_stop``, cinatra#4890).
 
     httpx calls the hook with each response inside ``client.request``, so it
     raises before WayFlow's retry loop looks at the status, and before WayFlow
@@ -987,11 +1045,6 @@ def _step_declared_failure_auth(own_auth: Any = None) -> Any:
     if _STEP_DECLARED_FAILURE_AUTH_CLASS is None:
         import httpx
 
-        def _stop_at(response: Any) -> None:
-            answer = _step_declared_failure_answer(response)
-            if answer is not None:
-                raise _StepDeclaredFailureAnswer(*answer)
-
         class _CallableAuth(httpx.Auth):
             # httpx's own reading of a callable auth: it rewrites the request.
             def __init__(self, func: Any) -> None:
@@ -1001,7 +1054,8 @@ def _step_declared_failure_auth(own_auth: Any = None) -> Any:
                 yield self._func(request)
 
         class _StepDeclaredFailureStop(httpx.Auth):
-            def __init__(self, own: Any) -> None:
+            def __init__(self, own: Any, stop: Any) -> None:
+                self._stop = stop
                 if own is None or own is getattr(httpx, "USE_CLIENT_DEFAULT", None):
                     own = None
                 elif isinstance(own, httpx.Auth):
@@ -1027,15 +1081,20 @@ def _step_declared_failure_auth(own_auth: Any = None) -> Any:
                     request = next(flow)
                     while True:
                         response = yield request
-                        if response.status_code == 422:
+                        if response.status_code in (403, 422):
                             response.read()
-                            _stop_at(response)
+                            self._stop_at(response)
                         try:
                             request = flow.send(response)
                         except StopIteration:
                             return
                 finally:
                     flow.close()
+
+            def _stop_at(self, response: Any) -> None:
+                failure = self._stop(response)
+                if failure is not None:
+                    raise _StepDeclaredFailureAnswer(failure)
 
             async def async_auth_flow(self, request: Any) -> Any:
                 flow = (
@@ -1047,9 +1106,9 @@ def _step_declared_failure_auth(own_auth: Any = None) -> Any:
                     request = await flow.__anext__()
                     while True:
                         response = yield request
-                        if response.status_code == 422:
+                        if response.status_code in (403, 422):
                             await response.aread()
-                            _stop_at(response)
+                            self._stop_at(response)
                         try:
                             request = await flow.asend(response)
                         except StopAsyncIteration:
@@ -1058,7 +1117,7 @@ def _step_declared_failure_auth(own_auth: Any = None) -> Any:
                     await flow.aclose()
 
         _STEP_DECLARED_FAILURE_AUTH_CLASS = _StepDeclaredFailureStop
-    return _STEP_DECLARED_FAILURE_AUTH_CLASS(own_auth)
+    return _STEP_DECLARED_FAILURE_AUTH_CLASS(own_auth, stop or _bridge_stop)
 
 
 def _install_step_declared_failure_stop(request: Dict[str, Any]) -> None:
@@ -1071,10 +1130,18 @@ def _install_step_declared_failure_stop(request: Dict[str, Any]) -> None:
     (``_step_declared_failure_auth``), and a step that takes bad answers
     itself (``ignore_bad_http_requests``) still stops, because the hook raises
     inside the client. The hook adds nothing to the request and reads only a
-    422 answer. Every other call is left as it is.
+    422 answer.
+
+    A call to the host's passthrough gets the same hook for its one final
+    answer (cinatra#4890): a 403 ``run_fail_stated`` ends the step at once, with
+    exactly the stated sentence, and is never retried or swallowed. Every other
+    call, and every other answer, is left as it is.
     """
-    if _targets_llm_bridge(str(request.get("url", ""))):
+    url = str(request.get("url", ""))
+    if _targets_llm_bridge(url):
         request["auth"] = _step_declared_failure_auth(request.get("auth"))
+    elif _targets_passthrough(url):
+        request["auth"] = _step_declared_failure_auth(request.get("auth"), _passthrough_stop)
 
 
 def _patch_api_call_step_bridge_token() -> None:
@@ -4163,6 +4230,15 @@ _LLM_BRIDGE_PATH = "/api/llm-bridge"
 def _targets_llm_bridge(url: Any) -> bool:
     """True when an ApiNode `url` addresses the host's LLM bridge."""
     return isinstance(url, str) and url.endswith(_LLM_BRIDGE_PATH)
+
+
+#: The host's deterministic passthrough (src/app/api/agents/passthrough).
+_PASSTHROUGH_PATH = "/api/agents/passthrough"
+
+
+def _targets_passthrough(url: Any) -> bool:
+    """True when an ApiNode `url` addresses the host's passthrough (cinatra#4890)."""
+    return isinstance(url, str) and url.endswith(_PASSTHROUGH_PATH)
 
 
 def _declared_members(node: Any) -> Optional[Dict[str, Any]]:
