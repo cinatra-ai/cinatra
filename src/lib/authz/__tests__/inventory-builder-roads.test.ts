@@ -106,7 +106,10 @@ const TREES: Record<string, Record<string, string>> = {
   },
   missing: { [ROUTE]: route(OK_LIST, [], [], "const ALLOWED_NAMES = new Set([") },
   twoScopes: {
-    [ROUTE]: route(OK_LIST, [], ["function shadow() { const ALLOWED_TOOLS = new Set(['x']); return ALLOWED_TOOLS.size; }"]),
+    [ROUTE]: route(OK_LIST, [], [
+      "function shadow() { const ALLOWED_TOOLS = new Set(['x']); ALLOWED_TOOLS.add('y'); return ALLOWED_TOOLS.size; }",
+      "export function param(ALLOWED_TOOLS: Set<string>) { ALLOWED_TOOLS.clear(); }",
+    ]),
   },
   callEntry: { [ROUTE]: route(['  "fixture_ok",', "  buildName(),"], ["function buildName() { return 'fixture_built'; }"]) },
   builtSpread: {
@@ -134,11 +137,48 @@ const TREES: Record<string, Record<string, string>> = {
   reads: {
     [ROUTE]: route(OK_LIST, [], [
       "export const SIZE = ALLOWED_TOOLS.size;",
+      "export const HAS = ALLOWED_TOOLS.has('fixture_ok');",
       "export const COPY = [...ALLOWED_TOOLS];",
-      "export const LISTED = Array.from(ALLOWED_TOOLS);",
-      "for (const n of ALLOWED_TOOLS) void n;",
-      "ALLOWED_TOOLS.forEach((n) => void n);",
+      "export const SAME = new Set(ALLOWED_TOOLS);",
+      "export type LIST = typeof ALLOWED_TOOLS;",
     ]),
+  },
+  // Route tail lines start at line 10 (no head lines, a one-line list).
+  forEachUse: { [ROUTE]: route(OK_LIST, [], ["ALLOWED_TOOLS.forEach((n) => void n);"]) },
+  sizeWrite: { [ROUTE]: route(OK_LIST, [], ["ALLOWED_TOOLS.size++;"]) },
+  ...Object.fromEntries(
+    (
+      [
+        ["namesLengthDecrement", "TOOL_NAMES.length--;"],
+        ["namesPush", "TOOL_NAMES.push('fixture_late');"],
+        ["namesAlias", "const copy = TOOL_NAMES; void copy;"],
+        ["namesPassed", "export const kept = keep(TOOL_NAMES);"],
+      ] as const
+    ).map(([k, use]) => [
+      k,
+      {
+        "src/lib/tool-names.ts": [
+          "export const TOOL_NAMES = ['fixture_names_a', 'fixture_names_b'];",
+          `${use}`,
+          "function keep(a: unknown) { return a; }",
+          "",
+        ].join("\n"),
+        [ROUTE]: route(['  "fixture_ok",', "  ...TOOL_NAMES,"], ['import { TOOL_NAMES } from "@/lib/tool-names";']),
+      },
+    ]),
+  ),
+  namesRead: {
+    "src/lib/tool-names.ts": [
+      "export const TOOL_NAMES = ['fixture_names_a', 'fixture_names_b'];",
+      "export const NAME_SET = new Set([...TOOL_NAMES]);",
+      "export const ANY_NAME = NAME_SET.has('fixture_names_a') && NAME_SET.size > 0;",
+      "",
+    ].join("\n"),
+    [ROUTE]: route(
+      ['  "fixture_ok",', "  ...TOOL_NAMES,", "  ...NAME_SET,"],
+      ['import { NAME_SET, TOOL_NAMES } from "@/lib/tool-names";'],
+      ["export const BOTH = NAME_SET.has('fixture_ok') || NAME_SET.size === 0;"],
+    ),
   },
   twoOwners: {
     "src/lib/fixture-core-set.ts": "export const CORE_SET = new Set(['fixture_shared', 'fixture_shared']);\n",
@@ -290,7 +330,10 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(builderFailure(trees.imported)).toBe("");
     expect(namesAt(trees.imported)).toEqual(["fixture_moved"]);
     expect(builderFailure(trees.missing)).toContain("expected exactly one declaration or import of ALLOWED_TOOLS, found 0");
-    expect(builderFailure(trees.twoScopes)).toContain("expected exactly one declaration or import of ALLOWED_TOOLS, found 2");
+    // A local variable or parameter of the same name inside a function is
+    // another binding: the module-level set is read, the local one ignored.
+    expect(builderFailure(trees.twoScopes)).toBe("");
+    expect(namesAt(trees.twoScopes)).toEqual(["fixture_ok"]);
   });
 
   it("fails the builder on a list or an entry it cannot read, naming it", () => {
@@ -309,6 +352,37 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(builderFailure(trees.inObject)).toContain("is not used as a constant");
     expect(builderFailure(trees.spreadMutated)).toContain("SPREAD_TOOLS.delete('fixture_spread')");
     expect(builderFailure(trees.reads)).toBe("");
+    expect(namesAt(trees.reads)).toEqual(["fixture_ok"]);
+  });
+
+  it("accepts only the forms known to read a set: any other use fails with its file and line", () => {
+    const forEachUse = builderFailure(trees.forEachUse);
+    expect(forEachUse).toContain(`${ROUTE}:10`);
+    expect(forEachUse).toContain("ALLOWED_TOOLS.forEach((n) => void n)");
+    const sizeWrite = builderFailure(trees.sizeWrite);
+    expect(sizeWrite).toContain(`${ROUTE}:10`);
+    expect(sizeWrite).toContain("ALLOWED_TOOLS.size++");
+  });
+
+  it("refuses a change of a spread array in its own module: `.length--`, `.push`, an alias, passing it to a function", () => {
+    const at = "src/lib/tool-names.ts:2";
+    const decrement = builderFailure(trees.namesLengthDecrement);
+    expect(decrement).toContain(at);
+    expect(decrement).toContain("TOOL_NAMES.length--");
+    const push = builderFailure(trees.namesPush);
+    expect(push).toContain(at);
+    expect(push).toContain("TOOL_NAMES.push('fixture_late')");
+    const alias = builderFailure(trees.namesAlias);
+    expect(alias).toContain(at);
+    expect(alias).toContain("copy = TOOL_NAMES");
+    const passed = builderFailure(trees.namesPassed);
+    expect(passed).toContain(at);
+    expect(passed).toContain("keep(TOOL_NAMES)");
+  });
+
+  it("accepts `.has(...)` and `.size` reads and a spread of a read array in its own module", () => {
+    expect(builderFailure(trees.namesRead)).toBe("");
+    expect(namesAt(trees.namesRead)).toEqual(["fixture_names_a", "fixture_names_b", "fixture_ok"]);
   });
 
   it("keeps a passthrough row for each file that admits a name, so a second owner stays visible", () => {

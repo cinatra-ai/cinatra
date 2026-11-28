@@ -308,16 +308,39 @@ function namesOfSet(checker, program, decl, arrays, stack, seen) {
 
 /**
  * In the module that declares a set read for the allow list, and in the
- * route, every value reference to that set must leave it as declared: its
- * declaration, an export, a spread, a `for…of`, `Array.from(X)`, `X.size`,
- * `X.length`, or a call of `.has`, `.includes`, `.forEach`, `.values`,
- * `.keys`, `.entries`. Any other use FAILS the builder. References are found
- * by symbol, so a type of the same name is not a use.
- * @param {ts.TypeChecker} checker @param {ts.SourceFile} route @param {Set<ts.VariableDeclaration>} seen
+ * route, every value reference to that set is accepted only in a form known
+ * to read it: its own declaration name; an import or export specifier (a
+ * re-export included); the operand of a spread element inside an array
+ * literal (so also `new Set([...X])`); the argument of `new Set(X)` with the
+ * global Set; the object of a call of `.has(...)`; the object of a read of
+ * `.size`; `export default X`; a `typeof X` type. EVERY other use FAILS the
+ * builder with its file and line (`.length--`, `.push`, `.add`, an index
+ * assignment, passing it to a function, `forEach`, an alias to another name).
+ * References are found by symbol, so a type of the same name is not a use; a
+ * qualified access (`ns.X`) is judged as the whole access.
+ * @param {ts.TypeChecker} checker @param {ts.Program} program @param {ts.SourceFile} route
+ * @param {Set<ts.VariableDeclaration>} seen
  */
-function assertSetsConstant(checker, route, seen) {
-  const READS = new Set(["has", "includes", "forEach", "values", "keys", "entries"]);
+function assertSetsConstant(checker, program, route, seen) {
   const files = new Set([route, ...[...seen].map((d) => d.getSourceFile())]);
+  /** @param {ts.Node} e a property access: true when it is written, not read */
+  const written = (e) => {
+    const q = e.parent;
+    if (ts.isBinaryExpression(q) && q.left === e) {
+      const k = q.operatorToken.kind;
+      return k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
+    }
+    if (ts.isPrefixUnaryExpression(q) || ts.isPostfixUnaryExpression(q)) {
+      return q.operator === ts.SyntaxKind.PlusPlusToken || q.operator === ts.SyntaxKind.MinusMinusToken;
+    }
+    return ts.isDeleteExpression(q);
+  };
+  /** @param {ts.NewExpression} e */
+  const isGlobalSet = (e) => {
+    if (!ts.isIdentifier(e.expression) || e.expression.text !== "Set") return false;
+    const ctor = checker.getSymbolAtLocation(e.expression);
+    return !!ctor?.declarations?.length && ctor.declarations.every((d) => program.isSourceFileDefaultLibrary(d.getSourceFile()));
+  };
   for (const sf of files) {
     const visit = (n) => {
       if (ts.isIdentifier(n) && !ts.isPartOfTypeNode(n)) {
@@ -328,25 +351,35 @@ function assertSetsConstant(checker, route, seen) {
         if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
         const decl = sym?.valueDeclaration;
         if (decl && seen.has(/** @type {any} */ (decl))) {
-          const p = n.parent;
+          const ref = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
+          const p = ref.parent;
           const ok =
-            (ts.isVariableDeclaration(p) && p.name === n) ||
-            ts.isImportSpecifier(p) ||
-            ts.isImportClause(p) ||
-            ts.isExportSpecifier(p) ||
-            ts.isTypeAliasDeclaration(p) ||
-            ts.isInterfaceDeclaration(p) ||
-            (ts.isPropertyAccessExpression(p) && p.name === n) ||
-            ts.isSpreadElement(p) ||
-            (ts.isForOfStatement(p) && p.expression === n) ||
+            (ref === n &&
+              (((ts.isVariableDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isInterfaceDeclaration(p)) && p.name === n) ||
+                ts.isImportSpecifier(p) ||
+                (ts.isImportClause(p) && p.name === n) ||
+                ts.isExportSpecifier(p))) ||
+            (ts.isSpreadElement(p) && p.expression === ref && ts.isArrayLiteralExpression(p.parent)) ||
+            (ts.isNewExpression(p) && p.arguments?.length === 1 && p.arguments[0] === ref && isGlobalSet(p)) ||
             (ts.isPropertyAccessExpression(p) &&
-              p.expression === n &&
-              (((p.name.text === "size" || p.name.text === "length") &&
-                !(ts.isBinaryExpression(p.parent) && p.parent.left === p)) ||
-                (READS.has(p.name.text) && ts.isCallExpression(p.parent) && p.parent.expression === p))) ||
-            (ts.isCallExpression(p) && p.expression.getText(sf) === "Array.from" && p.arguments[0] === n);
+              p.expression === ref &&
+              ((p.name.text === "has" && ts.isCallExpression(p.parent) && p.parent.expression === p) ||
+                (p.name.text === "size" && !written(p)))) ||
+            (ts.isExportAssignment(p) && !p.isExportEquals && p.expression === ref) ||
+            (ts.isTypeQueryNode(p) && p.exprName === ref);
           if (!ok) {
-            const shown = ts.isPropertyAccessExpression(p) && ts.isCallExpression(p.parent) ? p.parent : p;
+            let shown = p;
+            while (
+              shown.parent &&
+              (ts.isPropertyAccessExpression(shown.parent) ||
+                ts.isElementAccessExpression(shown.parent) ||
+                ts.isCallExpression(shown.parent) ||
+                ts.isPrefixUnaryExpression(shown.parent) ||
+                ts.isPostfixUnaryExpression(shown.parent) ||
+                ts.isBinaryExpression(shown.parent))
+            ) {
+              shown = shown.parent;
+            }
             fail(`${at(n)}: the allow-list set ${n.text} is not used as a constant (\`${shown.getText(sf).slice(0, 80)}\`)`);
           }
         }
@@ -357,33 +390,53 @@ function assertSetsConstant(checker, route, seen) {
   }
 }
 
+/**
+ * The route's top-level bindings named ALLOW_LIST_NAME. A local variable or
+ * parameter of that name inside a function is another binding and is ignored.
+ * @param {ts.SourceFile} route
+ * @returns {ts.Node[]} each candidate's declaration node
+ */
+function topLevelBindings(route) {
+  const named = (/** @type {ts.Node | undefined} */ id) => !!id && ts.isIdentifier(id) && id.text === ALLOW_LIST_NAME;
+  const found = [];
+  for (const stmt of route.statements) {
+    if (ts.isVariableStatement(stmt)) {
+      for (const d of stmt.declarationList.declarations) if (named(d.name)) found.push(d);
+    } else if (ts.isImportDeclaration(stmt) && stmt.importClause) {
+      const c = stmt.importClause;
+      if (named(c.name)) found.push(c);
+      const b = c.namedBindings;
+      if (b && ts.isNamespaceImport(b) && named(b.name)) found.push(b);
+      if (b && ts.isNamedImports(b)) for (const e of b.elements) if (named(e.name)) found.push(e);
+    } else if (
+      (ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt) || ts.isEnumDeclaration(stmt)) &&
+      named(stmt.name)
+    ) {
+      found.push(stmt);
+    }
+  }
+  return found;
+}
+
 function scanPassthrough() {
   const program = createProgram();
   const checker = program.getTypeChecker();
   const route = program.getSourceFile(join(ROOT, PASSTHROUGH_ROUTE));
   if (!route) fail(`cannot read ${PASSTHROUGH_ROUTE}`);
-  // The allow list is found by its declaration: exactly one binding of this
-  // name in the route, at module level (a const or a named import of one).
-  const found = [];
-  const visit = (n) => {
-    if (
-      (ts.isVariableDeclaration(n) || ts.isImportSpecifier(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n)) &&
-      n.name &&
-      ts.isIdentifier(n.name) &&
-      n.name.text === ALLOW_LIST_NAME
-    ) {
-      found.push(n);
-    }
-    ts.forEachChild(n, visit);
-  };
-  visit(route);
+  // The allow list is found by its declaration among the route's top-level
+  // statements: exactly one binding of this name, a const or a named import.
+  const found = topLevelBindings(route);
   if (found.length !== 1) {
     fail(`${PASSTHROUGH_ROUTE}: expected exactly one declaration or import of ${ALLOW_LIST_NAME}, found ${found.length}`);
   }
-  const list = constOf(checker, found[0].name);
+  const binding = found[0];
+  if (!ts.isVariableDeclaration(binding) && !ts.isImportSpecifier(binding)) {
+    fail(`${at(binding)}: ${ALLOW_LIST_NAME} is not a const declaration or a named import`);
+  }
+  const list = constOf(checker, /** @type {ts.Identifier} */ (binding.name));
   const seen = new Set();
   const names = namesOfSet(checker, program, list, false, new Set(), seen);
-  assertSetsConstant(checker, route, seen);
+  assertSetsConstant(checker, program, route, seen);
   return names;
 }
 
