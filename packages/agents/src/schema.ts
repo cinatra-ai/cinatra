@@ -1025,23 +1025,6 @@ export const runSelectedSkillRevisions = cinatraSchema.table("run_selected_skill
   runIdx:       index("run_selected_skill_revisions_run_idx").on(t.runId),
 }));
 
-/** DECIDED SCHEMA (S5): a CMS snapshot-as-target + its apply binding. */
-export const cmsSnapshotTargets = cinatraSchema.table("cms_snapshot_targets", {
-  id:                   text("id").primaryKey(),
-  artifactId:           text("artifact_id").notNull(),
-  snapshotRevisionId:   text("snapshot_revision_id").notNull(),
-  scopeManifest:        jsonb("scope_manifest").notNull().default(sql`'{"paths":[]}'::jsonb`),
-  connectorInstance:    text("connector_instance").notNull(),
-  resourceType:         text("resource_type").notNull(),
-  resourceId:           text("resource_id"),
-  baseRemoteRevisionRef:text("base_remote_revision_ref"),
-  operationId:          text("operation_id").notNull(),
-  createdAt:            timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-}, (t) => ({
-  operationUniq: uniqueIndex("cms_snapshot_targets_operation_uniq").on(t.operationId),
-  artifactIdx:   index("cms_snapshot_targets_artifact_idx").on(t.artifactId),
-}));
-
 /** DECIDED SCHEMA (S4 auditor re-home): gate-bound immutable suggestion snapshots. */
 export const gateSuggestionSnapshots = cinatraSchema.table("gate_suggestion_snapshots", {
   id:        text("id").primaryKey(),

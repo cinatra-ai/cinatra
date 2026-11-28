@@ -392,29 +392,6 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
     },
 
     // -----------------------------------------------------------------------
-    // DECIDED SCHEMA — CMS snapshot-as-target + apply binding (S5).
-    // -----------------------------------------------------------------------
-    {
-      text: `CREATE TABLE IF NOT EXISTS "${q}"."cms_snapshot_targets" (
-  id                     text PRIMARY KEY,
-  artifact_id            text NOT NULL,
-  snapshot_revision_id   text NOT NULL,
-  scope_manifest         jsonb NOT NULL DEFAULT '{"paths":[]}'::jsonb,
-  connector_instance     text NOT NULL,
-  resource_type          text NOT NULL,
-  resource_id            text,
-  base_remote_revision_ref text,
-  operation_id           text NOT NULL,
-  created_at             timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT cms_snapshot_targets_operation_uniq UNIQUE (operation_id)
-)`,
-    },
-    {
-      text: `CREATE INDEX IF NOT EXISTS cms_snapshot_targets_artifact_idx
-  ON "${q}"."cms_snapshot_targets" (artifact_id)`,
-    },
-
-    // -----------------------------------------------------------------------
     // DECIDED SCHEMA — gate-bound suggestion snapshots + decision ledger (S4).
     // -----------------------------------------------------------------------
     {

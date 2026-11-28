@@ -5,7 +5,7 @@
  * Since slice 2 the generic completer (`completeDispatchedProducerRepairs`)
  * takes every dispatched repair, a captured CMS snapshot's included; the CMS
  * bridge's completer no longer runs. This suite drives a CMS base (an object of
- * the app-owned snapshot type with a `cms_snapshot_targets` row) to a
+ * the app-owned snapshot type) to a
  * dispatched repair, and reads what the generic completer does with the answer
  * it finishes and the two it must not finish:
  *
@@ -132,8 +132,7 @@ async function repairRow(repairId: string) {
   return r.rows[0] as { status: string; successor_gate_id: string | null } | undefined;
 }
 
-/** A captured CMS snapshot (the app-owned type, with its `cms_snapshot_targets`
- * row) driven through auto-gate → typed changes-request → producer repair →
+/** A captured CMS snapshot (the app-owned type) driven through auto-gate → typed changes-request → producer repair →
  * delivery; the repair run then finishes. Returns the dispatched repair. */
 async function driveToFinishedCmsBaseRepair(): Promise<{ repairId: string; repairRunId: string; baseArtifactId: string }> {
   const templateId = `tmpl-${randomUUID()}`;
@@ -155,13 +154,6 @@ async function driveToFinishedCmsBaseRepair(): Promise<{ repairId: string; repai
     ORG,
   ]);
   await outboxStore.emitArtifactProduced(base, dbMod.db);
-  await pool(
-    `INSERT INTO "${q(TEST_SCHEMA)}"."cms_snapshot_targets"
-       (id, artifact_id, snapshot_revision_id, scope_manifest, connector_instance,
-        resource_type, resource_id, base_remote_revision_ref, operation_id)
-     VALUES ($1,$2,$3,'{"paths":[]}'::jsonb,$4,'post',$5,NULL,$6)`,
-    [`cst-${randomUUID()}`, base.artifactId, base.representationRevisionId, `wp-${randomUUID()}`, `post-${randomUUID()}`, `op-${randomUUID()}`],
-  );
 
   await orch.sweepReviewOrchestration({ limit: 50 });
   const baseTaskId = autoReviewTaskId(base.eventId);

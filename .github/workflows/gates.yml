@@ -268,7 +268,11 @@ jobs:
 
       # design-system.html §Toolbar: ground tokens pinned in both token homes,
       # no non-canonical role="toolbar" JSX, no spec hexes outside the tokens.
+      # The lint allow list for arbitrary type values is compared with the
+      # event's base commit (cinatra#3832; full history from the checkout above).
       - name: Toolbar Design-System Gate — Toolbar design-system gate
+        env:
+          TYPE_ALLOWLIST_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           node scripts/audit/toolbar-tokens.mjs
 
