@@ -342,6 +342,21 @@ export function checkFloorAgainstBase({ repoRoot = REPO_ROOT, env = process.env,
   };
 }
 
+/**
+ * The check of the test of record: the live matches against the committed
+ * floor, and the committed floor against the base (on a pull request's run the
+ * base is origin/<GITHUB_BASE_REF>; a base that cannot be read fails closed;
+ * no pull request and no base named passes the guard). Throws on a scanner
+ * error or an unreadable floor. Returns `{ grown, stale, guard }`.
+ */
+export function checkRecord({ repoRoot = REPO_ROOT, env = process.env } = {}) {
+  const floor = parseFloor(readFileSync(join(repoRoot, FLOOR_REL), "utf8"));
+  const scan = scanDeclaredTextCore(repoRoot);
+  const { grown, stale } = checkFloor(floor, scan.matches);
+  const guard = checkFloorAgainstBase({ repoRoot, env, headFloor: floor });
+  return { grown, stale, guard };
+}
+
 function argValue(argv, flag) {
   const i = argv.indexOf(flag);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;

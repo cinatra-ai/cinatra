@@ -8,11 +8,12 @@
 // root suite refuses a new, grown or stale match on every pull request.
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+import { makeFloorRepo, NO_PULL_REQUEST_RUN, PULL_REQUEST_RUN } from "./floor-base-fixture.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REAL_ROOT = resolve(HERE, "..", "..", "..");
@@ -210,8 +211,52 @@ describe("the floor", () => {
   });
 });
 
+/** Every file under `root` as a { repo-relative path: text } map. */
+function treeFiles(root, dir = root, out = {}) {
+  for (const name of readdirSync(dir)) {
+    const abs = join(dir, name);
+    if (statSync(abs).isDirectory()) treeFiles(root, abs, out);
+    else out[relative(root, abs).split("\\").join("/")] = readFileSync(abs, "utf8");
+  }
+  return out;
+}
+
+describe("the record check (the function the test of record runs)", () => {
+  it("on a pull request's run, refuses a list that grew against the base together with its new core literal", async () => {
+    const m = await gate();
+    expect(m.checkRecord, "the gate exports checkRecord, the test of record's check").toBeTypeOf("function");
+    const tree = treeFiles(fixtureRepo());
+    for (const core of ["src/lib/notes.ts", "src/app/notes/page.tsx", "packages/notes/src/help.ts"]) delete tree[core];
+    const key = "src/lib/notes.ts :: Choose how many notes the digest may carry at most.";
+    const repo = makeFloorRepo({
+      base: { ...tree, [m.FLOOR_REL]: m.floorDocument({}) },
+      head: { "src/lib/notes.ts": `export const a = "${DECLARED_FIELD}";\n`, [m.FLOOR_REL]: m.floorDocument({ [key]: 1 }) },
+    });
+    try {
+      const pr = m.checkRecord({ repoRoot: repo.root, env: { ...PULL_REQUEST_RUN, FLOOR_BASE_FETCH: "0" } });
+      expect(pr.grown).toEqual([]);
+      expect(pr.stale).toEqual([]);
+      expect(pr.guard.ok, pr.guard.lines.join("\n")).toBe(false);
+      expect(pr.guard.status).toBe("grew");
+      expect(pr.guard.growth).toEqual([`${key} (0 -> 1)`]);
+      const push = m.checkRecord({ repoRoot: repo.root, env: { ...NO_PULL_REQUEST_RUN } });
+      expect(push.guard.status).toBe("no-base");
+      const unreadable = m.checkRecord({
+        repoRoot: repo.root,
+        env: { GITHUB_EVENT_NAME: "pull_request", GITHUB_BASE_REF: "no-such-base-4533", FLOOR_BASE_FETCH: "0" },
+      });
+      expect(unreadable.guard.ok).toBe(false);
+    } finally {
+      repo.cleanup();
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
-// TEST OF RECORD: the real tree against the committed floor.
+// TEST OF RECORD: the real tree against the committed floor and, on a pull
+// request's run (GITHUB_BASE_REF, GITHUB_EVENT_NAME), the floor against the
+// base: a list that grew against the base fails, a base that cannot be read
+// fails.
 // ---------------------------------------------------------------------------
 
 function realTreeEmpty() {
@@ -233,12 +278,13 @@ describe("test of record", () => {
       if (REAL_TREE_EMPTY) {
         throw new Error("the extension tree is not materialized on a CI run; clone it back before the root suite");
       }
-      const { readFileSync } = await import("node:fs");
-      const floor = m.parseFloor(readFileSync(join(REAL_ROOT, m.FLOOR_REL), "utf8"));
-      const scan = m.scanDeclaredTextCore(REAL_ROOT);
-      const { grown, stale } = m.checkFloor(floor, scan.matches);
+      const { grown, stale, guard } = m.checkRecord({ repoRoot: REAL_ROOT, env: process.env });
       expect(grown, "core spells a text an extension declares; the extension supplies its own text").toEqual([]);
       expect(stale, "a recorded match is gone; lower the floor with --write-baseline").toEqual([]);
+      expect(guard.ok, guard.lines.join("\n")).toBe(true);
+      if (["pull_request", "pull_request_target"].includes(process.env.GITHUB_EVENT_NAME ?? "")) {
+        expect(guard.status, "a pull request's run compares the floor with its base").not.toBe("no-base");
+      }
     },
     RECORD_TIMEOUT,
   );
