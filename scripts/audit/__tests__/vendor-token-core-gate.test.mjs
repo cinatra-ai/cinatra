@@ -502,24 +502,41 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
       files: { "src/public.ts": `export const ZorbPublic = 1;\n` },
     });
     expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
-      "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
+      "the exports map of @example-org/sdk-a uses a subpath pattern, which this rule does not read yet",
     );
     for (const dir of ["packages/sdk-extensions", "packages/sdk-ui"]) {
       expect(() => gateFn("sdkEntryPoints")(REPO_ROOT_4875, dir)).not.toThrow();
     }
   });
 
-  it("an exports map with a null target fails closed, also inside a conditions object", () => {
+  it("an entry with a null target resolves to no file and fails closed; a null condition does not hide the other conditions", () => {
     const scan = gateFn("scanSdkExportNames");
-    for (const exportsMap of [
-      { ".": "./src/index.ts", "./hidden": null },
-      { ".": { types: "./src/index.ts", browser: null } },
-    ]) {
-      const root = makeSdkTree({ exportsMap, files: { "src/index.ts": `export const ZorbIndex = 1;\n` } });
-      expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
-        "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
-      );
-    }
+    const hidden = makeSdkTree({ exportsMap: { ".": "./src/index.ts", "./hidden": null }, files: { "src/index.ts": `export const ZorbIndex = 1;\n` } });
+    expect(() => scan(hidden, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(`@example-org/sdk-a exports "./hidden": resolves to no file`);
+    const blocked = makeSdkTree({ exportsMap: { ".": { browser: null, types: "./src/index.ts" } }, files: { "src/index.ts": `export const ZorbIndex = 1;\n` } });
+    expect(Object.keys(scan(blocked, ["zorb"], { packages: [FIXTURE_SDK] }))).toEqual(["@example-org/sdk-a :: ZorbIndex"]);
+  });
+
+  it("an extensionless target resolves to its source file and is read (finding 1 of the second review)", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts", "./new": "./src/new" },
+      files: { "src/index.ts": `export const neutral = 1;\n`, "src/new.ts": `export class ZorbClient {}\n` },
+    });
+    expect(Object.keys(scan(root, ["zorb"], { packages: [FIXTURE_SDK] }))).toEqual(["@example-org/sdk-a/new :: ZorbClient"]);
+  });
+
+  it("a fallback array whose first target is invalid resolves to the second target, which is read (finding 2 of the second review)", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": ["src/missing.ts", "./src/index.ts"] },
+      files: { "src/index.ts": `export const ZorbFallback = 1;\n` },
+    });
+    let found = {};
+    expect(() => {
+      found = scan(root, ["zorb"], { packages: [FIXTURE_SDK] });
+    }).not.toThrow();
+    expect(Object.keys(found)).toEqual(["@example-org/sdk-a :: ZorbFallback"]);
   });
 });
 

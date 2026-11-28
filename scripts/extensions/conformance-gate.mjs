@@ -685,7 +685,7 @@ function isAlwaysMatchedCondition(key) {
 /** Resolve an `exports` target to the package-relative file it names, using the
  * SAME resolution the entry check uses (an extension-less target resolves
  * through the source-extension candidates), or null. */
-function resolveExportTargetFile(pkgDir, target) {
+export function resolveExportTargetFile(pkgDir, target) {
   if (typeof target !== "string" || !isUiEntryContained(target)) return null;
   const rel = target.replace(/^\.\//, "");
   if (existsSync(join(pkgDir, rel))) return rel;
@@ -790,7 +790,7 @@ function isImportableSubpathKey(key) {
  * makes that specifier a function of the package's internal path — the coupling
  * item 0.8 removes. A pattern is therefore not a declaration OF THIS DISPLAY,
  * however narrow it is. */
-function readExportsField(pkgDir, exportsField) {
+export function readExportsField(pkgDir, exportsField) {
   if (exportsField === undefined || exportsField === null) {
     return { kind: "absent", map: new Map(), offending: [] };
   }

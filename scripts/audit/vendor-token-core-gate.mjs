@@ -79,12 +79,18 @@
 // contract named for a family or a vendor passed every gate. This class reads
 // the names a pack can import from the SDK packages a pack may depend on (the
 // two the conformance gate admits, SDK_PACKAGE_DIRS) on the same fact a pack
-// sees: every entry of each package's `exports` map (every condition's target,
-// and for a JavaScript target also the declaration or source TypeScript
-// resolves in its place; a root conditions object is the "." entry;
-// a map with a subpath pattern or a `null` target fails closed, as precedence
-// between overlapping keys is not resolved here), resolved by the
-// TypeScript program and type checker (`getExportsOfModule`, so `export *`,
+// sees: every entry of each package's `exports` map, resolved by two existing
+// readings of the map, never by one of this rule's own: TypeScript's module
+// resolution (`ts.resolveModuleName` on the package's name and subpath, with
+// the exports-aware resolution of the repository's tsconfig) under the
+// condition sets a consumer can use (types+import, types+require, import and
+// require, `default` matching in each), and the host import's reading of the
+// extension conformance gate (`readExportsField`, `resolveExportTargetFile`).
+// Every distinct file is read. A root conditions object is the "." entry; a
+// map with a subpath pattern fails closed (precedence between overlapping keys
+// is not resolved here), and so does an entry that resolves to no file in
+// either reading. The files are read by the
+// TypeScript type checker (`getExportsOfModule`, so `export *`,
 // renamed re-exports and type-only exports count). Only the TOP-LEVEL names of
 // an entry are read: a namespace export by its own name, never its members. A
 // name is split into words (camelCase, PascalCase, acronym runs, digits, `_`
@@ -107,10 +113,11 @@
 //   node scripts/audit/vendor-token-core-gate.mjs --write-baseline # ratchet the floor down
 //   VENDOR_TOKEN_BASE=<ref> node ...   # also fail if the committed baseline GREW vs <ref>
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { join, dirname, resolve, relative } from "node:path";
+import { readExportsField, resolveExportTargetFile } from "../extensions/conformance-gate.mjs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
 import { compareFloorWithBase, isPermitReason, newKeys } from "./lib/floor-base-guard.mjs";
@@ -340,26 +347,6 @@ export const SDK_NAME_CLASS = "sdk-name-with-extension-word";
 export const SDK_PACKAGE_DIRS = Object.freeze(["packages/sdk-extensions", "packages/sdk-ui"]);
 
 const BASELINE_REL = "scripts/audit/vendor-token-core-gate.baseline.json";
-const SDK_CODE_TARGET_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
-// The files TypeScript tries, in order, for a JavaScript target before it uses
-// the JavaScript file itself (its extension substitution): the first that
-// exists is what a TypeScript consumer reads.
-const TS_SUBSTITUTES = Object.freeze({
-  ".js": [".ts", ".tsx", ".d.ts"],
-  ".jsx": [".tsx", ".d.ts"],
-  ".mjs": [".mts", ".d.mts"],
-  ".cjs": [".cts", ".d.cts"],
-});
-
-/** The files of one target: the target, and for a JavaScript target also the file TypeScript resolves in its place. */
-function targetFiles(file) {
-  const ext = Object.keys(TS_SUBSTITUTES).find((e) => file.endsWith(e));
-  if (!ext) return [file];
-  const stem = file.slice(0, -ext.length);
-  const typed = TS_SUBSTITUTES[ext].map((e) => stem + e).find((f) => existsSync(f));
-  return typed ? [file, typed] : [file];
-}
-
 /** An SDK entry or export that cannot be read: a scanner error (exit 2), never a pass. */
 export class SdkNamesError extends Error {
   constructor(message) {
@@ -412,30 +399,49 @@ export function nameWordHits(name, words) {
   return [...hits].sort();
 }
 
-function targetLeaves(value, where) {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap((v) => targetLeaves(v, where));
-  if (value && typeof value === "object") return Object.values(value).flatMap((v) => targetLeaves(v, where));
-  throw new SdkNamesError(`${where}: the target ${JSON.stringify(value)} is not a path or a conditions object`);
+/**
+ * The condition sets a consumer of an SDK entry can resolve it under, as
+ * TypeScript's resolution options: types+import, types+require, and
+ * import / require without declarations (`noDtsResolution`), which reach the
+ * implementation targets. `default` matches in every set.
+ */
+function conditionSets(ts) {
+  return [
+    { mode: ts.ModuleKind.ESNext, noDtsResolution: false },
+    { mode: ts.ModuleKind.CommonJS, noDtsResolution: false },
+    { mode: ts.ModuleKind.ESNext, noDtsResolution: true },
+    { mode: ts.ModuleKind.CommonJS, noDtsResolution: true },
+  ];
 }
 
-const holdsNull = (value) =>
-  value === null || (typeof value === "object" && Object.values(value).some((v) => holdsNull(v)));
+/** The exports-aware resolution options: the repository's, and the same without its `paths` (a consumer outside the repository). */
+function resolutionOptions(ts, options) {
+  const kind = options.moduleResolution;
+  const honoursExports = [ts.ModuleResolutionKind.Bundler, ts.ModuleResolutionKind.Node16, ts.ModuleResolutionKind.NodeNext].includes(kind);
+  const base = { ...options, resolvePackageJsonExports: true, ...(honoursExports ? {} : { moduleResolution: ts.ModuleResolutionKind.Bundler }) };
+  const { paths, baseUrl, ...noPaths } = base;
+  return paths || baseUrl ? [base, noPaths] : [base];
+}
 
 /**
  * The entry points of one SDK package: `[{ specifier, files }]`, one per
- * `exports` entry; `files` are the absolute code targets of every condition,
- * and for a JavaScript target also the file TypeScript resolves in its place
- * (`.ts`/`.tsx`/`.d.ts` for `.js`, `.mts`/`.d.mts` for `.mjs`, `.cts`/`.d.cts`
- * for `.cjs`, the first that exists). A root conditions object is the `"."`
- * entry.
- * A subpath pattern (`*` in a key) or a `null` target is not read: export-map
- * precedence between overlapping keys is not resolved here, so such a map
- * fails closed. Throws SdkNamesError for an unreadable manifest, a package
- * with no `exports` map, a pattern or `null` target, or an entry whose target
- * file does not exist.
+ * `exports` key. `files` are the distinct files the entry reaches through two
+ * existing readings of the map, never one of this rule's own:
+ *  - TypeScript's (what a typed consumer reads): `ts.resolveModuleName` on
+ *    `"<package name><subpath>"` from inside the package (a self-name
+ *    reference) under every condition set of `conditionSets`, with the
+ *    repository's tsconfig options and without their `paths`;
+ *  - the host's (what the host imports): the extension conformance gate's
+ *    `readExportsField` and `resolveExportTargetFile`
+ *    (scripts/extensions/conformance-gate.mjs), which take Node's fallback
+ *    order and resolve an extensionless target through the source extensions.
+ * A root conditions object is the `"."` entry. Only the keys are read here.
+ * A subpath pattern (`*` in a key) is not read: export-map precedence between
+ * overlapping keys is not resolved here, so such a map fails closed. Throws
+ * SdkNamesError for an unreadable manifest, a package with no `exports` map, a
+ * pattern, or an entry that resolves to no file in either reading.
  */
-export function sdkEntryPoints(repoRoot, pkgDir) {
+export function sdkEntryPoints(repoRoot, pkgDir, ts = loadTypeScript(), options = repoCompilerOptions(ts, repoRoot)) {
   const abs = join(repoRoot, pkgDir);
   let pkg;
   try {
@@ -452,20 +458,34 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
   if (!map || typeof map !== "object" || !Object.keys(map).every((k) => k === "." || k.startsWith("./"))) {
     throw new SdkNamesError(`${pkg.name}: package.json has no subpath "exports" map (a pack imports through it)`);
   }
-  if (Object.entries(map).some(([key, value]) => key.includes("*") || holdsNull(value))) {
-    throw new SdkNamesError(
-      `the exports map of ${pkg.name} uses a pattern or a null target, which this rule does not read yet`,
-    );
+  if (Object.keys(map).some((key) => key.includes("*"))) {
+    throw new SdkNamesError(`the exports map of ${pkg.name} uses a subpath pattern, which this rule does not read yet`);
   }
-  const spec = (sub) => (sub === "." ? pkg.name : `${pkg.name}/${sub.slice(2)}`);
+  const containing = join(abs, "__sdk_names__.ts");
+  const variants = resolutionOptions(ts, options);
+  const hostTargets = readExportsField(abs, pkg.exports).map;
+  const real = (f) => (existsSync(f) ? realpathSync(f) : f);
   const entries = [];
-  for (const [key, value] of Object.entries(map)) {
-    const where = `${pkg.name} exports "${key}"`;
-    const code = targetLeaves(value, where)
-      .filter((t) => SDK_CODE_TARGET_RE.test(t))
-      .map((t) => resolve(abs, t));
-    for (const f of code) if (!existsSync(f)) throw new SdkNamesError(`${where}: the target ${relative(repoRoot, f)} does not exist`);
-    if (code.length) entries.push({ specifier: spec(key), files: [...new Set(code.flatMap(targetFiles))] });
+  for (const key of Object.keys(map)) {
+    const specifier = key === "." ? pkg.name : `${pkg.name}/${key.slice(2)}`;
+    const files = new Set();
+    for (const opts of variants) {
+      for (const { mode, noDtsResolution } of conditionSets(ts)) {
+        const o = { ...opts, noDtsResolution };
+        const r = ts.resolveModuleName(specifier, containing, o, ts.sys, undefined, undefined, mode);
+        if (r.resolvedModule?.resolvedFileName) files.add(real(resolve(r.resolvedModule.resolvedFileName)));
+      }
+    }
+    for (const target of hostTargets.get(key)?.targets ?? []) {
+      const rel = resolveExportTargetFile(abs, target);
+      if (rel) files.add(real(join(abs, rel)));
+    }
+    if (!files.size) {
+      throw new SdkNamesError(
+        `${pkg.name} exports "${key}": resolves to no file, neither for TypeScript (types+import, types+require, import, require) nor for the host's import`,
+      );
+    }
+    entries.push({ specifier, files: [...files] });
   }
   return entries;
 }
@@ -526,8 +546,8 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
   const found = {};
   let options;
   for (const pkgDir of packages) {
-    const entries = sdkEntryPoints(repoRoot, pkgDir);
     options ??= repoCompilerOptions(ts, repoRoot);
+    const entries = sdkEntryPoints(repoRoot, pkgDir, ts, options);
     const program = ts.createProgram(entries.flatMap((e) => e.files), options);
     const checker = program.getTypeChecker();
     const resolveAlias = (sym) => (sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym);

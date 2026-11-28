@@ -331,16 +331,23 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
 
 - **What it reads.** The names a pack can import from the SDK packages the
   conformance gate lets a pack depend on (`@cinatra-ai/sdk-extensions` and
-  `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map and
-  every condition's target (`types` and `default` alike); for a JavaScript
-  target also the file TypeScript resolves in its place (a sibling `.ts`,
-  `.d.ts`, `.d.mts` or `.d.cts`), and a root conditions object is the `"."`
-  entry. An `exports` map
-  with a subpath pattern (`*` in a key) or a `null` target fails closed ("the
-  exports map of <package> uses a pattern or a null target, which this rule
-  does not read yet"): precedence between overlapping keys is not resolved
-  here, and neither SDK package uses one today. The TypeScript program, built
-  with the compiler options of the repository's root `tsconfig.json` (`paths`
+  `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map; a root
+  conditions object is the `"."` entry. The rule reads only the keys of the
+  map. The files an entry reaches come from two existing readings, never from
+  one of the rule's own: TypeScript's module resolution
+  (`ts.resolveModuleName` on `<package name><subpath>`, with the
+  exports-aware resolution of the root `tsconfig.json`, with and without its
+  `paths`) under the condition sets types+import, types+require, import and
+  require (`default` matches in each), and the host import's reading of the
+  extension conformance gate (`readExportsField`, `resolveExportTargetFile` in
+  `scripts/extensions/conformance-gate.mjs`, which follows Node's fallback
+  order and resolves an extensionless target through the source extensions).
+  Every distinct file is read. An `exports` map with a subpath pattern (`*` in
+  a key) fails closed ("the exports map of <package> uses a subpath pattern,
+  which this rule does not read yet"): precedence between overlapping keys is
+  not resolved here, and neither SDK package uses one today. The TypeScript
+  program, built with the compiler options of the repository's root
+  `tsconfig.json` (`paths`
   and module resolution included; its root files are the SDK entry files only),
   and its type checker resolve each entry (`getExportsOfModule`). A target file
   that is no module is read through the ambient modules it declares
@@ -364,7 +371,7 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   is not found (whole words only).
 - **The words.** Both lists of `scripts/audit/lib/border-words.mjs`; the gate
   names no pack and no word.
-- **Fail closed.** An entry whose target does not exist, an `export ... from`
+- **Fail closed.** An entry that resolves to no file in either reading, an `export ... from`
   whose module does not resolve and an exported name that does not resolve are
   scanner errors (exit 2) that name the entry.
 - **The record.** Each finding is an entry of `sdkNames` in
