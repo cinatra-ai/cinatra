@@ -10,6 +10,7 @@
     "pack-step-kind-in-core",
     "pack-table-literal",
     "pack-type-id-in-core",
+    "single-package-declaration-reader",
     "skill-legacy-exception",
     "unbounded-port-member"
   ],

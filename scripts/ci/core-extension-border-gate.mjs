@@ -57,7 +57,7 @@
 //   CORE_EXTENSION_BORDER_BASE=<ref> node scripts/ci/core-extension-border-gate.mjs  # also fail if the ledger GREW vs <ref>
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpathSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join, relative, sep, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
@@ -751,17 +751,18 @@ export function leafParts(value, leaves) {
  *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. A template with a substitution
  *  is not read in this stage. Comments, regular expressions and escapes are the parser's business.
  *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) and a fixture or test helper module
- *  (LEAF_RULE_FIXTURE_MODULE_RE) are not read. A file the parser cannot read fails closed. */
+ *  (FIXTURE_OR_TEST_HELPER_MODULE_RE) are not read. A file the parser cannot read fails closed. */
 export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
 /** The fixture and test helper modules that stand in product folders (cinatra#4531): fixtures are
  *  outside the scan (docs/internals/contracts/core-extension-border.md), and these modules are named
  *  so in the tree: `fixtures.<ext>` (packages/chat/src/renderable-views/fixtures.ts),
  *  `conformance-fixtures.<ext>` (packages/agent-ui-protocol/src/conformance-fixtures.ts) and the
  *  test fakes `testing.<ext>` (packages/org-write-kernel/src/testing.ts, exported as "./testing").
- *  This rule does not read them. `dev-fixtures.ts` is the SDK's fixture contract and is read. */
-export const LEAF_RULE_FIXTURE_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
+ *  `pack-slug-in-core` and `single-package-declaration-reader` do not read them (one predicate for
+ *  both). `dev-fixtures.ts` is the SDK's fixture contract and is read. */
+export const FIXTURE_OR_TEST_HELPER_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
 export function scanPackLeafLiterals({ file, text, packs }) {
-  if (DECLARATION_FILE_RE.test(file) || LEAF_RULE_FIXTURE_MODULE_RE.test(file)) return [];
+  if (DECLARATION_FILE_RE.test(file) || FIXTURE_OR_TEST_HELPER_MODULE_RE.test(file)) return [];
   const leaves = packLeafNames(packs);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
   const broken = (sf.parseDiagnostics ?? [])[0];
@@ -790,6 +791,124 @@ export function scanPackLeafLiterals({ file, text, packs }) {
       );
     }
   });
+  return out;
+}
+
+/** `single-package-declaration-reader` (cinatra#4873, stage 1): the name of a per-primitive
+ *  declaration array, as a workspace package exports it (`<x>PrimitiveMetadata`). */
+export const PRIMITIVE_METADATA_NAME_RE = /PrimitiveMetadata$/;
+
+/** The workspace package that holds a repo-relative path (cinatra#4873): `packages/<dir>` for the
+ *  package directory itself or a path inside it (a trailing slash is not a segment), else the path's
+ *  first segment (`src` for the application; `packages` for the directory `packages` alone; `..` for
+ *  a path that leaves the repository, which is no package's path). */
+export function ownerOfPath(path) {
+  const parts = posix.normalize(path).replace(/\/+$/, "").split("/");
+  if (parts[0] === "packages" && parts.length >= 2) return `packages/${parts[1]}`;
+  return parts[0];
+}
+
+/** The package an import specifier names (cinatra#4873), as an owner key of `ownerOfPath`, decided
+ *  from facts the tree states:
+ *  - a relative specifier (`./x`, `../x`) is resolved against the importing file; the owner of the
+ *    resolved path is the package (so it stays in the importing file's own package unless the path
+ *    leaves it);
+ *  - a specifier that a path alias of the product's tsconfig.json matches (`@/*` -> `./src/*`) is
+ *    resolved through the alias's first target, an exact pattern before the wildcard pattern with
+ *    the longest prefix, as the compiler matches them; the owner of that path is the package;
+ *  - a bare specifier whose package name (`@scope/name` or `name`, before any subpath) is a workspace
+ *    package (`workspaceDirs`, read from `packages/<dir>/package.json`) is that package's directory;
+ *  - any other bare specifier is a package of its own, `npm:<name>`, never the importer's.
+ *  `aliases` is a list of `{ pattern, target }` with repo-relative targets; a `*` in the pattern is
+ *  carried into the target. */
+export function specifierOwner(specifier, file, { workspaceDirs = new Map(), aliases = [] } = {}) {
+  if (specifier.startsWith("./") || specifier.startsWith("../") || specifier === "." || specifier === "..") {
+    return ownerOfPath(posix.join(posix.dirname(file), specifier));
+  }
+  // As the compiler matches `paths`: an exact pattern first, else the wildcard pattern with the
+  // longest prefix before its `*`.
+  const exact = aliases.find((a) => !a.pattern.includes("*") && a.pattern === specifier);
+  if (exact) return ownerOfPath(exact.target);
+  let best = null;
+  for (const a of aliases) {
+    const star = a.pattern.indexOf("*");
+    if (star < 0) continue;
+    const head = a.pattern.slice(0, star);
+    const tail = a.pattern.slice(star + 1);
+    if (specifier.length < head.length + tail.length || !specifier.startsWith(head) || !specifier.endsWith(tail)) continue;
+    if (!best || head.length > best.head.length) best = { head, tail, target: a.target };
+  }
+  if (best) {
+    // A `paths` target holds at most one `*` (the compiler refuses more): the matched middle
+    // takes its place.
+    const middle = specifier.slice(best.head.length, specifier.length - best.tail.length);
+    const at = best.target.indexOf("*");
+    return ownerOfPath(at < 0 ? best.target : best.target.slice(0, at) + middle + best.target.slice(at + 1));
+  }
+  const segs = specifier.split("/");
+  const name = specifier.startsWith("@") ? segs.slice(0, 2).join("/") : segs[0];
+  if (workspaceDirs.has(name)) return workspaceDirs.get(name);
+  return `npm:${name}`;
+}
+
+/** The path aliases of the product's tsconfig.json (`compilerOptions.paths`), each with its FIRST
+ *  target made repo-relative (cinatra#4873). A tree without a tsconfig.json has none (a fixture tree);
+ *  a tsconfig.json that cannot be read fails closed. */
+export function productPathAliases(repoRoot) {
+  if (!existsSync(join(repoRoot, "tsconfig.json"))) return [];
+  const options = productCompilerOptions(repoRoot);
+  const base = options.baseUrl ?? options.pathsBasePath ?? repoRoot;
+  return Object.entries(options.paths ?? {})
+    .filter(([, targets]) => Array.isArray(targets) && targets.length > 0)
+    .map(([pattern, targets]) => ({ pattern, target: relative(repoRoot, join(base, targets[0])).split(sep).join("/") }));
+}
+
+/** `single-package-declaration-reader` (cinatra#4873, stage 1): a module of core VALUE-imports a
+ *  per-primitive declaration array of a workspace package from outside that package. Read with the
+ *  TypeScript parser: every static import declaration `import { X } from "<specifier>"` (also
+ *  `import { X as Y }`) whose imported name ends with `PrimitiveMetadata`, unless the import is
+ *  type-only (`import type { … }` or an inline `type X`). The package of the specifier
+ *  (`specifierOwner`) is compared with the package of the importing file (`ownerOfPath`): the same
+ *  package is the registering side and is allowed; `src/` or another package is a finding. A
+ *  declaration file is not read (it imports nothing at run time), and neither is a fixture or test
+ *  helper module (FIXTURE_OR_TEST_HELPER_MODULE_RE, as for the leaf rule). A file the parser cannot
+ *  read fails closed. The detail is the imported name with the declaring package. */
+export function scanSinglePackageDeclarationReaders({ file, text, workspaceDirs = new Map(), aliases = [] }) {
+  if (DECLARATION_FILE_RE.test(file) || FIXTURE_OR_TEST_HELPER_MODULE_RE.test(file)) return [];
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
+  const broken = (sf.parseDiagnostics ?? [])[0];
+  if (broken) {
+    throw new Error(
+      `[core-extension-border] ${file} does not parse (${compact(ts.flattenDiagnosticMessageText(broken.messageText, " "))}) — ` +
+        "the declaration reader rule fails closed rather than skipping the file",
+    );
+  }
+  const own = ownerOfPath(file);
+  const names = new Map([...workspaceDirs].map(([name, dir]) => [dir, name]));
+  const label = (owner) => names.get(owner) ?? (owner.startsWith("npm:") ? owner.slice(4) : `${owner}/`);
+  const out = [];
+  const counts = new Map();
+  for (const stmt of sf.statements) {
+    if (!ts.isImportDeclaration(stmt) || !ts.isStringLiteral(stmt.moduleSpecifier)) continue;
+    const clause = stmt.importClause;
+    if (!clause || clause.isTypeOnly || !clause.namedBindings || !ts.isNamedImports(clause.namedBindings)) continue;
+    const owner = specifierOwner(stmt.moduleSpecifier.text, file, { workspaceDirs, aliases });
+    if (owner === own) continue;
+    for (const el of clause.namedBindings.elements) {
+      if (el.isTypeOnly) continue;
+      const imported = (el.propertyName ?? el.name).text;
+      if (!PRIMITIVE_METADATA_NAME_RE.test(imported)) continue;
+      out.push(
+        finding(
+          "single-package-declaration-reader",
+          file,
+          sf.getLineAndCharacterOfPosition(el.getStart(sf)).line + 1,
+          occurrenceDetail(counts, "single-package-declaration-reader", `${imported} (${label(owner)})`),
+          `core reads the declarations of one package (${label(owner)}) outside that package; a host reader takes declarations from the registry or the manifests it iterates`,
+        ),
+      );
+    }
+  }
   return out;
 }
 
@@ -1103,6 +1222,8 @@ export function loadPackUniverse(repoRoot, baselineEntries = []) {
     for (const m of String(e?.key ?? "").matchAll(/(@cinatra-ai\/[a-z0-9][a-z0-9.-]*)/g)) packs.add(m[1]);
   }
   const workspacePackages = new Set();
+  // The directory of each workspace package (cinatra#4873), from the same manifests.
+  const workspaceDirs = new Map();
   const pkgDir = join(repoRoot, "packages");
   if (existsSync(pkgDir)) {
     for (const d of readdirSync(pkgDir, { withFileTypes: true })) {
@@ -1111,14 +1232,17 @@ export function loadPackUniverse(repoRoot, baselineEntries = []) {
       if (!existsSync(manifest)) continue;
       try {
         const name = JSON.parse(readFileSync(manifest, "utf8")).name;
-        if (name) workspacePackages.add(name);
+        if (name) {
+          workspacePackages.add(name);
+          workspaceDirs.set(name, `packages/${d.name}`);
+        }
       } catch {
         /* unreadable manifest — the package simply does not shield a name */
       }
     }
   }
   for (const w of workspacePackages) packs.delete(w);
-  return { packs, workspacePackages };
+  return { packs, workspacePackages, workspaceDirs };
 }
 
 export const KNOWN_RULES = new Set([
@@ -1132,6 +1256,7 @@ export const KNOWN_RULES = new Set([
   "pack-step-kind-in-core",
   "unbounded-port-member",
   "pack-slug-in-core",
+  "single-package-declaration-reader",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1327,7 +1452,8 @@ export function violationsOf(findings, baselineKeys) {
  *  entries whose crossing is gone. */
 export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DEFAULT_BASELINE, ports = true } = {}) {
   const baseline = readBaseline(baselinePath);
-  const { packs, workspacePackages } = loadPackUniverse(repoRoot, baseline.entries);
+  const { packs, workspacePackages, workspaceDirs } = loadPackUniverse(repoRoot, baseline.entries);
+  const aliases = productPathAliases(repoRoot);
   const findings = [];
   let kindTables = 0;
 
@@ -1338,6 +1464,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages }));
       findings.push(...scanScopedToolAdmissions({ file, text, packs }));
       findings.push(...scanPackLeafLiterals({ file, text, packs }));
+      findings.push(...scanSinglePackageDeclarationReaders({ file, text, workspaceDirs, aliases }));
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);
       kindTables += kinds.tables;
