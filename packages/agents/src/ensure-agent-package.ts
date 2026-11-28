@@ -7,7 +7,7 @@
 // package.json#version.
 
 import { readFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import * as semver from "semver";
 import { readAgentTemplateByPackageName, setAgentTemplatePackageName } from "./store";
 import {
@@ -383,37 +383,22 @@ type SiblingIdentity = {
 };
 type SiblingRead =
   | { status: "ok"; identity: SiblingIdentity }
-  /** No `package.json` beside the agent, on either supported layout (ENOENT). */
+  /** No `package.json` above `cinatra/` (ENOENT). */
   | { status: "absent" }
   /** Present but unusable — EACCES, a truncated/invalid JSON body, etc. */
   | { status: "unreadable"; reason: string };
 
-// The manifest location is DERIVED FROM THE LAYOUT, never guessed. Both shapes
-// the dev-boot scan (src/lib/boot/phases/dev-boot.ts) hands this loader are
-// distinguishable from the OAS path alone:
-//   agents/<slug>/cinatra/{oas,agent}.json -> ../package.json  (canonical)
-//   agents/<slug>/agent.json               -> ./package.json   (legacy flat,
-//                                                               dev-boot.ts:150)
+// The manifest location is DERIVED FROM THE LAYOUT, never guessed: every caller
+// (the dev-boot ingest, the hot-reload watcher, the supplied install) hands this
+// loader `<vendor>/<slug>/cinatra/oas.json`, so the manifest is the one
+// `package.json` above `cinatra/`. A flat `<slug>/agent.json` layout is not
+// loaded (cinatra#4920), so there is no adjacent-manifest rung.
 //
-// Resolving to ONE path rather than probing a candidate LIST is deliberate
-// (codex round 1). A list ordered [parent, adjacent] is ambiguous in both
-// directions: for the flat layout the parent candidate is an unrelated
-// VENDOR-level `package.json` (e.g. `extensions/<vendor>/package.json`) that
-// would silently shadow the agent's real adjacent manifest, and an unreadable
-// unrelated candidate would even refuse the import. No such file exists in the
-// tree today, so this was latent rather than live — but the layout is knowable,
-// so it is read directly instead of relying on that absence.
-//
-// Probing only the canonical location (the behaviour before cinatra#2044 GAP 2)
-// left the flat layout with NO manifest at all. That merely lost
-// `description`/`produces` before; WITH the version-skip drift check below it
-// would turn destructive — "declares nothing" would re-import on every boot and
-// CLEAR a legitimately-installed `lifecycle_config` (codex round 0).
+// ONE path, not a candidate LIST, is deliberate (codex round 1): a list would
+// let an unrelated `package.json` shadow the agent's real one, and an unreadable
+// unrelated candidate would even refuse the import.
 function siblingManifestPath(oasSourcePath: string): string {
-  const oasDir = dirname(oasSourcePath);
-  return basename(oasDir) === "cinatra"
-    ? join(oasDir, "..", "package.json")
-    : join(oasDir, "package.json");
+  return join(dirname(oasSourcePath), "..", "package.json");
 }
 
 async function readSiblingPackageJsonIdentity(oasSourcePath: string): Promise<SiblingRead> {
@@ -515,8 +500,8 @@ async function readSiblingPackageJsonIdentity(oasSourcePath: string): Promise<Si
 // ---------------------------------------------------------------------------
 // ensureAgentPackageFromGitFile — load a git-native agent JSON into the DB
 // ---------------------------------------------------------------------------
-// Reads an agents/<slug>/cinatra/oas.json file (canonical; legacy
-// flat agents/<slug>/agent.json also supported — callers resolve the path)
+// Reads a <vendor>/<slug>/cinatra/oas.json file (callers resolve the path;
+// a flat <slug>/agent.json is not loaded, cinatra#4920)
 // directly from the repo, builds an in-memory ZIP envelope, and upserts via
 // importAgentTemplate. This git-native path keeps the DB as a derived cache
 // of the files committed under agents/.
@@ -745,9 +730,9 @@ export async function ensureAgentPackageFromGitFile(opts: {
   }
 
   // --- Inject sibling description into in-memory content for DB storage ---
-  // description is sourced from package.json, not agent.json.
+  // description is sourced from package.json, not cinatra/oas.json.
   // agentDependencies / packageName / packageVersion are NOT injected into
-  // agent.json — the compiler reads them from the sibling package.json.
+  // cinatra/oas.json — the compiler reads them from the sibling package.json.
   if (sibling?.description && !content.description) {
     content.description = sibling.description;
   }
@@ -802,7 +787,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
       );
       licenseEntries.push({ name: licenseFile, content: licenseContent });
     } catch {
-      // try sibling-dir variant (flat layout: agent.json next to LICENSE)
+      // try a license file beside oas.json inside cinatra/ (not a flat-layout rung)
       try {
         const licenseContent = await readFile(
           join(/* turbopackIgnore: true */ dirname(opts.oasSourcePath), licenseFile),

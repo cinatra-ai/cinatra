@@ -8,7 +8,7 @@
 // pulling in the instance-identity store (agent-source-paths imports it hard;
 // the compiler reads it lazily on purpose).
 //
-// Order, the same as the four-rung probe on main (resolveAgentJsonPathForRead):
+// Order, the one the retired four-rung probe had:
 //   1. for each vendor, in the order given (operator first, then first-party):
 //      <root>/<vendor>/<slug>/            (cinatra/oas.json; old: cinatra/agent.json)
 //   2. the legacy directory <root>/<legacySlug>/
@@ -43,6 +43,14 @@ export function findAgentDefinition(args: {
   slug: string;
   legacySlug: string;
 }): AgentDefinitionLookup | null {
+  return selectAgentDefinition(args, existsSync);
+}
+
+/** The same order as `findAgentDefinition` over any "does this file exist" answer, so a caller that already walked the tree needs no second read. */
+export function selectAgentDefinition(
+  args: { root: string; vendors: readonly string[]; slug: string; legacySlug: string },
+  exists: (file: string) => boolean,
+): AgentDefinitionLookup | null {
   const { root, vendors, slug, legacySlug } = args;
   const old = (found: string, required: string): AgentDefinitionLookup => ({
     kind: "old",
@@ -52,9 +60,9 @@ export function findAgentDefinition(args: {
   });
   for (const vendor of vendors) {
     const oas = agentOasPath(root, vendor, slug);
-    if (existsSync(oas)) return { kind: "oas", path: oas, rootDir: join(root, vendor, slug) };
+    if (exists(oas)) return { kind: "oas", path: oas, rootDir: join(root, vendor, slug) };
     const oldFile = join(root, vendor, slug, "cinatra", "agent.json");
-    if (existsSync(oldFile)) return old(oldFile, oas);
+    if (exists(oldFile)) return old(oldFile, oas);
   }
   // The legacy directory holds old-layout files only; it names the first
   // vendor's `cinatra/oas.json` as the place to move the definition to.
@@ -62,7 +70,7 @@ export function findAgentDefinition(args: {
     const required = agentOasPath(root, vendors[0], slug);
     const legacyRoot = join(/* turbopackIgnore: true */ root, legacySlug);
     for (const found of [join(legacyRoot, "cinatra", "agent.json"), join(legacyRoot, "agent.json")]) {
-      if (existsSync(found)) return old(found, required);
+      if (exists(found)) return old(found, required);
     }
   }
   return null;

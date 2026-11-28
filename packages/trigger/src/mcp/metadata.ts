@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Trigger primitive metadata.
 //
-// Mirror of the TriggerEmailSendPrimitiveMetadata shape used by
-// packages/trigger-email-send. Three primitives are exposed for the
+// Mirror of the TriggerEmailSendPrimitiveMetadata shape once used by
+// packages/trigger-email-send (deleted, cinatra#4856). Three primitives are exposed for the
 // trigger-agent's tool list:
 //   - trigger_config_get   (read)
 //   - trigger_config_set   (write — per-tool approval, idempotent)

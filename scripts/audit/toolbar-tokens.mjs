@@ -27,8 +27,26 @@
 //      src/** and packages/**/src/** (committed snapshots/baselines under
 //      scripts/ legitimately embed token VALUES and are out of scope).
 //
-// Wired in CI by .github/workflows/toolbar-tokens-gate.yml (not paths-scoped:
-// check 2 must see every PR).
+//   4. THE TYPE ALLOW LIST MAY NOT GROW (cinatra#3832) — the lint rule's allow
+//      list for arbitrary type values (TYPE_BANS in eslint.config.mjs) lives in
+//      scripts/audit/type-arbitrary-allowlist.baseline.json, which
+//      eslint.config.mjs reads. Its `files` are compared with the copy on the
+//      base branch (scripts/audit/lib/floor-base-guard.mjs): a file on the head
+//      that the base does not hold fails the run, naming it; a removal passes.
+//      A base from before the list moved out of eslint.config.mjs is read from
+//      the array TYPE_ARBITRARY_MIGRATION_ALLOWLIST there. The workflow names
+//      the base from the event itself (TYPE_ALLOWLIST_BASE: the pull request's
+//      or the merge group's base SHA), so a rerun is not compared with the
+//      moving tip of the target branch. A base that cannot be read fails closed
+//      with its reason; a merge group run with no TYPE_ALLOWLIST_BASE fails
+//      closed; a push or a local run has no base and is not compared.
+//      STATED LIMIT: the check reads only this list, so an exemption written on
+//      purpose somewhere else in eslint.config.mjs (another `files` block) is
+//      not caught here.
+//
+// Wired in CI by the step "Toolbar Design-System Gate" of the `gates` job in
+// .github/workflows/gates.yml (full history; not paths-scoped: check 2 must see
+// every PR).
 //
 // Exit codes:
 //   0 — pass
@@ -36,8 +54,10 @@
 //   2 — unexpected internal error (token file missing, etc.)
 
 import { readFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { execFileSync, execSync } from "node:child_process";
 import { resolve } from "node:path";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "./lib/floor-base-guard.mjs";
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -187,6 +207,75 @@ export function scanGroundHexes(source, fileRel) {
 }
 
 // ---------------------------------------------------------------------------
+// The type allow list may not grow against the base (check 4)
+
+export const TYPE_ALLOWLIST_REL = "scripts/audit/type-arbitrary-allowlist.baseline.json";
+
+/** Where the list lived before it moved into its own file (read on an older base). */
+export const TYPE_ALLOWLIST_FORMER_HOME = "eslint.config.mjs";
+
+/** The variable a workflow may set to name the base revision. */
+export const TYPE_ALLOWLIST_BASE_VAR = "TYPE_ALLOWLIST_BASE";
+
+/**
+ * The list's text -> its file paths. The data file (a JSON object): `files`
+ * absent or `null` is the empty list; any other shape throws. The former home
+ * (eslint.config.mjs): the string literals of the array
+ * TYPE_ARBITRARY_MIGRATION_ALLOWLIST, comments skipped; no such array throws.
+ */
+export function parseTypeAllowlist(text) {
+  if (text.trimStart().startsWith("{")) {
+    const doc = JSON.parse(text);
+    if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a list object");
+    const files = doc.files ?? [];
+    if (!Array.isArray(files) || files.some((f) => typeof f !== "string")) throw new Error("files is not a list of paths");
+    return files;
+  }
+  const m = /const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = \[([\s\S]*?)\];/.exec(text);
+  if (!m) throw new Error(`no array TYPE_ARBITRARY_MIGRATION_ALLOWLIST in ${TYPE_ALLOWLIST_FORMER_HOME}`);
+  const body = m[1].replace(/\/\/[^\n]*/g, "");
+  return [...body.matchAll(/"([^"\n]+)"/g)].map((x) => x[1]);
+}
+
+/** The floor base guard for the type allow list (check 4). */
+export function checkTypeAllowlistAgainstBase({ repoRoot, env = process.env }) {
+  const gate = "toolbar-tokens";
+  let headFloor;
+  try {
+    headFloor = parseTypeAllowlist(readFileSync(resolve(repoRoot, TYPE_ALLOWLIST_REL), "utf8"));
+  } catch (err) {
+    return {
+      status: "malformed",
+      ok: false,
+      lines: [`[${gate}] FAIL — the floor ${TYPE_ALLOWLIST_REL} is not a readable list (${err?.message ?? err}). Failing closed.`],
+    };
+  }
+  // A merge group has no pull request base branch for the shared guard to fall
+  // back on: it would pass as "no base". The workflow always names the base.
+  if (env.GITHUB_EVENT_NAME === "merge_group" && !env[TYPE_ALLOWLIST_BASE_VAR]) {
+    return {
+      status: "unreadable",
+      ok: false,
+      lines: [
+        `[${gate}] FAIL — the floor ${TYPE_ALLOWLIST_REL} cannot be compared with the base: ` +
+          `the run is a merge group's but ${TYPE_ALLOWLIST_BASE_VAR} is empty. Failing closed.`,
+      ],
+    };
+  }
+  return compareFloorWithBase({
+    gate,
+    envVar: TYPE_ALLOWLIST_BASE_VAR,
+    floorPath: TYPE_ALLOWLIST_REL,
+    baseFallbackPath: TYPE_ALLOWLIST_FORMER_HOME,
+    headFloor,
+    parse: parseTypeAllowlist,
+    grown: (base, head) => newKeys(base, head).map((f) => `files ${f}`),
+    repoRoot,
+    env,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // CLI
 
 function listTrackedFiles(repoRoot, patterns) {
@@ -238,6 +327,10 @@ async function main() {
     encoding: "utf8",
   }).trim();
 
+  // Check 4 reports on its own and fails the run at the end, so its red does
+  // not hide the readings of checks 1-3.
+  const allowlistHeld = reportFloorGuard(checkTypeAllowlistAgainstBase({ repoRoot }));
+
   let findings;
   try {
     findings = await runGate(repoRoot);
@@ -250,9 +343,9 @@ async function main() {
     findings.drift.length + findings.role.length + findings.hex.length;
   if (total === 0) {
     console.log(
-      "[toolbar-tokens] PASS — tokens match the spec; no non-canonical toolbars; no ground-hex leaks",
+      `[toolbar-tokens] ${allowlistHeld ? "PASS" : "checks 1-3 pass (check 4 failed above)"} — tokens match the spec; no non-canonical toolbars; no ground-hex leaks`,
     );
-    process.exit(0);
+    process.exit(allowlistHeld ? 0 : 1);
   }
 
   if (findings.drift.length > 0) {

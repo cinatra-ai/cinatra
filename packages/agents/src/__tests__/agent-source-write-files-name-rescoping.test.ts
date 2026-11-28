@@ -1,3 +1,4 @@
+// red-first-expect: is not a function
 /**
  * Server-side `package.json#name` rescoping in `agent_source_write_files`.
  *
@@ -415,7 +416,7 @@ describe("agent source writers agree on one vendor segment for a hyphenated scop
     mockReadInstanceIdentity.mockReturnValue({ vendorName: HYPHEN_VENDOR });
     const mod = (await import("../mcp/handlers")) as unknown as {
       __resolveAgentJsonPathForWrite: (slug: string) => unknown;
-      __resolveAgentJsonPathForRead: (slug: string) => unknown;
+      __resolveAgentOasPathForRead: (slug: string) => unknown;
     };
     // A `..` / separator / leading-~ / leading-@ slug must never reach path.join.
     expect(() => mod.__resolveAgentJsonPathForWrite("..")).toThrow(/unsafe/);
@@ -423,10 +424,10 @@ describe("agent source writers agree on one vendor segment for a hyphenated scop
     expect(() => mod.__resolveAgentJsonPathForWrite("@..")).toThrow(/unsafe/);
     expect(() => mod.__resolveAgentJsonPathForWrite("@~evil")).toThrow(/unsafe/);
     // The read resolver returns null (no throw) for an unsafe slug — a read miss.
-    expect(mod.__resolveAgentJsonPathForRead("..")).toBeNull();
-    expect(mod.__resolveAgentJsonPathForRead("../../etc")).toBeNull();
-    expect(mod.__resolveAgentJsonPathForRead("@..")).toBeNull();
-    expect(mod.__resolveAgentJsonPathForRead("@~evil")).toBeNull();
+    expect(mod.__resolveAgentOasPathForRead("..")).toBeNull();
+    expect(mod.__resolveAgentOasPathForRead("../../etc")).toBeNull();
+    expect(mod.__resolveAgentOasPathForRead("@..")).toBeNull();
+    expect(mod.__resolveAgentOasPathForRead("@~evil")).toBeNull();
   });
 
   it("resolveInstanceVendorSegment FAILS CLOSED on an unsafe identity-derived vendor", async () => {
