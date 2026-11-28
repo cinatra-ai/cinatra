@@ -549,6 +549,88 @@ describe("dispatcher host-install ordering + rollback", () => {
     expect(rows.find((r) => r.id === "iext_v1")).toBeDefined();
   });
 
+  it("cinatra#4920: an INCOMPLETE hot-activation rollback carries compensationFailures naming the package; a CLEAN one carries none", async () => {
+    rows = [
+      {
+        id: "iext_hot_v1",
+        packageName: "@v/hot-connector",
+        status: "active",
+        organizationId: "org-1",
+        source: { type: "verdaccio", integrity: "sha512-v1" },
+      },
+    ];
+    extensionRegistry.register(makeHandler("connector"));
+    fireExtensionActivate.mockResolvedValueOnce({
+      finalized: true,
+      activated: false,
+      rolledBack: true,
+      rollbackComplete: false,
+      reason: "failed restore steps: provenance",
+    });
+    const incomplete = await extensionRegistry
+      .update("connector", makeRef("@v/hot-connector"), orgActor)
+      .then(() => null, (e: unknown) => e as Error & { compensationFailures?: string[] });
+    expect(incomplete!.message).toMatch(/durable rollback is INCOMPLETE — manual recovery required/);
+    expect(incomplete!.compensationFailures).toEqual(["@v/hot-connector"]);
+
+    fireExtensionActivate.mockResolvedValueOnce({
+      finalized: true,
+      activated: false,
+      rolledBack: true,
+      rollbackComplete: true,
+      reason: "register-threw",
+    });
+    const clean = await extensionRegistry
+      .update("connector", makeRef("@v/hot-connector"), orgActor)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(clean!.message).toMatch(/did NOT take/);
+    expect(clean).not.toHaveProperty("compensationFailures");
+  });
+
+  it("cinatra#4920: an INCOMPLETE rollback reported by the metadata-only pipeline carries compensationFailures", async () => {
+    rows = [
+      {
+        id: "iext_meta_v1",
+        packageName: "@v/meta-skill",
+        status: "active",
+        organizationId: "org-1",
+        source: { type: "verdaccio", integrity: "sha512-v1", version: "0.9.0" } as never,
+      },
+    ];
+    const handler = makeHandler("skill");
+    extensionRegistry.register(handler);
+    fireExtensionActivate.mockResolvedValueOnce({
+      finalized: true,
+      activated: false,
+      rolledBack: true,
+      rollbackComplete: false,
+      reason: "restore failed",
+    });
+    const err = await extensionRegistry
+      .update("skill", { registryUrl: "", packageName: "@v/meta-skill", version: "2.0.0" }, orgActor)
+      .then(() => null, (e: unknown) => e as Error & { compensationFailures?: string[] });
+    expect(err!.message).toMatch(/durable rollback is INCOMPLETE/);
+    expect(err!.compensationFailures).toEqual(["@v/meta-skill"]);
+    expect(handler.update).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#4920: a committed-but-not-activated install whose ARCHIVE fails carries compensationFailures; an archived one carries none", async () => {
+    extensionRegistry.register(makeHandler("connector"));
+    fireExtensionActivate.mockResolvedValue({ finalized: true, activated: false, reason: "anchor-refused" });
+    transitionExtensionLifecycle.mockRejectedValueOnce(new Error("archive write failed"));
+    const residue = await extensionRegistry
+      .install("connector", makeRef("@v/pc-fail-connector"), orgActor)
+      .then(() => null, (e: unknown) => e as Error & { compensationFailures?: string[] });
+    expect(residue!.message).toMatch(/RECOVERY REQUIRED/);
+    expect(residue!.compensationFailures).toEqual(["@v/pc-fail-connector"]);
+
+    const archived = await extensionRegistry
+      .install("connector", makeRef("@v/pc-ok-connector"), orgActor)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(archived!.message).toMatch(/committed but could not activate in this process/);
+    expect(archived).not.toHaveProperty("compensationFailures");
+  });
+
   it("a handler.install throw rolls back the placeholder row it just created", async () => {
     const handler = makeHandler("connector");
     (handler.install as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("handler boom"));

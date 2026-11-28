@@ -94,8 +94,15 @@ vi.mock("../materialize-agent-package", () => ({
   withInstallLock: (_pkg: string, fn: () => Promise<unknown>) => fn(),
 }));
 
+// The disk + runtime cleanup of the skill-failure compensation (cinatra#4920).
+vi.mock("../extension-handler-rollback", () => ({
+  rmDirForRolledBackInstall: vi.fn(async () => {}),
+  triggerReloadAfterRollback: vi.fn(async () => {}),
+}));
+
 import { createAgentExtensionHandler } from "../extension-handler";
 import {
+  deleteAgentTemplate,
   installAgentFromPackage,
   installAgentPackageWithDependencies,
 } from "@cinatra-ai/agents";
@@ -165,5 +172,40 @@ describe("createAgentExtensionHandler — #157 saga collapses the second resolve
 
     expect(installAgentPackageWithDependencies).toHaveBeenCalledTimes(1);
     expect(installAgentFromPackage).not.toHaveBeenCalled();
+  });
+});
+
+describe("createAgentExtensionHandler — a failed skill-registration rollback is reported (cinatra#4920)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sagaActiveSpy.mockReturnValue(true);
+    resolveInstallEnvironmentMock.mockResolvedValue({
+      args: [`--registry=${BROKER_URL}`, `--//marketplace.cinatra.ai/:_authToken=opaque.grant`],
+      registryUrl: BROKER_URL,
+      routingMode: "shared-acl",
+    });
+  });
+
+  it("a rollback step that fails names the package in compensationFailures on the rethrown error", async () => {
+    // Skill registration fails (no finalized store payload) after the template
+    // was installed; the compensation's template delete then fails too.
+    resolveFinalizedStorePayloadMock.mockResolvedValueOnce(null as never);
+    (deleteAgentTemplate as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("delete failed"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const err = await createAgentExtensionHandler()
+      .install({ packageName: "@scope/ext", version: "1.2.3" } as never, mockActor as never)
+      .then(() => null, (e: unknown) => e as Error & { compensationFailures?: string[] });
+    expect(err!.message).toMatch(/no FINALIZED store payload/);
+    expect(err!.compensationFailures).toEqual(["@scope/ext"]);
+    errorSpy.mockRestore();
+  });
+
+  it("a complete rollback attaches nothing", async () => {
+    resolveFinalizedStorePayloadMock.mockResolvedValueOnce(null as never);
+    const err = await createAgentExtensionHandler()
+      .install({ packageName: "@scope/ext", version: "1.2.3" } as never, mockActor as never)
+      .then(() => null, (e: unknown) => e as Error);
+    expect(err!.message).toMatch(/no FINALIZED store payload/);
+    expect(err).not.toHaveProperty("compensationFailures");
   });
 });

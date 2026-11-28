@@ -1318,6 +1318,23 @@ async function compensateHandlerFailureAfterFinalize(input: {
   }
 }
 
+/**
+ * cinatra#4920: mark an error thrown by the dispatcher as leaving `packageName`
+ * in a state that needs manual recovery — the `compensationFailures` shape the
+ * install batch and every caller reporting an incomplete rollback read.
+ * Message, class and code stay as they are.
+ */
+function withCompensationFailure<E>(err: E, packageName: string): E {
+  if (err !== null && typeof err === "object") {
+    const carried = (err as { compensationFailures?: unknown }).compensationFailures;
+    const names = Array.isArray(carried)
+      ? carried.filter((n): n is string => typeof n === "string")
+      : [];
+    Object.assign(err, { compensationFailures: [...new Set([...names, packageName])] });
+  }
+  return err;
+}
+
 // ---------------------------------------------------------------------------
 // POST-COMMIT ACTIVATION COMPENSATION.
 //
@@ -1334,13 +1351,14 @@ async function compensateHandlerFailureAfterFinalize(input: {
 // so the caller's error states exactly what is now true.
 //
 // Never throws: the caller is already reporting a failure and must be able to
-// surface the activation reason AND what compensation achieved.
+// surface the activation reason AND what compensation achieved. `residue` is
+// true when the committed row could not be archived (manual recovery).
 // ---------------------------------------------------------------------------
 async function compensatePostCommitActivationFailure(
   packageName: string,
   rowId: string | null,
   actor: Actor,
-): Promise<string> {
+): Promise<{ text: string; residue: boolean }> {
   const notes: string[] = [];
   let archived = false;
   if (rowId) {
@@ -1382,7 +1400,10 @@ async function compensatePostCommitActivationFailure(
       );
     }
   }
-  return notes.length > 0 ? `${notes.join(" ")}.` : "No install row was created.";
+  return {
+    text: notes.length > 0 ? `${notes.join(" ")}.` : "No install row was created.",
+    residue: rowId !== null && !archived,
+  };
 }
 
 // The kinds that ship a HOT-LOADABLE `register(ctx)` server module, whose
@@ -1835,10 +1856,11 @@ class ExtensionRegistryImpl {
         // rollback path, but honor a rolledBack verdict truthfully if one ever
         // surfaces — the update did NOT take.
         if (result.rolledBack === true) {
-          throw new Error(
+          const err = new Error(
             `${op} of ${ref.packageName} did NOT take — the new digest was rolled back ` +
               `(${result.reason ?? "unknown"})${result.rollbackComplete === true ? "; the previous version is retained" : " and the durable rollback is INCOMPLETE — manual recovery required"}.`,
           );
+          throw result.rollbackComplete === true ? err : withCompensationFailure(err, ref.packageName);
         }
         pipelineFinalizedBeforeHandler = true;
       }
@@ -1876,14 +1898,14 @@ class ExtensionRegistryImpl {
           // cinatra#4920: carry the failed rollback as `compensationFailures`
           // (the shape the install batch uses), so a caller that reports an
           // incomplete rollback sees it for a root-only install too.
-          throw Object.assign(
+          throw withCompensationFailure(
             new Error(
               `${op} of ${ref.packageName} failed in the ${typeId} handler AFTER the store ` +
                 `pipeline finalized (${err instanceof Error ? err.message : String(err)}) — AND the ` +
                 `dispatcher compensation ALSO failed (${comp.detail}); manual recovery required: the ` +
                 `canonical row may be ACTIVE with no run surface.`,
             ),
-            { compensationFailures: [ref.packageName] },
+            ref.packageName,
           );
         }
       } else if (ensure.ownsRollback && ensure.rowId) {
@@ -2019,12 +2041,15 @@ class ExtensionRegistryImpl {
     //       durable anchor is inconsistent and an operator must reconcile it).
     if (result.rolledBack === true) {
       if (result.rollbackComplete !== true) {
-        throw new Error(
-          `${op} of ${ref.packageName} FAILED and the durable rollback is INCOMPLETE — ` +
-            `manual recovery required (the previous digest is quarantined/restorable on disk and ` +
-            `boot-recoverable, but at least one durable restore step did not complete: ` +
-            `${result.reason ?? "unknown"}). Reconcile the install's durable anchor (provenance / ` +
-            `install-op journal / host-port grant) before re-attempting the update.`,
+        throw withCompensationFailure(
+          new Error(
+            `${op} of ${ref.packageName} FAILED and the durable rollback is INCOMPLETE — ` +
+              `manual recovery required (the previous digest is quarantined/restorable on disk and ` +
+              `boot-recoverable, but at least one durable restore step did not complete: ` +
+              `${result.reason ?? "unknown"}). Reconcile the install's durable anchor (provenance / ` +
+              `install-op journal / host-port grant) before re-attempting the update.`,
+          ),
+          ref.packageName,
         );
       }
       throw new Error(
@@ -2055,10 +2080,11 @@ class ExtensionRegistryImpl {
         ensure.rowId,
         actor,
       );
-      throw new Error(
+      const err = new Error(
         `${op} of ${ref.packageName} committed but could not activate in this process ` +
-          `(${result.reason ?? "unknown"}). ${compensation}`,
+          `(${result.reason ?? "unknown"}). ${compensation.text}`,
       );
+      throw compensation.residue ? withCompensationFailure(err, ref.packageName) : err;
     }
   }
 

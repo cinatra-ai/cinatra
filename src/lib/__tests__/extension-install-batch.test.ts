@@ -3,6 +3,45 @@
 // overlap guard, requires-rebuild pass-through, and the boot sweeper.
 import { describe, expect, it, vi } from "vitest";
 
+// cinatra#4920: the boundary BELOW the real dispatcher (`extensionRegistry`),
+// for the tests that let the dispatcher itself produce a member's error. Only
+// those tests reach these modules; every other test injects complete deps.
+const dispatcherBoundary = vi.hoisted(() => ({
+  rows: [] as Array<{
+    id: string;
+    packageName: string;
+    status: string;
+    organizationId: string | null;
+    source: { type: string; integrity?: string; version?: string } | null;
+  }>,
+  activateResult: null as null | Record<string, unknown>,
+}));
+vi.mock("../../../packages/extensions/src/canonical-store", () => ({
+  readInstalledExtensionsByPackageName: async (pkg: string) =>
+    dispatcherBoundary.rows.filter((r) => r.packageName === pkg),
+  readInstalledExtensionById: async (id: string) =>
+    dispatcherBoundary.rows.find((r) => r.id === id) ?? null,
+  listInstalledExtensions: async () => [],
+  readEffectiveStatusByPackageNames: async () => new Map(),
+}));
+vi.mock("../../../packages/extensions/src/lifecycle-primitive", () => ({
+  installExtensionManifest: async (row: unknown) => row,
+  transitionExtensionLifecycle: async () => null,
+  deleteNonFinalizedCanonicalRow: async () => undefined,
+}));
+vi.mock("../../../packages/extensions/src/required-in-prod", () => ({
+  isPackageRequiredInProd: () => false,
+  checkRequiredExtensionVersionPin: () => ({ ok: true }),
+}));
+vi.mock("../../../packages/extensions/src/activate-hook", () => ({
+  fireExtensionActivate: async () => dispatcherBoundary.activateResult,
+}));
+vi.mock("@cinatra-ai/agents", () => ({
+  withInstallLock: async (_pkg: string, fn: () => Promise<unknown>) => fn(),
+}));
+
+import { extensionRegistry } from "@cinatra-ai/extensions";
+
 import {
   installExtensionWithDependencies,
   sweepStaleInstallBatches,
@@ -2641,16 +2680,50 @@ describe("installExtensionWithDependencies — a failed member's own dispatcher 
 // of the prior version can fail too (it then carries the root on the error).
 describe("installExtensionWithDependencies — the recorded phase and member states follow every rollback failure (cinatra#4920)", () => {
   const DEP = "@cinatra-ai/new-dep";
+  // A non-gatekept CONNECTOR root update. The member's update runs through the
+  // REAL dispatcher (`extensionRegistry.update`); only the boundary below it is
+  // faked: the canonical store holds the healthy pre-existing root row and the
+  // activate hook reports the new digest failed live activation and was rolled
+  // back — completely, or with a durable restore step that did not complete.
   function rootUpdate(opts: { restoreFails: boolean; depTeardownFails: boolean }) {
     const h = makeHarness({
       preInstalled: [ROOT],
-      plan: [member(DEP), member(ROOT, { action: "update" })],
+      plan: [member(DEP), member(ROOT, { action: "update", typeId: "connector" })],
     });
-    (h.deps.updateMemberPackage as ReturnType<typeof vi.fn>).mockImplementation(async () => {
-      throw Object.assign(new Error("handler failed; prior-version restore result attached"), {
-        ...(opts.restoreFails ? { compensationFailures: [ROOT] } : {}),
-      });
-    });
+    extensionRegistry._resetForTesting();
+    extensionRegistry.register({
+      typeId: "connector",
+      install: vi.fn(async () => undefined),
+      update: vi.fn(async () => undefined),
+      uninstall: vi.fn(async () => undefined),
+      archive: vi.fn(async () => undefined),
+      restore: vi.fn(async () => undefined),
+    } as never);
+    dispatcherBoundary.rows = [
+      {
+        id: "iext_root_v0",
+        packageName: ROOT,
+        status: "active",
+        organizationId: null,
+        source: { type: "verdaccio", integrity: "sha512-v0", version: "0.9.0" },
+      },
+    ];
+    dispatcherBoundary.activateResult = {
+      finalized: true,
+      activated: false,
+      rolledBack: true,
+      rollbackComplete: !opts.restoreFails,
+      reason: opts.restoreFails ? "failed:register-threw (failed restore steps: provenance)" : "failed:register-threw",
+    };
+    (h.deps.updateMemberPackage as ReturnType<typeof vi.fn>).mockImplementation(
+      async (m: PlannedMember, a: Actor) => {
+        await extensionRegistry.update(
+          m.typeId,
+          { registryUrl: "", packageName: m.packageName, version: m.version },
+          a,
+        );
+      },
+    );
     if (opts.depTeardownFails) {
       (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error("uninstall refused"),
@@ -2673,6 +2746,8 @@ describe("installExtensionWithDependencies — the recorded phase and member sta
 
   it("(ii) only a carried failure: the prior-version restore failed, dependency cleanup succeeded", async () => {
     const { error, batch, view } = await run(rootUpdate({ restoreFails: true, depTeardownFails: false }));
+    // The dispatcher itself produced the root's error (no field set by hand).
+    expect(String((error.cause as Error).message)).toMatch(/durable rollback is INCOMPLETE/);
     expect(batch.phase).toBe("failed");
     expect(view.compensationFailed).toEqual([ROOT]);
     expect(view.compensated).toEqual([DEP]);
@@ -2681,8 +2756,20 @@ describe("installExtensionWithDependencies — the recorded phase and member sta
     expect(error.message).toMatch(new RegExp(`ROLLBACK INCOMPLETE for ${ROOT}`));
   });
 
+  it("a non-gatekept connector update whose hot activation was rolled back INCOMPLETELY, with a fresh dependency cleaned up: recorded failed, the root named, the summary says incomplete", async () => {
+    const { error, batch, view } = await run(rootUpdate({ restoreFails: true, depTeardownFails: false }));
+    expect((error.cause as { compensationFailures?: string[] }).compensationFailures).toEqual([ROOT]);
+    expect(batch.phase).toBe("failed");
+    expect(batch.members.find((m) => m.packageName === ROOT)?.status).toBe("compensation-failed");
+    expect(view.compensationFailed).toEqual([ROOT]);
+    expect(view.headline).toBe(
+      `Install of ${ROOT} failed and rollback was incomplete — manual cleanup may be needed.`,
+    );
+  });
+
   it("(i) only a batch-owned failure: the dependency teardown failed, the restore succeeded", async () => {
     const { error, batch, view } = await run(rootUpdate({ restoreFails: false, depTeardownFails: true }));
+    expect(String((error.cause as Error).message)).toMatch(/did NOT take/);
     expect(batch.phase).toBe("failed");
     expect(view.compensationFailed).toEqual([DEP]);
     expect(view.failedMember).toBe(ROOT);
@@ -2698,6 +2785,7 @@ describe("installExtensionWithDependencies — the recorded phase and member sta
 
   it("(iv) none: a clean rollback is recorded as compensated and the error carries no failure", async () => {
     const { error, batch, view } = await run(rootUpdate({ restoreFails: false, depTeardownFails: false }));
+    expect(String((error.cause as Error).message)).toMatch(/did NOT take/);
     expect(batch.phase).toBe("compensated");
     expect(view.compensationFailed).toEqual([]);
     expect(view.compensated).toEqual([DEP]);

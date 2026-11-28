@@ -315,9 +315,14 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
     // rows in the catalog whose slug points at a template that was just
     // deleted. The next install attempt would self-heal (upsertSkill
     // refreshes in place), but in the interim the catalog is inconsistent.
+    // cinatra#4920: any rollback step that fails leaves the package in a state
+    // that needs manual recovery; the rethrown error then names it in the
+    // `compensationFailures` shape the install batch and its callers read.
+    let rollbackIncomplete = false;
     try {
       await deleteAgentTemplate(result.rootTemplateId);
     } catch (rollbackErr) {
+      rollbackIncomplete = true;
       // Log rollback failure but rethrow the ORIGINAL skill error.
       // eslint-disable-next-line no-console
       console.error(
@@ -328,6 +333,7 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
     try {
       await deleteAgentSkillsForSlugs([slugify(ref.packageName)]);
     } catch (skillRollbackErr) {
+      rollbackIncomplete = true;
       // Same: log + rethrow the ORIGINAL skill error.
       // eslint-disable-next-line no-console
       console.error(
@@ -346,11 +352,21 @@ async function installAndRegisterSkills(ref: PackageRef, actor: Actor, status?: 
       await rmDirForRolledBackInstall(ref.packageName);
       await triggerReloadAfterRollback();
     } catch (diskRollbackErr) {
+      rollbackIncomplete = true;
       // eslint-disable-next-line no-console
       console.error(
         "[agent-extension-handler] Rollback (disk + reload) failed:",
         diskRollbackErr,
       );
+    }
+    if (rollbackIncomplete && skillErr !== null && typeof skillErr === "object") {
+      const carried = (skillErr as { compensationFailures?: unknown }).compensationFailures;
+      const names = Array.isArray(carried)
+        ? carried.filter((n): n is string => typeof n === "string")
+        : [];
+      Object.assign(skillErr, {
+        compensationFailures: [...new Set([...names, ref.packageName])],
+      });
     }
     throw skillErr;
   }
