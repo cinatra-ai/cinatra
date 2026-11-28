@@ -208,7 +208,7 @@ async function acquireAgentPackagePayload(
         version?: string;
       };
       // Same payload/readme resolution as extractAgentPackage (the OAS Flow
-      // document from cinatra/oas.json, legacy root agent.json fallback).
+      // document from cinatra/oas.json only; a root agent.json is refused).
       const oasPayload = await readAgentPayloadFromExtractedPackage(tempDir);
       const readmePath = join(tempDir, "README.md");
       const readme = (await access(readmePath).then(() => true).catch(() => false))

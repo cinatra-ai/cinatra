@@ -1,7 +1,7 @@
 // Pure Node.js module — no "use server". Safe to import from instrumentation.node.ts.
 // Reads a system-provided agent ZIP from data/downloads/, injects the
 // packageName/packageVersion via a synthetic sibling package.json (NOT into
-// agent.json — the compiler reads identity from the sibling package.json), and
+// cinatra/oas.json — the compiler reads identity from the sibling package.json), and
 // upserts the template via importAgentTemplate. The git-file loader
 // (ensureAgentPackageFromGitFile) resolves the version solely from the sibling
 // package.json#version.
@@ -273,13 +273,13 @@ export async function ensureAgentPackage(opts: {
   const zipBuf = await readFile(zipPath);
 
   // --- Inject packageName/packageVersion via a synthetic package.json ---
-  // packageName / packageVersion live in package.json, not agent.json;
+  // packageName / packageVersion live in package.json, not cinatra/oas.json;
   // the OAS compiler reads them from the sibling package.json. If the input ZIP
   // doesn't already carry a package.json, synthesize one from opts.
   const files = readZipFiles(zipBuf);
-  const agentRaw = files.get("agent.json");
+  const agentRaw = files.get("cinatra/oas.json");
   if (!agentRaw) {
-    throw new Error(`[ensureAgentPackage] ${opts.zipFileName}: agent.json not found in ZIP`);
+    throw new Error(`[ensureAgentPackage] ${opts.zipFileName}: cinatra/oas.json not found in ZIP`);
   }
 
   const agentJson = JSON.parse(agentRaw) as Record<string, unknown>;
@@ -291,8 +291,8 @@ export async function ensureAgentPackage(opts: {
     2,
   );
 
-  // Rebuild ZIP — keep every non-agent.json / non-package.json file verbatim;
-  // inject the synthetic package.json and the (possibly renamed) agent.json.
+  // Rebuild ZIP — keep every non-oas.json / non-package.json file verbatim;
+  // inject the synthetic package.json and the (possibly renamed) cinatra/oas.json.
   const allFiles: { name: string; content: string }[] = [];
   let packageJsonInjected = false;
   // Did the ZIP carry a REAL, parseable author manifest — or is the
@@ -304,7 +304,7 @@ export async function ensureAgentPackage(opts: {
   // synthesis below.
   let authorManifestPresent = false;
   for (const [fileName, content] of files.entries()) {
-    if (fileName === "agent.json") {
+    if (fileName === "cinatra/oas.json") {
       allFiles.push({ name: fileName, content: JSON.stringify(agentJson, null, 2) });
     } else if (fileName === "package.json") {
       // Prefer opts' packageName/packageVersion but keep any extra metadata.
@@ -753,7 +753,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
   }
   const agentJsonForZip = JSON.stringify(content, null, 2);
 
-  // --- Build an in-memory ZIP containing agent.json + manifest.json + package.json ---
+  // --- Build an in-memory ZIP containing cinatra/oas.json + manifest.json + package.json ---
   // importAgentTemplate expects a base64-encoded ZIP with a manifest at v1.
   // Include the sibling package.json in the ZIP so importAgentTemplateCore
   // can read packageName, packageVersion, and agentDependencies from it (the compiler
@@ -815,7 +815,7 @@ export async function ensureAgentPackageFromGitFile(opts: {
     }
   }
   const zipBuf = createZipBuffer([
-    { name: "agent.json", content: agentJsonForZip },
+    { name: "cinatra/oas.json", content: agentJsonForZip },
     { name: "manifest.json", content: manifestJson },
     { name: "package.json", content: packageJsonForZip },
     ...licenseEntries,

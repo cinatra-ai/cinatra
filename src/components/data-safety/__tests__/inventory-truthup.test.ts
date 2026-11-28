@@ -18,25 +18,30 @@ const inv = JSON.parse(
 const status = (a: string) => inv.surfaces.find((s) => s.action === a)?.status;
 
 describe("email-outreach stage actions are archived stubs → EXCLUDED", () => {
-  const stubs = [
-    "confirmCampaignRecipients",
-    "removeEmailOutreachRecipient",
-    "removeEmailOutreachRecipients",
-    "updateInitialDraft",
-    "dismissReviewRecommendation",
-    "applyReviewRecommendation",
-  ];
-  it("all six are EXCLUDED in the inventory", () => {
+  const stubs = ["removeEmailOutreachRecipients", "updateInitialDraft"];
+  it("both are EXCLUDED in the inventory", () => {
     for (const a of stubs) expect(status(a)).toBe("EXCLUDED");
   });
   it("the underlying primitive handlers are {ok:true} stubs (no object mutation)", () => {
     const src = read("packages/agents/src/email-outreach-stage-actions.ts");
     expect(src).toMatch(/primitive handlers are archived/);
-    expect(src).toMatch(/email_outreach_recipients_confirm: async \(_req: unknown\) => \(\{ ok: true \}\)/);
     expect(src).toMatch(/email_outreach_recipients_clear: async \(_req: unknown\) => \(\{ ok: true \}\)/);
     expect(src).toMatch(/email_outreach_initial_drafts_update: async \(_req: unknown\) => \(\{ ok: true \}\)/);
-    expect(src).toMatch(/email_outreach_review_recommendation_dismiss: async \(_req: unknown\) => \(\{ ok: true \}\)/);
-    expect(src).toMatch(/email_outreach_review_recommendation_apply_start: async \(_req: unknown\) => \(\{ ok: true \}\)/);
+  });
+
+  // red-first-expect: AssertionError: expected [ 'confirmCampaignRecipients', …(5) ] to deeply equal []
+  it("the review-check, confirm and single-remove stubs are deleted (cinatra#4857)", () => {
+    const src = read("packages/agents/src/email-outreach-stage-actions.ts");
+    const gone = [
+      "confirmCampaignRecipients",
+      "removeEmailOutreachRecipient",
+      "runReviewCheck",
+      "getReviewCheckState",
+      "dismissReviewRecommendation",
+      "applyReviewRecommendation",
+    ];
+    expect(gone.filter((n) => new RegExp(`export async function ${n}\\b`).test(src))).toEqual([]);
+    expect(gone.filter((a) => status(a) !== undefined)).toEqual([]);
   });
 });
 
@@ -49,7 +54,7 @@ describe("email-outreach stage actions are archived stubs → EXCLUDED", () => {
 // write-surface inventory entirely.
 
 describe("inventory tally after the CRM-surface retirement", () => {
-  it("12 EXCLUDED / 1 MIGRATED / 0 PENDING — the retired account/contact/list write surfaces are gone; the surviving entries are email-outreach stubs + reads + restoreObjectToVersionAction", () => {
-    expect(inv.tally).toEqual({ EXCLUDED: 12, MIGRATED: 1 });
+  it("6 EXCLUDED / 1 MIGRATED / 0 PENDING — the retired account/contact/list write surfaces are gone; the surviving entries are email-outreach stubs + reads + restoreObjectToVersionAction", () => {
+    expect(inv.tally).toEqual({ EXCLUDED: 6, MIGRATED: 1 });
   });
 });

@@ -93,6 +93,11 @@
       "resolvedSha": "7d430c7b20d47a70bc02383f6d09ce06d3b5c7ad"
     },
     {
+      "packageName": "@cinatra-ai/blog-post-html-skill",
+      "repo": "cinatra-ai/blog-post-html-skill",
+      "resolvedSha": "644f7146624a5b714115becc3d36bd98afbbec41"
+    },
+    {
       "packageName": "@cinatra-ai/blog-post-matcher-skill",
       "repo": "cinatra-ai/blog-post-matcher-skill",
       "resolvedSha": "3c156ca01cce8f2dbd2b2a97c74d36c2082964ff"
@@ -100,7 +105,7 @@
     {
       "packageName": "@cinatra-ai/blog-wordpress-publish-agent",
       "repo": "cinatra-ai/blog-wordpress-publish-agent",
-      "resolvedSha": "ed523da6097c51309b9e883a49ee2b472f85081f"
+      "resolvedSha": "0736d876a74fe9ee29b9a16a52304303d7f96610"
     },
     {
       "packageName": "@cinatra-ai/blog-writing-skill",
@@ -280,7 +285,7 @@
     {
       "packageName": "@cinatra-ai/list-curator-agent",
       "repo": "cinatra-ai/list-curator-agent",
-      "resolvedSha": "a66be10bb1f61ce6649a79db278ee2ba863237ca"
+      "resolvedSha": "d4d56c44f3e48d505fb1e9ef477a66baccc762ce"
     },
     {
       "packageName": "@cinatra-ai/marketing-icp-artifact",

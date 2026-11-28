@@ -425,7 +425,7 @@ export function scanOasForUntrustedUrls(parsed: Record<string, unknown>): Review
 // llm-bridge wiring scan
 // ---------------------------------------------------------------------------
 
-function isLlmBridgeUrl(url: unknown): boolean {
+export function isLlmBridgeUrl(url: unknown): boolean {
   if (typeof url !== "string") return false;
   if (url === "{{CINATRA_BASE_URL}}/api/llm-bridge") return true;
   if (url === "/api/llm-bridge") return true;

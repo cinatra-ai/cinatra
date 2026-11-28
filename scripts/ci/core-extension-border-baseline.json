@@ -1,6 +1,16 @@
 {
-  "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. See docs/internals/contracts/core-extension-border.md.",
+  "note": "SHRINK-ONLY ledger of the core/extension border crossings that stood in this tree the day scripts/ci/core-extension-border-gate.mjs landed. Every entry names ONE file and ONE detail, and states in one line why it stands today; there is no wildcard and no shape match. A crossing outside this ledger fails CI immediately. A `pack-shaped-core-domain` entry additionally records the line count of every product file it holds: a NEW file inside it, or a recorded file above its recorded count, is a failure, because the ledger may shrink and never grow. Regenerate with `node scripts/ci/core-extension-border-gate.mjs --write-baseline`, which carries every stated reason forward and refuses to leave a new entry unexplained. See docs/internals/contracts/core-extension-border.md. `rules` lists the rules this ledger ratchets: a rule absent from it on the base branch is seeded in the pull request that adds it, and a listed rule never gains an entry.",
   "schemaVersion": 1,
+  "rules": [
+    "materialized-extension-file",
+    "pack-named-passthrough",
+    "pack-package-name-branch",
+    "pack-shaped-core-domain",
+    "pack-step-kind-in-core",
+    "pack-table-literal",
+    "pack-type-id-in-core",
+    "skill-legacy-exception"
+  ],
   "entries": [
     {
       "rule": "pack-named-passthrough",
@@ -57,7 +67,7 @@
       "key": "packages/agents/src/campaign-recipients-review-renderer.tsx",
       "reason": "A host-authored renderer for a pack's review screen. It predates the self-owned-renderer road and is recorded at its current size so the host copy can only shrink as the pack takes its pixels back.",
       "files": {
-        "packages/agents/src/campaign-recipients-review-renderer.tsx": 688
+        "packages/agents/src/campaign-recipients-review-renderer.tsx": 669
       }
     },
     {
@@ -74,24 +84,57 @@
       "reason": "The standing host-side blog domain: generation, storage, projections and the WordPress road for a flow that belongs to the blog packs. It predates the border contract and is recorded file by file so it can only shrink.",
       "files": {
         "src/lib/blog/application/use-cases.ts": 180,
-        "src/lib/blog/dashboard-url.ts": 61,
         "src/lib/blog/generation.ts": 762,
-        "src/lib/blog/index.ts": 15,
+        "src/lib/blog/index.ts": 14,
         "src/lib/blog/integration/asset-blog-backfill.ts": 261,
         "src/lib/blog/integration/asset-blog-store-codec.ts": 181,
         "src/lib/blog/integration/blog-content-adapters.ts": 122,
-        "src/lib/blog/integration/module.ts": 20,
+        "src/lib/blog/integration/module.ts": 19,
         "src/lib/blog/integration/register-object-types.ts": 200,
         "src/lib/blog/mcp/client/deterministic-client.ts": 116,
         "src/lib/blog/mcp/handlers.ts": 207,
         "src/lib/blog/mcp/registry.ts": 144,
         "src/lib/blog/mcp/schemas.ts": 147,
         "src/lib/blog/member-post-draft-projection.ts": 163,
-        "src/lib/blog/plugin/definition.ts": 16,
         "src/lib/blog/ports/blog-content.ts": 132,
-        "src/lib/blog/store.ts": 1606,
+        "src/lib/blog/store.ts": 1605,
         "src/lib/blog/wordpress.ts": 465
       }
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::blog-idea-selection (@cinatra-ai/blog-connector, @cinatra-ai/blog-idea-artifact, @cinatra-ai/blog-idea-authoring-skill, @cinatra-ai/blog-idea-generator-agent, @cinatra-ai/blog-idea-matcher-skill)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::email-drafts-review (@cinatra-ai/email-connector)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::follow-up-cadence (@cinatra-ai/email-follow-up-agent)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::gmail-sender (@cinatra-ai/gmail-connector)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::linkedin-draft-review (@cinatra-ai/linkedin-connector, @cinatra-ai/linkedin-oauth-connector)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::test-delivery-input (@cinatra-ai/email-test-delivery-agent)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#4852 removes it: the agent declares its step with a generic kind and the key leaves the table."
+    },
+    {
+      "rule": "pack-step-kind-in-core",
+      "key": "packages/agents/src/register-default-renderers.ts::wordpress-draft-confirm (@cinatra-ai/wordpress-agent, @cinatra-ai/wordpress-assistant-connector, @cinatra-ai/wordpress-mcp-connector)",
+      "reason": "A step-screen kind named after one pack's step that stood in the core kind table when this rule landed. cinatra#3470 removes it: the agent declares its screen with a generic kind and the key leaves the table."
     },
     {
       "rule": "pack-type-id-in-core",

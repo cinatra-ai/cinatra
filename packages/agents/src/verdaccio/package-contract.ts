@@ -485,6 +485,19 @@ export const cinatraAgentPackageMetadataSchema = z.object({
     })
     .optional()
     .catch(undefined),
+  // The release note the publisher supplied (`changelog` on the publish tools).
+  // Optional for back-compat with every already-published package. A plain
+  // `z.object`, so an undeclared key is STRIPPED on parse: declaring it here
+  // keeps the publish-side carry (`verdaccio/client.ts`,
+  // `verdaccio/package-files.ts`) from being erased again. The registry read
+  // (`toSummary` in @cinatra-ai/registries) takes the summary's `changelog`
+  // from this block. FAIL-SOFT like `displayName`: a malformed value degrades
+  // to absent instead of failing the whole manifest at install.
+  changelog: z
+    .string()
+    .refine((v) => v.trim().length > 0)
+    .optional()
+    .catch(undefined),
   // `produces: SemanticArtifactRef[]` declarations are the ONLY path for typed
   // agent output (cinatra#1788, epic #1785): each entry names a REQUIRED
   // artifact-kind dependency (`extension`) and OPTIONALLY the exact

@@ -175,6 +175,12 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // against the vendored output types, the same client the approval pages call. Test-only,
   // not new production coupling; moves to the contract import with the swap.
   "src/app/configuration/marketplace/__tests__/marketplace-mcp-stub.test.ts",
+  // The core-pack-pin check's list (#4853) holds one key per core test file that
+  // names a pinned pack; the vendored package's own http-client test is one such
+  // file, so its path is a key there. A list key, not an import; the key leaves
+  // the list when that test stops naming the pack, and the entry leaves with the
+  // vendored package.
+  "scripts/audit/core-pack-pin-gate.baseline.json",
 ]);
 
 /** Files / directories the scanner skips entirely (perf + accuracy).

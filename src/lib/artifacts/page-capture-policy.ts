@@ -21,7 +21,7 @@
 export interface RegisteredCaptureSite {
   /** The opaque connect site id (audit/correlation). */
   readonly siteId: string;
-  /** The connect client kind (`wordpress` / `drupal`). */
+  /** The connect client kind (an opaque string). */
   readonly client: string;
   /** The registered origin (`connect_sites.widget_origin`). */
   readonly origin: string;

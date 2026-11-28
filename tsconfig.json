@@ -99,7 +99,6 @@
       "@cinatra-ai/agents/auditor-apply": ["./packages/agents/src/auditor-apply.ts"],
       "@cinatra-ai/agents/agent-runtime-mount": ["./packages/agents/src/agent-runtime-mount.ts"],
       "@cinatra-ai/agents/client-entry": ["./packages/agents/src/client-entry.ts"],
-      "@cinatra-ai/agents/cli": ["./packages/agents/src/cli/index.ts"],
       "@cinatra-ai/agents/auth-policy": ["./packages/agents/src/auth-policy.ts"],
       "@cinatra-ai/agents/auth-policy-types": ["./packages/agents/src/auth-policy-types.ts"],
       "@cinatra-ai/agents/install-targets": ["./packages/agents/src/install-targets.ts"],
