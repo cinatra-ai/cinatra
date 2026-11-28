@@ -256,3 +256,40 @@ describe("twin writer — delete query list (tombstone, Q2)", () => {
     }
   });
 });
+
+describe("twin writer — the object type comes from the artifact-dashboard-twin role (cinatra#4849)", () => {
+  it("writes the type the generated bindings carry for the role's claimant", async () => {
+    const generated = await import("@/lib/generated/agent-bindings");
+    const roleTypes = (generated as Record<string, unknown>).GENERATED_ROLE_ARTIFACT_TYPES as
+      | Record<string, string>
+      | undefined;
+    const declared = roleTypes?.["artifact-dashboard-twin"];
+    expect(declared).toBeTruthy();
+    expect(DASHBOARD_OBJECT_TYPE).toBe(declared);
+    // The stored value is unchanged: it is the type existing twin rows carry,
+    // which the library surface still reads (cinatra#4849 keeps rows as they are).
+    const surface = await import("@/lib/dashboards/dashboard-artifact-surface");
+    expect(declared).toBe(surface.DASHBOARD_ARTIFACT_OBJECT_TYPE);
+    const objects = buildWithoutLifecycle(upsertCtx).find((q) =>
+      q.text.includes(`"cinatra"."objects"`),
+    )!;
+    expect(objects.values).toContain(declared);
+  });
+
+  it("a build where no pack claims the role fails the twin upsert with the reason", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/generated/agent-bindings", async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      GENERATED_ROLE_ARTIFACT_TYPES: {},
+    }));
+    try {
+      const writer = await import("@/lib/dashboards/dashboard-artifact-twin-writer");
+      expect(() => writer.buildDashboardTwinQueries(upsertCtx)).toThrow(
+        /no artifact pack in this build claims the artifact-dashboard-twin role/,
+      );
+    } finally {
+      vi.doUnmock("@/lib/generated/agent-bindings");
+      vi.resetModules();
+    }
+  });
+});

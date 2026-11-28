@@ -15,6 +15,7 @@ import {
   publishCallInFlightOr,
 } from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
+import { resolveExtensionRoleArtifactType } from "@/lib/extension-roles";
 import {
   setDashboardArtifactTwinWriter,
   setDashboardTwinProducerRunLock,
@@ -83,12 +84,14 @@ import {
  *   2. `artifact_audit` (action='delete').
  */
 
-/** The `objects.type` a dashboard artifact carries — the self-registered,
- *  NON-dedicated-claim type enrolled by `@cinatra-ai/dashboard-artifact` (B1a).
- *  Namespaced `<package>:<type>` per the artifact object-type convention. Because
- *  no dedicated claim is minted for it, `buildBindingReconcileQueries`' winner CTE
- *  is always empty (self-claim only). */
-export const DASHBOARD_OBJECT_TYPE = "@cinatra-ai/dashboard-artifact:dashboard";
+/** The `objects.type` a dashboard artifact carries: the type owned by the
+ *  claimant of the `artifact-dashboard-twin` role, read from the generated
+ *  bindings (cinatra#4849) so core spells no pack type id. A role has exactly
+ *  one claimant (the generator refuses a second). Null only in a build where no
+ *  present pack claims the role; a twin upsert then fails with the reason (see
+ *  `buildDashboardTwinQueries`). */
+export const DASHBOARD_OBJECT_TYPE: string | null =
+  resolveExtensionRoleArtifactType("artifact-dashboard-twin") ?? null;
 
 /** The substrate `resource.kind` + `representation.form` a dashboard uses (both
  *  admitted by the B1a CHECK-constraint widening). */
@@ -214,6 +217,16 @@ export function buildDashboardTwinQueries(
   }
 
   // operation === "upsert".
+  // No role-claimed dashboard type in this build: fail like any other twin write
+  // failure, with the reason, never write an undeclared type (cinatra#4849).
+  if (DASHBOARD_OBJECT_TYPE === null) {
+    throw new Error(
+      "dashboards-artifact twin: no artifact pack in this build claims the " +
+        "artifact-dashboard-twin role with a single type of its own, so the twin has " +
+        "no object type to write. Re-run: node scripts/extensions/generate-extension-manifest.mjs",
+    );
+  }
+  const dashboardObjectType = DASHBOARD_OBJECT_TYPE;
   // The append-only representation revision id for THIS twin write — generated
   // here (not inside the builder) so the lifecycle produced-event (below) can pin
   // it as its review target, matching the substrate revision the twin allocates.
@@ -234,7 +247,7 @@ export function buildDashboardTwinQueries(
   });
   const objectsOutbox = buildObjectsWithOutboxQuery(schema, "upsert", {
     id: ctx.dashboardId,
-    type: DASHBOARD_OBJECT_TYPE,
+    type: dashboardObjectType,
     parentId: null,
     parentType: null,
     // Minimal IDENTITY payload — the config body lives in dashboards.config_json;
