@@ -11,17 +11,52 @@ import "server-only";
 //
 // Admitted only for a proven step of the run's bound flow that names this tool
 // in its own fixed data; a model step reaches no passthrough tool. The sentence
-// is one plain line within the bounds a module's refusal sentence keeps
-// (`moduleRefusalSentenceIssue`), with no control character. A sentence outside
-// them is refused with its own message, and the sentence is not repeated.
+// is one plain line (`readRunFailSentence`, the rule the run time checks again
+// in docker/wayflow/agent_loader.py `_read_run_fail_sentence`; both run the
+// cases of docker/wayflow/tests/fixtures/run_fail_parity.json), and here also
+// holds no source position, path or secret shape. A sentence outside the rule
+// is refused with its own message, and the sentence is not repeated.
 
-import { moduleRefusalSentenceIssue } from "@/lib/extension-tool-dispatch";
+import { refusalSentenceShapeIssue } from "@/lib/extension-tool-dispatch";
 
 export const RUN_FAIL_TOOL = "run_fail";
 /** The code the stated refusal carries, so a reader can tell it from the tool's other refusals. */
 export const RUN_FAIL_CODE = "run_fail_stated";
 
-const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/;
+/** The longest stated sentence, in code points (the run time counts the same). */
+export const RUN_FAIL_SENTENCE_MAX = 400;
+
+// THE RULE'S CHARACTER CLASSES, the one place for them on this side. With the
+// `u` flag a surrogate range matches only an unpaired surrogate. Zero-width
+// joiner and non-joiner are kept: scripts and emoji sequences need them.
+const NOT_WELL_FORMED = /[\uD800-\uDFFF]/u;
+const LINE_BREAK = /[\n\r\u0085\u2028\u2029]/u;
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
+const DIRECTION_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
+const INVISIBLE = /[\u200b\u2060\ufeff]/u;
+
+/**
+ * A stated sentence: one plain line of well-formed text, spaces at either end
+ * left out, at most RUN_FAIL_SENTENCE_MAX code points; or why it is refused.
+ */
+export function readRunFailSentence(value: unknown): { sentence: string } | { issue: string } {
+  if (typeof value !== "string") return { issue: "the sentence is not a string" };
+  if (NOT_WELL_FORMED.test(value)) return { issue: "the sentence is not well-formed text" };
+  if (LINE_BREAK.test(value)) return { issue: "the sentence holds a line break" };
+  if (CONTROL.test(value)) return { issue: "the sentence holds a control character" };
+  if (DIRECTION_CONTROL.test(value)) return { issue: "the sentence holds a direction control" };
+  if (INVISIBLE.test(value)) return { issue: "the sentence holds an invisible character" };
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === " ") start += 1;
+  while (end > start && value[end - 1] === " ") end -= 1;
+  const sentence = value.slice(start, end);
+  if (sentence === "") return { issue: "the sentence is empty" };
+  if ([...sentence].length > RUN_FAIL_SENTENCE_MAX) {
+    return { issue: `the sentence is longer than ${RUN_FAIL_SENTENCE_MAX} characters` };
+  }
+  return { sentence };
+}
 
 export type RunFailOutcome = { ok: false; status: 403; error: string; code?: string };
 
@@ -38,10 +73,8 @@ export async function runFailOutcome(input: unknown, verifiedStepId: unknown): P
   }
   const fields = typeof input === "object" && input !== null && !Array.isArray(input) ? Object.keys(input) : [];
   if (fields.length !== 1 || fields[0] !== "sentence") return refuse("the input takes one field, `sentence`");
-  const sentence: unknown = (input as { sentence: unknown }).sentence;
-  const issue =
-    moduleRefusalSentenceIssue(sentence) ??
-    (CONTROL_CHARACTER.test((sentence as string).trim()) ? "the sentence holds a control character" : null);
+  const read = readRunFailSentence((input as { sentence: unknown }).sentence);
+  const issue = "issue" in read ? read.issue : refusalSentenceShapeIssue(read.sentence);
   if (issue !== null) return refuse(`the sentence is refused (${issue})`);
-  return { ok: false, status: 403, error: (sentence as string).trim(), code: RUN_FAIL_CODE };
+  return { ok: false, status: 403, error: (read as { sentence: string }).sentence, code: RUN_FAIL_CODE };
 }

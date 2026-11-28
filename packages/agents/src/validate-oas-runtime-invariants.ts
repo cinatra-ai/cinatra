@@ -85,10 +85,13 @@
  *                     refuses calls of any other step (step_tool_step_unknown).
  *                     Also refused at install (`scanOasForInstallFindings`,
  *                     called by the ZIP import and the registry install).
- *   OAS-RUNTIME-017 — a fixed passthrough step that calls `run_fail` and sets
- *                     `ignore_bad_http_requests: true` (cinatra#4890). Such a
- *                     step exists to end its run; taking bad answers itself can
- *                     only be a mistake (the runtime stops it all the same).
+ *   OAS-RUNTIME-017 — an ApiNode whose data names `run_fail` (cinatra#4890)
+ *                     and that the run time would not stop at its stated answer:
+ *                     its url is not one `isPassthroughUrl` reads as the host's
+ *                     passthrough (the loader's `_targets_passthrough` reads the
+ *                     same), it does not POST, or it sets
+ *                     `ignore_bad_http_requests: true`. Such a step can only be
+ *                     a mistake.
  *
  * See `docs/developing-agents.md` "pyagentspec constraints when authoring
  * oas.json" for the human-readable description of each pattern.
@@ -852,26 +855,54 @@ export function findStepToolDeclaration(
 function scanRunFailStepsTakingBadAnswers(parsed: Record<string, unknown>): ReviewFinding[] {
   const findings: ReviewFinding[] = [];
   forEachRunStep(parsed, ({ node, path }) => {
-    if (passthroughToolOf(node) !== "run_fail" || node.ignore_bad_http_requests !== true) return;
-    findings.push({
-      code: "OAS-RUNTIME-017",
-      severity: "blocker",
-      message:
-        `Step "${gateLabel(node)}" at ${path} calls run_fail, which ends the run with a stated sentence, ` +
-        `and sets ignore_bad_http_requests: true. A step that ends its run cannot take that answer itself: ` +
-        `remove ignore_bad_http_requests from the step.`,
-      location: path,
-      source: "deterministic",
-    });
+    if (node.component_type !== "ApiNode" || fixedToolOf(node) !== "run_fail") return;
+    const head = `Step "${gateLabel(node)}" at ${path} calls run_fail, which ends the run with a stated sentence, `;
+    const fix =
+      !isPassthroughUrl(node.url)
+        ? `but its url is not a URL the run time reads as the host's passthrough ({{CINATRA_BASE_URL}} or ` +
+          `http(s):// followed by a path ending in ${PASSTHROUGH_PATH}): write the url in that form.`
+        : !isPostMethod(node.http_method)
+          ? `but it does not POST: set http_method to POST.`
+          : node.ignore_bad_http_requests === true
+            ? `and sets ignore_bad_http_requests: true. A step that ends its run cannot take that answer itself: ` +
+              `remove ignore_bad_http_requests from the step.`
+            : null;
+    if (fix === null) return;
+    findings.push({ code: "OAS-RUNTIME-017", severity: "blocker", message: head + fix, location: path,
+      source: "deterministic" });
   });
   return findings;
+}
+
+/** The host's passthrough route (src/app/api/agents/passthrough). */
+const PASSTHROUGH_PATH = "/api/agents/passthrough";
+
+/**
+ * cinatra#4890: whether an ApiNode url calls the host's passthrough, as the run
+ * time decides it (docker/wayflow/agent_loader.py `_targets_passthrough` keeps
+ * the same rule; both run docker/wayflow/tests/fixtures/run_fail_parity.json):
+ * the url starts with `{{CINATRA_BASE_URL}}`, `http://` or `https://`, and its
+ * path (the text before the first `?` or `#`, trailing slashes left out) ends
+ * with the passthrough path, letter case kept. A relative url is not a call.
+ */
+export function isPassthroughUrl(url: unknown): boolean {
+  if (typeof url !== "string") return false;
+  if (!url.startsWith("{{CINATRA_BASE_URL}}") && !url.startsWith("http://") && !url.startsWith("https://")) {
+    return false;
+  }
+  return urlPathOf(url).endsWith(PASSTHROUGH_PATH);
+}
+
+function isPostMethod(method: unknown): boolean {
+  return typeof method === "string" && method.toUpperCase() === "POST";
 }
 
 /**
  * cinatra#4890: the host tool the passthrough step with the given id names in
  * its own fixed `data.tool` (an object, or JSON text of one), over the steps the
- * run reads. Null for an unknown id, a step that is no passthrough call or names
- * no fixed tool, and ids shared by steps that do not all name the same tool.
+ * run reads. A passthrough call is a POST to a url `isPassthroughUrl` accepts.
+ * Null for an unknown id, a step that is no passthrough call or names no fixed
+ * tool, and ids shared by steps that do not all name the same tool.
  */
 export function findStepPassthroughTool(document: unknown, stepId: string): string | null {
   let tool: string | null | undefined;
@@ -884,8 +915,12 @@ export function findStepPassthroughTool(document: unknown, stepId: string): stri
 }
 
 function passthroughToolOf(node: Record<string, unknown>): string | null {
-  if (node.component_type !== "ApiNode" || typeof node.url !== "string") return null;
-  if (!urlPathOf(node.url).endsWith("/api/agents/passthrough")) return null;
+  if (node.component_type !== "ApiNode" || !isPassthroughUrl(node.url) || !isPostMethod(node.http_method)) return null;
+  return fixedToolOf(node);
+}
+
+/** The `tool` an ApiNode's fixed data names (an object, or JSON text of one), whatever its url. */
+function fixedToolOf(node: Record<string, unknown>): string | null {
   let data: unknown = node.data;
   if (typeof data === "string") {
     try {

@@ -5,6 +5,8 @@
  * whose tool is templated, or ids shared by steps that call different tools
  * name no tool. Plain OAS documents built here drive the real export.
  */
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import * as invariants from "../validate-oas-runtime-invariants";
@@ -68,5 +70,31 @@ describe("OAS-RUNTIME-017: a step that ends its run never takes bad answers itse
     expect(found[0]!.message).toContain('Step "stop"');
     expect(findings(flow(step("stop", { tool: "run_fail" })))).toEqual([]);
     expect(findings(flow({ ...step("save", { tool: "objects_save" }), ignore_bad_http_requests: true }))).toEqual([]);
+  });
+
+  it("refuses a run_fail step the run time would not read as a passthrough call, or that does not POST", () => {
+    const relative = findings(flow(step("stop", { tool: "run_fail" }, "/api/agents/passthrough")));
+    expect(relative).toHaveLength(1);
+    expect(relative[0]!.message).toContain("is not a URL the run time reads as the host's passthrough");
+    const fetched = findings(flow({ ...step("stop", { tool: "run_fail" }), http_method: "GET" }));
+    expect(fetched).toHaveLength(1);
+    expect(fetched[0]!.message).toContain("does not POST");
+    expect(findings(flow(step("stop", { tool: "run_fail" }, `${PASSTHROUGH}?x=1`)))).toEqual([]);
+  });
+});
+
+// The same table the loader's tests read (docker/wayflow/tests/fixtures/run_fail_parity.json).
+const PARITY = JSON.parse(
+  readFileSync(path.resolve(__dirname, "../../../../docker/wayflow/tests/fixtures/run_fail_parity.json"), "utf8"),
+) as { urls: Array<{ url: string; passthrough: boolean }> };
+
+describe("the passthrough call, as the run time reads it", () => {
+  type UrlRule = (url: unknown) => boolean | undefined;
+  const isPassthroughUrl: UrlRule =
+    (invariants as unknown as { isPassthroughUrl?: UrlRule }).isPassthroughUrl ?? (() => undefined);
+
+  it.each(PARITY.urls)("reads $url as a passthrough call: $passthrough", ({ url, passthrough }) => {
+    expect(isPassthroughUrl(url)).toBe(passthrough);
+    expect(find(flow(step("stop", { tool: "run_fail" }, url)), "stop")).toBe(passthrough ? "run_fail" : null);
   });
 });

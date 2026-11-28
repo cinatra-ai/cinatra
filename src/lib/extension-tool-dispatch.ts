@@ -189,6 +189,15 @@ export function moduleRefusalSentenceIssue(sentence: unknown): string | null {
     return `the sentence is longer than ${EXTENSION_TOOL_REFUSAL_SENTENCE_MAX} characters`;
   }
   if (/[\r\n\u2028\u2029]/.test(text)) return "the sentence holds a line break";
+  return refusalSentenceShapeIssue(text);
+}
+
+/**
+ * The shapes a repeated sentence never holds: a source position, a path or a
+ * secret shape (the last checks of `moduleRefusalSentenceIssue`, cinatra#4890
+ * reads them too). Null when the text holds none.
+ */
+export function refusalSentenceShapeIssue(text: string): string | null {
   if (/\.(?:[cm]?js|tsx?|jsx):\d+(?::\d+)?/.test(text)) {
     return "the sentence holds a source position";
   }

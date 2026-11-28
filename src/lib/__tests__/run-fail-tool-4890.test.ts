@@ -30,6 +30,14 @@ vi.mock("@/lib/extension-host-context", () => ({
 vi.mock("@/lib/authz/audit", () => ({ logAuditEvent: h.logAuditEvent }));
 
 import { EXTENSION_SCOPED_TOOLS, dispatchExtensionScopedTool } from "@/lib/extension-scoped-tools";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+
+// The same table the loader's tests read (docker/wayflow/tests/fixtures/run_fail_parity.json).
+type ParityCase = { text?: unknown; unit?: string; repeat?: number; suffix?: string; sentence?: string; issue?: string };
+const PARITY = JSON.parse(
+  readFileSync(path.resolve(__dirname, "../../../docker/wayflow/tests/fixtures/run_fail_parity.json"), "utf8"),
+) as { sentences: ParityCase[] };
 
 const RUN = {
   id: "run-4890",
@@ -89,6 +97,21 @@ describe("run_fail ends the run as failed with the caller's sentence", () => {
     const outcome = await call({ sentence });
     expect(outcome).toEqual({ ok: false, status: 403, error: `run_fail: the sentence is refused (${issue})` });
   });
+
+  it.each(PARITY.sentences.map((c, i) => [i, c] as const))(
+    "reads parity case %i exactly as the run time does",
+    async (_i, c) => {
+      h.stepTool.mockResolvedValue("run_fail");
+      const text = c.unit !== undefined ? c.unit.repeat(c.repeat ?? 0) + (c.suffix ?? "") : c.text;
+      const outcome = await call({ sentence: text });
+      if (c.issue !== undefined) {
+        expect(outcome).toEqual({ ok: false, status: 403, error: `run_fail: the sentence is refused (${c.issue})` });
+      } else {
+        const sentence = c.sentence === "repeat" ? text : c.sentence;
+        expect(outcome).toEqual({ ok: false, status: 403, error: sentence, code: "run_fail_stated" });
+      }
+    },
+  );
 
   it("refuses an input with another field than the sentence", async () => {
     h.stepTool.mockResolvedValue("run_fail");

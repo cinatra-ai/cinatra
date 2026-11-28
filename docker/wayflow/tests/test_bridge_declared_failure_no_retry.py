@@ -36,6 +36,7 @@ from __future__ import annotations
 import asyncio
 import json
 import warnings
+from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import pytest
@@ -877,3 +878,74 @@ def test_a_stated_answer_from_another_path_keeps_three_tries(
 
     assert len(bridge.requests) == 3
     assert str(raised.value).startswith("error executing POST request to ")
+
+
+# The same table the product's tests read (packages/agents/src/__tests__/
+# step-passthrough-tool-4890.test.ts, src/lib/__tests__/run-fail-tool-4890.test.ts).
+PARITY = json.loads(
+    (Path(__file__).parent / "fixtures" / "run_fail_parity.json").read_text(encoding="utf-8")
+)
+
+
+@pytest.mark.parametrize("case", PARITY["urls"], ids=lambda c: c["url"])
+def test_the_loader_reads_a_passthrough_url_as_the_product_does(case: Dict[str, Any]) -> None:
+    import agent_loader
+
+    assert agent_loader._targets_passthrough(case["url"]) is case["passthrough"]
+
+
+@pytest.mark.parametrize("case", PARITY["sentences"], ids=lambda c: str(c.get("issue", "stated")))
+def test_the_loader_reads_a_stated_sentence_as_the_product_does(case: Dict[str, Any]) -> None:
+    import agent_loader
+
+    text = case["unit"] * case["repeat"] + case.get("suffix", "") if "unit" in case else case["text"]
+    read = getattr(agent_loader, "_read_run_fail_sentence", lambda _value: ("no reader", "no reader"))
+    sentence, issue = read(text)
+    if "issue" in case:
+        assert (sentence, issue) == (None, case["issue"])
+    else:
+        assert (sentence, issue) == (text if case["sentence"] == "repeat" else case["sentence"], None)
+
+
+@pytest.mark.parametrize(
+    ("base_url", "path"),
+    [
+        (APP_BASE_URL, PASSTHROUGH + "?x=1"),
+        (APP_BASE_URL, PASSTHROUGH + "#f"),
+        (APP_BASE_URL, PASSTHROUGH + "/"),
+        (OTHER_BASE_URL, PASSTHROUGH),
+    ],
+)
+def test_every_passthrough_url_form_the_product_admits_stops_once(
+    monkeypatch: pytest.MonkeyPatch, bridge: _CountingBridge, base_url: str, path: str
+) -> None:
+    bridge.status = 403
+    bridge.body = {"error": STATED_SENTENCE, "code": "run_fail_stated"}
+    step_class = _patch_loader(monkeypatch, APP_BASE_URL)
+
+    with pytest.raises(RuntimeError) as raised:
+        _run_step(step_class, path, base_url)
+
+    assert len(bridge.requests) == 1
+    assert str(raised.value) == STATED_SENTENCE
+
+
+def test_a_failure_text_the_output_cannot_encode_is_still_printed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import io
+    import sys
+
+    import agent_loader
+
+    out = io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict")
+    monkeypatch.setattr(sys, "stdout", out)
+    try:
+        agent_loader._print_task_exception("EXCEPTION", "task-4890", RuntimeError("lone \ud800 café"))
+        raised = None
+    except UnicodeEncodeError as exc:  # the defect this test pins: the print must not raise
+        raised = exc
+    assert raised is None
+    out.flush()
+    printed = out.buffer.getvalue().decode("ascii")
+    assert "task=task-4890: lone \\ud800 caf\\xc3\\xa9" in printed

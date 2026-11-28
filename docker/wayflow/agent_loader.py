@@ -947,14 +947,53 @@ class _StepDeclaredFailureAnswer(Exception):
 
 #: The passthrough answer of a fixed step that ends its run (cinatra#4890).
 _RUN_FAIL_STATED_CODE = "run_fail_stated"
-#: The host's bound on that sentence (EXTENSION_TOOL_REFUSAL_SENTENCE_MAX).
+#: The longest stated sentence, in code points (src/lib/run-fail-tool.ts
+#: RUN_FAIL_SENTENCE_MAX counts the same).
 _RUN_FAIL_SENTENCE_MAX = 400
 _RUN_FAIL_FALLBACK = "The step ended the run with a failure."
-_RUN_FAIL_UNREADABLE = re.compile("[\u0000-\u001f\u007f-\u009f  ]")
+
+# THE RULE'S CHARACTER CLASSES, the one place for them on this side; the
+# product's `readRunFailSentence` (src/lib/run-fail-tool.ts) keeps the same,
+# and both run docker/wayflow/tests/fixtures/run_fail_parity.json. Zero-width
+# joiner and non-joiner are kept: scripts and emoji sequences need them.
+_RUN_FAIL_NOT_WELL_FORMED = re.compile("[\ud800-\udfff]")
+_RUN_FAIL_LINE_BREAK = re.compile("[\n\r\u0085\u2028\u2029]")
+_RUN_FAIL_CONTROL = re.compile("[\u0000-\u001f\u007f-\u009f]")
+_RUN_FAIL_DIRECTION_CONTROL = re.compile("[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+_RUN_FAIL_INVISIBLE = re.compile("[\u200b\u2060\ufeff]")
+
+
+def _read_run_fail_sentence(value: Any) -> Tuple[Optional[str], Optional[str]]:
+    """(sentence, None) for a stated sentence, (None, issue) for a refused one.
+
+    One plain line of well-formed text, spaces at either end left out, at most
+    _RUN_FAIL_SENTENCE_MAX code points: the product's rule, issue for issue.
+    """
+    if not isinstance(value, str):
+        return None, "the sentence is not a string"
+    if _RUN_FAIL_NOT_WELL_FORMED.search(value):
+        return None, "the sentence is not well-formed text"
+    if _RUN_FAIL_LINE_BREAK.search(value):
+        return None, "the sentence holds a line break"
+    if _RUN_FAIL_CONTROL.search(value):
+        return None, "the sentence holds a control character"
+    if _RUN_FAIL_DIRECTION_CONTROL.search(value):
+        return None, "the sentence holds a direction control"
+    if _RUN_FAIL_INVISIBLE.search(value):
+        return None, "the sentence holds an invisible character"
+    sentence = value.strip(" ")
+    if not sentence:
+        return None, "the sentence is empty"
+    if len(sentence) > _RUN_FAIL_SENTENCE_MAX:
+        return None, f"the sentence is longer than {_RUN_FAIL_SENTENCE_MAX} characters"
+    return sentence, None
 
 
 def _stated_run_failure_answer(response: Any) -> Optional[str]:
-    """The sentence of a 403 ``run_fail_stated`` answer; None for every other answer."""
+    """The sentence of a 403 ``run_fail_stated`` answer; None for every other answer.
+
+    A sentence outside the rule is not repeated: the fixed sentence stands for it.
+    """
     if getattr(response, "status_code", None) != 403:
         return None
     try:
@@ -963,13 +1002,8 @@ def _stated_run_failure_answer(response: Any) -> Optional[str]:
         return None
     if not isinstance(body, dict) or body.get("code") != _RUN_FAIL_STATED_CODE:
         return None
-    sentence = body.get("error")
-    if not isinstance(sentence, str):
-        return _RUN_FAIL_FALLBACK
-    sentence = sentence.strip()
-    if not sentence or len(sentence) > _RUN_FAIL_SENTENCE_MAX or _RUN_FAIL_UNREADABLE.search(sentence):
-        return _RUN_FAIL_FALLBACK
-    return sentence
+    sentence, _issue = _read_run_fail_sentence(body.get("error"))
+    return _RUN_FAIL_FALLBACK if sentence is None else sentence
 
 
 def _bridge_stop(response: Any) -> Optional[RuntimeError]:
@@ -1685,15 +1719,28 @@ def _patch_a2a_agent_no_shared_conversation() -> None:
 def _print_task_exception(label: str, task_id: Any, exc: BaseException) -> None:
     """Log a task's exception and its traceback (the task runner's two sites).
 
-    Prints ``str(exc)`` and the formatted traceback, as before. The traceback
+    Prints ``str(exc)`` and the formatted traceback, as before, through
+    ``_print_text``, which never raises on encoding. The traceback
     shows each exception through its ``str()``, so a StepDeclaredFailureError
     (cinatra#4220) logs only its escaped error code: the model's failure
     sentence, with any newline or control character in it, reaches no log.
     """
     import traceback as _tb
 
-    print(f"[agent_loader] _patched_run_task {label} task={task_id}: {exc}")
-    print("".join(_tb.format_exception(type(exc), exc, exc.__traceback__)))
+    _print_text(f"[agent_loader] _patched_run_task {label} task={task_id}: {exc}")
+    _print_text("".join(_tb.format_exception(type(exc), exc, exc.__traceback__)))
+
+
+def _print_text(text: str) -> None:
+    """Print a failure text; never raise on its encoding (cinatra#4890).
+
+    A text the output cannot encode (an unpaired surrogate, a character the
+    stream's encoding lacks) is printed with those characters escaped instead.
+    """
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode("utf-8", "backslashreplace").decode("ascii", "backslashreplace"))
 
 
 def _patch_wayflow_flow_skip_pre_execute() -> None:
@@ -4237,8 +4284,25 @@ _PASSTHROUGH_PATH = "/api/agents/passthrough"
 
 
 def _targets_passthrough(url: Any) -> bool:
-    """True when an ApiNode `url` addresses the host's passthrough (cinatra#4890)."""
-    return isinstance(url, str) and url.endswith(_PASSTHROUGH_PATH)
+    """True when an ApiNode `url` calls the host's passthrough (cinatra#4890).
+
+    The product's ``isPassthroughUrl`` (packages/agents/src/
+    validate-oas-runtime-invariants.ts) keeps the same rule; both run
+    tests/fixtures/run_fail_parity.json. The url starts with
+    ``{{CINATRA_BASE_URL}}``, ``http://`` or ``https://``, and its path (the text
+    before the first ``?`` or ``#``, trailing slashes left out) ends with the
+    passthrough path, letter case kept. A relative url is not a call.
+    """
+    if not isinstance(url, str):
+        return False
+    if not url.startswith(("{{CINATRA_BASE_URL}}", "http://", "https://")):
+        return False
+    cut = len(url)
+    for mark in ("?", "#"):
+        at = url.find(mark)
+        if at != -1 and at < cut:
+            cut = at
+    return url[:cut].rstrip("/").endswith(_PASSTHROUGH_PATH)
 
 
 def _declared_members(node: Any) -> Optional[Dict[str, Any]]:
