@@ -55,6 +55,7 @@
     "@cinatra-ai/blog-linkedin-writer-agent",
     "@cinatra-ai/blog-pipeline-agent",
     "@cinatra-ai/blog-post-artifact",
+    "@cinatra-ai/blog-post-html-skill",
     "@cinatra-ai/blog-post-matcher-skill",
     "@cinatra-ai/blog-wordpress-publish-agent",
     "@cinatra-ai/blog-writing-skill",

@@ -370,7 +370,7 @@ own in its manifest, and the gates read them; neither gate names a word.
   must reach empty; cinatra#4848 tracks it.**
 - **A pack without the declaration** fails unless the bridge's `packages`
   list names it; a named pack is listed as a warning. The list holds the
-  117 packs that were pinned without the declaration when the bridge came in,
+  118 packs that were pinned without the declaration when the bridge came in,
   and it only shrinks: a list that grew against the base fails, like the word
   lists. So a newly pinned pack must declare, a renamed pack too (a new name
   is a new pin), and a pack that declared cannot drop its declaration (it is
