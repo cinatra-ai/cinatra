@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
@@ -413,58 +414,13 @@ const TYPE_BANS = TYPE_BAN_SPECS.flatMap(({ pattern, message }) => [
 // TYPE_BANS until migrated — migration is tracked in cinatra#886 (it needs
 // the app-cn tailwind-merge extension, which needs the vendored-primitive
 // re-vendor cascade, plus per-site normalization decisions). NEVER add a
-// file here for new code — migrate to the named tokens instead.
-const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = [
-  "src/app/configuration/workspace/page.tsx",
-  "src/app/configuration/workspace/members/page.tsx",
-  "src/app/configuration/permissions/page.tsx",
-  "src/app/configuration/approvals/page.tsx",
-  "src/app/design-fixtures/primitive-row.tsx",
-  "src/app/design-fixtures/token-swatches.tsx",
-  "src/app/design-fixtures/sidebar-fixture.tsx",
-  "src/app/notifications/notifications-archive-body.tsx",
-  "src/components/marketplace-readme-section.tsx",
-  "src/components/list-controls.tsx",
-  "src/components/scope-badge.tsx",
-  "src/components/app-sidebar.tsx",
-  "src/components/extension-card.tsx",
-  "src/components/marketplace-detail-header.tsx",
-  "src/components/visibility-badge.tsx",
-  "src/components/workflows/workflow-task-detail.tsx",
-  "src/components/workflows/workflow-editable-title.tsx",
-  "src/components/workflows/workflow-task-list.tsx",
-  "src/components/workflows/workflow-target-date-control.tsx",
-  "src/components/workflows/workflow-audit-log.tsx",
-  "src/components/extensions/extensions-tab-select.tsx",
-  "src/components/extensions/install-batch-panel.tsx",
-  "packages/chat/src/chat-page.tsx",
-  // cinatra#918 moved the conversation renderer (and its pre-existing
-  // text-[15px]/text-[8px]/text-[0.8rem] sites) out of chat-page.tsx into
-  // the lazily-loaded view — same grandfathered sites, new file. The
-  // normalization stays tracked in cinatra#886.
-  "packages/chat/src/chat-messages-view.tsx",
-  "packages/mcp-server/src/index.tsx",
-  "packages/agents/src/campaign-recipients-review-renderer.tsx",
-  "packages/agents/src/upload-repository-link-form.tsx",
-  "packages/permissions/src/user-impersonation-panel.tsx",
-  "packages/permissions/src/impersonation-banner.tsx",
-  "packages/extensions/src/screens/extension-resolution-panel.tsx",
-  "packages/permissions/src/pages.tsx",
-  "packages/metric-cost-api/src/components/legacy-cost-list.tsx",
-  "packages/notifications/src/notifications-flyout.tsx",
-  // .ts template-literal HTML builder (chat markdown renderer): text-[0.8rem]
-  // code blocks + tracking-[0.1em] table headers — normalization decisions
-  // tracked in cinatra#886 like the JSX sites above.
-  "packages/chat/src/markdown-render.ts",
-  // cinatra#2934 moved the markup half of that renderer DOWN into the agents
-  // package so the per-run prompt window draws the same assistant prose /chat
-  // draws (chat depends on agents, so the import can only run that way). The
-  // tracking-[0.1em] table header came with it — SAME grandfathered site, new
-  // file, exactly as cinatra#918 above. Still tracked in cinatra#886; changing
-  // it here would silently restyle every /chat table, which is a design
-  // decision that belongs to that migration and not to this move.
-  "packages/agents/src/markdown-render-core.ts",
-];
+// file for new code — migrate to the named tokens instead.
+// The list lives in scripts/audit/type-arbitrary-allowlist.baseline.json (its
+// `files`, with a note per moved file) and may not grow against the base
+// branch (cinatra#3832; checked by scripts/audit/toolbar-tokens.mjs).
+const TYPE_ARBITRARY_MIGRATION_ALLOWLIST = JSON.parse(
+  readFileSync(new URL("./scripts/audit/type-arbitrary-allowlist.baseline.json", import.meta.url), "utf8"),
+).files;
 
 // AND a path-zone glob with an extension glob. ESLint flat config treats a
 // nested array inside `files` as a logical AND (every pattern must match), so
