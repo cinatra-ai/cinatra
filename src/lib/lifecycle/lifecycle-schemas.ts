@@ -8,7 +8,6 @@
  *     scope manifest; field-level + visual before/after.
  *   - PER-RUN SELECTED SKILL-REVISION sets (S3): an immutable per-run set of
  *     pinned skill revisions consumed by every delivery path.
- *   - CMS SNAPSHOT-as-target + scope manifest + apply-binding (S5).
  *   - GATE-BOUND immutable SUGGESTION snapshots + a decision-application ledger
  *     (S4 auditor re-home).
  *
@@ -76,41 +75,6 @@ export interface SelectedSkillRevision {
    * enumerates; S0 fixes the column. */
   selectionSource: string;
   selectedAt: Date;
-}
-
-// ---------------------------------------------------------------------------
-// CMS snapshot-as-target + apply-binding (S5).
-// ---------------------------------------------------------------------------
-
-/**
- * The apply-binding a CMS snapshot target carries — the coordinates the staged
- * remote write is applied against, with the base remote revision (a CAS witness)
- * and the saga `operationId`.
- */
-export interface CmsApplyBinding {
-  connectorInstance: string;
-  resourceType: string;
-  resourceId: string | null;
-  /** The base remote revision ref OR content hash the apply CAS-checks against. */
-  baseRemoteRevisionRef: string | null;
-  operationId: string;
-}
-
-/**
- * A CMS SNAPSHOT-as-target: a LOCALLY pinned snapshot revision captured from the
- * staged remote write (a CMS artifact is otherwise a pointer, not review-able
- * content), its scope manifest (the content-vs-chrome boundary the adapter
- * declares), and the apply-binding. S5 implements capture/apply; S0 fixes the
- * shape.
- */
-export interface CmsSnapshotTarget {
-  id: string;
-  artifactId: string;
-  /** The locally pinned snapshot revision that IS the review target. */
-  snapshotRevisionId: string;
-  scopeManifest: ReviewScopeManifest;
-  applyBinding: CmsApplyBinding;
-  createdAt: Date;
 }
 
 // ---------------------------------------------------------------------------

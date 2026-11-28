@@ -12,7 +12,6 @@ import "server-only";
  */
 export {
   backfillDashboardArtifactTwins,
-  DASHBOARD_TWIN_OBJECT_TYPE,
   type TwinBackfillResult,
   type BackfillTwinsDeps,
 } from "./mutation-service";

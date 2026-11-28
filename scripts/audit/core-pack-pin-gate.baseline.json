@@ -927,9 +927,6 @@
     "packages/cli/src/__tests__/dev-repo-sync-shallow-pin.test.mjs": {
       "@cinatra-ai/blog-pipeline-agent": 1
     },
-    "packages/dashboards/src/__tests__/twin-backfill.test.ts": {
-      "@cinatra-ai/dashboard-artifact": 1
-    },
     "packages/extensions/src/__tests__/access-declaration-mirror.test.ts": {
       "@cinatra-ai/github-connector": 1
     },
@@ -1749,7 +1746,6 @@
       "@cinatra-ai/web-scrape-agent": 4
     },
     "src/lib/__tests__/agents-store-provider-declared.test.ts": {
-      "@cinatra-ai/drupal-agent": 2,
       "@cinatra-ai/email-drafting-agent": 10,
       "@cinatra-ai/web-scrape-agent": 4
     },

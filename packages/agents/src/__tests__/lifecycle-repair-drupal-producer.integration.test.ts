@@ -150,31 +150,6 @@ async function produce(over: Partial<ArtifactProducedEvent> = {}): Promise<Artif
   return ev;
 }
 
-/** Insert a `cms_snapshot_targets` row directly — the apply binding the
- * retired CMS capture wrote (SQL mirrored from its `targetInsert`, as the
- * sibling CMS suites do). `resourceType: "node"` is the DRUPAL shape (WordPress writes "post"). */
-async function insertDrupalSnapshotTarget(input: {
-  artifactId: string;
-  snapshotRevisionId: string;
-  connectorInstance: string;
-  resourceId: string;
-}): Promise<void> {
-  await pool(
-    `INSERT INTO "${q(TEST_SCHEMA)}"."cms_snapshot_targets"
-       (id, artifact_id, snapshot_revision_id, scope_manifest, connector_instance,
-        resource_type, resource_id, base_remote_revision_ref, operation_id)
-     VALUES ($1,$2,$3,'{"paths":[]}'::jsonb,$4,'node',$5,NULL,$6)`,
-    [
-      `cst-${randomUUID()}`,
-      input.artifactId,
-      input.snapshotRevisionId,
-      input.connectorInstance,
-      input.resourceId,
-      `op-${randomUUID()}`,
-    ],
-  );
-}
-
 async function repairRow(repairId: string) {
   const r = await pool(
     `SELECT route, status, successor_gate_id FROM "${q(TEST_SCHEMA)}"."lifecycle_repair" WHERE id=$1`,
@@ -256,14 +231,6 @@ async function driveDrupalChangesRequest(lifecycle: Record<string, unknown> | nu
   const templateId = await drupalAgentTemplateWith(lifecycle);
   const producerRunId = await seedRun(templateId);
   const base = await produce({ producerRunId });
-  const connectorInstance = `drupal-instance-${randomUUID()}`;
-  const resourceId = `node-${randomUUID()}`;
-  await insertDrupalSnapshotTarget({
-    artifactId: base.artifactId,
-    snapshotRevisionId: base.representationRevisionId,
-    connectorInstance,
-    resourceId,
-  });
 
   await orch.sweepReviewOrchestration({ limit: 50 });
   const baseTaskId = autoReviewTaskId(base.eventId);
@@ -281,7 +248,7 @@ async function driveDrupalChangesRequest(lifecycle: Record<string, unknown> | nu
     feedback: "tighten the node title and fix the body's second paragraph",
   });
   if (!cr.ok) throw new Error(`changes-request failed: ${cr.error}`);
-  return { cr, producerRunId, resourceId, connectorInstance, base };
+  return { cr, producerRunId, base };
 }
 
 describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activation)", () => {

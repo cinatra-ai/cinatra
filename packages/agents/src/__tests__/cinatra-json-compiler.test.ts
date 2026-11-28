@@ -61,13 +61,13 @@ describe("readSiblingCinatraJson", () => {
     });
   });
 
-  it("reads flat layout sibling cinatra.json", async () => {
+  it("does not read a flat layout sibling cinatra.json (the flat layout is not loaded)", async () => {
     const agentJsonPath = setupAgent(
       "flat",
       JSON.stringify({ limits: { maxRecipients: 50 } }),
     );
     const cfg = await readSiblingCinatraJson(agentJsonPath);
-    expect(cfg?.limits?.maxRecipients).toBe(50);
+    expect(cfg).toBeNull();
   });
 
   it("returns null when no sibling cinatra.json present", async () => {
