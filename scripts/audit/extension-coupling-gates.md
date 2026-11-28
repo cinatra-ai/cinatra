@@ -933,6 +933,20 @@ connector's code is not judged here).
    packs, 7 `peerDependencies` and 3 `devDependencies`; no skill pack
    declares one, and no workflow pack is pinned.
 
+**A sixth class**, `rendererComponents` (per pack, cinatra#4532): an agent, a
+skill or a workflow declares no `cinatra.fieldRenderers` entry that carries a
+`component`. It is judged for the same packs as class 5. Read, in the manifest
+at the pinned commit, as the product reads it
+(`validateFieldRendererDeclarations` in
+`scripts/extensions/agent-binding-kinds.mjs`): `cinatra.fieldRenderers` is an
+array of plain objects; an entry counts when it carries the key `component`
+(the product's own test is `component !== undefined`; a value it rejects is
+counted too). Absent or `null` declares nothing; a value that is not an array,
+or an entry that is not an object, is a scanner error that names the package.
+Items: `fieldRenderers: <id>` (`[<position>]` for an entry without a string
+id). On the day it landed (pins of main at ab9a95143): 4 items in 3 agent
+packs. A list may omit the class as it may omit class 5 (`LATER_CLASSES`).
+
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:
 class 1 the sorted non-content paths of the pack, class 2 the declaration keys
