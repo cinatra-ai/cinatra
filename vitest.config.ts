@@ -601,6 +601,12 @@ export default defineConfig({
       // no runner on the other side, so it executed nowhere; the
       // ci-pinned-tests-exist gate now fails closed on exactly that shape.
       "scripts/audit/__tests__/exec-compose-scoping-check.test.mjs",
+      // agent-extension-code-gate (cinatra#4885) — same convention: a
+      // dependency-free `node --test` companion to the agent extension code
+      // gate, run by the "node --test scripts/audit/__tests__/
+      // agent-extension-code-gate.test.mjs" step in build-image.yml (the step
+      // that runs the gate itself sits right before it).
+      "scripts/audit/__tests__/agent-extension-code-gate.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
       // Mirrors the `*.integration.test.ts` exclusion above. Lifted when

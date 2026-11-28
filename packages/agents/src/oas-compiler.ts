@@ -1,9 +1,10 @@
 import "server-only";
 import { readFile } from "node:fs/promises";
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { z } from "zod";
 import { resolveDevExtensionSourceRoot } from "./agent-runtime-mount";
+import { agentOasPath, findAgentDefinition } from "./agent-definition-order";
 // Operator-aware vendor dir for compile-time probes.
 // Reads the instance-identity store dynamically to avoid a hard import that
 // the unit-test transitive shim cannot stub. Missing store returns null and
@@ -683,12 +684,13 @@ const OAS_COMPILER_LEGACY_SLUG_MAP: Record<string, string> = {
 function readChildOasRendererInfo(
   packageName: string,
 ): { renderer?: string; riskClass?: string } | null {
-  const candidates = resolveAgentJsonPath(packageName);
-  if (!candidates) return null;
-  for (const p of candidates) {
+  const lookupArgs = resolveAgentJsonPath(packageName);
+  if (!lookupArgs) return null;
+  // The directory that decides (cinatra#4920): an old-layout file there is not read.
+  const found = findAgentDefinition(lookupArgs);
+  if (found?.kind === "oas") {
     try {
-      if (!existsSync(p)) continue;
-      const raw = readFileSync(p, "utf8");
+      const raw = readFileSync(found.path, "utf8");
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       const refs = (parsed["$referenced_components"] ?? {}) as Record<string, Record<string, unknown>>;
       for (const comp of Object.values(refs)) {
@@ -700,13 +702,17 @@ function readChildOasRendererInfo(
         if (renderer) return { renderer, riskClass };
       }
     } catch {
-      // next candidate
+      // unreadable or malformed: no renderer info
     }
   }
   return null;
 }
 
-function resolveAgentJsonPath(packageName: string): string[] | null {
+// By-name read of an agent definition (cinatra#4920): `cinatra/oas.json` only.
+// Returns the arguments of findAgentDefinition (./agent-definition-order), the
+// one place that holds the directory order: the first directory with ANY
+// definition file decides, and an old-layout file there is the migration error.
+function resolveAgentJsonPath(packageName: string): Parameters<typeof findAgentDefinition>[0] | null {
   // Reject anything that contains traversal or NUL at any position in the name.
   if (packageName.includes("..") || packageName.includes("\0")) return null;
   const slug = packageName.split("/").pop();
@@ -717,21 +723,14 @@ function resolveAgentJsonPath(packageName: string): string[] | null {
   // both `@scope/slug` and `foo/bar` map to slug = last segment.
   const parts = packageName.split("/");
   if (parts.length > 2) return null;
-  // N-rung probe. The canonical layout nests agents under a
-  // vendor-namespace dir AND renames agent.json -> oas.json.
-  // Vendor-dir probe walks the operator's instance
-  // namespace first, then the shipped "cinatra" dir. Non-cinatra operators
-  // could not publish chat-authored agents before this restore.
-  const root = resolveDevExtensionSourceRoot();
-  const legacySlug = OAS_COMPILER_LEGACY_SLUG_MAP[slug] ?? slug;
-  const candidates: string[] = [];
-  for (const vendor of compilerVendorDirCandidates()) {
-    candidates.push(join(root, vendor, slug, "cinatra", "oas.json"));    // canonical
-    candidates.push(join(root, vendor, slug, "cinatra", "agent.json"));  // transitional
-  }
-  candidates.push(join(root, legacySlug, "cinatra", "agent.json"));      // older cinatra layout
-  candidates.push(join(root, legacySlug, "agent.json"));                 // older flat layout
-  return candidates;
+  // Vendor-dir probe walks the operator's instance namespace first, then the
+  // shipped "cinatra" dir.
+  return {
+    root: resolveDevExtensionSourceRoot(),
+    vendors: compilerVendorDirCandidates(),
+    slug,
+    legacySlug: OAS_COMPILER_LEGACY_SLUG_MAP[slug] ?? slug,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1887,28 +1886,24 @@ export async function compileOasAgentJson(opts: {
     return { ok: false, error: "oasSourcePath is required with oasSource" };
   }
   if (!oasSourcePath) {
-    const candidates = resolveAgentJsonPath(opts.packageName);
-    if (!candidates) {
+    const lookupArgs = resolveAgentJsonPath(opts.packageName);
+    if (!lookupArgs) {
       return {
         ok: false,
         error: `packageName ${opts.packageName} failed path-traversal guard`,
       };
     }
-    for (const candidate of candidates) {
-      try {
-        await readFile(candidate, "utf8");
-        oasSourcePath = candidate;
-        break;
-      } catch {
-        // try next
-      }
-    }
-    if (!oasSourcePath) {
+    // The first directory that holds ANY definition file decides (cinatra#4920).
+    const found = findAgentDefinition(lookupArgs);
+    if (found?.kind === "old") return { ok: false, error: found.message };
+    if (found?.kind !== "oas") {
+      const tried = lookupArgs.vendors.map((v) => agentOasPath(lookupArgs.root, v, lookupArgs.slug));
       return {
         ok: false,
-        error: `OAS source not found for ${opts.packageName} (tried ${candidates.join(", ")})`,
+        error: `OAS source not found for ${opts.packageName} (tried ${tried.join(", ")})`,
       };
     }
+    oasSourcePath = found.path;
   }
 
   // 2. Load OAS source: the handed bytes (cinatra#4264), else the file.

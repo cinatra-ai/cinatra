@@ -76,6 +76,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: package-under-test
+          # Full history: the baseline is compared with its copy at the event's base SHA.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout the cinatra toast-banner scanner (pinned)
@@ -88,6 +90,7 @@ jobs:
             scripts/audit/toast-banner-scan.mjs
             scripts/audit/lib/toast-banner-detect.mjs
             scripts/audit/lib/strip-comments.mjs
+            scripts/audit/lib/floor-base-guard.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -97,6 +100,8 @@ jobs:
           node-version: '24'
 
       - name: Run the toast-banner conformance gate
+        env:
+          TOAST_BANNER_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           set -u
           SCAN=cinatra-toast-banner-gate/scripts/audit/toast-banner-scan.mjs

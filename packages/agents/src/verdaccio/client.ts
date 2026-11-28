@@ -14,7 +14,7 @@ import "server-only";
 // resolved config down. NO global module-init facility is used here because it
 // creates fragile import-order coupling and tighter architectural coupling.
 
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
@@ -524,6 +524,12 @@ export async function publishAgentPackage(
   }
 }
 
+// An agent's one definition file is cinatra/oas.json. These are the old-layout
+// definition files: a publish never copies them into a tarball. The sibling
+// credential scan skips them as canonical definition files, so shipping a stale
+// one beside cinatra/oas.json would ship it unscanned.
+const OLD_LAYOUT_DEFINITION_FILES: readonly string[] = ["cinatra/agent.json", "agent.json"];
+
 export async function publishAgentPackageFromGitDir(
   input: {
     agentDir: string;
@@ -568,29 +574,27 @@ export async function publishAgentPackageFromGitDir(
     return { packageName, packageVersion, registryUrl: resolvedConfig.registryUrl, published: false, alreadyPublished: true };
   }
 
-  // Read the agent definition. Probe order:
-  //   1. cinatra/oas.json — canonical
-  //   2. cinatra/agent.json — transitional
-  //   3. agent.json — flat legacy
+  // Read the agent definition: cinatra/oas.json, the one definition file of an
+  // agent. A source tree in the old layout (cinatra/agent.json or a root
+  // agent.json) is refused with the file to move.
   // cinatra#4264: the source is read ONCE, as bytes. The compile is handed
   // these bytes and the tarball ships them; the path is never opened again.
-  let oasSourcePath: string | null = null;
-  let oasBytes: Buffer | null = null;
-  for (const candidate of [
-    path.join(input.agentDir, "cinatra", "oas.json"),
-    path.join(input.agentDir, "cinatra", "agent.json"),
-    path.join(input.agentDir, "agent.json"),
-  ]) {
-    try {
-      oasBytes = await readFile(candidate);
-      oasSourcePath = candidate;
-      break;
-    } catch {
-      // try next rung
+  const oasSourcePath = path.join(input.agentDir, "cinatra", "oas.json");
+  let oasBytes: Buffer;
+  try {
+    oasBytes = await readFile(oasSourcePath);
+  } catch {
+    let oldLayoutFile: string | null = null;
+    for (const rel of OLD_LAYOUT_DEFINITION_FILES) {
+      if (await access(path.join(input.agentDir, rel)).then(() => true, () => false)) {
+        oldLayoutFile = rel;
+        break;
+      }
     }
-  }
-  if (!oasSourcePath || oasBytes === null) {
-    throw new Error(`Cannot read oas.json or agent.json from ${input.agentDir}`);
+    throw new Error(
+      `Cannot read cinatra/oas.json from ${input.agentDir}` +
+        (oldLayoutFile ? `; found ${oldLayoutFile} (old layout), move it to cinatra/oas.json` : ""),
+    );
   }
   let raw: string;
   try {
@@ -614,7 +618,7 @@ export async function publishAgentPackageFromGitDir(
   const agentId = typeof gitAgentJson.id === "string" ? gitAgentJson.id : randomUUID();
   const description = typeof gitPkgJson.description === "string" ? gitPkgJson.description : null;
 
-  // Compile the OAS flow to derive approvalPolicy, inputSchema, taskSpec, and type.
+  // Compile the OAS flow to derive approvalPolicy and type.
   // Flow-type agents don't store these in metadata.cinatra — they're derived from the
   // flow graph at compile time. cinatra#4264: compile the SAME file this publish
   // packages (the resolved oasSourcePath, not a packageName lookup), and refuse
@@ -622,10 +626,7 @@ export async function publishAgentPackageFromGitDir(
   // write. A compiled value the result does not carry still falls back to
   // metadata.cinatra below.
   let compiledApprovalPolicy: { steps: Array<{ requiresApproval?: boolean }> } | null = null;
-  let compiledInputSchema: Record<string, unknown> | null = null;
-  let compiledTaskSpec: string | null = null;
   let compiledAgentType: string | null = null;
-  let compiledHitlScreens: string[] | null = null;
   const compileResult = await compileOasAgentJson({ packageName, oasSourcePath, oasSource: oasBytes }).catch((error: unknown) => {
     throw new Error(
       `publishAgentPackageFromGitDir: compile failed for ${packageName}@${packageVersion} ` +
@@ -644,20 +645,14 @@ export async function publishAgentPackageFromGitDir(
   {
     const v = compileResult.value;
     if (v.approvalPolicy) compiledApprovalPolicy = v.approvalPolicy as { steps: Array<{ requiresApproval?: boolean }> };
-    if (v.inputSchema) compiledInputSchema = v.inputSchema as Record<string, unknown>;
-    if (v.prompt) compiledTaskSpec = v.prompt;
     if (v.type) compiledAgentType = v.type;
-    if (Array.isArray(v.hitlScreens) && v.hitlScreens.length > 0) compiledHitlScreens = v.hitlScreens as string[];
   }
 
   const agentType = compiledAgentType ?? (cinatra.type ?? "leaf") as string;
   const executionProvider = typeof cinatra.executionProvider === "string" ? cinatra.executionProvider : null;
-  const inputSchema = compiledInputSchema ?? (cinatra.inputSchema ?? { type: "object", properties: {}, required: [] }) as Record<string, unknown>;
-  const compiledPlan = (cinatra.compiledPlan ?? []) as unknown[];
   const approvalPolicy = compiledApprovalPolicy ?? (cinatra.approvalPolicy ?? { steps: [] }) as { steps: Array<{ requiresApproval?: boolean }> };
-  const taskSpec = compiledTaskSpec ?? (typeof cinatra.taskSpec === "string" ? cinatra.taskSpec : null);
   const agentDeps = ((gitPkgJson.cinatra as Record<string, unknown> | undefined)?.agentDependencies ?? {}) as Record<string, string>;
-  // Surface connector dependencies into the published manifest + payload so the
+  // Surface connector dependencies into the published manifest so the
   // install resolver can resolve them via pacote without re-reading the source
   // git package.json.
   const connectorDeps = ((gitPkgJson.cinatra as Record<string, unknown> | undefined)?.connectorDependencies ?? {}) as Record<string, string>;
@@ -729,12 +724,10 @@ export async function publishAgentPackageFromGitDir(
   // here, before any write; see `carryManifestRunDeclarations`.
   const runDeclarations = await carryManifestRunDeclarations(gitPkgJson, packageName);
   const hasApprovalGates = approvalPolicy.steps.some((s) => s.requiresApproval);
-  const publishedAt = new Date().toISOString();
 
   const { createHash } = await import("node:crypto");
   const sourceTemplateId = agentId;
   const sourceVersionId = randomUUID();
-  const contentHash = createHash("sha256").update(JSON.stringify(gitAgentJson)).digest("hex").slice(0, 16);
 
   // Preserve the agent's source license. The license-detection helper
   // (packages/extensions/src/license-detection.ts) checks `package.json#license`
@@ -761,6 +754,7 @@ export async function publishAgentPackageFromGitDir(
   // reasoning.
   const displayName = carryManifestDisplayName(gitPkgJson);
   const vendor = carryManifestVendor(gitPkgJson);
+  const changelog = input.changelog?.trim() || undefined;
 
   // Build distribution-format package.json (satisfies AgentPackageManifest schema)
   const distManifest: Record<string, unknown> = {
@@ -799,6 +793,9 @@ export async function publishAgentPackageFromGitDir(
       // survive the rebuild — same class of fix, same rebuild site as logo.
       ...(displayName !== undefined ? { displayName } : {}),
       ...(vendor !== undefined ? { vendor } : {}),
+      // The release note the publisher supplied. It no longer lives in a root
+      // agent.json; the registry read (`toSummary`) takes it from this block.
+      ...(changelog !== undefined ? { changelog } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,
@@ -899,51 +896,11 @@ export async function publishAgentPackageFromGitDir(
     }
   }
 
-  // Build distribution-format agent.json (satisfies AgentPackagePayload schema)
-  const distPayload: Record<string, unknown> = {
-    formatVersion: 2,
-    packageName,
-    packageVersion,
-    publishedAt,
-    title: typeof gitAgentJson.name === "string" ? gitAgentJson.name : packageName,
-    description,
-    changelog: input.changelog?.trim() || null,
-    template: {
-      sourceTemplateId,
-      ownerOrgId: null,
-      name: typeof gitAgentJson.name === "string" ? gitAgentJson.name : packageName,
-      description,
-      sourceNl: taskSpec ?? "",
-      type: agentType,
-      compiledPlan,
-      inputSchema,
-      outputSchema: null,
-      approvalPolicy,
-      taskSpec,
-      status: "published",
-      ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
-      ...(compiledHitlScreens ? { hitlScreens: compiledHitlScreens } : {}),
-    },
-    version: {
-      sourceVersionId,
-      sourceVersionNumber: 1,
-      contentHash,
-      snapshot: { name: typeof gitAgentJson.name === "string" ? gitAgentJson.name : packageName, type: agentType, compiledPlan, inputSchema, approvalPolicy, taskSpec },
-    },
-    publish: {
-      riskLevel: "low",
-      toolAccess: [],
-      hasApprovalGates,
-      ...(Object.keys(agentDeps).length > 0 ? { agentDependencies: agentDeps } : {}),
-      ...(Object.keys(connectorDeps).length > 0 ? { connectorDependencies: connectorDeps } : {}),
-    },
-  };
-
-  // Build tarball: distribution package.json + agent.json, plus preserved SKILL.md and cinatra/ sidecar
+  // Build tarball: distribution package.json, plus preserved SKILL.md and the cinatra/ sidecar
+  // (cinatra/oas.json is the agent's one definition file; no root agent.json ships).
   const tempDir = await mkdtemp(path.join(tmpdir(), "cinatra-agent-git-publish-"));
   try {
     await writeFile(path.join(tempDir, "package.json"), `${JSON.stringify(distManifest, null, 2)}\n`, "utf8");
-    await writeFile(path.join(tempDir, "agent.json"), `${JSON.stringify(distPayload, null, 2)}\n`, "utf8");
 
     // Align the tarball file-set with the sibling-scanner file-set. A blind
     // recursive copy would include node_modules/, dist/, .git/, etc. — files
@@ -966,12 +923,25 @@ export async function publishAgentPackageFromGitDir(
     // having declared one, which is the failure mode #1482/#2467 exist to end.
     //
     // Derived from the ACTUAL copy set, not the raw walk (codex round-4): the
-    // loop below additionally drops the synthesized package.json/agent.json and
-    // every `isEnvBlocked` file, so asserting against the unfiltered walk would
+    // loop below additionally drops the synthesized package.json, any old-layout
+    // definition file (cinatra/agent.json, agent.json) and every `isEnvBlocked`
+    // file, so asserting against the unfiltered walk would
     // certify a file the tarball does not in fact contain. Same predicate, one
     // definition, so the two cannot drift.
     const shipsInTarball = (f: { relPath: string; isEnvBlocked: boolean }): boolean =>
-      f.relPath !== "package.json" && f.relPath !== "agent.json" && !f.isEnvBlocked;
+      f.relPath !== "package.json" &&
+      !OLD_LAYOUT_DEFINITION_FILES.includes(f.relPath) &&
+      !f.isEnvBlocked;
+    const staleDefinitions = publishableFiles
+      .map((f) => f.relPath)
+      .filter((relPath) => OLD_LAYOUT_DEFINITION_FILES.includes(relPath));
+    if (staleDefinitions.length > 0) {
+      console.warn(
+        `[publishAgentPackageFromGitDir] ${packageName}@${packageVersion}: not shipping ` +
+          `${staleDefinitions.join(", ")} (old layout); the one definition file is cinatra/oas.json. ` +
+          "Delete the stale file from the source.",
+      );
+    }
     assertDeclaredLogoShips({
       logo,
       packageRoot: input.agentDir,
@@ -979,8 +949,8 @@ export async function publishAgentPackageFromGitDir(
       packageName,
     });
     // cinatra#4264: the tarball must ship the compiled OAS source, as the exact
-    // bytes compiled. A flat `agent.json` source is replaced by the synthesized
-    // payload above, so it never ships and the publish is refused.
+    // bytes compiled. The walk can leave it out (a generated directory, a
+    // blocked file), and then the publish is refused.
     if (!publishableFiles.some((f) => f.relPath === oasRelPath && shipsInTarball(f))) {
       throw new Error(
         `publishAgentPackageFromGitDir: the compiled OAS source ${oasRelPath} does not ship in the ` +
@@ -988,8 +958,8 @@ export async function publishAgentPackageFromGitDir(
       );
     }
     for (const file of publishableFiles) {
-      // Top-level package.json + agent.json are synthesized above (distManifest
-      // + distPayload), so skip the original-on-disk versions. .env* files
+      // The top-level package.json is synthesized above (distManifest), so skip
+      // the original-on-disk version; an old-layout definition file never ships. .env* files
       // (other than .env.example) MUST NOT ship — the sibling scan would have
       // rejected the package at the gate; this is defense-in-depth.
       if (!shipsInTarball(file)) continue;
@@ -1062,7 +1032,7 @@ export async function publishAgentPackageFromGitDir(
  * Publish a DECLARATIVE extension package directory (SDK-P5).
  *
  * Distinct from `publishAgentPackageFromGitDir`: it does NOT require/compile a
- * `cinatra/oas.json` and does NOT build the agent-shaped distManifest/distPayload
+ * `cinatra/oas.json` and does NOT build the agent-shaped distManifest
  * (no agent_templates coupling). It publishes the source package dir as-is for
  * a declarative kind (artifact / skill) — reading name/version/cinatra
  * from the dir's package.json, carrying the `cinatra` block through to the
@@ -1389,7 +1359,7 @@ export async function listAgentPackageVersions(
  * Read the AUTHORITATIVE extension kind from the registry packument. npm
  * stores the full package.json per version, so `versions[<v>].cinatra.kind` is
  * the package.json field as published — trustworthy for skill/connector
- * packages that have NO agent.json payload (getAgentPackage throws for those).
+ * packages that have NO cinatra/oas.json payload (getAgentPackage yields none for those).
  * Returns the latest version's declared kind, or null when absent / no explicit
  * kind (legacy agents).
  */

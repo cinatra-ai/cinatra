@@ -16,7 +16,6 @@ import type { FieldRendererProps } from "./field-renderer-registry";
 import {
   fetchCampaignRecipients,
   fetchChildInterruptOutput,
-  confirmCampaignRecipients,
   checkEmailOutreachAsyncStatus,
   removeEmailOutreachRecipients,
   type StageRecipient,
@@ -308,23 +307,14 @@ export function CampaignRecipientsReviewRenderer({
       onBusyChange?.(false);
       setPhase("ready");
 
-      // Auto-confirm: proceeding to "Save & continue" IS the approval.
-      // Only auto-confirm when cId is truthy. cId may be empty when a
-      // value-less mount hasn't yet received a persistedCampaignId — fall back
-      // to runId so the downstream drafts renderer always receives a
-      // campaignId it can use to look up the run.
+      // Auto-approve: proceeding to "Save & continue" IS the approval. cId
+      // may be empty when a value-less mount hasn't yet received a
+      // persistedCampaignId — fall back to runId so the downstream drafts
+      // renderer always receives a campaignId it can use to look up the run.
+      // campaignId is the load-bearing field so downstream email-drafts can
+      // find the campaign.
       const effectiveCId = cId ?? runId;
       if (result.total > 0 && effectiveCId !== undefined) {
-        if (cId !== undefined) {
-          try {
-            await confirmCampaignRecipients(cId);
-          } catch {
-            // Non-fatal — confirm failed but we can still proceed.
-          }
-        }
-        // onChange must run even if confirm throws — otherwise the approval
-        // value stays {} and the step blocks. campaignId is the load-bearing
-        // field so downstream email-drafts can find the campaign.
         const payload = { campaignId: effectiveCId, approved: true, approvedAt: new Date().toISOString() };
         onChange({ ...payload, userResponse: JSON.stringify(payload) });
       }
@@ -400,18 +390,9 @@ export function CampaignRecipientsReviewRenderer({
             setServerTotal(result.recipients.length);
             setAgentMessage(result.agentMessage ?? null);
             setPhase("ready");
-            // Mirror loadRecipients auto-confirm: confirm in DB so email-drafts
-            // can find recipients. LLM may skip email_outreach_recipients_confirm
-            // when campaign context is sparse (inferred/proposed list case).
+            // Mirror loadRecipients auto-approve. campaignId is the
+            // load-bearing field for downstream email-drafts lookup.
             if (result.recipients.length > 0 && persistedCampaignId) {
-              try {
-                await confirmCampaignRecipients(persistedCampaignId);
-              } catch {
-                // Non-fatal — confirm failed but we can still proceed.
-              }
-              // onChange must run even if confirm throws — otherwise the
-              // approval value stays {} and the step blocks. campaignId is
-              // the load-bearing field for downstream email-drafts lookup.
               const payload = { campaignId: persistedCampaignId, approved: true, approvedAt: new Date().toISOString() };
               onChange({ ...payload, userResponse: JSON.stringify(payload) });
             }

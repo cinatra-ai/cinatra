@@ -34,6 +34,19 @@
 // exit 1 -> at least one blocking finding on an enforcing branch;
 // exit 2 -> the gate itself could not run.
 //
+// THE LISTS MAY NOT GROW (cinatra#3832). The rollout file's two recorded lists,
+// `knownFindings` and `grandfatheredBranches`, are compared with the copy on the
+// base branch (scripts/audit/lib/floor-base-guard.mjs): an entry on the head that
+// the base does not hold fails the check, naming it. Removing an entry passes.
+// STATED LIMIT: the comparison is mode-blind. It does not read `enforcement`,
+// `gateLandedAt` or `trunkBranch`, and it does not ask what the CLI flags do with
+// the lists; changing the mode is a visible one-line change in review, the lists
+// are what silently grow. The workflow names the base from the event itself
+// (CHAT_HITL_EVIDENCE_BASE: the pull request's or the merge group's base SHA), so
+// a rerun compares with the base the run started from, not a moved branch tip. A
+// merge group run with no such base fails closed. Both sides read a list the same way: an array of
+// strings; absent or `null` is the empty list; any other shape fails closed.
+//
 // Zero runtime dependencies (node builtins only) so the caller needs no install.
 // ---------------------------------------------------------------------------
 
@@ -50,6 +63,7 @@ import {
   validateCaptureIndex,
 } from "./lib/capture-record-contract.mjs";
 import { decideOutcome } from "./lib/evidence-gate-rollout.mjs";
+import { compareFloorWithBase, newKeys, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO_ROOT = join(__dirname, "..", "..");
@@ -63,6 +77,70 @@ export const ACCEPTANCE_MANIFEST_PATH = join(
   "audit",
   "chat-hitl-acceptance-manifest.json",
 );
+
+/** The floor this gate compares with the base branch, repo-relative. */
+export const FLOOR_FILE = "scripts/ci/chat-hitl-evidence-gate.rollout.json";
+
+/** The variable a workflow may set to name the base revision. */
+export const FLOOR_BASE_VAR = "CHAT_HITL_EVIDENCE_BASE";
+
+/** The recorded lists that may only shrink against the base. */
+export const FLOOR_LISTS = ["knownFindings", "grandfatheredBranches"];
+
+/**
+ * A rollout file's text -> `{ knownFindings, grandfatheredBranches }`. A list
+ * that is absent or `null` is empty; a list that is not an array of strings,
+ * or a text that is not a JSON object, throws (the message names the field).
+ */
+export function parseRolloutLists(text) {
+  const doc = JSON.parse(text);
+  if (doc === null || typeof doc !== "object" || Array.isArray(doc)) throw new Error("not a rollout object");
+  const lists = {};
+  for (const key of FLOOR_LISTS) {
+    const list = doc[key] ?? [];
+    if (!Array.isArray(list) || !list.every((e) => typeof e === "string")) {
+      throw new Error(`${key} is not a list of names`);
+    }
+    lists[key] = list;
+  }
+  return lists;
+}
+
+/** One line per entry the head's lists hold and the base's do not. */
+const addedEntries = (base, head) =>
+  FLOOR_LISTS.flatMap((key) => newKeys(base[key], head[key]).map((e) => `${key} entry ${e}`));
+
+export function checkFloorAgainstBase({ repoRoot = DEFAULT_REPO_ROOT, env = process.env } = {}) {
+  let headFloor;
+  try {
+    headFloor = parseRolloutLists(readFileSync(join(repoRoot, FLOOR_FILE), "utf8"));
+  } catch (err) {
+    return {
+      status: "malformed",
+      ok: false,
+      lines: [`[chat-hitl-evidence-gate] FAIL - the floor ${FLOOR_FILE} is not a readable rollout file (${err.message}). Failing closed.`],
+    };
+  }
+  // A merge group has no pull request base branch for the shared guard to fall
+  // back on: it would pass as "no base". The workflow always names the base.
+  if (env.GITHUB_EVENT_NAME === "merge_group" && !env[FLOOR_BASE_VAR]) {
+    return {
+      status: "unreadable",
+      ok: false,
+      lines: [`[chat-hitl-evidence-gate] FAIL - the floor ${FLOOR_FILE} cannot be compared with the base: the run is a merge group's but ${FLOOR_BASE_VAR} is empty. Failing closed.`],
+    };
+  }
+  return compareFloorWithBase({
+    gate: "chat-hitl-evidence-gate",
+    envVar: FLOOR_BASE_VAR,
+    floorPath: FLOOR_FILE,
+    headFloor,
+    parse: parseRolloutLists,
+    grown: addedEntries,
+    repoRoot,
+    env,
+  });
+}
 
 /** Where deterministic chat-dispatch prose can live. */
 export const DISPATCH_ROOTS = ["src/app/api/chat", "packages/chat/src"];
@@ -407,6 +485,9 @@ function main() {
   const argv = parseArgv(process.argv.slice(2));
   let result;
   try {
+    // The guard speaks on stderr under --json, so stdout stays one JSON document.
+    const out = argv.json ? { log: console.error, error: console.error } : console;
+    if (!reportFloorGuard(checkFloorAgainstBase(), out)) process.exit(1);
     result = runGate({ argv });
   } catch (err) {
     console.error(`[chat-hitl-evidence-gate] ${err.message}`);

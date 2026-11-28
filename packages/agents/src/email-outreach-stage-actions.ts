@@ -160,7 +160,6 @@ const createEmailOutreachPrimitiveHandlers = () => ({
   },
   email_outreach_campaign_async_operation_status: async (_req: unknown) => ({ status: "idle" }),
   // Missing stubs added — safe-empty values; primary data path is fetchChildInterruptOutput()
-  email_outreach_recipients_confirm: async (_req: unknown) => ({ ok: true }),
   email_outreach_recipients_clear: async (_req: unknown) => ({ ok: true }),
   // Drafts list: reads from the objects table where drafts-draft LLM persists
   // draft bundle via objects_save with typeHint @cinatra-ai/dynamic:email-drafts-bundle.
@@ -221,10 +220,6 @@ const createEmailOutreachPrimitiveHandlers = () => ({
     }
   },
   email_outreach_initial_drafts_update: async (_req: unknown) => ({ ok: true }),
-  email_outreach_review_check_run: async (_req: unknown) => ({ ok: true }),
-  email_outreach_review_check_get: async (_req: unknown) => ({ status: "idle", recommendations: [] as unknown[] }),
-  email_outreach_review_recommendation_dismiss: async (_req: unknown) => ({ ok: true }),
-  email_outreach_review_recommendation_apply_start: async (_req: unknown) => ({ ok: true }),
 });
 
 // ---------------------------------------------------------------------------
@@ -284,17 +279,6 @@ export type StageDraft = {
   subject: string;
   body: string;
   status?: string;
-};
-
-export type StageReviewCheck = {
-  status: string;
-  recommendations: Array<{
-    id: string;
-    severity: string;
-    title: string;
-    description?: string;
-    draftId?: string | null;
-  }>;
 };
 
 // ---------------------------------------------------------------------------
@@ -365,20 +349,6 @@ export async function fetchCampaignRecipients(
   return result;
 }
 
-export async function confirmCampaignRecipients(campaignId: string): Promise<void> {
-  await callPrimitive("email_outreach_recipients_confirm", { campaignId });
-}
-
-export async function removeEmailOutreachRecipient(input: {
-  campaignId: string;
-  startupId: string;
-}): Promise<void> {
-  await callPrimitive("email_outreach_recipients_clear", {
-    campaignId: input.campaignId,
-    startupIds: [input.startupId],
-  });
-}
-
 /**
  * Batch variant: clears multiple recipients in a single server call.
  * The underlying primitive `email_outreach_recipients_clear` already accepts an
@@ -427,58 +397,5 @@ export async function updateInitialDraft(input: {
     subject: input.subject,
     body: input.body,
     status: input.status ?? "draft",
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Review check
-// ---------------------------------------------------------------------------
-
-export async function runReviewCheck(input: {
-  serviceId: string;
-  campaignId: string;
-}): Promise<void> {
-  await callPrimitive("email_outreach_review_check_run", {
-    serviceId: input.serviceId,
-    campaignId: input.campaignId,
-  });
-}
-
-export async function getReviewCheckState(
-  campaignId: string,
-): Promise<StageReviewCheck> {
-  const result = await callPrimitive<StageReviewCheck>(
-    "email_outreach_review_check_get",
-    { campaignId },
-  );
-  return {
-    status: result?.status ?? "idle",
-    recommendations: Array.isArray(result?.recommendations)
-      ? result.recommendations
-      : [],
-  };
-}
-
-export async function dismissReviewRecommendation(input: {
-  serviceId: string;
-  campaignId: string;
-  ids: string[];
-}): Promise<void> {
-  await callPrimitive("email_outreach_review_recommendation_dismiss", {
-    serviceId: input.serviceId,
-    campaignId: input.campaignId,
-    ids: input.ids,
-  });
-}
-
-export async function applyReviewRecommendation(input: {
-  serviceId: string;
-  campaignId: string;
-  ids: string[];
-}): Promise<void> {
-  await callPrimitive("email_outreach_review_recommendation_apply_start", {
-    serviceId: input.serviceId,
-    campaignId: input.campaignId,
-    ids: input.ids,
   });
 }
