@@ -70,3 +70,10 @@ export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
   "artifact-blog-image": "@cinatra-ai/blog-image-artifact",
   "artifact-blog-post-body": "@cinatra-ai/blog-post-artifact",
 };
+
+// The DASHBOARD FORM claimant (cinatra#4849): the one object type owned by
+// the single artifact pack that declares `cinatra.artifact.accepts.dashboard`
+// (one claimant enforced at generation, like a role), or null when no
+// present pack declares it. The host dashboards twin writes this type, so
+// core reads the pack's declaration instead of spelling its type id.
+export const GENERATED_DASHBOARD_ARTIFACT_TYPE: string | null = "@cinatra-ai/dashboard-artifact:dashboard";

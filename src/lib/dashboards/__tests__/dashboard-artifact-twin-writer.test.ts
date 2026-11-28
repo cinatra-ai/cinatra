@@ -256,3 +256,33 @@ describe("twin writer — delete query list (tombstone, Q2)", () => {
     }
   });
 });
+
+describe("twin writer — the object type comes from the pack's declaration (cinatra#4849)", () => {
+  it("writes the type the generated bindings carry for the dashboard form claimant", async () => {
+    const generated = await import("@/lib/generated/agent-bindings");
+    const declared = (generated as Record<string, unknown>).GENERATED_DASHBOARD_ARTIFACT_TYPE;
+    expect(declared).toBe("@cinatra-ai/dashboard-artifact:dashboard");
+    expect(DASHBOARD_OBJECT_TYPE).toBe(declared);
+    const objects = buildWithoutLifecycle(upsertCtx).find((q) =>
+      q.text.includes(`"cinatra"."objects"`),
+    )!;
+    expect(objects.values).toContain(declared);
+  });
+
+  it("a build without a dashboard form claimant fails the twin upsert with the reason", async () => {
+    vi.resetModules();
+    vi.doMock("@/lib/generated/agent-bindings", async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      GENERATED_DASHBOARD_ARTIFACT_TYPE: null,
+    }));
+    try {
+      const writer = await import("@/lib/dashboards/dashboard-artifact-twin-writer");
+      expect(() => writer.buildDashboardTwinQueries(upsertCtx)).toThrow(
+        /no artifact pack in this build declares the dashboard form/,
+      );
+    } finally {
+      vi.doUnmock("@/lib/generated/agent-bindings");
+      vi.resetModules();
+    }
+  });
+});

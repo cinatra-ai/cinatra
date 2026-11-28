@@ -1674,6 +1674,15 @@ describe("artifactKindLabelEntries — carried, never derived", () => {
 });
 
 
+describe("the dashboard form claimant is generated, not spelled by core (cinatra#4849)", () => {
+  it("emits the type the pinned dashboard pack declares for the dashboard form", async () => {
+    const generated = await import("../../../src/lib/generated/agent-bindings.ts");
+    const manifest = await buildManifest();
+    expect(generated.GENERATED_DASHBOARD_ARTIFACT_TYPE).toBe("@cinatra-ai/dashboard-artifact:dashboard");
+    expect(manifest.dashboardArtifactType).toBe(generated.GENERATED_DASHBOARD_ARTIFACT_TYPE);
+  });
+});
+
 describe("artifact kind labels — bounded declared type migration (#3527)", () => {
   const records = [
     { packageName: "@cinatra-ai/linkedin-artifacts", kind: "artifact", displayName: "  LinkedIn post  ", artifactObjectTypes: [{ type: "@cinatra-ai/linkedin:post-draft", claim: "dedicated" }] },

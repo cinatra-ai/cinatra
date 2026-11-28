@@ -54,6 +54,7 @@ import {
   validateFieldRendererDeclarations,
   mergeFieldRendererBindings,
   mergeRoleDeclarations,
+  mergeDashboardFormDeclarations,
 } from "./agent-binding-kinds.mjs";
 import { validateArtifactObjectTypeClaims } from "./artifact-objecttypes-claims.mjs";
 // Assistant declaration (`cinatra/config.json` `assistant` block) build-time
@@ -2457,6 +2458,7 @@ export async function buildManifest() {
   const bindingErrors = [];
   const allFieldRendererEntries = [];
   const roleDeclarations = [];
+  const dashboardFormDeclarations = [];
   for (const r of records) {
     const cin = readCinatraManifest(r.sourceDir);
     const { entries, errors } = validateFieldRendererDeclarations(r.packageName, cin.fieldRenderers);
@@ -2473,6 +2475,13 @@ export async function buildManifest() {
     // canonical TS rules (see artifact-objecttypes-claims.mjs header).
     if (cin.kind === "artifact") {
       bindingErrors.push(...validateArtifactObjectTypeClaims(r.packageName, cin));
+      // The dashboard form's claimant (cinatra#4849): one pack, like a role.
+      if (cin.artifact?.accepts?.dashboard === true) {
+        dashboardFormDeclarations.push({
+          packageName: r.packageName,
+          objectTypes: cin.artifact.objectTypes,
+        });
+      }
     }
     // Assistant declaration gate (cinatra#1874 W1): a present `kind:"agent"`
     // extension whose `cinatra/config.json` declares an `assistant` block is
@@ -2498,7 +2507,9 @@ export async function buildManifest() {
     mergeFieldRendererBindings(allFieldRendererEntries);
   const { roles: agentRoleBindings, errors: roleErrors } =
     mergeRoleDeclarations(roleDeclarations);
-  bindingErrors.push(...mergeErrors, ...roleErrors);
+  const { type: dashboardArtifactType, errors: dashboardFormErrors } =
+    mergeDashboardFormDeclarations(dashboardFormDeclarations);
+  bindingErrors.push(...mergeErrors, ...roleErrors, ...dashboardFormErrors);
 
   // Field-renderer COMPONENT map (cinatra#1625, epic #1620 S8 — M3 spine): the
   // literal-import BUILD table of extension-shipped field-renderer components,
@@ -2610,6 +2621,7 @@ export async function buildManifest() {
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
+    dashboardArtifactType,
   };
 }
 
@@ -3538,7 +3550,7 @@ function emitClient() {
 // and server code (role resolution, a2ui translator wiring). Validated
 // fail-closed at generation by the shared validator
 // (scripts/extensions/agent-binding-kinds.mjs).
-function emitAgentBindings(fieldRendererBindings, roleBindings) {
+function emitAgentBindings(fieldRendererBindings, roleBindings, dashboardArtifactType = null) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const entryLines = fieldRendererBindings
     .map((b) => {
@@ -3593,7 +3605,13 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
     `// state in reduced universes).\n` +
     `export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {\n` +
     `${roleLines}\n` +
-    `};\n`
+    `};\n\n` +
+    `// The DASHBOARD FORM claimant (cinatra#4849): the one object type owned by\n` +
+    `// the single artifact pack that declares \`cinatra.artifact.accepts.dashboard\`\n` +
+    `// (one claimant enforced at generation, like a role), or null when no\n` +
+    `// present pack declares it. The host dashboards twin writes this type, so\n` +
+    `// core reads the pack's declaration instead of spelling its type id.\n` +
+    `export const GENERATED_DASHBOARD_ARTIFACT_TYPE: string | null = ${JSON.stringify(dashboardArtifactType)};\n`
   );
 }
 
@@ -3771,11 +3789,12 @@ async function main() {
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
+    dashboardArtifactType,
   } = await buildManifest();
   const files = [
     [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules, devSetupModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
     [OUT_CLIENT, emitClient()],
-    [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings)],
+    [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings, dashboardArtifactType)],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
     [OUT_WEBHOOKS_SERVER, emitWebhooksServer(webhookHooks)],
     [OUT_WEBHOOK_PATHS, emitWebhookPublicPaths(webhookHooks)],

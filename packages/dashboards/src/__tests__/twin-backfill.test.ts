@@ -3,11 +3,18 @@
  * (cinatra#1894 / #2006). The substrate behaviour is proven by the gated
  * real-Postgres kill-test `twin-backfill-substrate.integration.test.ts`.
  */
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  backfillDashboardArtifactTwins,
-  DASHBOARD_TWIN_OBJECT_TYPE,
-} from "../twin-backfill";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// A database that answers every scan with no rows: the sweep never reaches a
+// real connection.
+vi.mock("../store/db", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  getDashboardsDb: () => ({ execute: async () => ({ rows: [] }) }),
+}));
+
+import * as twinBackfill from "../twin-backfill";
+
+const { backfillDashboardArtifactTwins } = twinBackfill;
 
 describe("backfillDashboardArtifactTwins — unit (no DB)", () => {
   const orig = process.env.SUPABASE_DB_URL;
@@ -29,7 +36,16 @@ describe("backfillDashboardArtifactTwins — unit (no DB)", () => {
     });
   });
 
-  it("exposes the dashboard twin object type (mirrors the host DASHBOARD_OBJECT_TYPE)", () => {
-    expect(DASHBOARD_TWIN_OBJECT_TYPE).toBe("@cinatra-ai/dashboard-artifact:dashboard");
+  // cinatra#4849: the twin's object type is passed in by the host, which reads
+  // it from the dashboard pack's generated declaration; this package names none.
+  it("names no dashboard pack type of its own: the host passes the twin's object type in", () => {
+    expect(Object.keys(twinBackfill)).not.toContain("DASHBOARD_TWIN_OBJECT_TYPE");
+  });
+
+  it("refuses to sweep when a database is configured but no dashboard object type is passed", async () => {
+    process.env.SUPABASE_DB_URL = "postgres://example.invalid/none";
+    await expect(backfillDashboardArtifactTwins({ dashboardObjectType: null })).rejects.toThrow(
+      /no dashboard object type passed/,
+    );
   });
 });

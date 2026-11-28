@@ -2547,12 +2547,6 @@ export async function upgradeExtensionDashboards(
 // CONVERGENT (not literally once): a boot phase re-runs every boot; steady state
 // is a single cheap "is anything untwinned?" scan that returns nothing.
 
-/** The `objects.type` a dashboard twin carries. MIRRORS `DASHBOARD_OBJECT_TYPE`
- *  in the host `src/lib/dashboards/dashboard-artifact-twin-writer.ts` (this
- *  package cannot import host `@/lib`); the twin-backfill integration test
- *  cross-checks the two constants so a rename on either side reds CI. */
-export const DASHBOARD_TWIN_OBJECT_TYPE = "@cinatra-ai/dashboard-artifact:dashboard";
-
 export interface TwinBackfillResult {
   /** dashboards examined (a dashboard lacking a dashboard-type twin at scan time). */
   scanned: number;
@@ -2571,6 +2565,14 @@ export interface TwinBackfillResult {
 }
 
 export interface BackfillTwinsDeps {
+  /**
+   * The `objects.type` a dashboard twin carries (cinatra#4849). The host passes
+   * the twin writer's `DASHBOARD_OBJECT_TYPE`, which it reads from the dashboard
+   * pack's generated declaration; this package names no pack type. ABSENT (or
+   * null) with a database configured, the sweep fails with the reason before it
+   * scans; the boot phase logs it and retries next boot.
+   */
+  dashboardObjectType?: string | null;
   /** page size for the untwinned scan + per-id pairing (default 200). */
   batchSize?: number;
   /** hard cap on scan iterations (safety; default effectively unbounded). */
@@ -2603,6 +2605,7 @@ export async function pairOneUntwinnedDashboardTwin(
   id: string,
   schemaName: string,
   guard: { organizationId: string; authority: OrgWriteAuthority },
+  dashboardObjectType: string,
 ): Promise<"paired" | "already" | "collision" | "gone"> {
   const objTable = sql.raw(`"${schemaName.replaceAll('"', '""')}"."objects"`);
   // Org-write kernel guard (cinatra#1939 S3): the sweep resolved the row's org
@@ -2657,7 +2660,7 @@ export async function pairOneUntwinnedDashboardTwin(
     const existing = await tx.execute(sql`SELECT type FROM ${objTable} WHERE id = ${id} LIMIT 1`);
     const existingRows = (existing as { rows?: Array<Record<string, unknown>> }).rows ?? [];
     if (existingRows.length > 0) {
-      return existingRows[0].type === DASHBOARD_TWIN_OBJECT_TYPE ? "already" : "collision";
+      return existingRows[0].type === dashboardObjectType ? "already" : "collision";
     }
     // Pair via the registered forward writer (upsert). actor=null — a backfill
     // has no acting principal; the twin's audit row records source='dashboards-twin'.
@@ -2686,6 +2689,13 @@ export async function backfillDashboardArtifactTwins(
   };
   // Fresh install pre-setup: no database configured — nothing to backfill.
   if (!process.env.SUPABASE_DB_URL) return result;
+  const dashboardObjectType = deps.dashboardObjectType;
+  if (!dashboardObjectType) {
+    throw new Error(
+      "twin backfill: no dashboard object type passed (deps.dashboardObjectType) — the " +
+        "host reads it from the dashboard pack's generated declaration (cinatra#4849)",
+    );
+  }
 
   const batchSize = Math.max(1, deps.batchSize ?? 200);
   const maxBatches = Math.max(1, deps.maxBatches ?? 10_000_000);
@@ -2708,7 +2718,7 @@ export async function backfillDashboardArtifactTwins(
       WHERE d.id > ${cursor}
         AND NOT EXISTS (
           SELECT 1 FROM ${objTable} o
-          WHERE o.id = d.id AND o.type = ${DASHBOARD_TWIN_OBJECT_TYPE}
+          WHERE o.id = d.id AND o.type = ${dashboardObjectType}
         )
       ORDER BY d.id
       LIMIT ${batchSize}
@@ -2734,10 +2744,12 @@ export async function backfillDashboardArtifactTwins(
         continue;
       }
       try {
-        const outcome = await pairOneUntwinnedDashboardTwin(id, schemaName, {
-          organizationId: orgId,
-          authority: deps.mintOrgAuthority(orgId),
-        });
+        const outcome = await pairOneUntwinnedDashboardTwin(
+          id,
+          schemaName,
+          { organizationId: orgId, authority: deps.mintOrgAuthority(orgId) },
+          dashboardObjectType,
+        );
         if (outcome === "paired") result.paired += 1;
         else if (outcome === "already") result.alreadyTwinned += 1;
         else if (outcome === "collision") result.collisions += 1;

@@ -15,6 +15,7 @@ import {
   mergeFieldRendererBindings,
   mergeRoleDeclarations,
 } from "../agent-binding-kinds.mjs";
+import * as bindingKinds from "../agent-binding-kinds.mjs";
 
 const PKG = "@cinatra-ai/some-agent";
 const VALID = { id: `${PKG}:thing`, kind: "cta", priority: 90 };
@@ -206,5 +207,52 @@ describe("mergeRoleDeclarations", () => {
       { packageName: "p2", roles: ["Bad Role!"] },
     ]);
     expect(errors).toHaveLength(2);
+  });
+});
+
+// cinatra#4849: the dashboard FORM (`cinatra.artifact.accepts.dashboard`) has
+// one claimant, like a role. Core reads that pack's own type from the generated
+// bindings instead of spelling it.
+describe("mergeDashboardFormDeclarations", () => {
+  const merge = (declarations) => {
+    expect(typeof bindingKinds.mergeDashboardFormDeclarations).toBe("function");
+    return bindingKinds.mergeDashboardFormDeclarations(declarations);
+  };
+  const ONE = {
+    packageName: "@example-org/board-artifact",
+    objectTypes: [{ type: "@example-org/board-artifact:board", claim: "dedicated" }],
+  };
+
+  it("returns the single claimant's own type", () => {
+    expect(merge([ONE])).toEqual({
+      type: "@example-org/board-artifact:board",
+      declaredBy: "@example-org/board-artifact",
+      errors: [],
+    });
+  });
+
+  it("returns no type when no pack declares the form", () => {
+    expect(merge([])).toEqual({ type: null, declaredBy: null, errors: [] });
+  });
+
+  it("FAILS when two packages declare the form (exactly one claimant)", () => {
+    const second = {
+      packageName: "@example-org/panel-artifact",
+      objectTypes: [{ type: "@example-org/panel-artifact:panel", claim: "dedicated" }],
+    };
+    const { errors } = merge([ONE, second]);
+    expect(errors.join("\n")).toMatch(
+      /dashboard form \(cinatra\.artifact\.accepts\.dashboard\) claimed by BOTH @example-org\/board-artifact and @example-org\/panel-artifact/,
+    );
+  });
+
+  it("FAILS when the claimant does not own exactly one type (foreign claims do not count)", () => {
+    const { errors } = merge([
+      {
+        packageName: "@example-org/board-artifact",
+        objectTypes: [{ type: "@example-org/other-artifact:thing", claim: "dedicated" }],
+      },
+    ]);
+    expect(errors.join("\n")).toMatch(/owns 0 object types \(it must own exactly one\)/);
   });
 });

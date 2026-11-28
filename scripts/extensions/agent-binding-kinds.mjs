@@ -292,3 +292,40 @@ export function mergeRoleDeclarations(declarations) {
   );
   return { roles, errors };
 }
+
+/**
+ * Validate + merge the DASHBOARD FORM declarations (cinatra#4849).
+ * Input: array of { packageName, objectTypes }, one entry per artifact pack
+ * whose manifest declares `cinatra.artifact.accepts.dashboard`. Output:
+ * `{ type, declaredBy, errors }`: the one object type the single claimant
+ * OWNS (its id is namespaced by the claimant's own package), or nulls when no
+ * pack declares the form. Like a role, the form has exactly one claimant: a
+ * second declaring package is an ERROR, and so is a claimant that does not
+ * own exactly one type (a foreign claim is not the claimant's own type).
+ */
+export function mergeDashboardFormDeclarations(declarations) {
+  const errors = [];
+  let claim = null;
+  for (const { packageName, objectTypes } of declarations) {
+    const owned = (Array.isArray(objectTypes) ? objectTypes : [])
+      .map((t) => (t && typeof t.type === "string" ? t.type : null))
+      .filter((type) => type !== null && type.startsWith(`${packageName}:`));
+    const unique = [...new Set(owned)];
+    if (unique.length !== 1) {
+      errors.push(
+        `${packageName}: declares the dashboard form (cinatra.artifact.accepts.dashboard) ` +
+          `but owns ${unique.length} object types (it must own exactly one)`,
+      );
+      continue;
+    }
+    if (claim && claim.declaredBy !== packageName) {
+      errors.push(
+        `the dashboard form (cinatra.artifact.accepts.dashboard) claimed by BOTH ` +
+          `${claim.declaredBy} and ${packageName} (the form must have exactly one claimant)`,
+      );
+      continue;
+    }
+    claim = { type: unique[0], declaredBy: packageName };
+  }
+  return { type: claim?.type ?? null, declaredBy: claim?.declaredBy ?? null, errors };
+}
