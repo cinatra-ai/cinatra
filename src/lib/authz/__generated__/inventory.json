@@ -111,10 +111,22 @@
       "line": 151
     },
     {
+      "primitiveName": "agent_run_hitl_prompts_exclude",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 124
+    },
+    {
       "primitiveName": "agent_run_hitl_prompts_list",
       "file": "packages/agents/src/mcp/schemas.ts",
       "road": "mcp",
       "line": 146
+    },
+    {
+      "primitiveName": "agent_run_hitl_prompts_list",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 123
     },
     {
       "primitiveName": "agent_run_list",
@@ -459,10 +471,22 @@
       "line": 247
     },
     {
+      "primitiveName": "artifacts_get",
+      "file": "src/lib/extension-scoped-tools.ts",
+      "road": "passthrough",
+      "line": 73
+    },
+    {
       "primitiveName": "artifacts_list",
       "file": "src/lib/artifacts/mcp.ts",
       "road": "mcp",
       "line": 218
+    },
+    {
+      "primitiveName": "artifacts_list",
+      "file": "src/lib/extension-scoped-tools.ts",
+      "road": "passthrough",
+      "line": 72
     },
     {
       "primitiveName": "artifacts_tombstone",
@@ -633,6 +657,12 @@
       "line": 191
     },
     {
+      "primitiveName": "campaign_test_send_plan",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 134
+    },
+    {
       "primitiveName": "change_set_eligibility_get",
       "file": "packages/objects/src/mcp/registry.ts",
       "road": "mcp",
@@ -789,6 +819,12 @@
       "line": 34
     },
     {
+      "primitiveName": "dashboards_create",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 163
+    },
+    {
       "primitiveName": "dashboards_cube_chart",
       "file": "packages/dashboards/src/mcp-cubes/registry.ts",
       "road": "mcp",
@@ -891,10 +927,22 @@
       "line": 214
     },
     {
+      "primitiveName": "email_outreach_initial_drafts_update",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 140
+    },
+    {
       "primitiveName": "email_outreach_recipients_update",
       "file": "packages/agents/src/mcp/schemas.ts",
       "road": "mcp",
       "line": 237
+    },
+    {
+      "primitiveName": "email_outreach_recipients_update",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 145
     },
     {
       "primitiveName": "email_send",
@@ -909,10 +957,22 @@
       "line": 203
     },
     {
+      "primitiveName": "email_test_delivery_parse_action",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 130
+    },
+    {
       "primitiveName": "email_test_delivery_run_send",
       "file": "packages/agents/src/mcp/schemas.ts",
       "road": "mcp",
       "line": 164
+    },
+    {
+      "primitiveName": "email_test_delivery_run_send",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 129
     },
     {
       "primitiveName": "extension_data",
@@ -1155,6 +1215,12 @@
       "line": 30
     },
     {
+      "primitiveName": "objects_classify",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 98
+    },
+    {
       "primitiveName": "objects_delete",
       "file": "packages/objects/src/mcp/registry.ts",
       "road": "mcp",
@@ -1179,6 +1245,12 @@
       "line": 8
     },
     {
+      "primitiveName": "objects_save",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 97
+    },
+    {
       "primitiveName": "objects_types_list",
       "file": "packages/objects/src/mcp/registry.ts",
       "road": "mcp",
@@ -1189,6 +1261,12 @@
       "file": "packages/objects/src/mcp/registry.ts",
       "road": "mcp",
       "line": 22
+    },
+    {
+      "primitiveName": "objects_update",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 99
     },
     {
       "primitiveName": "permissions_invitations_cancel",
@@ -1573,6 +1651,12 @@
       "file": "packages/trigger/src/mcp/registry.ts",
       "road": "mcp",
       "line": 40
+    },
+    {
+      "primitiveName": "trigger_config_set",
+      "file": "src/app/api/agents/passthrough/route.ts",
+      "road": "passthrough",
+      "line": 96
     },
     {
       "primitiveName": "twenty_instances_list",

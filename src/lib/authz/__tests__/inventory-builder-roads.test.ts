@@ -19,8 +19,10 @@ const ROUTE = "src/app/api/agents/passthrough/route.ts";
 // fixture's registration as a tool of its own.
 const SERVER_REGISTER = ["server", "registerTool"].join(".");
 
-/** A route whose allow list is `list` and whose admission guard is `guard`. */
-const route = (list: string[], guard: string, head: string[] = []) =>
+const REFUSE = ["    return { error: 'not admitted', status: 403 };"];
+
+/** A route whose allow list is `list`, admission guard `guard` and refusal block `refuse`. */
+const route = (list: string[], guard: string, head: string[] = [], refuse: string[] = REFUSE) =>
   [
     ...head,
     "const ALLOWED_TOOLS = new Set([",
@@ -34,7 +36,7 @@ const route = (list: string[], guard: string, head: string[] = []) =>
     "    return { error: 'unsupported shape', status: 403 };",
     "  }",
     `  if (${guard}) {`,
-    "    return { error: 'not admitted', status: 403 };",
+    ...refuse,
     "  }",
     "  return { status: 200 };",
     "}",
@@ -96,6 +98,16 @@ const TREES: Record<string, Record<string, string>> = {
   },
   noGuard: { [ROUTE]: route(OK_LIST, "!SUPPORTED_SHAPES.has(requestedTool.slice(1))") },
   otherForm: { [ROUTE]: route(OK_LIST, "ALLOWED_TOOLS.has(requestedTool) !== true") },
+  noReturn: {
+    [ROUTE]: route(OK_LIST, "!ALLOWED_TOOLS.has(requestedTool)", ["function respond(o: object) { return o; }"], [
+      "    respond({ error: 'not admitted', status: 403 });",
+    ]),
+  },
+  throws: {
+    [ROUTE]: route(OK_LIST, "!ALLOWED_TOOLS.has(requestedTool)", [], [
+      "    throw Object.assign(new Error('not admitted'), { status: 403 });",
+    ]),
+  },
 };
 
 type Row = { primitiveName: string; file: string; line: number; road?: string };
@@ -162,8 +174,11 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(rowsOf("not_a_tool")).toEqual([]);
   });
 
-  it("keeps an MCP tool the route also admits on its mcp row only", () => {
-    expect(rowsOf("fixture_mcp_tool")).toEqual([{ file: "src/lib/fixture-mcp.ts", road: "mcp" }]);
+  it("lists a tool admitted on both roads with a row on each", () => {
+    expect(rowsOf("fixture_mcp_tool")).toEqual([
+      { file: ROUTE, road: "passthrough" },
+      { file: "src/lib/fixture-mcp.ts", road: "mcp" },
+    ]);
   });
 
   it("finds the allow list by the tool name it guards, beside an unrelated .has guard", () => {
@@ -183,6 +198,13 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
   it("fails closed when the admission guard is not found", () => {
     expect(builderFailure(trees.noGuard)).toContain("the allow-list guard was not found");
     expect(builderFailure(trees.otherForm)).toContain("the allow-list guard was not found");
+  });
+
+  it("requires the allow-list guard to stop the request", () => {
+    expect(builderFailure(trees.noReturn)).toContain("the allow-list guard does not stop the request");
+    expect(builderFailure(trees.equalsFalse)).toBe("");
+    expect(builderFailure(trees.throws)).toBe("");
+    expect(rowsAt(trees.throws).map((r) => r.primitiveName)).toEqual(["fixture_ok"]);
   });
 
   it("--check passes on the tree it just wrote", () => {

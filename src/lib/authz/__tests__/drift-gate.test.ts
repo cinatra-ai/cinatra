@@ -100,10 +100,21 @@ describe("authz invariant coverage", () => {
     );
     const stale = Object.keys(PASSTHROUGH_CLASSIFICATIONS).filter((n) => !passthroughRows.has(n));
     expect(stale).toEqual([]);
-    const notAtRoute = Object.entries(PASSTHROUGH_CLASSIFICATIONS)
-      .filter(([, c]) => c.status !== "passthrough_route")
+    const badStatus = Object.entries(PASSTHROUGH_CLASSIFICATIONS)
+      .filter(([, c]) => c.status !== "passthrough_route" && c.status !== "host_handler_via_passthrough")
       .map(([n]) => n);
-    expect(notAtRoute).toEqual([]);
+    expect(badStatus).toEqual([]);
+    // A name forwarded to its host handler carries the host classification of
+    // its mcp row, read from the host map.
+    const mcpRows = new Set(inv.primitives.filter((p) => p.road === "mcp").map((p) => p.primitiveName));
+    const driftedFromHost = Object.entries(PASSTHROUGH_CLASSIFICATIONS)
+      .filter(([, c]) => c.status === "host_handler_via_passthrough")
+      .filter(([n, c]) => {
+        const host = PRIMITIVE_CLASSIFICATIONS[n];
+        return !mcpRows.has(n) || !host || host.resourceType !== c.resourceType || host.action !== c.action;
+      })
+      .map(([n]) => n);
+    expect(driftedFromHost).toEqual([]);
   });
 
   it("every CarveOut targets a real primitive (no stale entries)", () => {

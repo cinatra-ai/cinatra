@@ -14,13 +14,15 @@
  *     MCP road registers. The route's allow list is the set the route checks as
  *     `if (!LIST.has(tool))` (or `LIST.has(tool) === false`), where `tool` is
  *     the const read from the request's `tool` field and the guarded block
- *     answers status 403; no such guard, or two, FAILS the builder. The list is
+ *     answers status 403 and ends with `return` of that answer or a `throw`;
+ *     no such guard, two, or one that does not stop the request FAILS the
+ *     builder. The list is
  *     read with the TypeScript parser: string literals in any quote form,
  *     templates without substitution, module-level consts with a literal value,
  *     and spread sets followed to their module-level declaration in the same
  *     file or an imported module. An entry the parser cannot resolve to a
- *     literal FAILS the builder. A name the route admits that IS an MCP tool is
- *     dispatched to that tool's handler and keeps its mcp row.
+ *     literal FAILS the builder. A name the route admits that is also an MCP
+ *     tool has a row on each road: the route dispatches it on its own path.
  * Not covered yet (cinatra#4895): a tool a pack registers only in its
  * `register(ctx)` through `ctx.mcp.registerTool` has no row unless the pack's
  * metadata block lists it.
@@ -147,16 +149,17 @@ function scan() {
     const prev = dedupe.get(key);
     if (!prev || prev.line > r.line) dedupe.set(key, r);
   }
-  const mcpNames = new Set(records.map((r) => r.primitiveName));
   for (const r of dedupe.values()) r.road = "mcp";
+  // A name admitted on both roads has a row on each: the passthrough row is
+  // keyed by its road, so an mcp row never hides it.
   for (const r of scanPassthrough()) {
-    if (mcpNames.has(r.primitiveName)) continue;
-    const key = `${r.primitiveName}::${r.file}`;
+    const key = `${r.primitiveName}::passthrough`;
     if (!dedupe.has(key)) dedupe.set(key, { ...r, road: "passthrough" });
   }
   const deduped = [...dedupe.values()].map(({ primitiveName, file, line, road }) => ({ primitiveName, file, road, line }));
-  deduped.sort((a, b) =>
-    a.primitiveName === b.primitiveName ? a.file.localeCompare(b.file) : a.primitiveName.localeCompare(b.primitiveName),
+  deduped.sort(
+    (a, b) =>
+      a.primitiveName.localeCompare(b.primitiveName) || a.file.localeCompare(b.file) || a.road.localeCompare(b.road),
   );
   return deduped;
 }
@@ -256,16 +259,9 @@ function allowListName(sf) {
         ts.isIdentifier(call.expression.expression) &&
         call.arguments.length === 1 &&
         ts.isIdentifier(call.arguments[0]) &&
-        contains(
-          n.thenStatement,
-          (x) =>
-            ts.isPropertyAssignment(x) &&
-            x.name.getText(sf) === "status" &&
-            ts.isNumericLiteral(x.initializer) &&
-            x.initializer.text === "403",
-        )
+        contains(n.thenStatement, is403)
       ) {
-        guards.push({ list: call.expression.expression.text, arg: call.arguments[0].text });
+        guards.push({ list: call.expression.expression.text, arg: call.arguments[0].text, stops: stopsRequest(n.thenStatement) });
       }
     }
     ts.forEachChild(n, visit);
@@ -278,7 +274,36 @@ function allowListName(sf) {
         `for the requested tool (tool variables: ${[...toolVars].join(", ") || "none"}), found ${admission.length}`,
     );
   }
+  if (!admission[0].stops) {
+    fail(
+      `${sf.fileName}: the allow-list guard does not stop the request: its block must end with ` +
+        "`return` of the 403 answer or with `throw`",
+    );
+  }
   return admission[0].list;
+}
+
+/** @param {ts.Node} x */
+function is403(x) {
+  return (
+    ts.isPropertyAssignment(x) &&
+    ts.isIdentifier(x.name) &&
+    x.name.text === "status" &&
+    ts.isNumericLiteral(x.initializer) &&
+    x.initializer.text === "403"
+  );
+}
+
+/**
+ * Whether a guard's block ends the handler: its final statement is `return` of
+ * an expression carrying status 403, or a `throw`.
+ * @param {ts.Statement} then
+ */
+function stopsRequest(then) {
+  const last = ts.isBlock(then) ? then.statements[then.statements.length - 1] : then;
+  if (!last) return false;
+  if (ts.isThrowStatement(last)) return true;
+  return ts.isReturnStatement(last) && !!last.expression && contains(last.expression, is403);
 }
 
 /** @param {string} fromRel @param {string} spec */
