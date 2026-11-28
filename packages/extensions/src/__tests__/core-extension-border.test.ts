@@ -1452,7 +1452,8 @@ describe("core/extension border — pack-slug-in-core", () => {
       'const f = "@example-org/quill-ledger-connector";',
       'const g = "quill-ledger-connector";',
     ].join("\n");
-    expect(leaves(text)).toEqual([`11 ${QUILL}`]);
+    // A path (line 7) and a query value (line 8) are parts of a path or query and are read (cinatra#4531 review 2).
+    expect(leaves(text)).toEqual([`7 ${QUILL}`, `8 ${QUILL} (occurrence 2)`, `11 ${QUILL} (occurrence 3)`]);
   });
 
   it("reports a JSX attribute value equal to a leaf", () => {
@@ -1505,6 +1506,59 @@ describe("core/extension border — pack-slug-in-core", () => {
       "tide-planner-agent (@example-org/tide-planner-agent)",
     ]);
     expect(run('{ "a": 1, }')).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/defaults\.json/)]);
+  });
+
+  it("reports a leaf that is one part of a path or a query, also in the literal spans of a template", () => {
+    const text = [
+      'const a = "/connectors/example-org/quill-ledger-connector/setup";',
+      'const b = "quill-ledger-connector/index";',
+      'const c = "./quill-ledger-connector";',
+      'const d = "?q=quill-ledger-connector";',
+      'const e = "a=quill-ledger-connector&b=1";',
+      'const f = "#quill-ledger-connector";',
+      "const g = `/x/${a}/quill-ledger-connector`;",
+      "const h = `${base}/quill-ledger-connector/y`;",
+      "const i = `/a/${x}/quill-ledger-connector/${y}/b`;",
+      'const j = "/x/@example-org/tide-planner-agent";',
+    ].join("\n");
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+  });
+
+  it("does not read a leaf joined to other characters, glued to a substitution, or after a scope", () => {
+    const text = [
+      "const a = `quill-ledger-connector-${n}`;",
+      "const b = `/x/quill-ledger-connector${q}`;",
+      "const c = `${p}quill-ledger-connector/y`;",
+      'const d = "quill-ledger-connector.json";',
+      'const e = "quill-ledger-connector:x";',
+      'const f = "quill-ledger-connector-v2";',
+      'const g = "use quill-ledger-connector now";',
+      'const h = "@example-org/quill-ledger-connector";',
+      'const i = "@example-org/quill-ledger-connector/sub";',
+      'const j = "/x/tide-planner-agent";',
+    ].join("\n");
+    expect(leaves(text)).toEqual(["10 tide-planner-agent (@example-org/tide-planner-agent)"]);
+  });
+
+  it("reports a leaf that is one part of a JSON path value", () => {
+    const run = (gate as unknown as { scanPackLeafJson?: (i: { file: string; text: string; packs: Set<string> }) => Finding[] }).scanPackLeafJson;
+    expect(run ? run({ file: "src/lib/links.json", text: '{ "href": "/connectors/x/tide-planner-agent/setup", "@example-org/quill-ledger-connector": 1 }', packs: LEAF_PACKS }).map((f) => f.detail) : ["not a function"]).toEqual([
+      "tide-planner-agent (@example-org/tide-planner-agent)",
+    ]);
+  });
+
+  it("a test helper or stub under a tests folder is out of the scan", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-tests-tree-"));
+    try {
+      for (const f of ["packages/x/tests/__stubs__/server-only.ts", "packages/x/tests/setup.ts", "packages/x/src/a.ts", "src/app/x/test/route.ts"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), 'export const A = "quill-ledger-connector";\n');
+      }
+      const files = ["packages", "src"].flatMap((r) => gate.walkProductFiles(path.join(root, r), [], root)).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files.sort()).toEqual(["packages/x/src/a.ts", "src/app/x/test/route.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reads JSON files in the product tree except tsconfig files, tests and fixtures", () => {

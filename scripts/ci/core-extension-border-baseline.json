@@ -471,12 +471,17 @@
     {
       "rule": "pack-slug-in-core",
       "key": "src/app/campaigns/actions.ts::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
-      "reason": "The campaign actions name connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+      "reason": "The campaign actions name connector packages by their unscoped names, also as the fallback setup path. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-slug-in-core",
       "key": "src/app/campaigns/actions.ts::twenty-connector (@cinatra-ai/twenty-connector)",
-      "reason": "The campaign actions name connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+      "reason": "The campaign actions name connector packages by their unscoped names, also as the fallback setup path. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/campaigns/actions.ts::twenty-connector (@cinatra-ai/twenty-connector) (occurrence 2)",
+      "reason": "The campaign actions name connector packages by their unscoped names, also as the fallback setup path. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-slug-in-core",
@@ -532,6 +537,16 @@
       "rule": "pack-slug-in-core",
       "key": "src/app/configuration/llm/apis-page.tsx::openai-connector (@cinatra-ai/openai-connector) (occurrence 2)",
       "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/page.tsx::drupal-assistant-connector (@cinatra-ai/drupal-assistant-connector)",
+      "reason": "The configuration page links the assistant connectors' setup routes by their unscoped package names in the path. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/page.tsx::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "The configuration page links the assistant connectors' setup routes by their unscoped package names in the path. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-slug-in-core",

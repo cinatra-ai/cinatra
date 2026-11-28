@@ -18,8 +18,9 @@ fix it, each one anchored in a contract this repository already carries.
 
 `scripts/ci/core-extension-border-gate.mjs` scans the product code under `src/` and
 `packages/` and reports each crossing with its file, its line and the rule it breaks.
-Tests, mocks, fixtures (the `src/app/design-fixtures` tree included), generated maps and
-type declarations are outside the scan: a
+Tests (also test helpers and stubs under `tests/` and `__stubs__/`), mocks, fixtures (the
+`src/app/design-fixtures` tree included), generated maps and inventories, and type declarations
+are outside the scan: a
 pack name in a fixture is the fixture doing its job, and a pack name in a generated
 map is the materializer crossing. Comments are masked before every scan, so a comment
 that names a pack to explain a gap states knowledge without encoding it. The
@@ -53,18 +54,22 @@ silenced by unpinning the pack it names.
 ### `pack-slug-in-core` (cinatra#4531)
 
 A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connector` is
-`openai-connector`. The rule reads each product file with the TypeScript parser and reports a
-string literal token whose whole value is a pack's leaf: a `StringLiteral` in any quote (a JSX
-attribute value such as `slug="openai-connector"` is one) or a template literal without a
-substitution, wherever the tree holds it (a quoted or computed object key, an import or export
-specifier, an enum initializer, a string or template literal type, a JSX expression container),
-and JSX text whose trimmed whole text is a leaf (`<code>openai-connector</code>`). The rule also
-reads the `.json` files of the same product tree (tests, fixtures and `tsconfig*.json` compiler
-configs left out) with `JSON.parse` and reports every string value and every object key equal to
-a leaf; a JSON file that does not parse fails the check with its name. Comments, regular expressions and escapes are the parser's: they are never read
-as a literal. A file the parser cannot read fails the check with its name. The vocabulary is
-the leaves of the pack universe above (the two committed locks, plus a pack the ledger names);
-the check names no pack itself. A finding's detail is the leaf with its package,
+`openai-connector`. The rule reads each product file with the TypeScript parser and takes the
+text of every string token: a `StringLiteral` in any quote (a JSX attribute value such as
+`slug="openai-connector"` is one), a template literal, the literal spans of a template with
+substitutions, and JSX text trimmed. It also reads the `.json` files of the same product tree
+(tests, fixtures and `tsconfig*.json` compiler configs left out) with `JSON.parse`, taking every
+string value and every object key. Each text is split on the characters that separate the parts
+of a path or URL (`/ ? # = &`), and every part equal to a leaf is a finding: the whole value
+`"openai-connector"`, `"/connectors/cinatra-ai/openai-connector/setup"`, `"?q=openai-connector"`,
+`` `/agents/${vendor}/openai-connector/new` ``, `"openai-connector/index"`. A part right after a
+part that starts with `@` is a scoped package name (`"@scope/<leaf>"`), left to the package-name
+rule. In a template, a part that touches a substitution (`` `<leaf>${n}` ``) is not a whole part
+and is not read. Comments, regular expressions and escapes are the parser's: a comment, also
+inside `${...}`, and a regular expression literal are not string tokens and are not read. A
+file that does not parse fails the check with its name. The vocabulary is the leaves of the pack
+universe above (the two committed locks, plus a pack the ledger names); the check names no pack
+itself. A finding's detail is the leaf with its package,
 `openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
 occurrence, as in the other text rules.
 
@@ -74,11 +79,10 @@ is read, the suffixes the naming rule accepts
 `-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`. Every pack in the locks carries
 one today; the filter keeps a future one-word pack from turning a generic word into a finding.
 
-Not part of this rule yet, tracked in the issue: a leaf inside a longer string or a longer JSX
-text (a path segment such as `"/agents/cinatra-ai/<leaf>/new"`, a query value, a sentence), a
-template literal or template literal type with a substitution, the role-suffix stem (`blog-content` of `blog-content-skill`) and a tool or table
-name under a pack's stem. A scoped name `"@scope/<leaf>"` is not equal to the leaf; the
-package-name rule and the coupling checks read package names.
+Not read: a leaf inside a sentence or joined to other characters (`"use <leaf> now"`,
+`"<leaf>-v2"`, `"<leaf>.json"`, `"a:<leaf>"`), and a regular expression literal. Not part of this
+rule yet, tracked in the issue: the role-suffix stem (`blog-content` of `blog-content-skill`) and
+a tool or table name under a pack's stem.
 
 ### `unbounded-port-member` (cinatra#4872)
 

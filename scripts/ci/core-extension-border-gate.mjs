@@ -99,6 +99,8 @@ export const SKIP_DIRS = new Set([
   "build",
   "coverage",
   "__tests__",
+  "tests",
+  "__stubs__",
   "__mocks__",
   "__fixtures__",
   "__snapshots__",
@@ -109,9 +111,11 @@ export const SKIP_DIRS = new Set([
  *  crossing. */
 export const HOST_RESERVED_PACKAGE = "@cinatra-ai/host";
 
-/** The materializer-owned generated maps — crossing (2). Skipped by exact path
- *  so no other directory can shelter under the name. */
-export const GENERATED_PATHS = new Set(["src/lib/generated"]);
+/** The materializer-owned generated maps — crossing (2) — and the generated inventories that
+ *  record source files by path, extension files included, written by their own build scripts
+ *  (scripts/build-authz-inventory.mjs, scripts/build-write-surface-inventory.mjs; cinatra#4531).
+ *  Skipped by exact path so no other directory can shelter under the name. */
+export const GENERATED_PATHS = new Set(["src/lib/generated", "src/lib/authz/__generated__", "src/lib/object-history/__generated__"]);
 
 /** The design fixture tree (cinatra#4531): the routes and seeded kits the design conformance
  *  suite renders. They are fixtures, out of the scan like every fixture, skipped by exact path. */
@@ -735,6 +739,22 @@ export function packLeafNames(packs) {
   return leaves;
 }
 
+/** The leaves among the parts of one token value (cinatra#4531): the value split on the characters
+ *  that separate the parts of a path or URL (`/ ? # = &`). A part after a part that starts with `@`
+ *  is a scoped package name, left to the package-name rule. `gluedStart` / `gluedEnd`: the first /
+ *  last part touches a template substitution, so it is not a whole part and is not read. */
+const PATH_PART_SEPARATORS = /[/?#=&]/;
+export function leafParts(value, leaves, { gluedStart = false, gluedEnd = false } = {}) {
+  const parts = value.split(PATH_PART_SEPARATORS);
+  const out = [];
+  parts.forEach((part, i) => {
+    if ((gluedStart && i === 0) || (gluedEnd && i === parts.length - 1)) return;
+    if (i > 0 && parts[i - 1].startsWith("@")) return;
+    if (leaves.has(part)) out.push(part);
+  });
+  return out;
+}
+
 /** `pack-slug-in-core` (cinatra#4531): a string literal token whose WHOLE value is a pack's leaf.
  *  The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is one)
  *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf, or a `JsxText` whose text,
@@ -753,18 +773,24 @@ export function scanPackLeafLiterals({ file, text, packs }) {
   const out = [];
   const counts = new Map();
   walk(sf, (n) => {
-    const value = ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) ? n.text : ts.isJsxText(n) ? n.text.trim() : null;
-    const owners = value === null ? undefined : leaves.get(value);
-    if (!owners) return;
-    out.push(
-      finding(
-        "pack-slug-in-core",
-        file,
-        sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
-        occurrenceDetail(counts, "pack-slug-in-core", `${value} (${owners.join(", ")})`),
-        `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
-      ),
-    );
+    let found = [];
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) found = leafParts(n.text, leaves);
+    else if (ts.isJsxText(n)) found = leafParts(n.text.trim(), leaves);
+    else if (ts.isTemplateHead(n)) found = leafParts(n.text, leaves, { gluedEnd: true });
+    else if (ts.isTemplateMiddle(n)) found = leafParts(n.text, leaves, { gluedStart: true, gluedEnd: true });
+    else if (ts.isTemplateTail(n)) found = leafParts(n.text, leaves, { gluedStart: true });
+    for (const leaf of found) {
+      const owners = leaves.get(leaf);
+      out.push(
+        finding(
+          "pack-slug-in-core",
+          file,
+          sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
+          occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${owners.join(", ")})`),
+          `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+        ),
+      );
+    }
   });
   return out;
 }
@@ -793,12 +819,12 @@ export function scanPackLeafJson({ file, text, packs }) {
     );
   const visit = (v) => {
     if (typeof v === "string") {
-      if (leaves.has(v)) report(v);
+      leafParts(v, leaves).forEach(report);
     } else if (Array.isArray(v)) {
       v.forEach(visit);
     } else if (v && typeof v === "object") {
       for (const [k, x] of Object.entries(v)) {
-        if (leaves.has(k)) report(k);
+        leafParts(k, leaves).forEach(report);
         visit(x);
       }
     }
