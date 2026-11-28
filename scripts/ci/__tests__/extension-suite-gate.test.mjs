@@ -2328,15 +2328,60 @@ describe("runsOnPullRequestsAndDefaultPushes — `on:` as a string, a list or a 
     expect(runs({ pull_request: null, push: { "tags-ignore": ["v*"] } })).toBe(false);
   });
 
-  it("a filter this check does not read, or two filters at once, count as not covering main", () => {
+  it("a filter that does not match main, or two filters at once, count as not covering main", () => {
     expect(runs({ pull_request: null, push: { branches: ["!develop"] } })).toBe(false);
     expect(runs({ pull_request: null, push: { branches: ["m?in"] } })).toBe(false);
-    expect(runs({ pull_request: null, push: { branches: ["ma+in"] } })).toBe(false);
-    expect(runs({ pull_request: null, push: { branches: ["[m]ain"] } })).toBe(false);
     expect(runs({ pull_request: null, push: { branches: ["main"], "branches-ignore": ["develop"] } })).toBe(false);
     expect(runs({ pull_request: null, push: { branches: 5 } })).toBe(false);
     expect(runs({ pull_request: null, push: "main" })).toBe(false);
     expect(runs({ pull_request: null, push: ["main"] })).toBe(false);
+  });
+
+  // GitHub's filter syntax: a leading `**/` may match no directory at all, so `**/main` is `main`
+  // and `a/main` and `a/b/main` (the repository's own reading: merge-readiness.mjs).
+  it("`branches` with a leading globstar covers main, as `**` and `*` do", () => {
+    expect(runs({ pull_request: null, push: { branches: ["**/main"] } })).toBe(true);
+    expect(runs({ pull_request: { branches: ["**/main"] }, push: null })).toBe(true);
+    expect(runs({ pull_request: { branches: ["**/main"] }, push: { branches: "**/main" } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["release/*", "**/main"] } })).toBe(true);
+    expect(runs({ pull_request: { branches: ["**"] }, push: { branches: ["**"] } })).toBe(true);
+    expect(runs({ pull_request: { branches: ["*"] }, push: { branches: ["*"] } })).toBe(true);
+  });
+
+  it("`branches-ignore` with a leading globstar leaves main out, as `**` and `*` do", () => {
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["**/main"] } })).toBe(false);
+    expect(runs({ pull_request: { "branches-ignore": ["**/main"] }, push: null })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["develop", "**/main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["**"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["*"] } })).toBe(false);
+    expect(runs({ pull_request: { "branches-ignore": ["**"] }, push: null })).toBe(false);
+  });
+
+  it("a leading globstar on another name leaves main running, and does not cover it", () => {
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["**/develop", "**/release/**"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["**/develop"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["**/main-x"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["feature/**/main"] } })).toBe(false);
+  });
+
+  it("the other forms GitHub's filter syntax has are read as the merge-readiness check reads them", () => {
+    expect(runs({ pull_request: null, push: { branches: ["ma+in"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["[m]ain"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["mai?n"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { branches: ["**", "!main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["!main", "**"] } })).toBe(true);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["ma+in"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["[m]ain"] } })).toBe(false);
+  });
+
+  it("a pattern GitHub refuses, a negation or an empty entry in `branches-ignore` count as not covering main", () => {
+    expect(runs({ pull_request: null, push: { branches: ["[main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["[]"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["main\\"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["[develop"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["!main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": ["develop", "!main"] } })).toBe(false);
+    expect(runs({ pull_request: null, push: { "branches-ignore": [""] } })).toBe(false);
   });
 
   it("anything that is not a string, a list or a map runs on nothing", () => {

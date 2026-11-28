@@ -101,7 +101,10 @@
 //     tree, and parsed with the `yaml` package (never matched as text);
 //   - in each file: `on:` as a string, a list or a map (event names, and for `pull_request` and
 //     `push` the `branches` and `branches-ignore` filters, and for `push` a `tags`-only filter),
-//     and each job's `uses:` and `with:`.
+//     and each job's `uses:` and `with:`;
+//   - a branch filter is read by `matchesBranchFilter` of scripts/ci/merge-readiness.mjs, the one
+//     reading of GitHub's filter syntax in this repository; a pattern GitHub refuses, an empty
+//     entry or a `!` entry in `branches-ignore` counts as not covering the branch.
 // FAIL CLOSED: a pinned connector whose pinned commit is unknown, whose workflow files cannot be
 // listed or read, or whose files do not parse as a workflow mapping, is a SCANNER ERROR naming the
 // pack: it never passes, and the recorded list below never excuses it.
@@ -113,8 +116,7 @@
 // STATED LIMITS (the next stages, not findings of this rule): other extension kinds (agent,
 // skill, artifact, workflow); whether the pinned commit of the reusable workflow is recent;
 // whether the caller's job is a required check in the pack's repository; a job-level `if:`,
-// `needs`, matrix or `types:`/`paths` filter that stops the job in some runs; a branch filter in a
-// form other than a plain name, `*` or `**` (such a filter counts as not covering the branch).
+// `needs`, matrix or `types:`/`paths` filter that stops the job in some runs.
 //
 // USAGE
 //   node scripts/ci/extension-suite-gate.mjs            # discover + run + judge
@@ -136,6 +138,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { compareFloorWithBase, newKeys, readFileAtBase } from "../audit/lib/floor-base-guard.mjs";
+import { matchesBranchFilter } from "./merge-readiness.mjs";
 
 // ---------------------------------------------------------------------------
 // CARVE-OUT LEDGER
@@ -1069,28 +1072,16 @@ const isMap = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const firstLine = (e) => String(e?.message ?? e).split(/\r?\n/)[0].slice(0, 160);
 
 /**
- * One glob of a `branches` or `branches-ignore` filter against a branch name.
- * Read: a name of letters, digits, `.`, `_`, `-` and `/`, with `*` (anything but
- * a slash) and `**` (anything). Any other form (`?`, `+`, `[...]`, a leading
- * `!`) is not read and gives null; the caller then counts the filter as not
- * covering the branch.
- */
-export function branchGlobMatches(pattern, branch) {
-  if (typeof pattern !== "string" || !/^[A-Za-z0-9._/*-]+$/.test(pattern)) return null;
-  const source = pattern
-    .split("**")
-    .map((part) => part.split("*").map((lit) => lit.replace(/\./g, "\\.")).join("[^/]*"))
-    .join(".*");
-  return new RegExp(`^${source}$`).test(branch);
-}
-
-/**
  * Does one event of `on:` run for a ref of the branch `branch`? `config` is the
  * value under the event's name: null (or absent) names no filter. For `push`
  * the branch is the one pushed to; for `pull_request` it is the base branch.
- * A `push` that carries only a `tags` filter runs for no branch. A filter that
- * is not read (see branchGlobMatches), both filters at once, or a config that is
- * not a map: not covered.
+ * A `push` that carries only a `tags` filter runs for no branch. The filter
+ * list is read by `matchesBranchFilter` of merge-readiness.mjs, the one reading of
+ * GitHub's filter syntax in this repository (`*`, `**`, a leading `**` and slash that
+ * may match no directory, `?`, `+`, `[...]`, `\`, and `!` in `branches`). Not covered: a pattern
+ * GitHub refuses (that function throws), an empty entry, a `!` entry in
+ * `branches-ignore`, both filters at once, a list that is not strings, or a config
+ * that is not a map.
  */
 export function eventRunsOnBranch(event, config, branch = CONNECTOR_DEFAULT_BRANCH) {
   if (config === null || config === undefined) return true;
@@ -1102,10 +1093,13 @@ export function eventRunsOnBranch(event, config, branch = CONNECTOR_DEFAULT_BRAN
   if (!only && !ignore) return !(event === "push" && (has("tags") || has("tags-ignore")));
   const raw = config[only ? "branches" : "branches-ignore"];
   const list = typeof raw === "string" ? [raw] : Array.isArray(raw) && raw.every((x) => typeof x === "string") ? raw : null;
-  if (list === null) return false;
-  const hits = list.map((p) => branchGlobMatches(p, branch));
-  if (hits.includes(null)) return false;
-  return only ? hits.includes(true) : !hits.includes(true);
+  if (list === null || list.some((p) => p === "" || (ignore && p.startsWith("!")))) return false;
+  try {
+    const matched = matchesBranchFilter(list, branch);
+    return only ? matched : !matched;
+  } catch {
+    return false;
+  }
 }
 
 /** `on:` in the three forms GitHub accepts (a string, a list, a map) as a Map of event name to config; null when it is none of them. */
