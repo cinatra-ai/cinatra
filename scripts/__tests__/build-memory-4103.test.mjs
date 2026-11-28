@@ -2,7 +2,7 @@
 //
 // Two settings keep the build lean. next.config.ts switches the server source maps off whenever the
 // error-report upload that reads them is not set up (the maps were about 2 GB beside about 590 MB of
-// server code), and sixteen run-time path calls carry the bundler's ignore hint. In the fixture readings only the
+// server code), and fifteen run-time path calls carry the bundler's ignore hint. In the fixture readings only the
 // process.cwd()-first hint forms take the trace from 38 to 1; the other retained forms do not stop it. Both settings are
 // read straight from the real files, so a later edit that drops either one fails here.
 
@@ -26,11 +26,10 @@ function codeLines(text) {
     .join("\n");
 }
 
-// The call each of the sixteen places makes, in the order they stand in the file, keyed by file.
+// The call each of the fifteen places makes, in the order they stand in the file, keyed by file.
 const SITES = {
   "packages/agents/src/ensure-agent-package.ts": ["join"],
   "packages/agents/src/materialize-agent-package.ts": ["path.join", "path.join"],
-  "packages/agents/src/mcp/agent-source-paths.ts": ["join"],
   "packages/agents/src/mcp/handlers.ts": ["join"],
   "packages/extensions/src/license-detection.ts": ["join"],
   "packages/llm/src/tools/skills.ts": ["path.join"],
@@ -122,8 +121,8 @@ describe("server source maps by upload variables (cinatra#4103)", () => {
 });
 
 describe("bundler ignore hint on run-time path calls (cinatra#4103)", () => {
-  // The second memory trace named twenty calls, and sixteen keep the hint; each builds a folder path at run time. In the fixture readings only the process.cwd()-first hint forms take the trace from 38 to 1; the other retained forms do not stop it. This test counts the hint only.
-  it("counts the hint on exactly the 16 path calls the build trace named (a count only: it does not prove the bundler stops tracing)", () => {
+  // The second memory trace named twenty calls, and fifteen keep the hint (a sixteenth went with the old-layout agent read, cinatra#4920); each builds a folder path at run time. In the fixture readings only the process.cwd()-first hint forms take the trace from 38 to 1; the other retained forms do not stop it. This test counts the hint only.
+  it("counts the hint on exactly the 15 path calls the build trace named (a count only: it does not prove the bundler stops tracing)", () => {
     const callBefore = /([A-Za-z_$][\w$.]*)\(\/\* turbopackIgnore: true \*\/ (?=[^)\s])/g;
     let total = 0;
     for (const [file, callees] of Object.entries(SITES)) {
@@ -133,7 +132,7 @@ describe("bundler ignore hint on run-time path calls (cinatra#4103)", () => {
       expect(code.split(HINT).length - 1, file).toBe(callees.length);
       total += found.length;
     }
-    expect(total).toBe(16);
+    expect(total).toBe(15);
   });
 
   // Measured on a fixture build of the pinned Next 16.2.10: the hint stops the trace where the first operand is

@@ -498,11 +498,11 @@ describe("readProviderDeclaredAgents + readAgentsForSkillMatching union", () => 
     // The operator's vendor directory is absent: it is skipped, as it always
     // was, and the first-party agent is still surfaced.
     readInstanceIdentityMock.mockReturnValue(makeInstanceIdentity("marcushorndt-local", "Marcus Local"));
-    makeProviderAgentDir(tmpRoot, "email-drafting-agent", {
+    makeProviderAgentDir(tmpRoot, "sample-agent", {
       layout: "new-oas",
-      metadataPackageName: "@cinatra-ai/email-drafting-agent",
-      name: "Email Drafting Agent",
-      description: "Drafts cold-outreach emails.",
+      metadataPackageName: "@example-org/sample-agent",
+      name: "Sample Agent",
+      description: "A sample agent.",
     });
     expect(() => readProviderDeclaredAgents({ throwOnError: true })).not.toThrow();
     expect(readProviderDeclaredAgents({ throwOnError: true })).toHaveLength(1);
