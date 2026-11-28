@@ -234,7 +234,7 @@ describe("cinatra#2044 GAP 2 — the sibling manifest is resolved per supported 
 
   it("FLAT layout (agents/<slug>/agent.json, not loaded): the ADJACENT package.json is NOT read", async () => {
     // ONLY the adjacent path exists. The one path the loader reads is the
-    // parent (/agents/cinatra-ai/package.json), which throws ENOENT, so the
+    // manifest one folder up (the vendor folder), which throws ENOENT, so the
     // lifecycle of the adjacent manifest is never carried.
     MANIFEST_PATHS = {
       "/agents/cinatra-ai/flat-agent/package.json": PKG_WITH_LIFECYCLE,
