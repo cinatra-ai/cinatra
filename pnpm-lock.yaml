@@ -2936,15 +2936,6 @@ importers:
         specifier: ^4.4.3
         version: 4.4.3
 
-  packages/trigger-email-send:
-    dependencies:
-      '@cinatra-ai/mcp-client':
-        specifier: workspace:*
-        version: link:../mcp-client
-      zod:
-        specifier: ^4.4.3
-        version: 4.4.3
-
   packages/webhooks:
     dependencies:
       drizzle-orm:

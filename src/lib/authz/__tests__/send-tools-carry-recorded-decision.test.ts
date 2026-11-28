@@ -14,6 +14,8 @@
  * restored after each case.
  */
 import "server-only";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as auditModule from "../audit";
@@ -22,13 +24,13 @@ import * as carveOutModule from "../carve-out";
 import * as extensionRegistryModule from "@/lib/extension-mcp-registry";
 import * as boundary from "../mcp-boundary";
 import inventory from "@/lib/authz/__generated__/inventory.json";
-import { triggerEmailSendPrimitiveMetadata } from "../../../../packages/trigger-email-send/src/mcp/metadata";
 
 const { enforceMcpBoundary } = boundary;
 
 const REASON = "outward_effect_requires_recorded_decision";
 
-// The trigger-email-send tools whose metadata marks a state change.
+// The campaign send tools that change state. The core package that once
+// defined them is deleted (cinatra#4856); the names stay in the boundary set.
 const TRIGGER_EMAIL_SEND_MEMBERS = [
   "email_outreach_send_test_start",
   "email_outreach_send_initial_start",
@@ -75,7 +77,7 @@ const KEPT_OUTSIDE_THE_SET = [
 ] as const;
 
 // A classification for the members the host inventory does not list (the
-// trigger-email-send tools), so every member reaches the rule under test.
+// campaign send tools), so every member reaches the rule under test.
 const FIXTURE_CLASSIFICATION = { resourceType: "agent_run", action: "execute", status: "enforced" } as const;
 
 const runMemberCtx = () => ({ orgId: "org-1", userId: "user-1", runId: "run-1" });
@@ -191,10 +193,12 @@ describe("outward-effect tools on an agent run's frame", () => {
       expect([...boundary.OUTWARD_EFFECT_TOOL_NAMES].sort()).toEqual([...EXPECTED_MEMBERS].sort());
     });
 
-    it("holds every trigger-email-send tool whose metadata marks a state change", () => {
-      const stateChanging = triggerEmailSendPrimitiveMetadata.filter((m) => m.mutatesState).map((m) => m.name);
-      expect(stateChanging.length).toBeGreaterThan(0);
-      for (const name of stateChanging) expect(boundary.OUTWARD_EFFECT_TOOL_NAMES.has(name)).toBe(true);
+    it("holds the campaign send tools, though the core package that defined them is gone (cinatra#4856)", () => {
+      const removedPackage = fileURLToPath(new URL("../../../../packages/trigger-email-send/", import.meta.url));
+      // red-first-expect: expected true to be false
+      expect(existsSync(`${removedPackage}package.json`)).toBe(false);
+      expect(existsSync(`${removedPackage}src/mcp/metadata.ts`)).toBe(false);
+      for (const name of TRIGGER_EMAIL_SEND_MEMBERS) expect(boundary.OUTWARD_EFFECT_TOOL_NAMES.has(name)).toBe(true);
     });
 
     it.each(INVENTORY_MEMBERS)("holds %s, a primitive of the authorization inventory", (name) => {

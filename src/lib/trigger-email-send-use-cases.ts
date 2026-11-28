@@ -1,8 +1,8 @@
 /**
  * TriggerEmailSendUseCases adapter.
  *
- * Implements the contract from `@cinatra-ai/trigger-email-send` for the in-HITL
- * test-send button. Test sends are implemented directly; worker/pipeline methods
+ * Implements the `TriggerEmailSendUseCases` contract (declared below) for the
+ * in-HITL test-send button. Test sends are implemented directly; worker/pipeline methods
  * that do not run under the synchronous send path return explicit unsupported
  * errors.
  *
@@ -24,8 +24,36 @@
  * tests without resolving them — tests pass mocked deps via the factory.
  */
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import type { TriggerEmailSendUseCases } from "@cinatra-ai/trigger-email-send";
 import { testSendRecipient } from "@cinatra-ai/agents/test-delivery-send-port";
+
+// The use-case contract. It was declared by the deleted core package of the
+// same name (cinatra#4856), whose handler factory had no caller.
+type AsyncOperationState = {
+  operationId: string;
+  kind: string;
+  status: string;
+  phase?: string;
+  message?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  campaignId: string;
+  resultSummary?: string;
+};
+
+type TriggerEmailSendNotSupported = {
+  ok: false;
+  status: "not_supported";
+  reason: string;
+};
+
+type TriggerEmailSendUseCases = {
+  sendTestEmail(input: { campaignId: string; recipientEmail: string; selectionMode: "random_initial" | "specific_initial" | "all_initial"; specificInitialDraftIds?: string[]; specificFollowUpDraftIds?: string[]; submissionId?: string }, actor: PrimitiveActorContext): Promise<Record<string, unknown>>;
+  startInitialSend(input: { serviceId: string; campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
+  getInitialSendStatus(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
+  cancelInitialSend(input: { campaignId: string }, actor: PrimitiveActorContext): Promise<AsyncOperationState>;
+  runInitialSendWorker(input: { serviceId: string; campaignId: string; jobId: string }, actor: PrimitiveActorContext): Promise<{ ok: true; jobId: string } | TriggerEmailSendNotSupported>;
+  processDueFollowUps(input: { campaignId?: string }, actor: PrimitiveActorContext): Promise<{ ok: true } | TriggerEmailSendNotSupported>;
+};
 
 // Minimal local shapes so this file does not need to load @/lib/types at the
 // top level (kept light for vitest compatibility — types only).
