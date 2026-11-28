@@ -797,11 +797,13 @@ export function scanPackLeafLiterals({ file, text, packs }) {
  *  declaration array, as a workspace package exports it (`<x>PrimitiveMetadata`). */
 export const PRIMITIVE_METADATA_NAME_RE = /PrimitiveMetadata$/;
 
-/** The workspace package that holds a repo-relative path (cinatra#4873): `packages/<dir>` for a path
- *  inside a package directory, else the path's first segment (`src` for the application). */
+/** The workspace package that holds a repo-relative path (cinatra#4873): `packages/<dir>` for the
+ *  package directory itself or a path inside it (a trailing slash is not a segment), else the path's
+ *  first segment (`src` for the application; `packages` for the directory `packages` alone; `..` for
+ *  a path that leaves the repository, which is no package's path). */
 export function ownerOfPath(path) {
-  const parts = posix.normalize(path).split("/");
-  if (parts[0] === "packages" && parts.length > 2) return `packages/${parts[1]}`;
+  const parts = posix.normalize(path).replace(/\/+$/, "").split("/");
+  if (parts[0] === "packages" && parts.length >= 2) return `packages/${parts[1]}`;
   return parts[0];
 }
 

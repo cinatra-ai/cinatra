@@ -1728,6 +1728,42 @@ describe("core/extension border — single-package-declaration-reader", () => {
     expect(readers('import { quillPrimitiveMetadata } from "@example-org/quill-primitives/declarations";\n')).toEqual([`1 ${QUILL}`]);
   });
 
+  // A package's own root directory is a path of that package: `..` from `packages/x/src/` is `packages/x`.
+  const rootReaders = (text: string, file: string): string[] => {
+    const run = (gate as unknown as Readers).scanSinglePackageDeclarationReaders;
+    if (!run) return ["not a function"];
+    const dirs = new Map([
+      ["@example-org/x", "packages/x"],
+      ["@example-org/y", "packages/y"],
+    ]);
+    const aliases = [{ pattern: "@example-org/x-root", target: "packages/x" }];
+    try {
+      return run({ file, text, workspaceDirs: dirs, aliases })
+        .filter((f) => f.rule === RULE)
+        .map((f) => `${f.line} ${f.detail}`);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    }
+  };
+
+  it("allows an import of the package's own root directory: from `..` and from `../index`", () => {
+    const file = "packages/x/src/reader.ts";
+    expect(rootReaders('import { fooPrimitiveMetadata } from "..";\n', file)).toEqual([]);
+    expect(rootReaders('import { fooPrimitiveMetadata } from "../index";\n', file)).toEqual([]);
+  });
+
+  it("reports an import of another package's root directory", () => {
+    expect(rootReaders('import { fooPrimitiveMetadata } from "../../y";\n', "packages/x/src/reader.ts")).toEqual([
+      "1 fooPrimitiveMetadata (@example-org/y)",
+    ]);
+  });
+
+  it("an exact path alias that targets a package directory names that package", () => {
+    const text = 'import { fooPrimitiveMetadata } from "@example-org/x-root";\n';
+    expect(rootReaders(text, "packages/x/src/reader.ts")).toEqual([]);
+    expect(rootReaders(text, "src/lib/reader.ts")).toEqual(["1 fooPrimitiveMetadata (@example-org/x)"]);
+  });
+
   it("a bare specifier that is no workspace package is another package", () => {
     expect(readers('import { remotePrimitiveMetadata } from "@other-scope/remote/deep";\n')).toEqual([
       "1 remotePrimitiveMetadata (@other-scope/remote)",
