@@ -1,0 +1,9 @@
+{
+  "seq": "0136",
+  "file": "core/core__0136_drop-cms-snapshot-targets.mjs",
+  "summary": "Drop the unused CMS snapshot target table (cinatra#4854). core__0079 created cms_snapshot_targets for the CMS page snapshot capture; that writer left core in cinatra#4597 and no core code or pinned extension reads or writes the table. The same change removes it from the fresh-install bootstrap DDL and the Drizzle schema. up: DROP TABLE IF EXISTS cms_snapshot_targets (its index and UNIQUE constraint go with it; no foreign key points to it or from it); rows a database still holds are lost by design, nothing reads them. Idempotent; runs in the runner's default transaction. down() recreates the empty table and index in the core__0079 shape; dropped rows are not restored. SEQ IS PROVISIONAL: 0135 is the highest sequence on main (2026-11-26); a rename-only renumber at merge is normal.",
+  "destructive": true,
+  "tables": [
+    "cms_snapshot_targets"
+  ]
+}
