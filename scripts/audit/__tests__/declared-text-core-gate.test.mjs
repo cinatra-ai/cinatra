@@ -1,4 +1,4 @@
-// declared-text-core-gate tests (cinatra#4533, stage 1).
+// declared-text-core-gate tests (cinatra#4533, stages 1 and 2).
 //
 // The gate module is imported inside each test, so a checkout without it fails
 // every case by an assertion rather than failing to load. The fixture trees
@@ -237,6 +237,145 @@ describe("the floor", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Stage 2: the extensions' own code literals under `src/` and `cinatra/`.
+// ---------------------------------------------------------------------------
+
+const CODE_STRING = "Pick a weekly digest before you send it out.";
+const CODE_TEMPLATE = "The digest list is empty for this week so far.";
+const CODE_JSX = "Your weekly digest has been queued for sending.";
+const CODE_IN_CINATRA = "The digest step needs one approved note to continue.";
+const CODE_IN_TEST = "This sentence lives only in a test file of the pack code.";
+const CODE_IN_DTS = "This sentence lives only in a type declaration file here.";
+const CODE_OUTSIDE = "This sentence lives in pack code outside the read folders.";
+
+/** The fixture repository plus pack code files; core spells every text once in one file. */
+function repoWithCode() {
+  const root = fixtureRepo();
+  const pack = "extensions/example-org/notes-agent";
+  put(root, `${pack}/src/texts.ts`, `export const a = ${JSON.stringify(CODE_STRING)};\nexport const b = \`${CODE_TEMPLATE}\`;\nexport const c = \`${CODE_STRING} \${a}\`;\n`);
+  put(root, `${pack}/src/view.tsx`, `export const V = () => <p>\n  Your weekly digest has been\n  queued for sending.\n</p>;\n`);
+  put(root, `${pack}/cinatra/steps/step.mjs`, `export default { help: ${JSON.stringify(CODE_IN_CINATRA)} };\n`);
+  put(root, `${pack}/src/texts.test.ts`, `export const t = ${JSON.stringify(CODE_IN_TEST)};\n`);
+  put(root, `${pack}/src/__tests__/view.tsx`, `export const t = ${JSON.stringify(CODE_IN_TEST)};\n`);
+  put(root, `${pack}/src/types.d.ts`, `export declare const d: ${JSON.stringify(CODE_IN_DTS)};\n`);
+  put(root, `${pack}/scripts/build.mjs`, `export const o = ${JSON.stringify(CODE_OUTSIDE)};\n`);
+  put(root, `${pack}/src/declared-too.ts`, `export const x = ${JSON.stringify(DECLARED_FIELD)};\n`);
+  const all = [CODE_STRING, CODE_TEMPLATE, CODE_JSX, CODE_IN_CINATRA, CODE_IN_TEST, CODE_IN_DTS, CODE_OUTSIDE];
+  put(root, "src/lib/pack-code-texts.ts", all.map((t, i) => `export const s${i} = ${JSON.stringify(t)};`).join("\n") + "\n");
+  return root;
+}
+
+const EXPECTED_CODE_MATCHES = {
+  "packages/notes/src/other.ts :: This sentence lives only in the pack's own source code.": 1,
+  [`src/lib/pack-code-texts.ts :: ${CODE_IN_CINATRA}`]: 1,
+  [`src/lib/pack-code-texts.ts :: ${CODE_JSX}`]: 1,
+  [`src/lib/pack-code-texts.ts :: ${CODE_STRING}`]: 1,
+  [`src/lib/pack-code-texts.ts :: ${CODE_TEMPLATE}`]: 1,
+};
+
+describe("stage 2: the extensions' own code", () => {
+  it("the code path rule: code files under src/ and cinatra/, never tests, *.test.ts(x), declaration files or other folders", async () => {
+    const m = await gate();
+    expect(m.isExtensionCodePath, "the gate exports isExtensionCodePath").toBeTypeOf("function");
+    for (const rel of ["src/a.ts", "src/b/c.tsx", "src/d.mts", "src/e.cts", "src/f.js", "src/g.jsx", "cinatra/h.mjs", "cinatra/i/j.cjs"]) {
+      expect(m.isExtensionCodePath(rel), rel).toBe(true);
+    }
+    for (const rel of [
+      "src/a.test.ts",
+      "src/a.test.tsx",
+      "src/__tests__/a.ts",
+      "src/fixtures/a.ts",
+      "cinatra/__mocks__/a.js",
+      "src/a.d.ts",
+      "src/a.d.mts",
+      "cinatra/a.d.cts",
+      "scripts/a.ts",
+      "dist/a.js",
+      "index.ts",
+      "src/a.json",
+    ]) {
+      expect(m.isExtensionCodePath(rel), rel).toBe(false);
+    }
+    expect(m.isExtensionTestOrFixturePath("src/a.test.ts")).toBe(true);
+    expect(m.isExtensionTestOrFixturePath("src/a.test.tsx")).toBe(true);
+  });
+
+  it("records a core text equal to a pack code literal as a codeMatches entry; a JSON-declared text stays a matches entry", async () => {
+    const m = await gate();
+    const scan = m.scanDeclaredTextCore(repoWithCode());
+    expect(scan.matches).toEqual(EXPECTED_MATCHES);
+    expect(scan.codeMatches).toEqual(EXPECTED_CODE_MATCHES);
+    expect(scan.owners[`src/lib/pack-code-texts.ts :: ${CODE_JSX}`]).toEqual(["@example-org/notes-agent"]);
+  });
+
+  it("an extension code file that does not parse is a scanner error naming the file", async () => {
+    const m = await gate();
+    const root = repoWithCode();
+    put(root, "extensions/example-org/notes-agent/src/broken.ts", "export const = ;\n");
+    expect(() => m.scanDeclaredTextCore(root)).toThrow(/notes-agent\/src\/broken\.ts/);
+    expect(() => m.scanDeclaredTextCore(root)).toThrow(m.DeclaredTextScanError);
+  });
+
+  it("the writer seeds codeMatches into a floor without the section, and afterwards a new code match fails", async () => {
+    const m = await gate();
+    const quiet = { log() {}, error() {} };
+    const root = repoWithCode();
+    const floorPath = join(root, m.FLOOR_REL);
+    mkdirSync(dirname(floorPath), { recursive: true });
+    writeFileSync(floorPath, `${JSON.stringify({ note: "a stage 1 floor", matches: EXPECTED_MATCHES }, null, 2)}\n`);
+    expect(m.main(["--repo-root", root], { env: {}, out: quiet })).toBe(1); // the code matches are not on the floor
+    expect(m.main(["--repo-root", root, "--write-baseline"], { env: {}, out: quiet })).toBe(0);
+    const written = JSON.parse(readFileSync(floorPath, "utf8"));
+    expect(written.matches).toEqual(EXPECTED_MATCHES);
+    expect(written.codeMatches).toEqual(EXPECTED_CODE_MATCHES);
+    expect(m.main(["--repo-root", root], { env: {}, out: quiet })).toBe(0);
+    put(root, "src/lib/more-code.ts", `export const y = ${JSON.stringify(CODE_TEMPLATE)};\n`);
+    expect(m.main(["--repo-root", root], { env: {}, out: quiet })).toBe(1);
+    expect(m.main(["--repo-root", root, "--write-baseline"], { env: {}, out: quiet })).toBe(1); // never raised
+    expect(JSON.parse(readFileSync(floorPath, "utf8")).codeMatches).toEqual(EXPECTED_CODE_MATCHES);
+  });
+
+  it("the base guard: a base without codeMatches seeds it once; then it only shrinks and is never removed; matches never seeds", async () => {
+    const m = await gate();
+    expect(m.parseFloorDocument, "the gate exports parseFloorDocument, the two-section floor reader").toBeTypeOf("function");
+    const tree = treeFiles(fixtureRepo());
+    const codeKey = "packages/notes/src/other.ts :: This sentence lives only in the pack's own source code.";
+    const declKey = "src/lib/notes.ts :: Choose how many notes the digest may carry at most.";
+    const run = (baseFloorText, headFloorText) => {
+      const repo = makeFloorRepo({ base: { ...tree, [m.FLOOR_REL]: baseFloorText }, head: { [m.FLOOR_REL]: headFloorText } });
+      try {
+        const doc = m.parseFloorDocument(headFloorText);
+        return m.checkFloorAgainstBase({
+          repoRoot: repo.root,
+          env: { ...PULL_REQUEST_RUN, FLOOR_BASE_FETCH: "0" },
+          headFloor: doc.matches,
+          headCodeFloor: doc.codeMatches,
+        });
+      } finally {
+        repo.cleanup();
+      }
+    };
+    const stage1Base = `${JSON.stringify({ note: "stage 1", matches: {} }, null, 2)}\n`;
+    const seeded = run(stage1Base, m.floorDocument({}, { [codeKey]: 1 }));
+    expect(seeded.ok, seeded.lines.join("\n")).toBe(true);
+    expect(seeded.lines.join("\n")).toMatch(/seeds it with 1 entr/);
+    const declGrew = run(stage1Base, m.floorDocument({ [declKey]: 1 }, { [codeKey]: 1 }));
+    expect(declGrew.ok).toBe(false);
+    expect(declGrew.growth).toEqual([`${declKey} (0 -> 1)`]);
+    const codeGrew = run(m.floorDocument({}, {}), m.floorDocument({}, { [codeKey]: 1 }));
+    expect(codeGrew.ok).toBe(false);
+    expect(codeGrew.growth).toEqual([`codeMatches: ${codeKey} (0 -> 1)`]);
+    const raised = run(m.floorDocument({}, { [codeKey]: 1 }), m.floorDocument({}, { [codeKey]: 2 }));
+    expect(raised.growth).toEqual([`codeMatches: ${codeKey} (1 -> 2)`]);
+    const shrunk = run(m.floorDocument({}, { [codeKey]: 2 }), m.floorDocument({}, { [codeKey]: 1 }));
+    expect(shrunk.ok, shrunk.lines.join("\n")).toBe(true);
+    const removed = run(m.floorDocument({}, { [codeKey]: 1 }), stage1Base);
+    expect(removed.ok).toBe(false);
+    expect(removed.growth.join("\n")).toMatch(/codeMatches: the section is removed/);
+  });
+});
+
 /** Every file under `root` as a { repo-relative path: text } map. */
 function treeFiles(root, dir = root, out = {}) {
   for (const name of readdirSync(dir)) {
@@ -252,7 +391,7 @@ describe("the record check (the function the test of record runs)", () => {
     const m = await gate();
     expect(m.checkRecord, "the gate exports checkRecord, the test of record's check").toBeTypeOf("function");
     const tree = treeFiles(fixtureRepo());
-    for (const core of ["src/lib/notes.ts", "src/app/notes/page.tsx", "packages/notes/src/help.ts"]) delete tree[core];
+    for (const core of ["src/lib/notes.ts", "src/app/notes/page.tsx", "packages/notes/src/help.ts", "packages/notes/src/other.ts"]) delete tree[core];
     const key = "src/lib/notes.ts :: Choose how many notes the digest may carry at most.";
     const repo = makeFloorRepo({
       base: { ...tree, [m.FLOOR_REL]: m.floorDocument({}) },
