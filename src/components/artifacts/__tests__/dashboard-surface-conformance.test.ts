@@ -145,8 +145,11 @@ describe("§VIII single-gate — object.read is the sole list authorization", ()
   });
 
   it("the object-type constant is the single §VIII type id", () => {
+    // cinatra#4849: the one constant takes the type from the claimant of the
+    // `artifact-dashboard-twin` role; the surface spells no quoted type id.
     expect(SURFACE).toContain(
-      'DASHBOARD_ARTIFACT_OBJECT_TYPE =\n  "@cinatra-ai/dashboard-artifact:dashboard"',
+      'DASHBOARD_ARTIFACT_OBJECT_TYPE: string | null =\n  resolveExtensionRoleArtifactType("artifact-dashboard-twin")',
     );
+    expect(SURFACE).not.toMatch(/"@[a-z0-9-]+\/[a-z0-9-]+:[a-z0-9-]+"/);
   });
 });

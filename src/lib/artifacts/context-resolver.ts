@@ -335,7 +335,7 @@ export function resolveContextSlot(
 
   // cinatra#1896 / epic #1883 §D8 (v1): DASHBOARD-FORM rows are excluded from
   // attachment-hydrated context candidates. A dashboards-artifact twin (§D7)
-  // carries the base object type `@cinatra-ai/dashboard-artifact:dashboard`
+  // carries the dashboard twin type (the type the `artifact-dashboard-twin` role's claimant owns)
   // (which IS in listArtifacts(), so the type predicate above admits it) and its
   // substrate substance is the published dashboard envelope — a `representation.form =
   // 'dashboard'` row, NOT ingestible file bytes. Such a row can never be

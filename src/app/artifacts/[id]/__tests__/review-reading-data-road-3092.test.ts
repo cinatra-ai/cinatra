@@ -488,7 +488,8 @@ describe("(h) a dashboard target's live address is its canonical path (cinatra#4
   const CANONICAL = "/teams/t-1/dashboards/dash-r";
   const resolver = vi.mocked(resolveDashboardArtifactPointer);
   const DASHBOARD_TARGET = {
-    artifact: summary("dash-r", DASHBOARD_ARTIFACT_OBJECT_TYPE, null),
+    // The constant is null only in a build where no pack claims the dashboard twin role.
+    artifact: summary("dash-r", DASHBOARD_ARTIFACT_OBJECT_TYPE ?? "", null),
     revision: "rev_dash",
     mime: "application/vnd.cinatra.dashboard+json",
     member: {

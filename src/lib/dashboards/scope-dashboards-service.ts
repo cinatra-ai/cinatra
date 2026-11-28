@@ -141,6 +141,15 @@ function byName(a: ScopeDashboardTabRow, b: ScopeDashboardTabRow): number {
  * manager — this returns `null` to a non-manager (fail-closed; the client never
  * renders the picker for a non-manager anyway).
  */
+/** The org's dashboard twin objects. None in a build where no pack claims the
+ *  dashboard twin role (cinatra#4849): the type is then unknown, so nothing is
+ *  read. */
+function readDashboardObjects(opts: Parameters<typeof readObjectsByType>[1]) {
+  return DASHBOARD_ARTIFACT_OBJECT_TYPE === null
+    ? []
+    : readObjectsByType(DASHBOARD_ARTIFACT_OBJECT_TYPE, opts);
+}
+
 export async function listScopeAddCandidates(input: {
   actor: ActorContext;
   scope: ListingScope;
@@ -150,9 +159,7 @@ export async function listScopeAddCandidates(input: {
 
   // The org's dashboard objects (canonical ownership tuples), filtered to those
   // the actor may actually see, then to those not already present in the scope.
-  const objects = readObjectsByType(DASHBOARD_ARTIFACT_OBJECT_TYPE, {
-    orgId: input.actor.organizationId,
-  });
+  const objects = readDashboardObjects({ orgId: input.actor.organizationId });
   const present = await listScopePresentDashboardIds(input.scope);
   const visibleRows = objects.filter(
     (o) =>
@@ -333,9 +340,7 @@ function objectTupleFor(
   projectId: string | null;
   orgId: string | null;
 } | null {
-  const objects = readObjectsByType(DASHBOARD_ARTIFACT_OBJECT_TYPE, {
-    ...(orgId ? { orgId } : {}),
-  });
+  const objects = readDashboardObjects(orgId ? { orgId } : {});
   const match = objects.find((o) => o.id === dashboardId);
   if (!match) return null;
   return {

@@ -331,7 +331,7 @@ function registerDeclaredArtifactTypes(
   // The owning package registers the TYPE (never this bridge, below); but when
   // this pack ships semantic renderers, it may render a foreign type it depends
   // on — a meaning-type dashboard pack renders the base
-  // `@cinatra-ai/dashboard-artifact:dashboard` rows (whose meaning is the pack's,
+  // dashboard twin rows (whose meaning is the pack's,
   // via its eligible assertion) even though the base pack owns that type. Its
   // renderer is keyed by (foreignType, THIS pack, slot) and resolves ONLY when
   // this pack is the row's per-org presentation-identity winner (never the
