@@ -260,7 +260,7 @@ test("a malformed list is refused; parsed maps carry no prototype", () => {
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: { count: 2, items: ["read"] } } })), /not \{ count, items \}/);
   const parsed = parseList(JSON.stringify({ ...recorded(), toolDeclarations: { __proto__: { count: 1, items: ["a"] }, constructor: { count: 1, items: ["b"] } } }));
   assert.equal(Object.getPrototypeOf(parsed.toolDeclarations), null);
-  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents"]);
+  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations"]);
 });
 
 test("the agent rule mirrors the product's discovery: the paths its two readers test, at a pack root", () => {
@@ -700,10 +700,17 @@ const rendererPacks = () => {
   p["mail-connector"].packageJson.cinatra.fieldRenderers = [withComponent("@example-org/mail-connector:setup")];
   return p;
 };
+const CONNECTOR = "@example-org/mail-connector";
 const rendererRecorded = () => ({
   ...recorded(),
   rendererComponents: {
     [READ]: { count: 1, items: [`fieldRenderers: ${READ}:review`] },
+    [SKILL]: { count: 1, items: [`fieldRenderers: ${SKILL}:shape`] },
+    [WORKFLOW]: { count: 1, items: [`fieldRenderers: ${WORKFLOW}:cta`] },
+  },
+  // The HITL rule (below) reads the fixture's skill, workflow and connector too.
+  hitlDeclarations: {
+    [CONNECTOR]: { count: 1, items: [`fieldRenderers: ${CONNECTOR}:setup`] },
     [SKILL]: { count: 1, items: [`fieldRenderers: ${SKILL}:shape`] },
     [WORKFLOW]: { count: 1, items: [`fieldRenderers: ${WORKFLOW}:cta`] },
   },
@@ -756,7 +763,7 @@ test("the renderer rule: an entry counts by its component key, in an array of pl
   // The logic names no package: no key of the list appears in the gate's source.
   const source = readFileSync(GATE_SCRIPT, "utf8");
   for (const key of Object.keys(JSON.parse(readFileSync(join(dirname(GATE_SCRIPT), "agent-extension-code-gate.baseline.json"), "utf8")).rendererComponents ?? {})) assert.ok(!source.includes(key), key);
-  assert.deepEqual(CLASSES.at(-1), "rendererComponents");
+  assert.deepEqual(CLASSES.at(-2), "rendererComponents");
   assert.ok(gate.LATER_CLASSES.has("rendererComponents"));
 });
 
@@ -765,7 +772,8 @@ test("live: a field renderer component of an agent, skill or workflow pack fails
     const res = runGate(root);
     assert.equal(res.status, 1, res.out);
     assert.match(res.out, /\[rendererComponents\] items the list does not hold \(an agent, skill or workflow extension declares no field renderer component\):\n  \+ @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:shape\n  \+ @example-org\/post-workflow: fieldRenderers: @example-org\/post-workflow:cta\n  \+ @example-org\/read-agent: fieldRenderers: @example-org\/read-agent:review\n/);
-    assert.doesNotMatch(res.out, /note-artifact|mail-connector|read-agent:plain/);
+    // A connector's declaration is read by the HITL rule, not by this one: look at this class's lines only.
+    assert.doesNotMatch(res.out.slice(0, res.out.indexOf("[hitlDeclarations]")), /note-artifact|mail-connector|read-agent:plain/);
     assert.match(runGate(root, ["--report"]).out, /3 rendererComponents in 3 key\(s\)/);
   });
   withRoot({ packs: rendererPacks(), list: rendererRecorded() }, (root) => {
@@ -815,7 +823,8 @@ test("live base guard: a base list without the rendererComponents class seeds it
     const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
     writeJson(join(pack, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: [...pkg.cinatra.fieldRenderers, withComponent(`${SKILL}:more`)] } });
     repin(root, "pick-skill", SKILL);
-    writeJson(join(root, LIST_REL), { ...rendererRecorded(), rendererComponents: { ...rendererRecorded().rendererComponents, [SKILL]: { count: 2, items: [`fieldRenderers: ${SKILL}:more`, `fieldRenderers: ${SKILL}:shape`] } } });
+    const skillItems = { count: 2, items: [`fieldRenderers: ${SKILL}:more`, `fieldRenderers: ${SKILL}:shape`] };
+    writeJson(join(root, LIST_REL), { ...rendererRecorded(), rendererComponents: { ...rendererRecorded().rendererComponents, [SKILL]: skillItems }, hitlDeclarations: { ...rendererRecorded().hitlDeclarations, [SKILL]: skillItems } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1, grew.out);
     assert.match(grew.out, /GREW against the base[\s\S]*\[rendererComponents\] @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:more \(the base does not hold it\)/);
@@ -826,5 +835,187 @@ test("live base guard: a base list without the rendererComponents class seeds it
     const removed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(removed.status, 1, removed.out);
     assert.match(removed.out, /\[rendererComponents\] the class is removed/);
+  });
+});
+
+// The HITL rule (cinatra#4532): a pack of kind skill, workflow or connector that
+// is not an agent declares no `cinatra.fieldRenderers` entry; an agent and an
+// artifact pack (ruling 133-1: it hosts agents' HITL renderers) are not read by
+// it, and the shapes are read for every pinned pack. Read through the module
+// namespace (`gate`) so this file still loads where the gate has no such export.
+const NOTE_ARTIFACT = "@example-org/note-artifact";
+const OAS_CONNECTOR = "@example-org/oas-connector";
+
+const hitlPacks = () => {
+  const p = packs();
+  p["read-agent"].packageJson.cinatra.fieldRenderers = [renderer(`${READ}:review`), renderer(`${READ}:edit`)];
+  p["note-artifact"] = { packageJson: { name: NOTE_ARTIFACT, cinatra: { kind: "artifact", fieldRenderers: [withComponent(`${NOTE_ARTIFACT}:show`), renderer(`${NOTE_ARTIFACT}:plain`)] } } };
+  p["pick-skill"] = { packageJson: { name: SKILL, cinatra: { kind: "skill", fieldRenderers: [renderer(`${SKILL}:shape`)] } }, files: { "SKILL.md": "# pick\n" } };
+  p["post-workflow"] = { packageJson: { name: WORKFLOW, cinatra: { kind: "workflow", fieldRenderers: [withComponent(`${WORKFLOW}:cta`), renderer(`${WORKFLOW}:plain`)] } } };
+  // A connector with an entry that has an id, and one that has none (named by its position).
+  p["mail-connector"].packageJson.cinatra.fieldRenderers = [renderer(`${CONNECTOR}:setup`), { kind: "cta", priority: 5 }];
+  // A connector whose pinned tree holds `cinatra/oas.json` is an agent by the check's own rule: not read.
+  p["oas-connector"] = { packageJson: { name: OAS_CONNECTOR, cinatra: { kind: "connector", fieldRenderers: [renderer(`${OAS_CONNECTOR}:review`)] } }, files: { "cinatra/oas.json": "{}\n" } };
+  return p;
+};
+const hitlRecorded = () => ({
+  ...recorded(),
+  rendererComponents: { [WORKFLOW]: { count: 1, items: [`fieldRenderers: ${WORKFLOW}:cta`] } },
+  hitlDeclarations: {
+    [CONNECTOR]: { count: 2, items: [`fieldRenderers: ${CONNECTOR}:setup`, "fieldRenderers: [1]"] },
+    [SKILL]: { count: 1, items: [`fieldRenderers: ${SKILL}:shape`] },
+    [WORKFLOW]: { count: 2, items: [`fieldRenderers: ${WORKFLOW}:cta`, `fieldRenderers: ${WORKFLOW}:plain`] },
+  },
+});
+
+test("the HITL rule: a skill, workflow or connector that is no agent declares no entry, each entry is one item keyed as in the renderer rule; an agent and an artifact are not read; a shape the product does not read is refused and names the package", () => {
+  assert.equal(typeof gate.hitlDeclarationItems, "function", "the gate has no hitlDeclarationItems");
+  assert.equal(typeof gate.isHitlFreePack, "function", "the gate has no isHitlFreePack");
+  assert.deepEqual([...gate.HITL_FREE_KINDS], ["skill", "workflow", "connector"]);
+
+  // The kind is decided as the check decides it: the manifest kind, and the agent rule on the pinned tree.
+  for (const kind of ["skill", "workflow", "connector"]) {
+    assert.equal(gate.isHitlFreePack(kind, []), true, kind);
+    assert.equal(gate.isHitlFreePack(kind, plain("src/index.ts", "SKILL.md")), true, kind);
+    assert.equal(gate.isHitlFreePack(kind, plain("cinatra/oas.json")), false, `${kind} with a definition file is an agent`);
+  }
+  for (const kind of ["agent", "artifact", "registry"]) assert.equal(gate.isHitlFreePack(kind, []), false, kind);
+  assert.equal(gate.isHitlFreePack("artifact", plain("cinatra/oas.json")), false);
+  assert.equal(isAgentPack("connector", plain("cinatra/oas.json")), true);
+
+  const A = "@example-org/a-connector:setup";
+  const B = "@example-org/a-connector:chat";
+  const items = (fieldRenderers) => gate.hitlDeclarationItems(declares(fieldRenderers));
+
+  // The product's reading is the reference: every entry it reads is one item, with or without a component.
+  const good = [withComponent(B), renderer(A), renderer(A, { params: { a: 1 }, midRunHitl: true })];
+  const read = product.validateFieldRendererDeclarations("@example-org/p", good);
+  assert.deepEqual(read.errors, []);
+  assert.deepEqual(read.entries.map((e) => `fieldRenderers: ${e.id}`).sort(), items(good));
+  assert.deepEqual(items(good), [`fieldRenderers: ${B}`, `fieldRenderers: ${A}`, `fieldRenderers: ${A}`].sort());
+  // An entry without a string id is named by its position, as in the renderer rule.
+  assert.deepEqual(items([renderer(A), { kind: "cta", priority: 1 }]), [`fieldRenderers: ${A}`, "fieldRenderers: [1]"].sort());
+  assert.deepEqual(items([{ id: 7, kind: "cta" }]), ["fieldRenderers: [0]"]);
+
+  // Absent, null and an empty array declare nothing, as in the product.
+  for (const value of [undefined, null, []]) {
+    assert.deepEqual(product.validateFieldRendererDeclarations("@example-org/p", value), { entries: [], errors: [] });
+    assert.deepEqual(items(value), []);
+  }
+  assert.deepEqual(gate.hitlDeclarationItems({ name: "@example-org/p" }), []);
+  assert.deepEqual(gate.hitlDeclarationItems({ name: "@example-org/p", cinatra: { kind: "connector" } }), []);
+
+  // A shape the product does not read fails closed, with the label that names the package.
+  const LABEL = "@example-org/p (extensions/example-org/p/package.json at the pinned commit abc)";
+  for (const value of ["react", 7, true, { [A]: { kind: "cta", priority: 1 } }, { id: A }]) {
+    assert.match(product.validateFieldRendererDeclarations("@example-org/p", value).errors[0], /must be an array/);
+    assert.throws(() => gate.hitlDeclarationItems(declares(value), LABEL), (e) => e.message === `${LABEL}: cinatra.fieldRenderers is not an array`, JSON.stringify(value));
+  }
+  for (const entry of ["./r.tsx", null, 7, [], [renderer(A)]]) {
+    assert.match(product.validateFieldRendererDeclarations("@example-org/p", [renderer(B), entry]).errors[0], /entry must be an object/);
+    assert.throws(() => gate.hitlDeclarationItems(declares([renderer(B), entry]), LABEL), (e) => e.message === `${LABEL}: cinatra.fieldRenderers[1] is not an object`);
+  }
+
+  // The logic names no package: no key of the list appears in the gate's source.
+  const source = readFileSync(GATE_SCRIPT, "utf8");
+  for (const key of Object.keys(JSON.parse(readFileSync(join(dirname(GATE_SCRIPT), "agent-extension-code-gate.baseline.json"), "utf8")).hitlDeclarations ?? {})) assert.ok(!source.includes(key), key);
+  assert.deepEqual(CLASSES.at(-1), "hitlDeclarations");
+  assert.ok(gate.LATER_CLASSES.has("hitlDeclarations"));
+});
+
+test("live: an entry of a skill, workflow or connector pack fails until it is recorded; an agent's, an artifact's and a connector-with-definition's is not counted; both rules apply to a component of a skill or workflow; a shape the product does not read is a scanner error that names the package, in any kind", () => {
+  withRoot({ packs: hitlPacks(), list: recorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[hitlDeclarations\] items the list does not hold \(a skill, workflow or connector extension declares no HITL field renderer\):\n  \+ @example-org\/mail-connector: fieldRenderers: @example-org\/mail-connector:setup\n  \+ @example-org\/mail-connector: fieldRenderers: \[1\]\n  \+ @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:shape\n  \+ @example-org\/post-workflow: fieldRenderers: @example-org\/post-workflow:cta\n  \+ @example-org\/post-workflow: fieldRenderers: @example-org\/post-workflow:plain\n/);
+    assert.doesNotMatch(res.out.slice(res.out.indexOf("[hitlDeclarations]")), /read-agent|note-artifact|oas-connector/);
+    // A component of the workflow is one finding of the renderer rule and one of this rule.
+    assert.match(res.out, /\[rendererComponents\] items the list does not hold[^\n]*\n  \+ @example-org\/post-workflow: fieldRenderers: @example-org\/post-workflow:cta\n/);
+    assert.match(runGate(root, ["--report"]).out, /5 hitlDeclarations in 3 key\(s\)/);
+  });
+  withRoot({ packs: hitlPacks(), list: hitlRecorded() }, (root) => {
+    const ok = runGate(root);
+    assert.equal(ok.status, 0, ok.out);
+
+    // More entries in an agent or an artifact pack are not this rule's concern.
+    for (const [dir, name] of [["read-agent", READ], ["note-artifact", NOTE_ARTIFACT]]) {
+      const pack = packDir(root, dir);
+      const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+      writeJson(join(pack, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: [...pkg.cinatra.fieldRenderers, renderer(`${name}:more`)] } });
+      repin(root, dir, name);
+      const res = runGate(root);
+      assert.equal(res.status, 0, res.out);
+    }
+
+    const skill = packDir(root, "pick-skill");
+    const skillPkg = JSON.parse(readFileSync(join(skill, "package.json"), "utf8"));
+    writeJson(join(skill, "package.json"), { ...skillPkg, cinatra: { ...skillPkg.cinatra, fieldRenderers: [...skillPkg.cinatra.fieldRenderers, renderer(`${SKILL}:more`)] } });
+    repin(root, "pick-skill", SKILL);
+    const grew = runGate(root);
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /\+ @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:more/);
+
+    writeJson(join(skill, "package.json"), { ...skillPkg, cinatra: { kind: "skill", fieldRenderers: [] } });
+    repin(root, "pick-skill", SKILL);
+    const stale = runGate(root);
+    assert.equal(stale.status, 1, stale.out);
+    assert.match(stale.out, /\[hitlDeclarations\] recorded items that are gone[^\n]*\n  - @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:shape/);
+    writeJson(join(skill, "package.json"), skillPkg);
+    repin(root, "pick-skill", SKILL);
+    assert.equal(runGate(root).status, 0);
+
+    // The shape is read for every pinned pack, whatever its kind: a value the product does not read names the package.
+    for (const [dir, name] of [["pick-skill", SKILL], ["read-agent", READ], ["note-artifact", NOTE_ARTIFACT], ["mail-connector", CONNECTOR]]) {
+      const pack = packDir(root, dir);
+      const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+      for (const bad of ["./renderer.tsx", { [`${name}:x`]: renderer(`${name}:x`) }, [renderer(`${name}:x`), "./renderer.tsx"]]) {
+        writeJson(join(pack, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: bad } });
+        repin(root, dir, name);
+        const res = runGate(root);
+        assert.equal(res.status, 2, `${name} ${res.out}`);
+        assert.match(res.out, new RegExp(`${name} \\(extensions/example-org/${dir}/package\\.json at the pinned commit [0-9a-f]{40}\\): cinatra\\.fieldRenderers(?: is not an array|\\[1\\] is not an object)`));
+      }
+      writeJson(join(pack, "package.json"), pkg);
+      repin(root, dir, name);
+      assert.equal(runGate(root).status, 0);
+    }
+  });
+  // A pack of a kind no rule reads is read for its shape too.
+  const other = hitlPacks();
+  other["misc-pack"] = { packageJson: { name: "@example-org/misc-pack", cinatra: { kind: "registry", fieldRenderers: "./renderer.tsx" } } };
+  withRoot({ packs: other, list: hitlRecorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /@example-org\/misc-pack \(extensions\/example-org\/misc-pack\/package\.json at the pinned commit [0-9a-f]{40}\): cinatra\.fieldRenderers is not an array/);
+  });
+});
+
+test("live base guard: a base list without the hitlDeclarations class seeds it once; then an entry the base does not hold fails, and a removed class fails", () => {
+  withRoot({ packs: hitlPacks(), list: recorded() }, (root) => {
+    writeFile(join(root, "scripts", "audit", "agent-extension-code-gate.mjs"), "// the gate\n");
+    git(root, "init", "-q");
+    const before = commitAll(root, "base with a list of four classes");
+    writeJson(join(root, LIST_REL), hitlRecorded());
+    const seed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: before });
+    assert.equal(seed.status, 0, seed.out);
+    const seeded = commitAll(root, "seed the classes");
+
+    const pack = packDir(root, "mail-connector");
+    const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+    writeJson(join(pack, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: [...pkg.cinatra.fieldRenderers, renderer(`${CONNECTOR}:more`)] } });
+    repin(root, "mail-connector", CONNECTOR);
+    const held = hitlRecorded().hitlDeclarations;
+    writeJson(join(root, LIST_REL), { ...hitlRecorded(), hitlDeclarations: { ...held, [CONNECTOR]: { count: 3, items: [`fieldRenderers: ${CONNECTOR}:more`, ...held[CONNECTOR].items] } } });
+    const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /GREW against the base[\s\S]*\[hitlDeclarations\] @example-org\/mail-connector: fieldRenderers: @example-org\/mail-connector:more \(the base does not hold it\)/);
+
+    writeJson(join(pack, "package.json"), pkg);
+    repin(root, "mail-connector", CONNECTOR);
+    const { hitlDeclarations: _dropped, ...withoutClass } = hitlRecorded();
+    writeJson(join(root, LIST_REL), withoutClass);
+    const removed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(removed.status, 1, removed.out);
+    assert.match(removed.out, /\[hitlDeclarations\] the class is removed/);
   });
 });
