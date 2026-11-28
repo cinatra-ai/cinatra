@@ -70,7 +70,7 @@ async function resolveGatekeptKindMetadata(
  */
 /**
  * Authoritative kind→typeId resolver for install/update/uninstall/archive/
- * restore dispatch. `getAgentPackage()` extracts agent.json and rejects for
+ * restore dispatch. `getAgentPackage()` extracts cinatra/oas.json and rejects for
  * skill/connector/artifact, so a `getAgentPackage(...).catch(()=>null)` →
  * `deriveTypeId(pkg?.kind)` pattern silently mis-routes every non-agent kind
  * to "agent". This falls back to the kind-agnostic packument read
@@ -123,7 +123,7 @@ export async function resolveExtensionTypeId(
  * `reinstallLatestExtensionPackage` paths must not derive typeId through
  * `getAgentPackage(...).catch(() => null)`. That pattern silently fails for
  * `kind:"skill" | "connector" | "artifact"` packages:
- *   - getAgentPackage extracts the tarball + reads agent.json → throws for
+ *   - getAgentPackage extracts the tarball + reads cinatra/oas.json → throws for
  *     non-agent kinds → pkg is null → visibility check is bypassed.
  *   - dispatch falls through to resolveExtensionTypeId, which works
  *     kind-agnostically — but visibility has already been silently skipped.
@@ -184,7 +184,7 @@ export async function resolveExtensionPackageForLifecycle(
   // Pull the publisher-set origin block from the resolved version's manifest's
   // `cinatra.origin`. This is the canonical location written by the publish
   // path. Reading `pkg.origin` from `getAgentPackage`'s extracted manifest is
-  // agent-only because that path extracts the tarball + reads agent.json, so it
+  // agent-only because that path extracts the tarball + reads cinatra/oas.json, so it
   // never populates `origin` for non-agent kinds. Reading directly from the
   // packument's manifest closes that gap uniformly.
   const cinatraBlock = (summary.manifest as { cinatra?: Record<string, unknown> } | null)?.cinatra;

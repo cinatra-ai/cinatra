@@ -93,6 +93,7 @@ vi.mock("../reserved-workspace-slugs", () => ({
 }));
 
 import { ensureAgentPackageFromGitFile as ensureReal } from "../ensure-agent-package";
+import { packageNameFromAgentLayout } from "../retained-regenerate";
 
 // Review 2 note: the install-record and declared-tables seams are injected, so
 // the same-version controls reach the skip branch without the real
@@ -190,5 +191,14 @@ describe("cinatra#4264 A1b review 1 — an unreadable sibling manifest checks th
     const result = await ensureAgentPackageFromGitFile({ oasSourcePath: AGENT_JSON_PATH });
     expect(result.skipped).toBe(true);
     expect(importAgentTemplateCoreMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("cinatra#4920 — the layout names a package only for <vendor>/<slug>/cinatra/oas.json", () => {
+  it("names the scoped package for the cinatra/oas.json layout and nothing for the old flat file", () => {
+    expect(packageNameFromAgentLayout(join("/agents", "example-org", "flat-agent", "agent.json"))).toBeNull();
+    expect(packageNameFromAgentLayout(join("/agents", "example-org", "new-agent", "cinatra", "oas.json"))).toBe(
+      "@example-org/new-agent",
+    );
   });
 });

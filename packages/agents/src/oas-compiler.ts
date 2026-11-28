@@ -738,45 +738,42 @@ function resolveAgentJsonPath(packageName: string): Parameters<typeof findAgentD
 // ---------------------------------------------------------------------------
 
 // Read sibling `<agent>/cinatra.json` (next to package.json,
-// NOT inside the cinatra/ subdirectory which holds OAS files).
+// NOT inside the cinatra/ subdirectory which holds OAS files). The definition
+// is `<agent>/cinatra/oas.json`, so the file is one level above it; no other
+// location is probed (cinatra#4920).
 // Exported for unit testing — production callers should rely on the compiler
 // surfacing this via CompiledAgentOas.cinatraConfig.
 export async function readSiblingCinatraJson(
   oasSourcePath: string,
 ): Promise<CinatraAgentConfig | null> {
-  const candidates = [
-    join(dirname(oasSourcePath), "..", "cinatra.json"), // cinatra/ layout (most common)
-    join(dirname(oasSourcePath), "cinatra.json"),       // flat layout
-  ];
-  for (const cfgPath of candidates) {
-    try {
-      const raw = await readFile(cfgPath, "utf8");
-      const parsed = JSON.parse(raw) as CinatraAgentConfig;
-      // Defensive shape check — drop unknown roots, validate scalar types.
-      const out: CinatraAgentConfig = {};
-      if (parsed.limits && typeof parsed.limits === "object") {
-        const maxRecipients = parsed.limits.maxRecipients;
-        if (typeof maxRecipients === "number" && maxRecipients > 0) {
-          out.limits = { maxRecipients };
-        }
+  const cfgPath = join(dirname(oasSourcePath), "..", "cinatra.json");
+  try {
+    const raw = await readFile(cfgPath, "utf8");
+    const parsed = JSON.parse(raw) as CinatraAgentConfig;
+    // Defensive shape check — drop unknown roots, validate scalar types.
+    const out: CinatraAgentConfig = {};
+    if (parsed.limits && typeof parsed.limits === "object") {
+      const maxRecipients = parsed.limits.maxRecipients;
+      if (typeof maxRecipients === "number" && maxRecipients > 0) {
+        out.limits = { maxRecipients };
       }
-      if (Array.isArray(parsed.requiredConnections)) {
-        const conns = parsed.requiredConnections.filter(
-          (c): c is { type: string; preferred?: string } =>
-            !!c && typeof c === "object" && typeof c.type === "string",
-        );
-        if (conns.length > 0) out.requiredConnections = conns;
-      }
-      if (parsed.defaults && typeof parsed.defaults === "object") {
-        const senderName = parsed.defaults.senderName;
-        if (typeof senderName === "string" || senderName === null) {
-          out.defaults = { senderName };
-        }
-      }
-      return out;
-    } catch {
-      // try next candidate
     }
+    if (Array.isArray(parsed.requiredConnections)) {
+      const conns = parsed.requiredConnections.filter(
+        (c): c is { type: string; preferred?: string } =>
+          !!c && typeof c === "object" && typeof c.type === "string",
+      );
+      if (conns.length > 0) out.requiredConnections = conns;
+    }
+    if (parsed.defaults && typeof parsed.defaults === "object") {
+      const senderName = parsed.defaults.senderName;
+      if (typeof senderName === "string" || senderName === null) {
+        out.defaults = { senderName };
+      }
+    }
+    return out;
+  } catch {
+    // absent or unreadable: no sibling config
   }
   return null;
 }
@@ -810,77 +807,68 @@ async function readSiblingPackageJson(
    *  manifest declares none. Reported to a writer on request. */
   lifecycle: unknown;
 } | null> {
-  // OAS source lives at either:
-  //   agents/<slug>/cinatra/oas.json  → package.json is ../../package.json (one up from cinatra/)
-  //   agents/<slug>/agent.json        → package.json is ../package.json (legacy back-compat)
-  // dirname(oasSourcePath) joined with ".." / "package.json" handles the cinatra/ case.
-  // For the flat case, the same path accidentally works because dirname is agents/<slug>/
-  // and "..", "package.json" jumps up to agents/package.json (which doesn't exist) — so try
-  // both candidates for robustness.
-  const candidates = [
-    join(dirname(oasSourcePath), "..", "package.json"), // cinatra/ layout
-    join(dirname(oasSourcePath), "package.json"),       // flat layout
-  ];
-  for (const pkgPath of candidates) {
-    try {
-      const raw = await readFile(pkgPath, "utf8");
-      const parsed = JSON.parse(raw) as {
-        name?: unknown;
-        version?: unknown;
-        cinatra?: {
-          agentDependencies?: Record<string, string>;
-          produces?: unknown;
-          lifecycle?: { regenerate?: unknown };
-        };
+  // The OAS source is `<vendor>/<slug>/cinatra/oas.json`; its package.json is
+  // one level above the cinatra/ directory. No other location is probed
+  // (cinatra#4920: a flat `<slug>/agent.json` layout is not loaded).
+  const pkgPath = join(dirname(oasSourcePath), "..", "package.json");
+  try {
+    const raw = await readFile(pkgPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      name?: unknown;
+      version?: unknown;
+      cinatra?: {
+        agentDependencies?: Record<string, string>;
+        produces?: unknown;
+        lifecycle?: { regenerate?: unknown };
       };
-      // `cinatra.produces` — same tolerant PARSE as
-      // readAgentProducesFromPackageManifest (never throws), but the result
-      // is FAIL-CLOSED for binding parity: absent or malformed ⇒ [] (a
-      // declared binding then errors — production must be declared), never
-      // a silent skip (codex round 0).
-      let produces: string[] = [];
-      let producesRefs: Array<{ extension: string; objectTypeId?: string }> = [];
-      // An ABSENT block is readable (it says "nothing"); a present block is
-      // readable only when the tolerant parse below keeps every entry.
-      let producesReadable = true;
-      const producesRaw = parsed.cinatra?.produces;
-      if (producesRaw !== undefined && producesRaw !== null && !Array.isArray(producesRaw)) {
+    };
+    // `cinatra.produces` — same tolerant PARSE as
+    // readAgentProducesFromPackageManifest (never throws), but the result
+    // is FAIL-CLOSED for binding parity: absent or malformed ⇒ [] (a
+    // declared binding then errors — production must be declared), never
+    // a silent skip (codex round 0).
+    let produces: string[] = [];
+    let producesRefs: Array<{ extension: string; objectTypeId?: string }> = [];
+    // An ABSENT block is readable (it says "nothing"); a present block is
+    // readable only when the tolerant parse below keeps every entry.
+    let producesReadable = true;
+    const producesRaw = parsed.cinatra?.produces;
+    if (producesRaw !== undefined && producesRaw !== null && !Array.isArray(producesRaw)) {
+      producesReadable = false;
+    }
+    if (Array.isArray(producesRaw)) {
+      const collectedRefs = producesRaw
+        .map((r) => {
+          if (!r || typeof r !== "object") return null;
+          const ext = (r as { extension?: unknown }).extension;
+          if (typeof ext !== "string" || ext.length === 0) return null;
+          const otid = (r as { objectTypeId?: unknown }).objectTypeId;
+          return typeof otid === "string" && otid.length > 0
+            ? { extension: ext, objectTypeId: otid }
+            : { extension: ext };
+        })
+        .filter((e): e is { extension: string; objectTypeId?: string } => e !== null);
+      // All-or-nothing (fail-closed): a malformed entry drops the whole set so
+      // a declared binding then errors rather than passing an unvalidated set.
+      if (collectedRefs.length === producesRaw.length) {
+        producesRefs = collectedRefs;
+        produces = collectedRefs.map((r) => r.extension);
+      } else {
         producesReadable = false;
       }
-      if (Array.isArray(producesRaw)) {
-        const collectedRefs = producesRaw
-          .map((r) => {
-            if (!r || typeof r !== "object") return null;
-            const ext = (r as { extension?: unknown }).extension;
-            if (typeof ext !== "string" || ext.length === 0) return null;
-            const otid = (r as { objectTypeId?: unknown }).objectTypeId;
-            return typeof otid === "string" && otid.length > 0
-              ? { extension: ext, objectTypeId: otid }
-              : { extension: ext };
-          })
-          .filter((e): e is { extension: string; objectTypeId?: string } => e !== null);
-        // All-or-nothing (fail-closed): a malformed entry drops the whole set so
-        // a declared binding then errors rather than passing an unvalidated set.
-        if (collectedRefs.length === producesRaw.length) {
-          producesRefs = collectedRefs;
-          produces = collectedRefs.map((r) => r.extension);
-        } else {
-          producesReadable = false;
-        }
-      }
-      return {
-        packageName: typeof parsed.name === "string" ? parsed.name : null,
-        packageVersion: typeof parsed.version === "string" ? parsed.version : null,
-        agentDependencies: parsed.cinatra?.agentDependencies ?? {},
-        produces,
-        producesRefs,
-        producesReadable,
-        regenerate: parsed.cinatra?.lifecycle?.regenerate,
-        lifecycle: parsed.cinatra?.lifecycle,
-      };
-    } catch {
-      // try next candidate
     }
+    return {
+      packageName: typeof parsed.name === "string" ? parsed.name : null,
+      packageVersion: typeof parsed.version === "string" ? parsed.version : null,
+      agentDependencies: parsed.cinatra?.agentDependencies ?? {},
+      produces,
+      producesRefs,
+      producesReadable,
+      regenerate: parsed.cinatra?.lifecycle?.regenerate,
+      lifecycle: parsed.cinatra?.lifecycle,
+    };
+  } catch {
+    // absent or unreadable: no readable sibling manifest
   }
   return null;
 }
