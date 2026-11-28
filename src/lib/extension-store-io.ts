@@ -33,9 +33,19 @@ import {
   storeSlugSegments,
   type ExtensionStoreKind,
 } from "@/lib/extension-package-store-core";
+import {
+  consumesDeclarationOfManifestText,
+  type ConsumesDeclaration,
+} from "@/lib/extension-declared-consumes";
 
-/** A discovered V2 store record: the sdk record + the path-derived kind. */
-export type PackageStoreRecordV2 = PackageStoreRecord & { kind: ExtensionStoreKind };
+/** A discovered V2 store record: the sdk record + the path-derived kind, and
+ *  (cinatra#4894) the manifest's raw `cinatra.consumes` declaration, which the
+ *  loader hands to the host context so `ctx.mcp.callPrimitive` can refuse an
+ *  undeclared primitive. A record without it has every call refused. */
+export type PackageStoreRecordV2 = PackageStoreRecord & {
+  kind: ExtensionStoreKind;
+  consumesDeclaration?: ConsumesDeclaration;
+};
 
 /** node:fs/promises-backed `PackageStoreFs` (shared by the V2 discovery callers). */
 export const realStoreFs: PackageStoreFs = {
@@ -142,7 +152,8 @@ async function collectSlugDirRecords(
       );
       continue;
     }
-    out.push({ ...rec, kind });
+    const consumesDeclaration = consumesDeclarationOfManifestText(manifestText);
+    out.push({ ...rec, kind, ...(consumesDeclaration ? { consumesDeclaration } : {}) });
   }
 }
 

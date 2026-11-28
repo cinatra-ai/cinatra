@@ -128,6 +128,25 @@ function readCinatraManifest(dir) {
   }
 }
 
+// The RAW `cinatra.consumes` declaration of one manifest, in the manifest's own
+// shape (cinatra#4894): `{ consumes: <raw> }` when the key is present (carried
+// UNVALIDATED, a malformed value included), `{}` when it is absent. The host
+// parses it at call time with the SDK's `parseConsumedPrimitives` — the reader
+// the CI check follows — and refuses a `ctx.mcp.callPrimitive` call of any
+// primitive it does not name (src/lib/extension-declared-consumes.ts).
+export function consumesDeclarationOf(cin) {
+  if (!isObj(cin) || !Object.prototype.hasOwnProperty.call(cin, "consumes")) return {};
+  return { consumes: cin.consumes };
+}
+
+// The generated `package → ConsumesDeclaration` map body (one line per record,
+// every record listed, so a compiled-in pack is never "unknown" to the host).
+export function emitConsumesDeclarations(records) {
+  return records
+    .map((r) => `  ${JSON.stringify(r.packageName)}: ${JSON.stringify(r.consumesDeclaration ?? {})},`)
+    .join("\n");
+}
+
 // Resolve `cinatra.displayName` (trimmed, non-empty) or null.
 export function resolveDisplayName(cin) {
   return typeof cin.displayName === "string" && cin.displayName.trim().length > 0
@@ -1824,6 +1843,10 @@ export async function buildManifest() {
       // via `parseExecutionEnvironment` before any environment build. INERT
       // until a bundled agent ships a declaration.
       executionEnvironment: resolveExecutionEnvironmentClaim(x.kind, cin),
+      // RAW `cinatra.consumes` pass-through (cinatra#4894) — emitted as its own
+      // core-side map (GENERATED_EXTENSION_CONSUMES_DECLARATIONS), never on the
+      // SDK record type; the host parses it at call time.
+      consumesDeclaration: consumesDeclarationOf(cin),
     };
   });
   records.sort((a, b) => a.packageName.localeCompare(b.packageName));
@@ -2801,6 +2824,12 @@ function emitServer(records, connectorEntryModules, connectorMcpModules, connect
     `${body}\n};\n\n` +
     `export const STATIC_EXTENSION_RECORDS: NormalizedExtensionRecord[] =\n` +
     `  Object.values(STATIC_EXTENSION_MANIFEST);\n\n` +
+    `// package → its RAW cinatra.consumes declaration ({ consumes } or {} when\n` +
+    `// absent), cinatra#4894. The host parses it at call time with\n` +
+    `// parseConsumedPrimitives and refuses ctx.mcp.callPrimitive of any primitive\n` +
+    `// it does not name (src/lib/extension-declared-consumes.ts).\n` +
+    `export const GENERATED_EXTENSION_CONSUMES_DECLARATIONS: Record<string, { readonly consumes?: unknown }> = {\n` +
+    `${emitConsumesDeclarations(records)}\n};\n\n` +
     `// Every loader-map entry below carries the generator-owned presence\n` +
     `// classification: resolution "required" (cinatra.systemExtensions member —\n` +
     `// unguarded import, absence fails loudly) | "guardedOptional" (loader\n` +

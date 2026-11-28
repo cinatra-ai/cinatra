@@ -36,6 +36,7 @@ import {
 import { discoverStoreRecordsV2, realStoreFs, type PackageStoreRecordV2 } from "@/lib/extension-store-io";
 import { isExtensionStoreKind } from "@/lib/extension-package-store-core";
 import { createExtensionHostContext, createNonDefaultVersionHostContext } from "@/lib/extension-host-context";
+import { consumesDeclarationOfStoreRecord } from "@/lib/extension-declared-consumes";
 // TYPE-ONLY (erased): the version-keyed sink handle threaded from makeContext to
 // the per-record settle hook. The VALUE import is dynamic (see the wiring below)
 // so the serving registry stays off the locked routes' static graphs.
@@ -689,6 +690,10 @@ export async function loadRuntimePackageExtensions(
       // cinatra#3745: the stamp rides into the ctx, so each MCP tool this attempt
       // registers carries it beside its handler (never looked up again later).
       const loadedIdentity = stampedIdentities.get(record) ?? null;
+      // cinatra#4894: this record's own manifest `cinatra.consumes` (read at
+      // discovery), so `ctx.mcp.callPrimitive` refuses what this version does
+      // not declare. A record without the reading hands over `null`: refused.
+      const consumesDeclaration = consumesDeclarationOfStoreRecord(record);
       if (record.isDefault === false) {
         let sink: VersionKeyedRegistrationSink | undefined;
         if (record.version) {
@@ -700,14 +705,14 @@ export async function loadRuntimePackageExtensions(
           grantedPorts,
           { envOverrides: record.envOverrides },
           sink,
-          { installId, version: record.version ?? null, isDefault: false, loadedIdentity },
+          { installId, version: record.version ?? null, isDefault: false, loadedIdentity, consumesDeclaration },
         );
       }
       return createExtensionHostContext(
         packageName,
         grantedPorts,
         { envOverrides: record.envOverrides },
-        { installId, version: record.version ?? null, isDefault: true, loadedIdentity },
+        { installId, version: record.version ?? null, isDefault: true, loadedIdentity, consumesDeclaration },
       );
     },
     // Per-record settle (cinatra#1392 Gap 1 / S8): commit a fully-successful
