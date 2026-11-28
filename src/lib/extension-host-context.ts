@@ -1656,7 +1656,7 @@ export function createNonDefaultVersionHostContext(
 import type { ActionJson } from "@cinatra-ai/sdk-extensions";
 import { parseVerifiedExecutedRunSource, type VerifiedExecutedRunSource } from "@cinatra-ai/sdk-extensions";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server/request-context";
-import { assertRunStepToolAllowed, consumeRunActionDecision, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal,
+import { assertRunStepToolAllowed, consumeRunActionDecision, findStepPassthroughTool, readCurrentRunStepToolPolicy, RunStepToolPolicyRefusal,
   type RunActionDecisionConsumption, type RunActionSubject, type RunActionToolIdentity } from "@cinatra-ai/agents/store";
 import { HOST_PRIMITIVE_OWNER_PACKAGE } from "@cinatra-ai/mcp-server/capability-plan";
 import { isProxy } from "node:util/types";
@@ -1782,6 +1782,24 @@ export async function prepareDeclaredRunToolArguments(toolName: string, args: un
     contextId: proof.contextId, executedSourceSha256: proof.executedSourceSha256,
     stepId: proof.stepId, toolName });
   return frozenArguments;
+}
+
+/**
+ * cinatra#4890: the host tool the frame's proven step names in its own fixed
+ * data, read in the run's current bound source (the read above). Null when the
+ * frame proves no current step, the read fails, or the step names no fixed
+ * passthrough tool.
+ */
+export async function readProvenStepPassthroughTool(): Promise<string | null> {
+  const frame = mcpRequestContextStorage.getStore();
+  const proof = parseVerifiedExecutedRunSource(frame?.verifiedExecutedSource);
+  if (!frame?.runId || !frame.orgId || !proof || proof.stepId !== frame.verifiedStepId) return null;
+  try {
+    const policy = await readCurrentRunStepToolPolicy(frame.runId, frame.orgId, proof);
+    return findStepPassthroughTool(JSON.parse(policy.source), proof.stepId);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -844,6 +844,36 @@ export function findStepToolDeclaration(
 }
 
 /**
+ * cinatra#4890: the host tool the passthrough step with the given id names in
+ * its own fixed `data.tool` (an object, or JSON text of one), over the steps the
+ * run reads. Null for an unknown id, a step that is no passthrough call or names
+ * no fixed tool, and ids shared by steps that do not all name the same tool.
+ */
+export function findStepPassthroughTool(document: unknown, stepId: string): string | null {
+  let tool: string | null | undefined;
+  forEachRunStep(document, ({ node, id }) => {
+    if (id !== stepId) return;
+    const named = passthroughToolOf(node);
+    tool = tool === undefined || tool === named ? named : null;
+  });
+  return tool ?? null;
+}
+
+function passthroughToolOf(node: Record<string, unknown>): string | null {
+  if (node.component_type !== "ApiNode" || typeof node.url !== "string") return null;
+  if (!urlPathOf(node.url).endsWith("/api/agents/passthrough")) return null;
+  let data: unknown = node.data;
+  if (typeof data === "string") {
+    try {
+      data = JSON.parse(data);
+    } catch {
+      return null;
+    }
+  }
+  return isPlainObject(data) && typeof data.tool === "string" && data.tool !== "" ? data.tool : null;
+}
+
+/**
  * Whether a flow document holds an ApiNode with the given id, nested subflows
  * included, whatever its target (cinatra#3745: the step a run's executing-source
  * proof names must be a step of the run's bound graph).

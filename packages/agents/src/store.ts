@@ -4039,6 +4039,8 @@ export {
 // #3745 public package subpath remains ./store; no held export-map edit.
 export { bindRunStepToolPolicy, readRunPauseSteps, readRunStepToolPolicy, readCurrentRunStepToolPolicy, verifyRunExecutedSource, isRunExecutedSourceCurrent, withRunActionPolicyTransaction } from "./agent-run-serde";
 export { selectWayflowRunStepToolPolicy, createRunStepToolPolicy, parseRunStepToolPolicy, readTrustedStepToolDeclaration, assertRunStepToolAllowed, RunStepToolPolicyRefusal } from "./agent-run-serde";
+// cinatra#4890: the fixed host tool a passthrough step names, read over a run's bound source.
+export { findStepPassthroughTool } from "./validate-oas-runtime-invariants";
 // cinatra#3745: the single-use consumption of a person's decision; its caller is the host's guarded outward run action.
 export { consumeRunActionDecision, type RunActionSubject, type RunActionToolIdentity, type RunActionDecisionConsumption } from "./run-action-decision-consumption";
 export type { RunStepToolPolicy, StepToolReading } from "./agent-run-serde";

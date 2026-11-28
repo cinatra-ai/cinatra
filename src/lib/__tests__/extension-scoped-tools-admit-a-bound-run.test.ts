@@ -105,6 +105,7 @@ describe("the names the passthrough admits", () => {
       "artifacts_list",
       "extension_data",
       "extension_tool",
+      "run_fail",
     ]);
   });
 

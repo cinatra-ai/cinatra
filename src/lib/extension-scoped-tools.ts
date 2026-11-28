@@ -59,6 +59,7 @@ import {
 } from "@/lib/passthrough-refusal";
 import { logFixedLine } from "@/lib/failure-log";
 import { RUN_ACTION_REFUSED, runActionRefusalCode } from "@/lib/run-action-refusal";
+import { RUN_FAIL_TOOL, runFailOutcome } from "@/lib/run-fail-tool";
 
 /** The names W7 adds to the passthrough allowlist, each scoped below. */
 export const EXTENSION_SCOPED_TOOLS = new Set<string>([
@@ -72,6 +73,9 @@ export const EXTENSION_SCOPED_TOOLS = new Set<string>([
   "artifacts_list",
   "artifacts_get",
   "artifact_content_read",
+  // cinatra#4890: a fixed step ends its run as failed with a stated sentence
+  // (./run-fail-tool). It always refuses; it names no extension either.
+  "run_fail",
 ]);
 
 export type ExtensionScopedToolRun = {
@@ -139,7 +143,7 @@ export async function dispatchExtensionScopedTool(input: {
   };
   const outcome = await dispatchScopedTool(input, trail);
   try {
-    if (trail.tool === "extension_tool") await auditToolDispatch(trail, outcome);
+    if (trail.tool === "extension_tool" || trail.tool === RUN_FAIL_TOOL) await auditToolDispatch(trail, outcome);
   } finally {
     // A slot no write took over (the event was not handed over) is freed here.
     releaseDispatchAuditSlot(trail);
@@ -298,13 +302,14 @@ async function auditToolDispatch(trail: DispatchTrail, outcome: ExtensionScopedT
         : outcome.status === 404
           ? "not-found"
           : "failed";
+    const toolName = trail.tool === RUN_FAIL_TOOL ? RUN_FAIL_TOOL : "extension_tool";
     const event: AuditEventInput = {
       ...(orgId !== undefined ? { organizationId: orgId } : {}),
       ...(runBy !== undefined ? { actorPrincipalId: runBy } : {}),
       actorPrincipalType: "a2a" as const,
       authSource: "agent" as const,
-      resourceType: "extension_tool",
-      operation: "extension_tool.dispatch",
+      resourceType: toolName,
+      operation: `${toolName}.dispatch`,
       ...(runId !== undefined ? { runId } : {}),
       ...(trail.codePackage ? { resourceId: trail.codePackage } : {}),
       decision: reason === null ? ("allowed" as const) : ("denied" as const),
@@ -353,6 +358,12 @@ async function dispatchScopedTool(
     if (seenTool(trail, input.tool) === "extension_tool") {
       trail.branched = true;
       return { ok: true, result: await runExtensionTool(context, input, trail) };
+    }
+    if (seenTool(trail, input.tool) === RUN_FAIL_TOOL) {
+      trail.branched = true;
+      // The calling extension, for the dispatch event; the run's own package is the code that asked.
+      trail.runPackage = trail.codePackage = context.packageName;
+      return await runFailOutcome(input.input, input.run.verifiedStepId);
     }
     trail.branched = true;
     return { ok: true, result: await runArtifactRead(context, input) };

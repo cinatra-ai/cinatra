@@ -61,6 +61,7 @@ describe("the allowlist reader over this tree's own route", () => {
       "objects_classify",
       "objects_save",
       "objects_update",
+      "run_fail",
       "run_folder_list",
       "run_folder_read",
       "run_folder_write",

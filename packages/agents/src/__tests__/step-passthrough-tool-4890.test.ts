@@ -1,0 +1,58 @@
+/**
+ * cinatra#4890: the fixed host tool a passthrough step of a flow calls, read by
+ * the step's id over the steps the run reads. A tool that ends a run is reached
+ * only from a step that names it in its own fixed data; a model step, a step
+ * whose tool is templated, or ids shared by steps that call different tools
+ * name no tool. Plain OAS documents built here drive the real export.
+ */
+import { describe, expect, it } from "vitest";
+
+import * as invariants from "../validate-oas-runtime-invariants";
+
+type Reader = (document: unknown, stepId: string) => string | null | undefined;
+const find: Reader =
+  (invariants as unknown as { findStepPassthroughTool?: Reader }).findStepPassthroughTool ?? (() => undefined);
+
+const PASSTHROUGH = "{{CINATRA_BASE_URL}}/api/agents/passthrough";
+const step = (id: string, data: unknown, url = PASSTHROUGH) => ({
+  component_type: "ApiNode",
+  id,
+  name: id,
+  url,
+  http_method: "POST",
+  data,
+});
+// Steps sit in the root's `$referenced_components`, as the run reads them; each key is its own.
+const flow = (...nodes: unknown[]) => ({
+  component_type: "Flow",
+  id: "flow",
+  name: "flow",
+  $referenced_components: Object.fromEntries(nodes.map((node, index) => [`step_${index}`, node])),
+});
+
+describe("findStepPassthroughTool", () => {
+  it("names the tool a passthrough step calls in its fixed data", () => {
+    expect(find(flow(step("stop", { tool: "run_fail", input: {} })), "stop")).toBe("run_fail");
+  });
+
+  it("reads data written as JSON text", () => {
+    expect(find(flow(step("stop", JSON.stringify({ tool: "run_fail" }))), "stop")).toBe("run_fail");
+  });
+
+  it("names no tool for a model step, an unknown id or a step without a fixed tool", () => {
+    const doc = flow(
+      step("model", { tool: "run_fail" }, "{{CINATRA_BASE_URL}}/api/llm-bridge"),
+      step("templated", "{{ payload }}"),
+      step("bare", { input: {} }),
+    );
+    expect(find(doc, "model")).toBe(null);
+    expect(find(doc, "templated")).toBe(null);
+    expect(find(doc, "bare")).toBe(null);
+    expect(find(doc, "missing")).toBe(null);
+  });
+
+  it("names no tool when steps that share the id call different tools", () => {
+    const doc = flow(step("twin", { tool: "run_fail" }), step("twin", { tool: "extension_data" }));
+    expect(find(doc, "twin")).toBe(null);
+  });
+});
