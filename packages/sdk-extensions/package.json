@@ -22,6 +22,7 @@
     "./extension-protection": "./src/extension-protection.ts",
     "./dependencies": "./src/dependencies.ts",
     "./consumes": "./src/consumes.ts",
+    "./border-words": "./src/border-words.ts",
     "./flash-href": "./src/flash-href.ts",
     "./social-contract": "./src/social-media-connector-contract.ts",
     "./blog-contract": "./src/blog-connector-contract.ts",

@@ -5,7 +5,8 @@ import "server-only";
  * design@5daf862 — content commit 16efd8d).
  *
  * A dashboard is an artifact: the #1894 twin writer pairs every dashboard with
- * an `objects` row of type `@cinatra-ai/dashboard-artifact:dashboard`, so a
+ * an `objects` row of the dashboard twin type (`DASHBOARD_ARTIFACT_OBJECT_TYPE`
+ * below), so a
  * dashboard already flows into the library through the object substrate. This
  * module turns those rows into the §VIII POINTER surface (owner ruling
  * 2026-07-20: NO inline dashboard render — the row and the detail page both
@@ -26,24 +27,30 @@ import {
 } from "@cinatra-ai/dashboards/extension-dashboard-reads";
 import type { ScopeLevel } from "@/components/scope-badge";
 import { ARTIFACT_SCOPE_LEVEL_WORD } from "@/lib/artifacts/artifact-owner-label";
+import { resolveExtensionRoleArtifactType } from "@/lib/extension-roles";
 
 /**
- * The `objects.type` a dashboard artifact carries — the self-registered,
- * NON-dedicated-claim type enrolled by `@cinatra-ai/dashboard-artifact` and
- * written by the #1894 twin writer (`DASHBOARD_OBJECT_TYPE`). Declared standalone
- * so the library/detail render paths never import the server-only twin-writer
- * module (which self-registers into the dashboards mutation seam on import and
- * pulls the artifact-substrate builders); the equality invariant against the
- * twin's own constant is pinned in the surface unit test.
+ * The `objects.type` a dashboard artifact carries: the type owned by the
+ * claimant of the `artifact-dashboard-twin` role, read from the generated
+ * bindings (cinatra#4849), the same type the #1894 twin writer writes
+ * (`DASHBOARD_OBJECT_TYPE`). Its pack declares it with `claim: dedicated`.
+ * Read here, not imported from the twin writer, so the library/detail render
+ * paths never import the server-only twin-writer module (which self-registers
+ * into the dashboards mutation seam on import and pulls the artifact-substrate
+ * builders); the equality with the twin's own value is pinned in the surface
+ * unit test. The empty string in a build where no present pack claims the
+ * role (no `objects` row carries an empty type): no row is then a dashboard
+ * row, and nothing throws at import.
  */
-export const DASHBOARD_ARTIFACT_OBJECT_TYPE =
-  "@cinatra-ai/dashboard-artifact:dashboard";
+export const DASHBOARD_ARTIFACT_OBJECT_TYPE: string =
+  resolveExtensionRoleArtifactType("artifact-dashboard-twin") ?? "";
 
-/** True for a dashboard-typed artifact object row (§VIII). */
+/** True for a dashboard-typed artifact object row (§VIII). False for every
+ *  row in a build where no pack claims the dashboard twin role. */
 export function isDashboardArtifactType(
   objectType: string | null | undefined,
 ): boolean {
-  return objectType === DASHBOARD_ARTIFACT_OBJECT_TYPE;
+  return DASHBOARD_ARTIFACT_OBJECT_TYPE !== "" && objectType === DASHBOARD_ARTIFACT_OBJECT_TYPE;
 }
 
 /**

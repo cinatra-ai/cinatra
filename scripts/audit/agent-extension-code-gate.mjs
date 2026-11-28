@@ -22,7 +22,9 @@
  * by `isContent`, not under a `.git` folder, `isSkippedDir`,
  * and not named `*.test.<ext>` or `*.spec.<ext>`, `isTestFile`),
  * `toolDeclarations` (`cinatra.tools` values), `extensionToolSteps` and
- * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`).
+ * `unreadableSteps` (per pack and `cinatra/*.json` file, see `flowSteps`), and
+ * `uiDependencies` (cinatra#4532: per agent, skill or workflow pack, its
+ * declared dependencies on a UI package, see `uiDependencyItems`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
  *
  * Usage: node scripts/audit/agent-extension-code-gate.mjs [--report | --write-baseline | --seed]
@@ -39,7 +41,9 @@ export const FLOOR_FILE = "scripts/audit/agent-extension-code-gate.baseline.json
 export const GATE_FILE = "scripts/audit/agent-extension-code-gate.mjs";
 export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
-export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps"];
+export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies"];
+/** Classes added after the list was seeded: a list without such a class holds none of its items, and a base list without it seeds it (`listGrowth`). */
+export const LATER_CLASSES = new Set(["uiDependencies"]);
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
@@ -68,6 +72,61 @@ export function oldDefinitionFiles(entries) {
 }
 
 /**
+ * THE ROLE RULE (cinatra#4532). An agent, a skill or a workflow has no screen
+ * of its own: core draws an agent's HITL step with its generic gate from the
+ * declaration. Such a pack declares no dependency on a UI package. The pack is
+ * judged by its manifest kind (`cinatra.kind`, the value the product reads)
+ * `skill` or `workflow` (the legacy kind the product's record still carries),
+ * or by the agent rule above. The rule is about the DECLARATION: a bundler can
+ * inline any declared package into what is published (build-server-entry.mjs
+ * inlines react reached from a TypeScript `cinatra.serverEntry`, whichever
+ * field declares it), so a development-only declaration counts too. A
+ * dependency is a key of `dependencies`, `peerDependencies`,
+ * `optionalDependencies` (the fields `sdkOnlyManifestDeps` and
+ * `hostServedManifestDeps` in scripts/extensions/inventory.mjs read) or
+ * `devDependencies`; the target of an `npm:<name>` or `workspace:<name>@`
+ * alias value there; or a name in `bundledDependencies` / `bundleDependencies`.
+ * `overrides` and `resolutions` declare no dependency of the package (they
+ * only pin versions of what something else declares) and are not read; a
+ * `file:`, `link:` or URL value names no package and is a stated limit.
+ */
+export const ROLE_KINDS = Object.freeze(["skill", "workflow"]);
+export const UI_PACKAGES = Object.freeze(["react", "react-dom", "@cinatra-ai/sdk-ui", "@cinatra-ai/design-primitives"]);
+export const DEPENDENCY_FIELDS = Object.freeze(["dependencies", "peerDependencies", "optionalDependencies", "devDependencies"]);
+export const BUNDLE_FIELDS = Object.freeze(["bundledDependencies", "bundleDependencies"]);
+export function isRolePack(kind, entries) {
+  return ROLE_KINDS.includes(kind) || isAgentPack(kind, entries);
+}
+
+/**
+ * The UI dependencies a manifest declares, as sorted `<field>: <name>` items
+ * (`<field>: <key> -> <name>` for an alias). An absent or `null` field
+ * declares nothing; a dependency field that is not an object, or a bundle
+ * field that is neither a boolean nor a list of names, is a scanner error.
+ */
+export function uiDependencyItems(packageJson, label = "package.json") {
+  const items = [];
+  for (const field of DEPENDENCY_FIELDS) {
+    const deps = packageJson?.[field];
+    if (deps === undefined || deps === null) continue;
+    if (!isPlainObject(deps)) throw new ScannerError(`${label}: ${field} is not an object`);
+    for (const [key, spec] of Object.entries(deps)) {
+      const m = typeof spec === "string" ? ALIAS_RE.exec(spec.trim()) : null;
+      const alias = m ? (m[1] ?? m[2]) : undefined;
+      if (UI_PACKAGES.includes(key)) items.push(`${field}: ${key}`);
+      else if (alias && UI_PACKAGES.includes(alias)) items.push(`${field}: ${key} -> ${alias}`);
+    }
+  }
+  for (const field of BUNDLE_FIELDS) {
+    const names = packageJson?.[field];
+    if (names === undefined || names === null || typeof names === "boolean") continue;
+    if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new ScannerError(`${label}: ${field} is not a list of names`);
+    for (const n of names) if (UI_PACKAGES.includes(n)) items.push(`${field}: ${n}`);
+  }
+  return items.sort();
+}
+
+/**
  * THE CONTENT RULE, closed. A file is content when its extension, exact name
  * or top folder is listed here. Nothing else is content: a file under a
  * `skills/` folder of an agent pack counts like any other file.
@@ -83,6 +142,8 @@ const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const BLOB_MODES = new Set(["100644", "100755"]);
 const FLOW_RE = /^cinatra\/[^/]+\.json$/;
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
+// `npm:<name>[@<range>]` or `workspace:<name>@<range>` (a plain `workspace:*` or `workspace:^1` names no other package).
+const ALIAS_RE = /^(?:npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@.*)?|workspace:((?:@[^/@\s]+\/)?[a-z0-9][^/@\s]*)@.*)$/;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 
@@ -218,17 +279,20 @@ export function listGrowth(base, head) {
   const lines = [];
   for (const cls of CLASSES) {
     if (base?.[cls] && !head?.[cls]) lines.push(`[${cls}] the class is removed (a class is never removed)`);
+    // A class the base list does not carry is introduced by this change: its items are the class's seed.
+    if (LATER_CLASSES.has(cls) && base && !base[cls]) continue;
     for (const k of keysOf(head?.[cls])) for (const i of missingItems(itemsOf(head[cls], k), itemsOf(base?.[cls], k))) lines.push(`[${cls}] ${k}: ${i} (the base does not hold it)`);
   }
   return lines.sort();
 }
 
-/** Parse a list: every class an object of `{ count, items }`, `count` the number of items. Throws otherwise. Prototype-free copy. */
+/** Parse a list: every class an object of `{ count, items }`, `count` the number of items; a class of `LATER_CLASSES` may be absent (it holds nothing). Throws otherwise. Prototype-free copy. */
 export function parseList(text) {
   const raw = JSON.parse(text);
   if (!isPlainObject(raw)) throw new Error("the list is not an object");
   const out = Object.create(null);
   for (const cls of CLASSES) {
+    if (LATER_CLASSES.has(cls) && !hasOwn(raw, cls)) continue;
     if (!isPlainObject(raw[cls])) throw new Error(`the class ${cls} is missing or not an object`);
     out[cls] = Object.create(null);
     for (const [k, e] of Object.entries(raw[cls])) {
@@ -344,6 +408,10 @@ export function scan(root) {
       const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
+    if (isRolePack(kind, entries)) {
+      const ui = uiDependencyItems(pkg, `${rel}/package.json at the pinned commit ${sha}`);
+      if (ui.length) findings.uiDependencies[name] = { count: ui.length, items: ui };
+    }
   }
   return { findings, packCount: packs.length, oldLayout };
 }
@@ -406,13 +474,13 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
   const diff = diffWithList(findings, list);
   for (const cls of CLASSES) {
     const { fresh, stale } = diff[cls];
-    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] items the list does not hold (an agent extension ships no program code):`);
+    if (fresh.length) err(`[${GATE}] FAIL — [${cls}] items the list does not hold (${cls === "uiDependencies" ? "an agent, skill or workflow extension depends on no UI package" : "an agent extension ships no program code"}):`);
     for (const p of fresh) err(`  + ${p}`);
     if (stale.length) err(`[${GATE}] FAIL — [${cls}] recorded items that are gone (shrink the list: --write-baseline):`);
     for (const p of stale) err(`  - ${p}`);
     failed ||= fresh.length + stale.length > 0;
   }
-  if (failed) return stop(1, `[${GATE}] Fix: move the work into a skill extension (kind skill, declared as a dependency), into core's generic machinery or into a connector. See scripts/audit/extension-coupling-gates.md.`);
+  if (failed) return stop(1, `[${GATE}] Fix: move the work into a skill extension (kind skill, declared as a dependency), into core's generic machinery or into a connector; a HITL screen is a cinatra.fieldRenderers declaration core draws. See scripts/audit/extension-coupling-gates.md.`);
   log(`[${GATE}] OK — ${packCount} pinned extensions; recorded: ${totals(findings)}.`);
   return 0;
 }

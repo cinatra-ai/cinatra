@@ -2,11 +2,10 @@
   "note": "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.",
   "nonContentFiles": {
     "@cinatra-ai/apollo-prospecting-agent": {
-      "count": 3,
+      "count": 2,
       "items": [
         ".npmrc",
-        "extension-kind-gate.mjs",
-        "src/index.ts"
+        "extension-kind-gate.mjs"
       ]
     },
     "@cinatra-ai/author-agent": {
@@ -239,10 +238,9 @@
       ]
     },
     "@cinatra-ai/wordpress-agent": {
-      "count": 3,
+      "count": 2,
       "items": [
         ".npmrc",
-        "cinatra/tools/review-targets.mjs",
         "extension-kind-gate.mjs"
       ]
     }
@@ -297,12 +295,6 @@
       "items": [
         "recipient_records",
         "saved_drafts"
-      ]
-    },
-    "@cinatra-ai/wordpress-agent": {
-      "count": 1,
-      "items": [
-        "review_targets"
       ]
     }
   },
@@ -362,13 +354,39 @@
         "drafts-read_drafts -> saved_drafts",
         "sender-file_recipients -> recipient_records"
       ]
-    },
-    "@cinatra-ai/wordpress-agent :: cinatra/oas.json": {
-      "count": 1,
-      "items": [
-        "gather_page_review -> review_targets"
-      ]
     }
   },
-  "unreadableSteps": {}
+  "unreadableSteps": {},
+  "uiDependencies": {
+    "@cinatra-ai/blog-linkedin-publish-agent": {
+      "count": 3,
+      "items": [
+        "devDependencies: react",
+        "peerDependencies: @cinatra-ai/sdk-ui",
+        "peerDependencies: react"
+      ]
+    },
+    "@cinatra-ai/blog-pipeline-agent": {
+      "count": 3,
+      "items": [
+        "devDependencies: react",
+        "devDependencies: react-dom",
+        "peerDependencies: react"
+      ]
+    },
+    "@cinatra-ai/blog-wordpress-publish-agent": {
+      "count": 1,
+      "items": [
+        "peerDependencies: @cinatra-ai/sdk-ui"
+      ]
+    },
+    "@cinatra-ai/list-curator-agent": {
+      "count": 3,
+      "items": [
+        "peerDependencies: @cinatra-ai/sdk-ui",
+        "peerDependencies: react",
+        "peerDependencies: react-dom"
+      ]
+    }
+  }
 }

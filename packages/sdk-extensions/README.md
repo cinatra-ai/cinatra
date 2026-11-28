@@ -240,6 +240,21 @@ a marketplace extension may claim only a NAMESPACED env key
 (non-namespaced) name is honored only for a `resolution: "required"` system
 extension.
 
+## `cinatra.borderWords` — the words an extension owns
+
+Every extension declares the words that are its own (cinatra#4848):
+`{"vendor": ["acme"], "domain": ["ticket"]}` — its vendor or product words
+and its domain words. A pack that owns no word declares
+`{"vendor": [], "domain": [], "reason": "<why>"}`. Each word is one
+lower-case token of letters and digits (at least two characters), not a kind
+word (`agent`, `connector`, `artifact`, `skill`, `extension`, `cinatra`, and
+their plurals), not a host port name, not repeated and not in both lists.
+Core's border checks read the union of the pinned packs' words and refuse a
+core module path or import specifier that carries one, so core cannot grow a
+module named for your vendor or domain. Rules and validator:
+[`src/border-words.ts`](src/border-words.ts) (`borderWordsIssues`). CI data
+only: no loader reads it, and the ABI is unchanged.
+
 ## `cinatra.serverEntry` — published packages ship BUILT artifacts
 
 A runtime-store-installed package's `cinatra.serverEntry` must resolve —

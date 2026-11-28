@@ -1629,9 +1629,6 @@
     "src/components/__tests__/page-header-meta-line.test.tsx": {
       "@cinatra-ai/image-artifact": 3
     },
-    "src/components/artifacts/__tests__/dashboard-surface-conformance.test.ts": {
-      "@cinatra-ai/dashboard-artifact": 1
-    },
     "src/components/artifacts/__tests__/library-row-glyph.test.tsx": {
       "@cinatra-ai/email-artifacts": 3
     },

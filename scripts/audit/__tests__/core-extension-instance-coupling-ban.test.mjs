@@ -321,12 +321,10 @@ describe("core-extension-instance-coupling-ban gate", () => {
     const extensions = { names: discoverExtensionNames(), dirPaths: new Set() };
     expect(allowlistShapeDefects(DATA_CONTRACT_ID_ALLOWLIST, extensions)).toEqual([]);
     // Acceptance pin (cinatra#151): the allowlist holds ONLY owner-ruled
-    // entries. Today that is exactly one — the dashboard object-type contract
-    // id minted by owner ruling 2026-07-22 (PR #1971). Any
-    // extra/renamed key here is an unauthorized addition and fails this pin.
-    expect([...DATA_CONTRACT_ID_ALLOWLIST.keys()]).toEqual([
-      "@cinatra-ai/dashboard-artifact:dashboard",
-    ]);
+    // entries. Today it holds none: the one entry (owner ruling 2026-07-22,
+    // PR #1971) went stale when core stopped spelling the dashboard type id
+    // (cinatra#4849). Any key here is an unauthorized addition and fails this pin.
+    expect([...DATA_CONTRACT_ID_ALLOWLIST.keys()]).toEqual([]);
     // Every entry carries a non-empty written justification (owner ruling).
     for (const [id, justification] of DATA_CONTRACT_ID_ALLOWLIST) {
       expect(typeof justification, id).toBe("string");

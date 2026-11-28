@@ -82,6 +82,7 @@ jobs:
             scripts/extensions/conformance-gate.mjs
             scripts/extensions/lib/conformance-rules.mjs
             scripts/audit/lib/strip-comments.mjs
+            scripts/audit/connector-access-config-gate.mjs
             packages/sdk-extensions/src/host-context.ts
             packages/sdk-extensions/src/artifact-contract.ts
             packages/sdk-extensions/src/chat-views-contract.ts
