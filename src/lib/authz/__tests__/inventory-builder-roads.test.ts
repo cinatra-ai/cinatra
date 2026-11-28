@@ -120,6 +120,38 @@ const TREES: Record<string, Record<string, string>> = {
       "ALLOWED_TOOLS.forEach((n) => void n);",
     ]),
   },
+  twoOwners: {
+    "src/lib/fixture-core-set.ts": "export const CORE_SET = new Set(['fixture_shared', 'fixture_shared']);\n",
+    "extensions/@example-org/fixture-pack/src/pack-set.ts": "export const PACK_SET = new Set(['fixture_shared']);\n",
+    [ROUTE]: route(
+      ['  "fixture_ok",', "  ...CORE_SET,", "  ...PACK_SET,"],
+      [
+        'import { CORE_SET } from "@/lib/fixture-core-set";',
+        'import { PACK_SET } from "../../../../../extensions/@example-org/fixture-pack/src/pack-set";',
+      ],
+    ),
+  },
+  reexportNamed: {
+    "src/lib/names/source.ts": "export const NAMED_SET = new Set(['fixture_named']);\n",
+    "src/lib/names/index.ts": 'export { NAMED_SET } from "./source";\n',
+    [ROUTE]: route(['  "fixture_ok",', "  ...NAMED_SET,"], ['import { NAMED_SET } from "@/lib/names";']),
+  },
+  reexportRenamed: {
+    "src/lib/names/source.ts": "export const RENAMED_SOURCE = new Set(['fixture_renamed']);\n",
+    "src/lib/names/index.ts": 'export { RENAMED_SOURCE as RENAMED_SET } from "./source";\n',
+    [ROUTE]: route(['  "fixture_ok",', "  ...RENAMED_SET,"], ['import { RENAMED_SET } from "@/lib/names";']),
+  },
+  reexportStar: {
+    "src/lib/names/source.ts": "export const STAR_SET = new Set(['fixture_star']);\n",
+    "src/lib/names/star-hop.ts": 'export * from "./source";\n',
+    "src/lib/names/index.ts": 'export * from "./star-hop";\n',
+    [ROUTE]: route(['  "fixture_ok",', "  ...STAR_SET,"], ['import { STAR_SET } from "@/lib/names";']),
+  },
+  reexportCycle: {
+    "src/lib/cycle-a.ts": 'export * from "./cycle-b";\n',
+    "src/lib/cycle-b.ts": 'export { CYCLE_SET } from "./cycle-a";\n',
+    [ROUTE]: route(['  "fixture_ok",', "  ...CYCLE_SET,"], ['import { CYCLE_SET } from "@/lib/cycle-a";']),
+  },
 };
 
 type Row = { primitiveName: string; file: string; line: number; road?: string };
@@ -224,6 +256,44 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(builderFailure(trees.passedToFn)).toContain("extend(ALLOWED_TOOLS)");
     expect(builderFailure(trees.spreadMutated)).toContain("SPREAD_TOOLS.delete('fixture_spread')");
     expect(builderFailure(trees.reads)).toBe("");
+  });
+
+  it("keeps a passthrough row for each file that admits a name, so a second owner stays visible", () => {
+    expect(builderFailure(trees.twoOwners)).toBe("");
+    const shared = rowsAt(trees.twoOwners)
+      .filter((r) => r.primitiveName === "fixture_shared")
+      .map(({ file, road }) => ({ file, road }));
+    // A name twice in one set is one row; the same name in a set of another file is a second row.
+    expect(shared).toEqual([
+      { file: "extensions/@example-org/fixture-pack/src/pack-set.ts", road: "passthrough" },
+      { file: "src/lib/fixture-core-set.ts", road: "passthrough" },
+    ]);
+  });
+
+  it("follows a named re-export to the set it names", () => {
+    expect(builderFailure(trees.reexportNamed)).toBe("");
+    const named = rowsAt(trees.reexportNamed).filter((r) => r.primitiveName === "fixture_named");
+    expect(named.map(({ file, road }) => ({ file, road }))).toEqual([{ file: "src/lib/names/source.ts", road: "passthrough" }]);
+  });
+
+  it("follows a renamed re-export to the set under its original name", () => {
+    expect(builderFailure(trees.reexportRenamed)).toBe("");
+    expect(rowsAt(trees.reexportRenamed).filter((r) => r.primitiveName === "fixture_renamed").map((r) => r.file)).toEqual([
+      "src/lib/names/source.ts",
+    ]);
+  });
+
+  it("follows a chain of star re-exports to the set", () => {
+    expect(builderFailure(trees.reexportStar)).toBe("");
+    expect(rowsAt(trees.reexportStar).filter((r) => r.primitiveName === "fixture_star").map((r) => r.file)).toEqual([
+      "src/lib/names/source.ts",
+    ]);
+  });
+
+  it("fails the builder on a re-export cycle, naming the file", () => {
+    const failure = builderFailure(trees.reexportCycle);
+    expect(failure).toContain("re-export cycle");
+    expect(failure).toContain("src/lib/cycle-a.ts");
   });
 
   it("--check passes on the tree it just wrote", () => {

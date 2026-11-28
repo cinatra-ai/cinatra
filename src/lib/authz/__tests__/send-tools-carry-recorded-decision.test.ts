@@ -198,7 +198,6 @@ describe("outward-effect tools on an agent run's frame", () => {
 
     it("holds the campaign send tools, though the core package that defined them is gone (cinatra#4856)", () => {
       const removedPackage = fileURLToPath(new URL("../../../../packages/trigger-email-send/", import.meta.url));
-      // red-first-expect: expected true to be false
       expect(existsSync(`${removedPackage}package.json`)).toBe(false);
       expect(existsSync(`${removedPackage}src/mcp/metadata.ts`)).toBe(false);
       for (const name of TRIGGER_EMAIL_SEND_MEMBERS) expect(boundary.OUTWARD_EFFECT_TOOL_NAMES.has(name)).toBe(true);

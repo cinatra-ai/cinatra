@@ -30,9 +30,12 @@
  * Not covered yet (cinatra#4895): a tool a pack registers only in its
  * `register(ctx)` through `ctx.mcp.registerTool` has no row unless the pack's
  * metadata block lists it.
- * Stated limit: indirection deeper than MAX_SET_DEPTH hops (re-export chains,
- * sets built by code) is refused, not followed; a mutation of an exported set
- * from a module the builder does not read is not followed.
+ * Re-exports are followed as TypeScript resolves them: `export { X } from`,
+ * `export { A as B } from` and `export * from`, through chains of barrels; a
+ * re-export cycle FAILS the builder with the file named.
+ * Stated limit: more than MAX_SET_DEPTH import or spread hops, and sets built
+ * by code, are refused, not followed; a mutation of an exported set from a
+ * module the builder does not read is not followed.
  * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
  * that pack, any other path is core. A passthrough row's file is the module
  * of the set that holds the entry (the route or a spread set), never the
@@ -158,10 +161,14 @@ function scan() {
   }
   for (const r of dedupe.values()) r.road = "mcp";
   // A name admitted on both roads has a row on each: the passthrough row is
-  // keyed by its road, so an mcp row never hides it.
+  // keyed by its road, so an mcp row never hides it. A passthrough row is also
+  // keyed by its file: two sets in different files that admit the same name
+  // keep a row each, so the owner check of #4874 sees both owners. Only a row
+  // identical in name, road and file is merged, keeping its smallest line.
   for (const r of scanPassthrough()) {
-    const key = `${r.primitiveName}::passthrough`;
-    if (!dedupe.has(key)) dedupe.set(key, { ...r, road: "passthrough" });
+    const key = `${r.primitiveName}::passthrough::${r.file}`;
+    const prev = dedupe.get(key);
+    if (!prev || prev.line > r.line) dedupe.set(key, { ...r, road: "passthrough" });
   }
   const deduped = [...dedupe.values()].map(({ primitiveName, file, line, road }) => ({ primitiveName, file, road, line }));
   deduped.sort(
@@ -304,7 +311,8 @@ function resolveModule(fromRel, spec) {
 
 /**
  * The module-level `const` declaration of `name` in `rel`, followed through a
- * named import to the module it comes from. Module level is exact here: the
+ * named import or a re-export (`export { X } from`, `export { A as B } from`,
+ * `export * from`) to the module it comes from. Module level is exact here: the
  * allow list is a module-level set, and an initializer at module level can
  * only name module-level bindings or imports. A list declared inside a
  * function is not found and FAILS the builder.
@@ -313,28 +321,123 @@ function resolveModule(fromRel, spec) {
  * @returns {{ rel: string, sf: ts.SourceFile, decl: ts.VariableDeclaration }}
  */
 function resolveConst(rel, name, depth, track) {
-  if (track) (track.get(rel) ?? track.set(rel, new Set()).get(rel)).add(name);
+  const path = [];
+  const found = findConst(rel, name, depth, new Set(), path);
+  if (!found) return fail(`${rel}: no module-level const declaration, import or re-export of ${name}`);
+  if (track) for (const [r, n] of path) (track.get(r) ?? track.set(r, new Set()).get(r)).add(n);
+  return found;
+}
+
+/**
+ * One step of `resolveConst`. Returns null when `rel` neither declares, imports
+ * nor re-exports `name` (a star re-export is then tried in the next module);
+ * fails on everything else it cannot follow. `path` receives the modules and
+ * local names of the chain that resolved. Reached through `export *`
+ * (`viaStar`), only what the module exports counts: an exported const, a
+ * local `export { A as X }` list, a re-export; an import alone does not.
+ * @param {string} rel @param {string} name @param {number} depth
+ * @param {Set<string>} visited the modules and names on this chain, to refuse a cycle
+ * @param {Array<[string, string]>} path
+ * @param {boolean} [viaStar]
+ * @returns {{ rel: string, sf: ts.SourceFile, decl: ts.VariableDeclaration } | null}
+ */
+function findConst(rel, name, depth, visited, path, viaStar = false) {
   if (depth > MAX_SET_DEPTH) fail(`${rel}: ${name} is more than ${MAX_SET_DEPTH} hops from the allow list`);
+  const key = `${rel}::${name}`;
+  if (visited.has(key)) fail(`${rel}: a re-export cycle reaches ${name} again`);
+  visited.add(key);
+  try {
+    return findConstIn(rel, name, depth, visited, path, viaStar);
+  } finally {
+    // The set holds the current chain only: two stars reaching one module are no cycle.
+    visited.delete(key);
+  }
+}
+
+/** @param {string} rel @param {string} name @param {number} depth @param {Set<string>} visited @param {Array<[string, string]>} path @param {boolean} viaStar */
+function findConstIn(rel, name, depth, visited, path, viaStar) {
   const sf = parseRel(rel);
+  const hop = (spec, targetName, nextDepth, star = false) => {
+    const target = resolveModule(rel, spec);
+    if (!target) fail(`${rel}: cannot resolve the module ${spec} of ${name}`);
+    const sub = [];
+    const r = findConst(target, targetName, nextDepth, visited, sub, star);
+    if (r) path.push([rel, name], ...sub);
+    return r;
+  };
   for (const st of sf.statements) {
     if (!ts.isVariableStatement(st)) continue;
+    if (viaStar && !st.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
     for (const d of st.declarationList.declarations) {
       if (!ts.isIdentifier(d.name) || d.name.text !== name) continue;
       if (!(st.declarationList.flags & ts.NodeFlags.Const)) fail(`${rel}: ${name} is not declared with const`);
+      path.push([rel, name]);
       return { rel, sf, decl: d };
     }
   }
+  // A local export list (`export { X }`, `export { A as X }`, no `from`) names a
+  // binding of this module: its const or its import.
   for (const st of sf.statements) {
+    if (!ts.isExportDeclaration(st) || st.isTypeOnly || st.moduleSpecifier) continue;
+    if (!st.exportClause || !ts.isNamedExports(st.exportClause)) continue;
+    for (const el of st.exportClause.elements) {
+      if (el.isTypeOnly || el.name.text !== name) continue;
+      if (!el.propertyName && !viaStar) continue; // already looked up as a binding of this module
+      const sub = [];
+      const r = el.propertyName
+        ? findConst(rel, el.propertyName.text, depth, visited, sub)
+        : findConstIn(rel, name, depth, visited, sub, false);
+      if (!r) fail(`${rel}: cannot resolve the export of ${name}`);
+      path.push([rel, name], ...sub);
+      return r;
+    }
+  }
+  for (const st of sf.statements) {
+    if (viaStar) break;
     const bindings = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : undefined;
     if (!bindings || !ts.isNamedImports(bindings)) continue;
     for (const el of bindings.elements) {
       if (el.name.text !== name) continue;
-      const target = resolveModule(rel, /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text);
-      if (!target) fail(`${rel}: cannot resolve the import of ${name}`);
-      return resolveConst(target, (el.propertyName ?? el.name).text, depth + 1, track);
+      const spec = /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text;
+      const r = hop(spec, (el.propertyName ?? el.name).text, depth + 1);
+      if (!r) fail(`${rel}: cannot resolve the import of ${name}`);
+      return r;
     }
   }
-  return fail(`${rel}: no module-level const declaration or import of ${name}`);
+  // A named re-export (`export { X } from`, `export { A as X } from`) takes
+  // precedence over a star re-export, as in TypeScript.
+  for (const st of sf.statements) {
+    if (!ts.isExportDeclaration(st) || st.isTypeOnly || !st.moduleSpecifier) continue;
+    if (!st.exportClause || !ts.isNamedExports(st.exportClause)) continue;
+    for (const el of st.exportClause.elements) {
+      if (el.isTypeOnly || el.name.text !== name) continue;
+      const spec = /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text;
+      const r = hop(spec, (el.propertyName ?? el.name).text, depth);
+      if (!r) fail(`${rel}: cannot resolve the re-export of ${name} from ${spec}`);
+      return r;
+    }
+  }
+  // `export * from`: the one star module that provides the name. Two that
+  // provide different declarations are ambiguous in TypeScript and FAIL.
+  let star = null;
+  let starPath = null;
+  for (const st of sf.statements) {
+    if (!ts.isExportDeclaration(st) || st.isTypeOnly || !st.moduleSpecifier || st.exportClause) continue;
+    const spec = /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text;
+    const before = path.length;
+    const r = hop(spec, name, depth, true);
+    if (!r) continue;
+    const sub = path.splice(before);
+    if (star && (star.rel !== r.rel || star.decl.pos !== r.decl.pos)) {
+      fail(`${rel}: ${name} is exported by more than one \`export *\` (${star.rel} and ${r.rel})`);
+    }
+    if (!star) {
+      star = r;
+      starPath = sub;
+    }
+  }
+  if (star) path.push(...starPath);
+  return star;
 }
 
 /**
