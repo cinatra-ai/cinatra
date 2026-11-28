@@ -113,6 +113,10 @@ export const HOST_RESERVED_PACKAGE = "@cinatra-ai/host";
  *  so no other directory can shelter under the name. */
 export const GENERATED_PATHS = new Set(["src/lib/generated"]);
 
+/** The design fixture tree (cinatra#4531): the routes and seeded kits the design conformance
+ *  suite renders. They are fixtures, out of the scan like every fixture, skipped by exact path. */
+export const FIXTURE_PATHS = new Set(["src/app/design-fixtures"]);
+
 export function isProductFile(name) {
   if (/\.(test|spec)\./.test(name)) return false;
   if (/\.fixture\./.test(name) || /\.stories\./.test(name)) return false;
@@ -129,7 +133,8 @@ export function walkProductFiles(dir, acc = [], repoRoot = null) {
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (repoRoot && GENERATED_PATHS.has(relative(repoRoot, full).split(sep).join("/"))) continue;
+      const relDir = repoRoot ? relative(repoRoot, full).split(sep).join("/") : null;
+      if (relDir && (GENERATED_PATHS.has(relDir) || FIXTURE_PATHS.has(relDir))) continue;
       walkProductFiles(full, acc, repoRoot);
       continue;
     }
@@ -704,6 +709,58 @@ export function scanStepScreenKindTables({ file, text, packs }) {
   return { findings, tables: declarations.length };
 }
 
+/** The canonical package suffixes of the extension kinds, as the naming rule accepts them
+ *  (packages/extensions/src/__tests__/naming-conformance.test.ts, isAllowedDirShapeForKind):
+ *  `-agent` or `-assistant`, `-connector`, `-artifact` or `-artifacts`, `-skill`, `-workflow`. */
+const KIND_SUFFIX_RE = /-(agent|assistant|connector|artifacts?|skill|workflow)$/;
+
+/** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
+ *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
+ *  hand-listed. Only a leaf that ends in a canonical kind suffix is read, so a one-word or
+ *  generic leaf cannot make an ordinary word a finding. */
+export function packLeafNames(packs) {
+  const leaves = new Map();
+  for (const p of packs) {
+    const leaf = String(p).replace(/^@[^/]+\//, "");
+    if (!KIND_SUFFIX_RE.test(leaf)) continue;
+    leaves.set(leaf, [...(leaves.get(leaf) ?? []), String(p)].sort());
+  }
+  return leaves;
+}
+
+/** `pack-slug-in-core` (cinatra#4531): a string literal token whose WHOLE value is a pack's leaf.
+ *  The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is one)
+ *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf. Comments, regular expressions
+ *  and escapes are the parser's business. A file the parser cannot read fails closed. */
+export function scanPackLeafLiterals({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
+  const broken = (sf.parseDiagnostics ?? [])[0];
+  if (broken) {
+    throw new Error(
+      `[core-extension-border] ${file} does not parse (${compact(ts.flattenDiagnosticMessageText(broken.messageText, " "))}) — ` +
+        "the leaf rule fails closed rather than skipping the file",
+    );
+  }
+  const out = [];
+  const counts = new Map();
+  walk(sf, (n) => {
+    if (!ts.isStringLiteral(n) && !ts.isNoSubstitutionTemplateLiteral(n)) return;
+    const owners = leaves.get(n.text);
+    if (!owners) return;
+    out.push(
+      finding(
+        "pack-slug-in-core",
+        file,
+        sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
+        occurrenceDetail(counts, "pack-slug-in-core", `${n.text} (${owners.join(", ")})`),
+        `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+      ),
+    );
+  });
+  return out;
+}
+
 const KIND_KEY_RE = /^(.*?)::(.+?) \((@[^()]+)\)(?: \(occurrence (\d+)\))?$/;
 
 /** A kind finding keeps the detail its ledger entry recorded while every
@@ -1042,6 +1099,7 @@ export const KNOWN_RULES = new Set([
   "pack-shaped-core-domain",
   "pack-step-kind-in-core",
   "unbounded-port-member",
+  "pack-slug-in-core",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1247,6 +1305,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       const text = readFileSync(abs, "utf8");
       findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages }));
       findings.push(...scanScopedToolAdmissions({ file, text, packs }));
+      findings.push(...scanPackLeafLiterals({ file, text, packs }));
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);
       kindTables += kinds.tables;
