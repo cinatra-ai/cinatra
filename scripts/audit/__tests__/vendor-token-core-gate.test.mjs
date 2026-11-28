@@ -528,6 +528,68 @@ describe("sdk-name-with-extension-word — fails closed (cinatra#4875)", () => {
   }
 });
 
+describe("sdk-name-with-extension-word — the root tsconfig's ambient types resolve as in the product's typecheck (cinatra#4875)", () => {
+  // The root tsconfig.json loads Node's types (`"types": ["node"]`); the
+  // fixture configures them the same way, from a fixture @types/node.
+  const nodeTypes = {
+    "node_modules/@types/node/package.json": JSON.stringify({ name: "@types/node", version: "0.0.0", types: "index.d.ts" }),
+    "node_modules/@types/node/index.d.ts": [
+      `declare module "buffer" {`,
+      `  export interface Buffer { readonly length: number }`,
+      `  export const Buffer: { from(text: string): Buffer };`,
+      `}`,
+      `declare module "node:buffer" {`,
+      `  export * from "buffer";`,
+      `}`,
+    ].join("\n"),
+  };
+  const withNodeTypes = JSON.stringify({ compilerOptions: { ...FIXTURE_TSCONFIG.compilerOptions, types: ["node"] } });
+  const scanBuffer = (alias, rootFiles) => {
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files: { "src/index.ts": `export type { Buffer as ${alias} } from "node:buffer";\nexport const neutral = 1;\n` },
+      rootFiles,
+    });
+    return () => gateFn("scanSdkExportNames")(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] });
+  };
+
+  it("a neutral re-export from node:buffer resolves through the configured Node types: no scanner error, no finding", () => {
+    let found;
+    expect(() => {
+      found = scanBuffer("OpaqueBinaryValue", { ...nodeTypes, "tsconfig.json": withNodeTypes })();
+    }).not.toThrow();
+    expect(found).toEqual({});
+  });
+
+  it("a word-carrying alias of the same re-export is reported", () => {
+    let found;
+    expect(() => {
+      found = scanBuffer("ZorbBuffer", { ...nodeTypes, "tsconfig.json": withNodeTypes })();
+    }).not.toThrow();
+    expect(found).toEqual({ "@example-org/sdk-a :: ZorbBuffer": ["zorb"] });
+  });
+
+  it("a tsconfig without the types and no such module still gives the scanner error", () => {
+    expect(scanBuffer("OpaqueBinaryValue", {})).toThrow(`export ... from "node:buffer"`);
+  });
+
+  it("a re-export from a bare package resolvable only through its installed node_modules types is read", () => {
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files: { "src/index.ts": `export type { WidgetProps as PanelProps, ZorbWidget } from "@example-org/widgets";\n` },
+      rootFiles: {
+        "node_modules/@example-org/widgets/package.json": JSON.stringify({ name: "@example-org/widgets", version: "0.0.0", types: "index.d.ts" }),
+        "node_modules/@example-org/widgets/index.d.ts": `export interface WidgetProps { id: string }\nexport interface ZorbWidget { id: string }\n`,
+      },
+    });
+    let found;
+    expect(() => {
+      found = gateFn("scanSdkExportNames")(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] });
+    }).not.toThrow();
+    expect(found).toEqual({ "@example-org/sdk-a :: ZorbWidget": ["zorb"] });
+  });
+});
+
 describe("sdk-name-with-extension-word — the record only shrinks against the base (cinatra#4875)", () => {
   const exportsMap = { ".": "./src/index.ts" };
 

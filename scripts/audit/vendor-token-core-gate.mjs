@@ -501,7 +501,7 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
 
 /**
  * The compiler options of the repository's own root tsconfig.json (module
- * resolution, `baseUrl` and `paths` included), so a name resolves as in the
+ * resolution, `baseUrl`, `paths` and the ambient `types` included), so a name resolves as in the
  * product's typecheck. Its `include` files are not read: the program's root
  * files are the SDK entry files only. Throws SdkNamesError when unreadable.
  */
@@ -517,12 +517,16 @@ function repoCompilerOptions(ts, repoRoot) {
   if (errors.length) {
     throw new SdkNamesError(`tsconfig.json is invalid: ${ts.flattenDiagnosticMessageText(errors[0].messageText, " ")}`);
   }
+  // Every option that decides which module or name resolves (`paths`,
+  // `baseUrl`, module resolution, `allowJs`, `types`, `typeRoots`, ...) is
+  // kept as the root sets it. Only options that concern output or speed are
+  // set: no emit, no incremental build info, no language-service plugins,
+  // and no type check of declaration files (skipLibCheck reports fewer
+  // errors; it does not change what a specifier or a name resolves to).
   return {
     ...parsed.options,
-    allowJs: true,
     noEmit: true,
     skipLibCheck: true,
-    types: [],
     incremental: false,
     composite: false,
     tsBuildInfoFile: undefined,
