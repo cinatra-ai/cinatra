@@ -492,6 +492,41 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
     expect(found.map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
     expect(found[0].detail).toContain("not valid JSON");
   });
+
+  const ACCESS = { scope: { default: "user" } };
+
+  it("fails an assistant config that also holds an access block, naming the exclusion (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify({ ...VALID_ASSISTANT_CONFIG, access: ACCESS }) }));
+    expect(result.conform).toBe(false);
+    const found = agentFindings(result);
+    expect(found.map((f) => f.rule)).toEqual(["manifest.agent-assistant-executor-exclusive"]);
+    expect(found[0].detail).toContain("both an assistant block and an access block");
+  });
+
+  it("keeps an assistant config clean when its access block is null or absent (#4920)", () => {
+    for (const config of [{ ...VALID_ASSISTANT_CONFIG, access: null }, VALID_ASSISTANT_CONFIG]) {
+      const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify(config) }));
+      expect({ blocking: result.blocking, known: result.known, advisory: result.advisory }).toEqual({
+        blocking: [],
+        known: [],
+        advisory: [],
+      });
+    }
+  });
+
+  it("checks the assistant declaration of an agent that also ships cinatra/oas.json (#4920)", () => {
+    const withOas = (config) =>
+      agentFindings(gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": config })));
+    expect(withOas(JSON.stringify({ formatVersion: 1, assistant: {} })).map((f) => f.rule)).toEqual([
+      "manifest.agent-assistant-config-invalid",
+    ]);
+    expect(withOas("{ not json").map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
+    expect(withOas(JSON.stringify({ ...VALID_ASSISTANT_CONFIG, access: ACCESS })).map((f) => f.rule)).toEqual([
+      "manifest.agent-assistant-executor-exclusive",
+    ]);
+    expect(withOas(JSON.stringify(VALID_ASSISTANT_CONFIG))).toEqual([]);
+    expect(withOas(JSON.stringify({ formatVersion: 1, access: ACCESS }))).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -60,7 +60,12 @@ import { stripComments } from "../audit/lib/strip-comments.mjs";
 // The assistant validator the dedicated assistant check and ci-validate-agents use
 // (a mirror of the product's assistant schema). The reusable workflow's sparse
 // checkout fetches this file, so the import resolves in an extension repository.
-import { hasAssistantBlock, validateAssistantConfig } from "../audit/connector-access-config-gate.mjs";
+import {
+  ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE,
+  hasAssistantBlock,
+  hasConnectorExecutorBlock,
+  validateAssistantConfig,
+} from "../audit/connector-access-config-gate.mjs";
 
 export const CONFORMANCE_GATE_VERSION = "0.1.0";
 
@@ -1496,17 +1501,31 @@ function checkWebhooksDeclaration(pkg) {
 // without cinatra/oas.json the finding names the file to move. The other agent
 // form is a config-only assistant: no cinatra/oas.json and no old file, and a
 // cinatra/config.json with an `assistant` block (the order of
-// scripts/ci-validate-agents.mjs). The block gets the full validation of the
-// dedicated assistant check, and cinatra/config.json must ship, because the
-// product's loader reads the packaged config.
+// scripts/ci-validate-agents.mjs).
+//
+// The product reads cinatra/config.json of EVERY agent package, with or without
+// cinatra/oas.json (src/lib/assistant-declaration-host.ts,
+// packages/sdk-extensions/src/assistant-declaration.ts), so this check does too:
+//   - a config that cannot be read or parsed is refused (own lines here);
+//   - an `assistant` block (hasAssistantBlock) gets the product's file and block
+//     schema (validateAssistantConfig: formatVersion 1, no unknown keys,
+//     `protected` a boolean, every block field);
+//   - an assistant block beside a non-null `access` block is refused, the
+//     assistant/executor exclusion (hasConnectorExecutorBlock);
+//   - a declared assistant must ship cinatra/config.json, or the product never
+//     sees it (npm's packlist, own lines here).
+// Not checked here: the platform-scope rule (an assistant installs only at
+// platform scope) is a property of the install request, not of the package; the
+// install gate (assertAssistantInstallConstraints) enforces it.
 const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
 
 function checkAgentManifest(pkgDir, pkg) {
+  const config = checkAgentConfig(pkgDir, pkg);
   const oasPath = join(pkgDir, "cinatra", "oas.json");
   if (existsSync(oasPath)) {
     try {
       JSON.parse(readFileSync(oasPath, "utf8"));
-      return [];
+      return config.findings;
     } catch (err) {
       return [
         {
@@ -1514,6 +1533,7 @@ function checkAgentManifest(pkgDir, pkg) {
           file: "cinatra/oas.json",
           detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
         },
+        ...config.findings,
       ];
     }
   }
@@ -1525,24 +1545,11 @@ function checkAgentManifest(pkgDir, pkg) {
         file: "cinatra/oas.json",
         detail: `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`,
       },
+      ...config.findings,
     ];
   }
-  const configPath = join(pkgDir, "cinatra", "config.json");
-  if (existsSync(configPath)) {
-    let config;
-    try {
-      config = JSON.parse(readFileSync(configPath, "utf8"));
-    } catch (err) {
-      return [
-        {
-          rule: "manifest.agent-assistant-config-invalid",
-          file: "cinatra/config.json",
-          detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)} (without cinatra/oas.json this file is the package's only possible definition).`,
-        },
-      ];
-    }
-    if (hasAssistantBlock(config)) return checkAssistantConfig(pkgDir, pkg, config);
-  }
+  // A config-only assistant, or a config that does not parse: its own findings.
+  if (config.assistant || config.findings.length > 0) return config.findings;
   return [
     {
       rule: "manifest.agent-missing-oas",
@@ -1552,33 +1559,56 @@ function checkAgentManifest(pkgDir, pkg) {
   ];
 }
 
-function checkAssistantConfig(pkgDir, pkg, config) {
+// Returns { assistant: whether cinatra/config.json declares an assistant block,
+// findings }.
+function checkAgentConfig(pkgDir, pkg) {
+  const rel = "cinatra/config.json";
+  const configPath = join(pkgDir, rel);
+  if (!existsSync(configPath)) return { assistant: false, findings: [] };
+  let config;
+  try {
+    config = JSON.parse(readFileSync(configPath, "utf8"));
+  } catch (err) {
+    return {
+      assistant: false,
+      findings: [
+        {
+          rule: "manifest.agent-assistant-config-invalid",
+          file: rel,
+          detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)} (the product reads this file of every agent package and refuses the install).`,
+        },
+      ],
+    };
+  }
+  if (!hasAssistantBlock(config)) return { assistant: false, findings: [] };
+  const findings = [];
   const errors = validateAssistantConfig(config, pkg.name);
   if (errors.length > 0) {
-    return [
-      {
-        rule: "manifest.agent-assistant-config-invalid",
-        file: "cinatra/config.json",
-        detail: `the assistant declaration is invalid: ${errors.join("; ")}.`,
-      },
-    ];
+    findings.push({
+      rule: "manifest.agent-assistant-config-invalid",
+      file: rel,
+      detail: `the assistant declaration is invalid: ${errors.join("; ")}.`,
+    });
   }
+  if (hasConnectorExecutorBlock(config)) {
+    findings.push({ rule: "manifest.agent-assistant-executor-exclusive", file: rel, detail: `cinatra/config.json ${ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE}.` });
+  }
+  if (findings.length > 0) return { assistant: true, findings };
   // The same shipment proof as checkDeclaredLogo: npm's packlist, the `files`
   // heuristic only when the dry run is unavailable.
-  const rel = "cinatra/config.json";
   const { files: packed } = resolvePacklist(pkgDir);
   const ships = packed === null ? isInScope(rel, pkg.files) : packed.includes(rel);
-  if (ships) return [];
-  return [
-    {
+  if (!ships) {
+    findings.push({
       rule: "manifest.agent-assistant-config-unpublished",
       file: rel,
       detail:
         `cinatra/config.json declares the assistant but does not ship in the published package` +
         `${packed === null ? ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)' : " (per `npm pack --dry-run`)"}` +
         `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
-    },
-  ];
+    });
+  }
+  return { assistant: true, findings };
 }
 
 // ---------------------------------------------------------------------------
