@@ -51,7 +51,7 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
-### `pack-slug-in-core` (cinatra#4531)
+### `pack-slug-in-core` and `pack-slug-in-core-template-span` (cinatra#4531)
 
 A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connector` is
 `openai-connector`. Stage 1 of the rule reads the TypeScript and JavaScript source files of the
@@ -86,10 +86,23 @@ is read, the suffixes the naming rule accepts
 (`packages/extensions/src/__tests__/naming-conformance.test.ts`): `-agent`, `-assistant`,
 `-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`.
 
+Stage 2 adds one position: the literal text spans of a template literal WITH a substitution, as
+the parser gives them (the head, each middle and the tail, cooked), in an expression, a tagged
+template or a template literal type. Its findings are recorded under their own rule id,
+`pack-slug-in-core-template-span`, with the same detail and occurrence count: the ledger's base
+guard never lets a rule it already ratchets gain an entry, so the wider reading enters as a new rule
+seeded once, and the stage 1 entries stay shrink-only. Each span is split and judged as above, with
+one difference: a span is a fragment, and its edge next to a substitution may continue into the
+substituted value. A part of a span counts only when a separator of the rule or the outer end of
+the whole template bounds it on both sides, never a substitution: `` `/api/${id}/openai-connector/run` ``
+is a finding, `` `${prefix}openai-connector` `` and `` `openai-connector${suffix}` `` are not (a leaf
+joined to a substitution is a stated limit). The tree held no finding of this position when it
+landed, so the rule is seeded with no entry.
+
 Not read in this stage (next stages, tracked in the issue): stylesheets, YAML, JSON, Markdown and
-other run-time text files; a template with a substitution; JSX element and attribute names; root
-configuration files; regular expression literals; a leaf inside a sentence or joined to other
-characters (`"use <leaf> now"`, `"<leaf>-v2"`, `"<leaf>.json"`). Not part of this rule yet: the
+other run-time text files; JSX element and attribute names; root configuration files; regular
+expression literals; a leaf inside a sentence or joined to other characters (`"use <leaf> now"`,
+`"<leaf>-v2"`, `"<leaf>.json"`) or to a substitution (`` `${x}<leaf>` ``). Not part of this rule yet: the
 role-suffix stem (`blog-content` of `blog-content-skill`) and a tool or table name under a pack's
 stem.
 

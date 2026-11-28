@@ -7,6 +7,7 @@
     "pack-package-name-branch",
     "pack-shaped-core-domain",
     "pack-slug-in-core",
+    "pack-slug-in-core-template-span",
     "pack-step-kind-in-core",
     "pack-table-literal",
     "pack-type-id-in-core",
