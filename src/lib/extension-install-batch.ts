@@ -97,6 +97,23 @@ export type BatchInstallResult = {
   batchId: string | null; // null = root-only fast path (no ledger row)
 };
 
+/**
+ * `code` of the refusal `allowedRootKinds` raises (cinatra#4920).
+ */
+export const EXTENSION_KIND_NOT_ALLOWED = "EXTENSION_KIND_NOT_ALLOWED";
+/**
+ * `code` of the refusal when the kind the marketplace authorized for the root
+ * differs from the kind the plan derives from the served manifest
+ * (cinatra#4920; checked for every gatekept install).
+ */
+export const EXTENSION_KIND_MISMATCH = "EXTENSION_KIND_MISMATCH";
+/**
+ * `code` of the refusal `accessTargets: "require"` raises (cinatra#4920): the
+ * plan holds a fresh member of a kind that needs an access target. The error
+ * names them in `packages`.
+ */
+export const EXTENSION_ACCESS_TARGET_REQUIRED = "EXTENSION_ACCESS_TARGET_REQUIRED";
+
 export class BatchMemberInstallError extends Error {
   constructor(
     message: string,
@@ -970,6 +987,22 @@ export async function installExtensionWithDependencies(
      * route is unreachable from compensation by construction.
      */
     rowScopedCompensation?: boolean;
+    /**
+     * cinatra#4920: restrict the ROOT to these kinds, checked on the kind the
+     * PLAN derives for the root (the kind the batch dispatches), inside the
+     * global lock right after planning and before any install work. Absent =
+     * every kind (unchanged).
+     */
+    allowedRootKinds?: readonly string[];
+    /**
+     * cinatra#4920: what happens to a member of a kind that needs an access
+     * target (connector, artifact, workflow) that this batch would create a row
+     * for. `"fallback"` (default, today's behaviour for every caller): it is
+     * installed and, unless the caller writes a policy afterwards, read with the
+     * workspace-wide default policy. `"require"`: the plan is refused before any
+     * install work, naming those members.
+     */
+    accessTargets?: "require" | "fallback";
   },
   depsOverride?: InstallBatchSagaDeps,
 ): Promise<BatchInstallResult> {
@@ -1092,6 +1125,68 @@ export async function installExtensionWithDependencies(
         // gatekept path the planner defensively ignores this (closure != null).
         rootAction: input.rootAction ?? "install",
       });
+
+      // cinatra#4920: the batch's own checks, for EVERY caller, on the PLAN —
+      // the kinds the members are dispatched as — before the overlap check,
+      // the ledger and any install.
+      const plannedRoot = plan.ordered.find((m) => m.packageName === input.packageName);
+      const plannedRootKind = plannedRoot?.typeId ?? null;
+      // (1) The kind the marketplace authorized for the root must be the kind
+      //     the served manifest declares (the planned kind is what executes).
+      if (resolution && plannedRootKind !== resolution.authorize.kind) {
+        throw Object.assign(
+          new Error(
+            `[extension-install-batch] ${input.packageName}: the marketplace authorized kind ` +
+              `"${resolution.authorize.kind}" but the package manifest declares ` +
+              `"${plannedRootKind ?? "none"}" — nothing was installed.`,
+          ),
+          {
+            code: EXTENSION_KIND_MISMATCH,
+            kind: plannedRootKind,
+            authorizedKind: resolution.authorize.kind,
+          },
+        );
+      }
+      // (2) Optional root-kind allow list, on the planned kind.
+      if (
+        input.allowedRootKinds &&
+        (plannedRootKind === null || !input.allowedRootKinds.includes(plannedRootKind))
+      ) {
+        throw Object.assign(
+          new Error(
+            `[extension-install-batch] ${input.packageName} is of kind "${plannedRootKind ?? "none"}", ` +
+              `which this install surface does not accept — nothing was installed.`,
+          ),
+          { code: EXTENSION_KIND_NOT_ALLOWED, kind: plannedRootKind },
+        );
+      }
+      // (3) Access targets. A member of a kind that needs an access target
+      //     (connector, artifact, workflow) and that this batch creates a row
+      //     for gets the workspace-wide fallback policy unless its caller
+      //     writes one afterwards. "require" refuses such a plan, root or
+      //     dependency, because the batch takes no target per member.
+      if (input.accessTargets === "require") {
+        const { isInstallAccessTargetKind } = await import(
+          "@cinatra-ai/extensions/install-access-target"
+        );
+        const needTarget = plan.ordered.filter(
+          (m) => !m.alreadyInstalled && m.action !== "update" && isInstallAccessTargetKind(m.typeId),
+        );
+        if (needTarget.length > 0) {
+          const names = needTarget.map((m) => `${m.packageName} (${m.typeId})`).join(", ");
+          throw Object.assign(
+            new Error(
+              `[extension-install-batch] installing ${input.packageName} would install ` +
+                `${needTarget.length === 1 ? "a package" : "packages"} of a kind that needs an ` +
+                `access target, which this install takes none for: ${names} — nothing was installed.`,
+            ),
+            {
+              code: EXTENSION_ACCESS_TARGET_REQUIRED,
+              packages: needTarget.map((m) => m.packageName),
+            },
+          );
+        }
+      }
 
       const toInstall = plan.ordered.filter((m) => !m.alreadyInstalled);
       const alreadyInstalled = plan.ordered
@@ -1665,6 +1760,26 @@ export async function installExtensionWithDependencies(
       await deps.ledger
         .setPhase(batch!.batchId, failures.length === 0 ? "compensated" : "failed")
         .catch(() => undefined);
+      // An INCOMPLETE rollback must leave this function on EVERY exit, not only
+      // inside BatchMemberInstallError (cinatra#4920): the two raw structured
+      // rethrows below would otherwise carry a refusal that hides packages left
+      // installed. The same `compensationFailures` field is attached to the raw
+      // error (class and `code` unchanged, so callers matching on the code keep
+      // working). A complete rollback attaches nothing.
+      // The failed member's own dispatcher rollback can have failed too; the
+      // dispatcher then carries its package on the cause already. Keep it,
+      // unless this batch's own teardown of that member just succeeded.
+      const carriedRaw =
+        cause !== null && typeof cause === "object"
+          ? (cause as { compensationFailures?: unknown }).compensationFailures
+          : undefined;
+      const carried = Array.isArray(carriedRaw)
+        ? carriedRaw.filter((n): n is string => typeof n === "string" && !compensated.includes(n))
+        : [];
+      const allFailures = [...new Set([...carried, ...failures])];
+      if (allFailures.length > 0 && cause !== null && typeof cause === "object") {
+        Object.assign(cause, { compensationFailures: [...allFailures] });
+      }
       // REQUIRES_REBUILD: the refusing kind needs a host rebuild before this
       // install can proceed — compensation has run; rethrow the RAW error so
       // the structured { requiresRebuild } surface contract is preserved.
@@ -1690,13 +1805,13 @@ export async function installExtensionWithDependencies(
           (compensated.length > 0
             ? `Rolled back the dependencies this install had added (${compensated.join(", ")}); `
             : `No dependencies needed rollback; `) +
-          (failures.length > 0
-            ? `ROLLBACK INCOMPLETE for ${failures.join(", ")} — these may need manual removal. `
+          (allFailures.length > 0
+            ? `ROLLBACK INCOMPLETE for ${allFailures.join(", ")} — these may need manual removal. `
             : ``) +
           `Previously-installed extensions were not touched.`,
         failedMember,
         compensated,
-        failures,
+        allFailures,
         cause,
       );
     }

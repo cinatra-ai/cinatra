@@ -12,17 +12,25 @@ import {
   diffCreatedRowIds,
   decideMemberCompensation,
   BatchMemberInstallError,
+  EXTENSION_ACCESS_TARGET_REQUIRED,
+  EXTENSION_KIND_MISMATCH,
+  EXTENSION_KIND_NOT_ALLOWED,
   type InstallBatchSagaDeps,
 } from "@/lib/extension-install-batch";
 import type {
   InstallBatch,
   InstallBatchMember,
 } from "@/lib/extension-install-batch-ops";
-import type {
-  DependencyInstallPlan,
-  PlannedMember,
-  RowOwnership,
+import {
+  planDependencyInstall,
+  type DependencyInstallPlan,
+  type DependencyPlanDeps,
+  type MemberSummary,
+  type PlannedMember,
+  type RowOwnership,
 } from "@/lib/extension-dependency-plan";
+import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
+import { isAutoInstallableEdge } from "@cinatra-ai/extensions/dependency-closure";
 import type { GatekeptInstallResolution } from "@/lib/gatekept-install";
 import {
   GrantRefreshRefusedError,
@@ -1438,6 +1446,8 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
       // RAW (un-wrapped) so the MCP surface keeps its { requiresRebuild } result.
       expect((e as { code?: string }).code).toBe("REQUIRES_REBUILD");
       expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      // A complete rollback attaches nothing.
+      expect(e).not.toHaveProperty("compensationFailures");
     }
     // The dispatcher rolled back the refusing package's placeholder row —
     // nothing durable installed for it — so the batch compensates the deps
@@ -1445,6 +1455,30 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.phase).toBe("compensated");
     expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
+  });
+
+  it("a FAILED compensation is carried out on the raw error as compensationFailures (cinatra#4920)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installRequiresRebuild: ROOT,
+    });
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("uninstall refused"),
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("root rebuild refusal must propagate");
+    } catch (e) {
+      // Still the RAW structured error (code + class unchanged)…
+      expect((e as { code?: string }).code).toBe("REQUIRES_REBUILD");
+      expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      // …now carrying the packages the rollback left installed.
+      expect((e as { compensationFailures?: string[] }).compensationFailures).toEqual([
+        "@cinatra-ai/dep-a",
+      ]);
+    }
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.phase).toBe("failed");
   });
 });
 
@@ -1481,6 +1515,29 @@ describe("installExtensionWithDependencies — AGENT_PACKAGE_CONTRACT_VIOLATION 
     expect(batch.phase).toBe("compensated");
     expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
     expect(h.events).not.toContain(`install:${ROOT}`);
+  });
+
+  it("a FAILED compensation is carried out on the raw contract-violation error as compensationFailures (cinatra#4920)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installContractViolation: "@cinatra-ai/dep-b",
+    });
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("uninstall refused"),
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("a member contract violation must propagate");
+    } catch (e) {
+      expect((e as { code?: string }).code).toBe("AGENT_PACKAGE_CONTRACT_VIOLATION");
+      expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      expect((e as { packageName?: string }).packageName).toBe("@cinatra-ai/dep-b");
+      expect((e as { compensationFailures?: string[] }).compensationFailures).toEqual([
+        "@cinatra-ai/dep-a",
+      ]);
+    }
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.phase).toBe("failed");
   });
 });
 
@@ -2400,5 +2457,179 @@ describe("decideMemberCompensation (cinatra#2415)", () => {
       kind: "refuse",
       reason: "no-durable-provenance",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#4920: the root-kind allow list binds on the PLANNED kind. These tests
+// run the REAL planner (`planDependencyInstall`) behind the batch; only the
+// registry/marketplace reads are faked, so the planner derives the root's type
+// from a served manifest fixture.
+// ---------------------------------------------------------------------------
+describe("installExtensionWithDependencies — the kind and access-target checks run on the REAL plan (cinatra#4920)", () => {
+  type Kind = "agent" | "skill" | "connector" | "artifact" | "workflow";
+  /** Registry fixture: each package's served manifest kind and required deps. */
+  function realPlan(
+    h: ReturnType<typeof makeHarness>,
+    registry: Record<string, { kind: Kind; deps?: string[] }>,
+  ): void {
+    const planDeps: DependencyPlanDeps = {
+      fetchSummary: async (packageName: string, version: string): Promise<MemberSummary> => {
+        const pkg = registry[packageName];
+        if (!pkg) throw new Error(`fixture: no package ${packageName}`);
+        const resolvedVersion = /^\d/.test(version) ? version : "1.0.0";
+        return {
+          resolvedVersion,
+          kind: pkg.kind,
+          manifest: {
+            name: packageName,
+            version: resolvedVersion,
+            cinatra: {
+              kind: pkg.kind,
+              dependencies: (pkg.deps ?? []).map((dep) => ({
+                packageName: dep,
+                edgeType: "runtime",
+                versionConstraint: { kind: "semver-range", range: "*" },
+                requirement: "required",
+              })),
+            },
+          },
+        };
+      },
+      parseEdges: (manifest, packageName) =>
+        parseManifestDependencyEdges(manifest, { packageName }).edges,
+      isAutoInstallableEdge,
+      readInstalledRows: async () => [],
+    };
+    h.deps.plan = async (input) => {
+      h.events.push("plan");
+      return planDependencyInstall(input, planDeps);
+    };
+  }
+
+  it("refuses a root whose MANIFEST kind differs from the AUTHORIZED kind, for every caller, before any install work", async () => {
+    const h = makeHarness({
+      plan: [],
+      gatekept: true,
+      authorize: async () => resolution({ kind: "agent", closure: [] }),
+    });
+    realPlan(h, { [ROOT]: { kind: "connector" } });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toMatchObject({ code: EXTENSION_KIND_MISMATCH, kind: "connector", authorizedKind: "agent" });
+    expect(h.deps.installMember).not.toHaveBeenCalled();
+    expect(h.events).not.toContain("ledger:begin");
+  });
+
+  it("installs a gatekept root whose authorized and manifest kinds agree", async () => {
+    const h = makeHarness({
+      plan: [],
+      gatekept: true,
+      authorize: async () => resolution({ kind: "agent", closure: [] }),
+    });
+    realPlan(h, { [ROOT]: { kind: "agent" } });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(h.deps.installMember).toHaveBeenCalledTimes(1);
+    expect((h.deps.installMember as ReturnType<typeof vi.fn>).mock.calls[0]![0]).toMatchObject({
+      packageName: ROOT,
+      typeId: "agent",
+    });
+  });
+
+  it("allowedRootKinds refuses a root whose PLANNED kind is outside the list", async () => {
+    const h = makeHarness({ plan: [] });
+    realPlan(h, { [ROOT]: { kind: "connector" } });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, allowedRootKinds: ["agent", "skill"] },
+        h.deps,
+      ),
+    ).rejects.toMatchObject({ code: EXTENSION_KIND_NOT_ALLOWED, kind: "connector" });
+    expect(h.deps.installMember).not.toHaveBeenCalled();
+  });
+
+  it("accessTargets \"require\" refuses a plan with a DEPENDENCY that needs an access target, naming it, before any work", async () => {
+    const DEP = "@cinatra-ai/dep-connector";
+    const h = makeHarness({ plan: [] });
+    realPlan(h, { [ROOT]: { kind: "agent", deps: [DEP] }, [DEP]: { kind: "connector" } });
+    let caught: unknown;
+    try {
+      await installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, accessTargets: "require" },
+        h.deps,
+      );
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toMatchObject({ code: EXTENSION_ACCESS_TARGET_REQUIRED, packages: [DEP] });
+    expect((caught as Error).message).toContain(`${DEP} (connector)`);
+    expect(h.deps.installMember).not.toHaveBeenCalled();
+    expect(h.events).not.toContain("ledger:begin");
+  });
+
+  it("accessTargets \"require\" refuses a ROOT that needs an access target", async () => {
+    const h = makeHarness({ plan: [] });
+    realPlan(h, { [ROOT]: { kind: "workflow" } });
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor, accessTargets: "require" },
+        h.deps,
+      ),
+    ).rejects.toMatchObject({ code: EXTENSION_ACCESS_TARGET_REQUIRED, packages: [ROOT] });
+    expect(h.deps.installMember).not.toHaveBeenCalled();
+  });
+
+  it("accessTargets \"require\" installs a plan with no such member", async () => {
+    const DEP = "@cinatra-ai/dep-skill";
+    const h = makeHarness({ plan: [] });
+    realPlan(h, { [ROOT]: { kind: "agent", deps: [DEP] }, [DEP]: { kind: "skill" } });
+    await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor, accessTargets: "require" },
+      h.deps,
+    );
+    expect(
+      (h.deps.installMember as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0].packageName),
+    ).toEqual([DEP, ROOT]);
+  });
+
+  it("by default (today's behaviour) a dependency that needs an access target installs with the fallback", async () => {
+    const DEP = "@cinatra-ai/dep-connector";
+    const h = makeHarness({ plan: [] });
+    realPlan(h, { [ROOT]: { kind: "agent", deps: [DEP] }, [DEP]: { kind: "connector" } });
+    await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+    expect(
+      (h.deps.installMember as ReturnType<typeof vi.fn>).mock.calls.map((c) => [c[0].packageName, c[0].typeId]),
+    ).toEqual([
+      [DEP, "connector"],
+      [ROOT, "agent"],
+    ]);
+  });
+});
+
+describe("installExtensionWithDependencies — a failed member's own dispatcher rollback is kept (cinatra#4920)", () => {
+  it("keeps the failed member's compensationFailures next to the batch's own failures", async () => {
+    const h = makeHarness({ plan: [member("@cinatra-ai/dep-a"), member(ROOT)] });
+    const install = h.deps.installMember as ReturnType<typeof vi.fn>;
+    const original = install.getMockImplementation()! as (m: PlannedMember, a: Actor) => Promise<void>;
+    install.mockImplementation(async (m: PlannedMember, a: Actor) => {
+      if (m.packageName === ROOT) {
+        throw Object.assign(new Error("handler failed and the archive failed"), {
+          compensationFailures: [ROOT],
+        });
+      }
+      return original(m, a);
+    });
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("uninstall refused"),
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("the root failure must propagate");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BatchMemberInstallError);
+      expect([...(e as BatchMemberInstallError).compensationFailures].sort()).toEqual(
+        ["@cinatra-ai/dep-a", ROOT].sort(),
+      );
+    }
   });
 });
