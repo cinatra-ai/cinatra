@@ -196,13 +196,25 @@ function relPath(fileName) {
   return relative(ROOT, fileName).split(sep).join("/");
 }
 
+/** Parentheses, `as`, `<T>`, `satisfies` and `!`: wrappers that change no value. */
+const OUTER = ts.OuterExpressionKinds.Parentheses | ts.OuterExpressionKinds.Assertions;
+
 /**
- * Parentheses, `as`, `<T>`, `satisfies` and `!` change no value: TypeScript's
- * own helper removes them.
+ * The wrapped expression: TypeScript's own helper removes the OUTER wrappers.
  * @param {ts.Expression} e
  */
 function unwrap(e) {
-  return ts.skipOuterExpressions(e, ts.OuterExpressionKinds.Parentheses | ts.OuterExpressionKinds.Assertions);
+  return ts.skipOuterExpressions(e, OUTER);
+}
+
+/**
+ * The outermost OUTER wrapper around `e` (`e` itself when it has none), found
+ * with TypeScript's own test: the use is judged at its parent.
+ * @param {ts.Node} e
+ */
+function outermost(e) {
+  while (e.parent && ts.isOuterExpression(e.parent, OUTER)) e = e.parent;
+  return e;
 }
 
 /** The route's allow list: the one binding of this name in the route module. */
@@ -317,7 +329,10 @@ function namesOfSet(checker, program, decl, arrays, stack, seen) {
  * builder with its file and line (`.length--`, `.push`, `.add`, an index
  * assignment, passing it to a function, `forEach`, an alias to another name).
  * References are found by symbol, so a type of the same name is not a use; a
- * qualified access (`ns.X`) is judged as the whole access.
+ * qualified access (`ns.X`) is judged as the whole access. A reference, a
+ * `.has` and a `.size` access inside the OUTER wrappers that `unwrap` removes
+ * are judged at the outermost wrapper, so a wrapper neither refuses a read nor
+ * hides a change.
  * @param {ts.TypeChecker} checker @param {ts.Program} program @param {ts.SourceFile} route
  * @param {Set<ts.VariableDeclaration>} seen
  */
@@ -325,8 +340,9 @@ function assertSetsConstant(checker, program, route, seen) {
   const files = new Set([route, ...[...seen].map((d) => d.getSourceFile())]);
   /** @param {ts.Node} e a property access: true when it is written, not read */
   const written = (e) => {
-    const q = e.parent;
-    if (ts.isBinaryExpression(q) && q.left === e) {
+    const w = outermost(e);
+    const q = w.parent;
+    if (ts.isBinaryExpression(q) && q.left === w) {
       const k = q.operatorToken.kind;
       return k >= ts.SyntaxKind.FirstAssignment && k <= ts.SyntaxKind.LastAssignment;
     }
@@ -351,8 +367,9 @@ function assertSetsConstant(checker, program, route, seen) {
         if (sym && sym.flags & ts.SymbolFlags.Alias) sym = checker.getAliasedSymbol(sym);
         const decl = sym?.valueDeclaration;
         if (decl && seen.has(/** @type {any} */ (decl))) {
-          const ref = ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n;
+          const ref = outermost(ts.isPropertyAccessExpression(n.parent) && n.parent.name === n ? n.parent : n);
           const p = ref.parent;
+          const call = ts.isPropertyAccessExpression(p) ? outermost(p) : p;
           const ok =
             (ref === n &&
               (((ts.isVariableDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isInterfaceDeclaration(p)) && p.name === n) ||
@@ -363,7 +380,7 @@ function assertSetsConstant(checker, program, route, seen) {
             (ts.isNewExpression(p) && p.arguments?.length === 1 && p.arguments[0] === ref && isGlobalSet(p)) ||
             (ts.isPropertyAccessExpression(p) &&
               p.expression === ref &&
-              ((p.name.text === "has" && ts.isCallExpression(p.parent) && p.parent.expression === p) ||
+              ((p.name.text === "has" && ts.isCallExpression(call.parent) && call.parent.expression === call) ||
                 (p.name.text === "size" && !written(p)))) ||
             (ts.isExportAssignment(p) && !p.isExportEquals && p.expression === ref) ||
             (ts.isTypeQueryNode(p) && p.exprName === ref);

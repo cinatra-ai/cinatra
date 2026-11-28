@@ -239,6 +239,33 @@ const TREES: Record<string, Record<string, string>> = {
     "src/lib/array-tools.ts": "export const ARRAY_TOOLS = ['fixture_array', `fixture_array_tpl`] as const;\n",
     [ROUTE]: route(['  "fixture_ok",', "  ...ARRAY_TOOLS,"], ['import { ARRAY_TOOLS } from "@/lib/array-tools";']),
   },
+  wrappedReads: {
+    "src/lib/wrap-tools.ts": "export const TOOLS = new Set(['fixture_wrap']);\n",
+    [ROUTE]: route(
+      ['  "fixture_ok",', "  ...(TOOLS as ReadonlySet<string>),", "  ...(TOOLS),", "  ...TOOLS!,"],
+      ['import { TOOLS } from "@/lib/wrap-tools";'],
+      [
+        "export const SAME = new Set((TOOLS as readonly string[]));",
+        "export const HAS = (ALLOWED_TOOLS).has('fixture_ok');",
+        "export const SIZE = (ALLOWED_TOOLS as ReadonlySet<string>).size;",
+      ],
+    ),
+  },
+  ...Object.fromEntries(
+    (
+      [
+        ["wrappedPush", '(TOOLS as string[]).push("x");'],
+        ["wrappedLengthDecrement", "TOOLS!.length--;"],
+        ["wrappedAdd", '(TOOLS).add("x");'],
+      ] as const
+    ).map(([k, use]) => [
+      k,
+      {
+        "src/lib/wrap-names.ts": ["export const TOOLS: any = ['fixture_wrap_a'];", `${use}`, ""].join("\n"),
+        [ROUTE]: route(['  "fixture_ok",', "  ...TOOLS,"], ['import { TOOLS } from "@/lib/wrap-names";']),
+      },
+    ]),
+  ),
   reexportCycle: {
     "src/lib/cycle-a.ts": 'export * from "./cycle-b";\n',
     "src/lib/cycle-b.ts": 'export { CYCLE_SET } from "./cycle-a";\n',
@@ -383,6 +410,24 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
   it("accepts `.has(...)` and `.size` reads and a spread of a read array in its own module", () => {
     expect(builderFailure(trees.namesRead)).toBe("");
     expect(namesAt(trees.namesRead)).toEqual(["fixture_names_a", "fixture_names_b", "fixture_ok"]);
+  });
+
+  it("judges a use inside parentheses, `as`, `satisfies` or `!` at its outermost wrapper: the read forms are accepted", () => {
+    expect(builderFailure(trees.wrappedReads)).toBe("");
+    expect(namesAt(trees.wrappedReads)).toEqual(["fixture_ok", "fixture_wrap"]);
+  });
+
+  it("refuses a change behind a wrapper with its file and line: `(X as T[]).push`, `X!.length--`, `(X).add`", () => {
+    const at = "src/lib/wrap-names.ts:2";
+    const push = builderFailure(trees.wrappedPush);
+    expect(push).toContain(at);
+    expect(push).toContain('(TOOLS as string[]).push("x")');
+    const decrement = builderFailure(trees.wrappedLengthDecrement);
+    expect(decrement).toContain(at);
+    expect(decrement).toContain("TOOLS!.length--");
+    const add = builderFailure(trees.wrappedAdd);
+    expect(add).toContain(at);
+    expect(add).toContain('(TOOLS).add("x")');
   });
 
   it("keeps a passthrough row for each file that admits a name, so a second owner stays visible", () => {
