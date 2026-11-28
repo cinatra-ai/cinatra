@@ -1511,15 +1511,17 @@ function checkWebhooksDeclaration(pkg) {
 //     cinatra/oas.json fails with the file to move. An old file that is not
 //     published is ignored: the product never sees it.
 //   - The other agent form is a config-only assistant: cinatra/config.json with
-//     an `assistant` block. The product reads cinatra/config.json of EVERY agent
-//     package (src/lib/assistant-declaration-host.ts,
-//     packages/sdk-extensions/src/assistant-declaration.ts); this check reads it
-//     when it is in the checkout: a config that cannot be read or parsed is
-//     refused (own lines); an assistant block (hasAssistantBlock) gets the
-//     product's file and block schema (validateAssistantConfig); an assistant
-//     block beside a non-null `access` block is refused (the assistant/executor
-//     exclusion, hasConnectorExecutorBlock); a declared assistant must publish
-//     cinatra/config.json, or the product never sees it.
+//     an `assistant` block. The product reads the PUBLISHED cinatra/config.json
+//     of every agent package (src/lib/assistant-declaration-host.ts,
+//     packages/sdk-extensions/src/assistant-declaration.ts), and so does this
+//     check: a published config that cannot be read or parsed is refused (own
+//     lines); an assistant block (hasAssistantBlock) gets the product's file and
+//     block schema (validateAssistantConfig); an assistant block beside a
+//     non-null `access` block is refused (the assistant/executor exclusion,
+//     hasConnectorExecutorBlock). A config that is not published is not judged,
+//     with one exception: when it parses and declares an assistant block, it
+//     fails as unpublished, because its author meant an assistant the product
+//     would never see. An unpublished config that does not parse is ignored.
 // Not checked here: the platform-scope rule (an assistant installs only at
 // platform scope) is a property of the install request, not of the package; the
 // install gate (assertAssistantInstallConstraints) enforces it.
@@ -1598,6 +1600,28 @@ function checkAgentConfig(pkgDir, pkg, published) {
   const rel = "cinatra/config.json";
   const configPath = join(pkgDir, rel);
   if (!existsSync(configPath)) return { assistant: false, findings: [] };
+  if (!published.isPublished(rel)) {
+    // The product never reads it. Only a parseable assistant declaration counts.
+    let unpublished;
+    try {
+      unpublished = JSON.parse(readFileSync(configPath, "utf8"));
+    } catch {
+      return { assistant: false, findings: [] };
+    }
+    if (!hasAssistantBlock(unpublished)) return { assistant: false, findings: [] };
+    return {
+      assistant: true,
+      findings: [
+        {
+          rule: "manifest.agent-assistant-config-unpublished",
+          file: rel,
+          detail:
+            `cinatra/config.json declares the assistant but does not ship in the published package${notPublishedHow(published.viaDryRun)}` +
+            `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
+        },
+      ],
+    };
+  }
   let config;
   try {
     config = JSON.parse(readFileSync(configPath, "utf8"));
@@ -1625,16 +1649,6 @@ function checkAgentConfig(pkgDir, pkg, published) {
   }
   if (hasConnectorExecutorBlock(config)) {
     findings.push({ rule: "manifest.agent-assistant-executor-exclusive", file: rel, detail: `cinatra/config.json ${ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE}.` });
-  }
-  if (findings.length > 0) return { assistant: true, findings };
-  if (!published.isPublished(rel)) {
-    findings.push({
-      rule: "manifest.agent-assistant-config-unpublished",
-      file: rel,
-      detail:
-        `cinatra/config.json declares the assistant but does not ship in the published package${notPublishedHow(published.viaDryRun)}` +
-        `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
-    });
   }
   return { assistant: true, findings };
 }

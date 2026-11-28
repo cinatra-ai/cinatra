@@ -566,6 +566,25 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
   it("passes a published, valid cinatra/oas.json (#4920)", () => {
     expect(cleanOf(gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }) })))).toEqual(CLEAN);
   });
+
+  it("does not read an unpublished cinatra/config.json that does not parse beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": "{ not json" }, ["cinatra/oas.json"]),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("reports only the unpublished finding for an unpublished, invalid assistant block (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify({ formatVersion: 1, assistant: {} }) }, ["README.md"]));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-unpublished"]);
+  });
+
+  it("fails a published cinatra/config.json that does not parse, also beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": "{ not json" }));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
