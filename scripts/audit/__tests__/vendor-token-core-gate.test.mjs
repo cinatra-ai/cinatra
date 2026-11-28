@@ -396,6 +396,62 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
     );
   });
 
+  it("each condition target of an entry is read: a types target and a default target that export different names are both found", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": { types: "./src/index.d.ts", default: "./src/index.js" } },
+      files: {
+        "src/index.d.ts": `export declare const ZorbTyped: number;\n`,
+        "src/index.js": `export const QuillCoded = 1;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] })).sort()).toEqual([
+      "@example-org/sdk-a :: QuillCoded",
+      "@example-org/sdk-a :: ZorbTyped",
+    ]);
+  });
+
+  it("a JavaScript target is read with the declaration TypeScript resolves beside it (.d.ts, .d.mts, .d.cts)", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./dist/index.js", "./m": "./dist/m.mjs", "./c": { default: "./dist/c.cjs" } },
+      files: {
+        "dist/index.js": `export const neutral = 1;\n`,
+        "dist/index.d.ts": `export declare const neutral: number;\nexport type ZorbWidget = string;\n`,
+        "dist/m.mjs": `export const neutralM = 1;\n`,
+        "dist/m.d.mts": `export declare const neutralM: number;\nexport interface QuillShape { a: 1 }\n`,
+        "dist/c.cjs": `exports.neutralC = 1;\n`,
+        "dist/c.d.cts": `export declare const neutralC: number;\nexport type ZorbCommon = number;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] })).sort()).toEqual([
+      "@example-org/sdk-a :: ZorbWidget",
+      "@example-org/sdk-a/c :: ZorbCommon",
+      "@example-org/sdk-a/m :: QuillShape",
+    ]);
+  });
+
+  it("a root conditions object is the \".\" entry; a root mixing conditions and subpaths fails closed", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { types: "./dist/index.d.ts", default: "./dist/index.js" },
+      files: {
+        "dist/index.d.ts": `export declare const ZorbRoot: number;\n`,
+        "dist/index.js": `export const ZorbRoot = 1;\n`,
+      },
+    });
+    let found = {};
+    expect(() => {
+      found = scan(root, ["zorb"], { packages: [FIXTURE_SDK] });
+    }).not.toThrow();
+    expect(Object.keys(found)).toEqual(["@example-org/sdk-a :: ZorbRoot"]);
+    const mixed = makeSdkTree({
+      exportsMap: { types: "./dist/index.d.ts", "./extra": "./dist/index.js" },
+      files: { "dist/index.d.ts": `export declare const ZorbRoot: number;\n`, "dist/index.js": `export const ZorbRoot = 1;\n` },
+    });
+    expect(() => scan(mixed, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow('package.json has no subpath "exports" map');
+  });
+
   it("an exports map with a subpath pattern fails closed (precedence is not read); the real SDK packages hold none", () => {
     const scan = gateFn("scanSdkExportNames");
     const root = makeSdkTree({

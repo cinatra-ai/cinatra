@@ -79,7 +79,9 @@
 // contract named for a family or a vendor passed every gate. This class reads
 // the names a pack can import from the SDK packages a pack may depend on (the
 // two the conformance gate admits, SDK_PACKAGE_DIRS) on the same fact a pack
-// sees: every entry of each package's `exports` map (every condition's target;
+// sees: every entry of each package's `exports` map (every condition's target,
+// and for a JavaScript target also the declaration or source TypeScript
+// resolves in its place; a root conditions object is the "." entry;
 // a map with a subpath pattern or a `null` target fails closed, as precedence
 // between overlapping keys is not resolved here), resolved by the
 // TypeScript program and type checker (`getExportsOfModule`, so `export *`,
@@ -338,6 +340,24 @@ export const SDK_PACKAGE_DIRS = Object.freeze(["packages/sdk-extensions", "packa
 
 const BASELINE_REL = "scripts/audit/vendor-token-core-gate.baseline.json";
 const SDK_CODE_TARGET_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+// The files TypeScript tries, in order, for a JavaScript target before it uses
+// the JavaScript file itself (its extension substitution): the first that
+// exists is what a TypeScript consumer reads.
+const TS_SUBSTITUTES = Object.freeze({
+  ".js": [".ts", ".tsx", ".d.ts"],
+  ".jsx": [".tsx", ".d.ts"],
+  ".mjs": [".mts", ".d.mts"],
+  ".cjs": [".cts", ".d.cts"],
+});
+
+/** The files of one target: the target, and for a JavaScript target also the file TypeScript resolves in its place. */
+function targetFiles(file) {
+  const ext = Object.keys(TS_SUBSTITUTES).find((e) => file.endsWith(e));
+  if (!ext) return [file];
+  const stem = file.slice(0, -ext.length);
+  const typed = TS_SUBSTITUTES[ext].map((e) => stem + e).find((f) => existsSync(f));
+  return typed ? [file, typed] : [file];
+}
 
 /** An SDK entry or export that cannot be read: a scanner error (exit 2), never a pass. */
 export class SdkNamesError extends Error {
@@ -403,7 +423,11 @@ const holdsNull = (value) =>
 
 /**
  * The entry points of one SDK package: `[{ specifier, files }]`, one per
- * `exports` entry; `files` are the absolute code targets of every condition.
+ * `exports` entry; `files` are the absolute code targets of every condition,
+ * and for a JavaScript target also the file TypeScript resolves in its place
+ * (`.ts`/`.tsx`/`.d.ts` for `.js`, `.mts`/`.d.mts` for `.mjs`, `.cts`/`.d.cts`
+ * for `.cjs`, the first that exists). A root conditions object is the `"."`
+ * entry.
  * A subpath pattern (`*` in a key) or a `null` target is not read: export-map
  * precedence between overlapping keys is not resolved here, so such a map
  * fails closed. Throws SdkNamesError for an unreadable manifest, a package
@@ -421,6 +445,9 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
   if (typeof pkg.name !== "string" || !pkg.name) throw new SdkNamesError(`${pkgDir}/package.json names no package`);
   let map = pkg.exports;
   if (typeof map === "string" || Array.isArray(map)) map = { ".": map };
+  // A conditions object at the root (no key starts with ".") is the "." entry;
+  // a mix of conditions and subpaths stays refused, as Node refuses it.
+  if (map && typeof map === "object" && Object.keys(map).every((k) => !k.startsWith("."))) map = { ".": map };
   if (!map || typeof map !== "object" || !Object.keys(map).every((k) => k === "." || k.startsWith("./"))) {
     throw new SdkNamesError(`${pkg.name}: package.json has no subpath "exports" map (a pack imports through it)`);
   }
@@ -437,7 +464,7 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
       .filter((t) => SDK_CODE_TARGET_RE.test(t))
       .map((t) => resolve(abs, t));
     for (const f of code) if (!existsSync(f)) throw new SdkNamesError(`${where}: the target ${relative(repoRoot, f)} does not exist`);
-    if (code.length) entries.push({ specifier: spec(key), files: [...new Set(code)] });
+    if (code.length) entries.push({ specifier: spec(key), files: [...new Set(code.flatMap(targetFiles))] });
   }
   return entries;
 }

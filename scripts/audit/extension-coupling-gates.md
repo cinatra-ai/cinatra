@@ -332,7 +332,10 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
 - **What it reads.** The names a pack can import from the SDK packages the
   conformance gate lets a pack depend on (`@cinatra-ai/sdk-extensions` and
   `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map and
-  every condition's target (`types` and `default` alike). An `exports` map
+  every condition's target (`types` and `default` alike); for a JavaScript
+  target also the file TypeScript resolves in its place (a sibling `.ts`,
+  `.d.ts`, `.d.mts` or `.d.cts`), and a root conditions object is the `"."`
+  entry. An `exports` map
   with a subpath pattern (`*` in a key) or a `null` target fails closed ("the
   exports map of <package> uses a pattern or a null target, which this rule
   does not read yet"): precedence between overlapping keys is not resolved
