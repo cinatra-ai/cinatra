@@ -96,7 +96,7 @@ The catalog lookup (in `personal-skills.ts`) performs a two-pass find: it first 
 The matcher's "agents" axis is the UNION of:
 
 1. **DB-installed agent templates** — `cinatra.agent_templates` rows with `packageName IS NOT NULL` and `status IN ('active', 'published')`. User-installed agents (extensions, agent-builder publishes).
-2. **Provider-declared agents on disk** — agents under `<installDir>/<vendor>/<slug>/cinatra/oas.json` (enumerated by `enumerateAgentSourceDirs`, shared with `handleAgentBuilderGitList`). These ship with the platform and are surfaced today via `agent_source_list` but never enter `agent_templates`.
+2. **Provider-declared agents on disk** — agents under `<installDir>/<vendor>/<slug>/cinatra/oas.json` (enumerated by `classifyAgentSourceDirs`, shared with `handleAgentBuilderGitList`). These ship with the platform and are surfaced today via `agent_source_list` but never enter `agent_templates`.
 
 Use `readAgentsForSkillMatching({ throwOnError? })` from `@/lib/agents-store` for any read on the matcher path (UI tabs, `matchAgentsToSkills`, `getAssignedSkillIdsForAgent`, MCP `skills_match_batch_run_now` / `skills_match_evaluate_pair`, manual add/remove server actions, personal-skill flows). It internally calls both `readInstalledAgentTemplates()` and `readProviderDeclaredAgents()` and dedupes by packageId — DB row wins on collision (richer metadata).
 

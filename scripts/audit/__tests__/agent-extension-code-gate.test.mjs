@@ -30,6 +30,7 @@ import {
 
 const GATE_SCRIPT = fileURLToPath(new URL("../agent-extension-code-gate.mjs", import.meta.url));
 const INGEST_SOURCE = fileURLToPath(new URL("../../../src/lib/git-native-agent-ingest.ts", import.meta.url));
+const PLACES_SOURCE = fileURLToPath(new URL("../../../packages/agents/src/agent-source-dirs.ts", import.meta.url));
 const SEED_SOURCE = fileURLToPath(new URL("../../extensions/build-required-oas-seed.mjs", import.meta.url));
 const LIST_REL = join("scripts", "audit", "agent-extension-code-gate.baseline.json");
 const ABSENT_SHA = "0123456789abcdef0123456789abcdef01234567";
@@ -264,9 +265,10 @@ test("a malformed list is refused; parsed maps carry no prototype", () => {
 
 test("the agent rule mirrors the product's discovery: the paths its two readers test, at a pack root", () => {
   const ingest = readFileSync(INGEST_SOURCE, "utf8");
-  assert.ok(ingest.includes('const oasJson = join(entryPath, sub.name, "cinatra", "oas.json");'), "git-native-agent-ingest.ts no longer probes <vendor>/<slug>/cinatra/oas.json: update AGENT_DEFINITION_PATHS");
-  assert.ok(ingest.includes('const transitional = join(entryPath, sub.name, "cinatra", "agent.json");'), "git-native-agent-ingest.ts no longer probes <vendor>/<slug>/cinatra/agent.json: update AGENT_DEFINITION_PATHS");
-  assert.ok(ingest.includes("const target = existsSync(oasJson)\n          ? oasJson\n          : existsSync(transitional)\n            ? transitional\n            : null;"), "the ingest's discovery condition changed: update AGENT_DEFINITION_PATHS");
+  assert.ok(ingest.includes('const { DEFINITION_PLACES, classifyAgentSourceDirs } = await import("@cinatra-ai/agents/agent-source-dirs");'), "git-native-agent-ingest.ts no longer takes its definition places from agent-source-dirs: update AGENT_DEFINITION_PATHS");
+  assert.ok(ingest.includes("const presentIn = (dir: string) => DEFINITION_PLACES.filter((place) => existsSync(join(dir, place)));"), "the ingest's discovery condition changed: update AGENT_DEFINITION_PATHS");
+  const places = readFileSync(PLACES_SOURCE, "utf8");
+  assert.ok(places.includes('export const DEFINITION_PLACES = ["cinatra/oas.json", "cinatra/agent.json", "agent.json"] as const;'), "agent-source-dirs.ts changed the places a definition is looked for: update AGENT_DEFINITION_PATHS");
   const seed = readFileSync(SEED_SOURCE, "utf8");
   assert.ok(seed.includes('const cinatraDir = path.join(slugDir, "cinatra");'), "build-required-oas-seed.mjs changed its cinatra/ folder: update AGENT_DEFINITION_PATHS");
   assert.ok(seed.includes('const oasPath = path.join(cinatraDir, "oas.json");\n      if (!existsSync(oasPath)) continue;'), "build-required-oas-seed.mjs changed its condition: update AGENT_DEFINITION_PATHS");
