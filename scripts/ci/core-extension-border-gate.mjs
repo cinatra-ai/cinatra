@@ -751,17 +751,18 @@ export function leafParts(value, leaves) {
  *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. A template with a substitution
  *  is not read in this stage. Comments, regular expressions and escapes are the parser's business.
  *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) and a fixture or test helper module
- *  (LEAF_RULE_FIXTURE_MODULE_RE) are not read. A file the parser cannot read fails closed. */
+ *  (FIXTURE_OR_TEST_HELPER_MODULE_RE) are not read. A file the parser cannot read fails closed. */
 export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
 /** The fixture and test helper modules that stand in product folders (cinatra#4531): fixtures are
  *  outside the scan (docs/internals/contracts/core-extension-border.md), and these modules are named
  *  so in the tree: `fixtures.<ext>` (packages/chat/src/renderable-views/fixtures.ts),
  *  `conformance-fixtures.<ext>` (packages/agent-ui-protocol/src/conformance-fixtures.ts) and the
  *  test fakes `testing.<ext>` (packages/org-write-kernel/src/testing.ts, exported as "./testing").
- *  This rule does not read them. `dev-fixtures.ts` is the SDK's fixture contract and is read. */
-export const LEAF_RULE_FIXTURE_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
+ *  `pack-slug-in-core` and `single-package-declaration-reader` do not read them (one predicate for
+ *  both). `dev-fixtures.ts` is the SDK's fixture contract and is read. */
+export const FIXTURE_OR_TEST_HELPER_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
 export function scanPackLeafLiterals({ file, text, packs }) {
-  if (DECLARATION_FILE_RE.test(file) || LEAF_RULE_FIXTURE_MODULE_RE.test(file)) return [];
+  if (DECLARATION_FILE_RE.test(file) || FIXTURE_OR_TEST_HELPER_MODULE_RE.test(file)) return [];
   const leaves = packLeafNames(packs);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
   const broken = (sf.parseDiagnostics ?? [])[0];
@@ -863,10 +864,11 @@ export function productPathAliases(repoRoot) {
  *  type-only (`import type { … }` or an inline `type X`). The package of the specifier
  *  (`specifierOwner`) is compared with the package of the importing file (`ownerOfPath`): the same
  *  package is the registering side and is allowed; `src/` or another package is a finding. A
- *  declaration file is not read (it imports nothing at run time). A file the parser cannot read
- *  fails closed. The detail is the imported name with the declaring package. */
+ *  declaration file is not read (it imports nothing at run time), and neither is a fixture or test
+ *  helper module (FIXTURE_OR_TEST_HELPER_MODULE_RE, as for the leaf rule). A file the parser cannot
+ *  read fails closed. The detail is the imported name with the declaring package. */
 export function scanSinglePackageDeclarationReaders({ file, text, workspaceDirs = new Map(), aliases = [] }) {
-  if (DECLARATION_FILE_RE.test(file)) return [];
+  if (DECLARATION_FILE_RE.test(file) || FIXTURE_OR_TEST_HELPER_MODULE_RE.test(file)) return [];
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
   const broken = (sf.parseDiagnostics ?? [])[0];
   if (broken) {

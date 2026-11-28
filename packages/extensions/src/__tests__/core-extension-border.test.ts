@@ -1796,6 +1796,18 @@ describe("core/extension border — single-package-declaration-reader", () => {
     expect(["src/lib/x.d.ts", "src/lib/x.d.mts", "src/app/x.tsx", "src/lib/x.mjs"].map((f) => readers(text, f).join("|"))).toEqual(["", "", `1 ${QUILL}`, `1 ${QUILL}`]);
   });
 
+  // The fixture and test helper modules are named as for `pack-slug-in-core` (one predicate for both
+  // rules): `fixtures.<ext>`, `conformance-fixtures.<ext>`, `testing.<ext>`; `dev-fixtures.ts` is read.
+  describe("a value import of another package's array inside a module named …", () => {
+    const text = 'import { fooPrimitiveMetadata } from "@example-org/quill-primitives";\n';
+    it.each(["fixtures.ts", "conformance-fixtures.ts", "testing.ts"])("%s is not reported", (name) => {
+      expect(readers(text, `packages/tide-runtime/src/${name}`)).toEqual([]);
+    });
+    it.each(["dev-fixtures.ts", "reader.ts"])("%s is reported", (name) => {
+      expect(readers(text, `packages/tide-runtime/src/${name}`)).toEqual(["1 fooPrimitiveMetadata (@example-org/quill-primitives)"]);
+    });
+  });
+
   it("a file the parser cannot read fails closed with its name", () => {
     expect(readers('import { quillPrimitiveMetadata } from "@example-org/quill-primitives";\nconst = ;\n', "src/lib/broken.ts")).toEqual([
       expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/broken\.ts/),

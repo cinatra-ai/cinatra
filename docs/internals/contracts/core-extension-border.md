@@ -134,7 +134,10 @@ such a form is not blocked by this check.
 A host reader of declarations takes them from the registry or from the manifests it iterates. A
 module of core that value-imports one workspace package's per-primitive declaration array serves
 that one package's domain. Stage 1 of the rule reads every product source file of the scan above
-(a declaration file `.d.ts`, `.d.mts`, `.d.cts` imports nothing at run time and is not read) with
+(a declaration file `.d.ts`, `.d.mts`, `.d.cts` imports nothing at run time and is not read, and
+neither is a fixture or test helper module that stands in a product folder, by the names these
+modules have in the tree, as for `pack-slug-in-core`: `fixtures.<ext>`, `conformance-fixtures.<ext>`
+and `testing.<ext>`; `dev-fixtures.ts`, the SDK's fixture contract, is read) with
 the TypeScript parser and takes each static import declaration with named imports,
 `import { X } from "<specifier>"` and `import { X as Y } from "<specifier>"`. A named import is a
 finding when the imported name (not the local name) ends with `PrimitiveMetadata`, the import is
