@@ -1,4 +1,3 @@
-// red-first-expect: agent.json not found
 /**
  * cinatra#2044 GAP 2, hop 1 of 2 — `ensureAgentPackageFromGitFile` must carry the
  * sibling `package.json#cinatra.lifecycle` block through the synthesized import
@@ -73,8 +72,8 @@ const DECOY_PKG = JSON.stringify({
 
 let PKG_CONTENT = PKG_WITH_LIFECYCLE;
 
-/** The legacy FLAT layout dev-boot.ts:150 still loads: the OAS sits at
- *  `agents/<slug>/agent.json`, so its manifest is ADJACENT, not one level up. */
+/** The old FLAT layout (`agents/<slug>/agent.json`), which is not loaded
+ *  (cinatra#4920): the loader no longer looks for an ADJACENT manifest. */
 const FLAT_AGENT_JSON_PATH = "/agents/cinatra-ai/flat-agent/agent.json";
 
 /**
@@ -213,21 +212,16 @@ describe("cinatra#2044 GAP 2 — ensureAgentPackageFromGitFile carries cinatra.l
  * decision itself at the unit boundary.
  */
 /**
- * The sibling-manifest PROBE, pinned per supported layout (codex round 0).
+ * The sibling-manifest PROBE (codex round 0): the manifest is the `package.json`
+ * one level above `cinatra/`, the one layout the product loads
+ * (`agents/<vendor>/<slug>/cinatra/oas.json`).
  *
- * `readSiblingPackageJsonIdentity` used to probe ONLY `../package.json` (the
- * canonical `agents/<slug>/cinatra/oas.json` layout), while the OAS compiler's
- * own sibling read probes BOTH candidates "for robustness"
- * (`oas-compiler.ts` readSiblingPackageJson). For the legacy FLAT layout —
- * `agents/<slug>/agent.json`, still loaded by `dev-boot.ts:150` — the loader
- * therefore found NO manifest at all.
- *
- * Before GAP 2 that only lost `description`/`produces`. WITH the version-skip
- * drift check it turns DESTRUCTIVE: "no manifest" compiles to "declares
- * nothing", which no longer matches an installed row carrying a real
- * `lifecycle_config`, so every boot re-imports and CLEARS the column — turning
- * a repair-capable producer back into `human_escalation`, the very bug this
- * issue fixes. Both layouts must reach the same declaration.
+ * A missing manifest is not harmless. WITH the version-skip drift check "no
+ * manifest" compiles to "declares nothing", which no longer matches an
+ * installed row carrying a real `lifecycle_config`, so every boot re-imports
+ * and CLEARS the column. That is why the location is exact, and why the old
+ * flat layout (`agents/<slug>/agent.json`, not loaded since cinatra#4920) has no
+ * adjacent-manifest rung any more.
  */
 describe("cinatra#2044 GAP 2 — the sibling manifest is resolved per supported layout", () => {
   beforeEach(() => {
@@ -238,15 +232,15 @@ describe("cinatra#2044 GAP 2 — the sibling manifest is resolved per supported 
     MANIFEST_PATHS = null;
   });
 
-  it("FLAT layout (agents/<slug>/agent.json): the ADJACENT package.json's lifecycle is carried", async () => {
-    // ONLY the adjacent path exists. The canonical `../package.json` candidate
-    // (/agents/cinatra-ai/package.json) throws ENOENT, so a passing assertion
-    // here can only come from the second candidate being probed.
+  it("FLAT layout (agents/<slug>/agent.json, not loaded): the ADJACENT package.json is NOT read", async () => {
+    // ONLY the adjacent path exists. The one path the loader reads is the
+    // parent (/agents/cinatra-ai/package.json), which throws ENOENT, so the
+    // lifecycle of the adjacent manifest is never carried.
     MANIFEST_PATHS = {
       "/agents/cinatra-ai/flat-agent/package.json": PKG_WITH_LIFECYCLE,
     };
     const cinatra = await synthesizedCinatraBlock(FLAT_AGENT_JSON_PATH);
-    expect(cinatra?.lifecycle).toEqual({ repairCapable: true });
+    expect(cinatra?.lifecycle).toBeUndefined();
   });
 
   it("CANONICAL layout: the PARENT package.json's lifecycle is still carried", async () => {
@@ -256,21 +250,6 @@ describe("cinatra#2044 GAP 2 — the sibling manifest is resolved per supported 
     };
     const cinatra = await synthesizedCinatraBlock(AGENT_JSON_PATH);
     expect(cinatra?.lifecycle).toEqual({ repairCapable: true });
-  });
-
-  it("FLAT layout: an unrelated VENDOR-level package.json does NOT shadow the agent's own", async () => {
-    // The ambiguity a [parent, adjacent] candidate LIST would have (codex round
-    // 1): for a flat agent the parent path is `extensions/<vendor>/package.json`
-    // — an unrelated manifest that a list ordered parent-first would read FIRST
-    // and accept as authoritative, dropping the agent's real declaration and
-    // clearing lifecycle_config. Layout-derived resolution never reads it.
-    MANIFEST_PATHS = {
-      "/agents/cinatra-ai/package.json": DECOY_PKG,
-      "/agents/cinatra-ai/flat-agent/package.json": PKG_WITH_LIFECYCLE,
-    };
-    const cinatra = await synthesizedCinatraBlock(FLAT_AGENT_JSON_PATH);
-    expect(cinatra?.lifecycle).toEqual({ repairCapable: true });
-    expect(cinatra?.type).toBe("flow");
   });
 
   it("CANONICAL layout: a decoy package.json inside cinatra/ does NOT shadow the parent", async () => {
