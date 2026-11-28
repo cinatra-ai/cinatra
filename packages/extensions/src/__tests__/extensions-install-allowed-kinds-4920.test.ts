@@ -93,6 +93,12 @@ describe("extensions_install allowedKinds (cinatra#4920)", () => {
   });
 
   it("a private package of another viewer scope is refused with EXTENSION_NOT_VISIBLE before the kind check and the batch", async () => {
+    // What this proves: the primitive's CONDITIONAL visibility check, when a
+    // manifest carries `cinatra.origin`. The current publish path does not
+    // write `cinatra.origin` (see the note above `isPackageVisible` in
+    // packages/registries/src/verdaccio/client.ts), so for real published
+    // packages this check does not fire today; the origin block below is a
+    // constructed input, not the shape a published package has.
     summaryMock.mockResolvedValue(summary("connector", { visibility: "private", scope: "@other-org" }));
     const err = await createExtensionsPrimitiveHandlers()
       .extensions_install(

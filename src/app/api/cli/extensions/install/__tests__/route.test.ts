@@ -34,12 +34,15 @@ vi.mock("@cinatra-ai/extensions/mcp-handlers", () => ({
 }));
 
 import { POST } from "../route";
+// The real wrapper the install batch throws for a member failure (it keeps the
+// registry error as `cause`).
+import { BatchMemberInstallError } from "@/lib/extension-install-batch";
 
 const URL_ = "https://inst.cinatra.ai/api/cli/extensions/install";
-function post(body?: string): Request {
+function post(body?: string, extraHeaders: Record<string, string> = {}): Request {
   return new Request(URL_, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...extraHeaders },
     ...(body === undefined ? {} : { body }),
   });
 }
@@ -148,6 +151,12 @@ describe("POST /api/cli/extensions/install", () => {
     ["an x-range", { packageName: "@example-org/agent-hello", version: "1.x" }],
     ["a non-string version", { packageName: "@example-org/agent-hello", version: 1 }],
     ["a version with shell characters", { packageName: "@example-org/agent-hello", version: "1.0.0;rm" }],
+    ["a numeric prerelease with a leading zero", { packageName: "@example-org/agent-hello", version: "1.2.3-01" }],
+    ["a major with a leading zero", { packageName: "@example-org/agent-hello", version: "01.2.3" }],
+    ["a two-part version", { packageName: "@example-org/agent-hello", version: "1.2" }],
+    ["an empty prerelease", { packageName: "@example-org/agent-hello", version: "1.2.3-" }],
+    ["an empty build", { packageName: "@example-org/agent-hello", version: "1.2.3+" }],
+    ["an equals-prefixed version", { packageName: "@example-org/agent-hello", version: "=1.2.3" }],
   ])("%s → 400 before any work", async (_label, body) => {
     const res = await POST(post(JSON.stringify(body)));
     expect(res.status).toBe(400);
@@ -176,6 +185,63 @@ describe("POST /api/cli/extensions/install", () => {
     const res = await POST(post(raw));
     expect(res.status).toBe(400);
     expect(extensionsInstallMock).not.toHaveBeenCalled();
+  });
+
+  it("a cross-origin request is refused before authorization and before the primitive", async () => {
+    const res = await POST(post(OK_BODY, { origin: "https://evil.example" }));
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("Cross-origin request rejected.");
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
+    expect(authorizeCliRequestMock).not.toHaveBeenCalled();
+    expect(extensionsInstallMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["text/plain (a CORS-simple type)", "text/plain"],
+    ["form encoding", "application/x-www-form-urlencoded"],
+    ["JSON-looking prefix (application/jsonp)", "application/jsonp"],
+  ])("a %s body is refused with 415 before authorization and before the primitive", async (_label, type) => {
+    const res = await POST(post(OK_BODY, { "content-type": type }));
+    expect(res.status).toBe(415);
+    expect(authorizeCliRequestMock).not.toHaveBeenCalled();
+    expect(extensionsInstallMock).not.toHaveBeenCalled();
+  });
+
+  it("application/json with a charset is accepted", async () => {
+    const res = await POST(post(OK_BODY, { "content-type": "application/json; charset=utf-8" }));
+    expect(res.status).toBe(200);
+  });
+
+  it("a body over the size cap is refused with 413 before the primitive", async () => {
+    const big = JSON.stringify({
+      packageName: "@example-org/agent-hello",
+      version: "1.2.3",
+      pad: "x".repeat(20 * 1024),
+    });
+    const res = await POST(post(big));
+    expect(res.status).toBe(413);
+    expect(extensionsInstallMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["E404", "404 Not Found - GET https://registry.example.test/@example-org%2fconnector-dep - Not found"],
+    ["ETARGET", "No matching version found for @example-org/connector-dep@0.4.0."],
+  ])("a dependency's registry %s, wrapped by the batch as its cause, → 404 not found", async (code, text) => {
+    const registryError = Object.assign(new Error(text), { code, statusCode: code === "E404" ? 404 : undefined });
+    extensionsInstallMock.mockRejectedValue(
+      new BatchMemberInstallError(
+        `Installing @example-org/agent-hello@1.2.3 failed at dependency @example-org/connector-dep: ${text}. No dependencies needed rollback; Previously-installed extensions were not touched.`,
+        "@example-org/connector-dep",
+        [],
+        [],
+        registryError,
+      ),
+    );
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toBe(
+      "Not found in the registry: @example-org/agent-hello@1.2.3 or one of its dependencies.",
+    );
   });
 
   it("a kind that needs an access target → 422 naming the product's marketplace page", async () => {

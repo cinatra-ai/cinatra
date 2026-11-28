@@ -18,7 +18,8 @@
 // product's marketplace page collects; the primitive refuses them through
 // `allowedKinds` right after its own resolution, before any install work.
 //
-// VERSION: required and exact. The primitive needs a version, and its
+// VERSION: required and exact, checked with the repository's canonical
+// validator (`isExactVersion`). The primitive needs a version, and its
 // non-gatekept resolution reads the given string as a literal version, so a
 // range, a dist-tag or "latest" is refused here with 400.
 //
@@ -29,6 +30,15 @@
 // AUTH: PLATFORM-ADMIN ONLY via `authorizeCliRequest` — the exact mirror of
 // `/api/cli/extensions/reconcile/apply`: cookie session, a verified remote
 // Bearer carrying `cli:extensions:write`, or the dev-admin loopback bypass.
+//
+// CSRF: `authorizeCliRequest` accepts a cookie session FIRST, so a cross-site
+// page could otherwise trigger an install with the admin's cookie (a
+// CORS-simple `text/plain` POST needs no preflight). Before any authorization
+// work the route therefore (1) refuses a cross-origin request through the
+// repository's cookie-backed admin mutation guard (`rejectCrossOrigin`) and
+// (2) requires `Content-Type: application/json`, which a cross-site page can
+// only send after a CORS preflight this instance never grants. The CLI sends
+// no `Origin` header and sends JSON.
 //
 // ACTOR: the standing-free install envelope, the shape the UI install wrapper
 // hands the batch (`buildActorEnvelope`). No `platformRole`: the batch's
@@ -50,6 +60,8 @@ import {
   EXTENSION_NOT_VISIBLE,
 } from "@cinatra-ai/extensions/mcp-handlers";
 import { classifyMarketplaceFailure } from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
+import { isExactVersion } from "@cinatra-ai/registries/src/version-compare";
+import { rejectCrossOrigin } from "@/lib/admin-origin-guard";
 import { authorizeCliRequest } from "@/lib/cli-api/route-guard";
 
 export const runtime = "nodejs";
@@ -61,9 +73,18 @@ const ALLOWED_KINDS = ["agent", "skill"] as const;
 // The scoped package name the install surfaces accept (the
 // `extensions_install` MCP schema's pattern).
 const PACKAGE_NAME_RE = /^@[a-z][a-z0-9-]*\/[a-z0-9][a-z0-9-]*$/;
-// An exact semver version (no range, no tag).
-const EXACT_VERSION_RE =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
+// The body is two short strings; a larger body is refused before parsing.
+const MAX_BODY_BYTES = 16 * 1024;
+// Known refusal codes, looked up along the error's `cause` chain: the install
+// batch wraps a member failure in `BatchMemberInstallError` and keeps the
+// registry error as its `cause`.
+const KNOWN_CODES = new Set<string>([
+  EXTENSION_KIND_NOT_ALLOWED,
+  EXTENSION_NOT_VISIBLE,
+  "E404",
+  "ETARGET",
+]);
+const MAX_CAUSE_DEPTH = 6;
 
 const GENERIC_FAILURE = "Failed to install the extension package.";
 
@@ -71,11 +92,25 @@ function json(body: Record<string, unknown>, status: number): Response {
   return NextResponse.json(body, { status });
 }
 
-function errorCode(error: unknown): unknown {
-  return (error as { code?: unknown } | null | undefined)?.code;
+/** The first known refusal code on the error or its `cause` chain, and the error that carries it. */
+function findKnownCode(error: unknown): { code: string; carrier: unknown } | null {
+  let node: unknown = error;
+  for (let depth = 0; depth <= MAX_CAUSE_DEPTH && node != null && typeof node === "object"; depth++) {
+    const code = (node as { code?: unknown }).code;
+    if (typeof code === "string" && KNOWN_CODES.has(code)) return { code, carrier: node };
+    node = (node as { cause?: unknown }).cause;
+  }
+  return null;
 }
 
 export async function POST(request: Request): Promise<Response> {
+  const crossOrigin = rejectCrossOrigin(request);
+  if (crossOrigin) return crossOrigin;
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!/^application\/json\s*(;|$)/i.test(contentType)) {
+    return json({ error: "Content-Type must be application/json." }, 415);
+  }
+
   const guard = await authorizeCliRequest(request, {
     minTier: "platform-admin",
     requiredScope: "cli:extensions:write",
@@ -84,9 +119,17 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: guard.error }, guard.status);
   }
 
+  const declaredLength = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    return json({ error: "Request body too large." }, 413);
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await request.text());
+    const raw = await request.text();
+    if (Buffer.byteLength(raw, "utf8") > MAX_BODY_BYTES) {
+      return json({ error: "Request body too large." }, 413);
+    }
+    parsed = JSON.parse(raw);
   } catch {
     return json({ error: "Invalid JSON body." }, 400);
   }
@@ -103,7 +146,7 @@ export async function POST(request: Request): Promise<Response> {
       400,
     );
   }
-  if (typeof version !== "string" || !EXACT_VERSION_RE.test(version)) {
+  if (typeof version !== "string" || !isExactVersion(version)) {
     return json(
       { error: "`version` is required and must be an exact version (for example 1.2.3), not a range or a tag." },
       400,
@@ -135,9 +178,10 @@ export async function POST(request: Request): Promise<Response> {
     }
     return json({ error: result.message }, 409);
   } catch (error) {
-    const code = errorCode(error);
+    const known = findKnownCode(error);
+    const code = known?.code;
     if (code === EXTENSION_KIND_NOT_ALLOWED) {
-      const kind = (error as { kind?: unknown }).kind;
+      const kind = (known!.carrier as { kind?: unknown }).kind;
       return json(
         {
           error: `${packageName} is ${typeof kind === "string" ? `a ${kind}` : "an extension"} package. Only agent and skill packages install over this route; install it from the product's marketplace page, which collects its access target.`,
