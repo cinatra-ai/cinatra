@@ -260,7 +260,7 @@ test("a malformed list is refused; parsed maps carry no prototype", () => {
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: { count: 2, items: ["read"] } } })), /not \{ count, items \}/);
   const parsed = parseList(JSON.stringify({ ...recorded(), toolDeclarations: { __proto__: { count: 1, items: ["a"] }, constructor: { count: 1, items: ["b"] } } }));
   assert.equal(Object.getPrototypeOf(parsed.toolDeclarations), null);
-  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies"]);
+  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents"]);
 });
 
 test("the agent rule mirrors the product's discovery: the paths its two readers test, at a pack root", () => {
@@ -677,5 +677,154 @@ test("live base guard: a base list without the uiDependencies class seeds it onc
     const removed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(removed.status, 1, removed.out);
     assert.match(removed.out, /\[uiDependencies\] the class is removed/);
+  });
+});
+
+// The renderer rule (cinatra#4532): an agent, skill or workflow pack declares no
+// `cinatra.fieldRenderers` entry that carries a `component`. Read through the
+// module namespace (`gate`) so this file still loads where the gate has no such
+// export.
+const BINDING_KINDS_SOURCE = fileURLToPath(new URL("../../extensions/agent-binding-kinds.mjs", import.meta.url));
+const product = await import(BINDING_KINDS_SOURCE);
+
+const renderer = (id, extra = {}) => ({ id, kind: "final-list-review", priority: 50, ...extra });
+const withComponent = (id) => renderer(id, { component: { entry: "./src/review.tsx", propsApiVersion: 1 } });
+const declares = (fieldRenderers) => ({ name: "@example-org/p", cinatra: { kind: "agent", fieldRenderers } });
+
+const rendererPacks = () => {
+  const p = packs();
+  p["read-agent"].packageJson.cinatra.fieldRenderers = [withComponent(`${READ}:review`), renderer(`${READ}:plain`)];
+  p["pick-skill"] = { packageJson: { name: SKILL, cinatra: { kind: "skill", fieldRenderers: [withComponent(`${SKILL}:shape`)] } }, files: { "SKILL.md": "# pick\n" } };
+  p["post-workflow"] = { packageJson: { name: WORKFLOW, cinatra: { kind: "workflow", fieldRenderers: [renderer(`${WORKFLOW}:cta`, { component: null })] } } };
+  p["note-artifact"] = { packageJson: { name: "@example-org/note-artifact", cinatra: { kind: "artifact", fieldRenderers: [withComponent("@example-org/note-artifact:show")] } } };
+  p["mail-connector"].packageJson.cinatra.fieldRenderers = [withComponent("@example-org/mail-connector:setup")];
+  return p;
+};
+const rendererRecorded = () => ({
+  ...recorded(),
+  rendererComponents: {
+    [READ]: { count: 1, items: [`fieldRenderers: ${READ}:review`] },
+    [SKILL]: { count: 1, items: [`fieldRenderers: ${SKILL}:shape`] },
+    [WORKFLOW]: { count: 1, items: [`fieldRenderers: ${WORKFLOW}:cta`] },
+  },
+});
+
+test("the renderer rule: an entry counts by its component key, in an array of plain objects as the product reads it; any other shape is refused and names the package", () => {
+  assert.equal(typeof gate.rendererComponentItems, "function", "the gate has no rendererComponentItems");
+  const A = "@example-org/a-agent:review";
+  const B = "@example-org/a-agent:plain";
+  const C = "@example-org/a-agent:confirm";
+  const items = (fieldRenderers) => gate.rendererComponentItems(declares(fieldRenderers));
+
+  // The product's reading is the reference: it takes a component from `component` of an object entry of an array.
+  const good = [withComponent(C), renderer(B), withComponent(A)];
+  const read = product.validateFieldRendererDeclarations("@example-org/p", good);
+  assert.deepEqual(read.errors, []);
+  assert.deepEqual(read.entries.filter((e) => e.component !== undefined).map((e) => `fieldRenderers: ${e.id}`).sort(), items(good));
+  assert.deepEqual(items(good), [`fieldRenderers: ${C}`, `fieldRenderers: ${A}`]);
+  assert.deepEqual(items([renderer(B), renderer(A, { params: { a: 1 }, midRunHitl: true })]), []);
+  assert.deepEqual(items([withComponent(A), withComponent(A)]), [`fieldRenderers: ${A}`, `fieldRenderers: ${A}`]);
+
+  // Only the key `component` is read: no other key name stands for a component.
+  assert.deepEqual(items([renderer(A, { renderer: "./r.tsx", entry: "./r.tsx", module: "./r.tsx", components: [] })]), []);
+  // A `component` the product rejects is no good declaration and is counted; an entry without a string id is named by its position.
+  for (const component of [null, "./r.tsx", {}, [], 7, false]) {
+    assert.notDeepEqual(product.validateFieldRendererDeclarations("@example-org/p", [renderer(A, { component })]).errors, []);
+    assert.deepEqual(items([renderer(A, { component })]), [`fieldRenderers: ${A}`], JSON.stringify(component));
+  }
+  assert.deepEqual(items([renderer(B), { kind: "cta", component: { entry: "./r.tsx" } }]), ["fieldRenderers: [1]"]);
+
+  // Absent and null declare nothing, as in the product.
+  for (const value of [undefined, null, []]) {
+    assert.deepEqual(product.validateFieldRendererDeclarations("@example-org/p", value), { entries: [], errors: [] });
+    assert.deepEqual(items(value), []);
+  }
+  assert.deepEqual(gate.rendererComponentItems({ name: "@example-org/p" }), []);
+  assert.deepEqual(gate.rendererComponentItems({ name: "@example-org/p", cinatra: { kind: "skill" } }), []);
+
+  // A shape the product does not read fails closed, with the label that names the package.
+  const LABEL = "@example-org/p (extensions/example-org/p/package.json at the pinned commit abc)";
+  for (const value of ["react", 7, true, { [A]: { kind: "cta", priority: 1, component: { entry: "./r.tsx" } } }, { component: { entry: "./r.tsx" } }]) {
+    assert.match(product.validateFieldRendererDeclarations("@example-org/p", value).errors[0], /must be an array/);
+    assert.throws(() => gate.rendererComponentItems(declares(value), LABEL), (e) => e.message === `${LABEL}: cinatra.fieldRenderers is not an array`, JSON.stringify(value));
+  }
+  for (const entry of ["./r.tsx", null, 7, [], [{ component: { entry: "./r.tsx" } }]]) {
+    assert.match(product.validateFieldRendererDeclarations("@example-org/p", [renderer(B), entry]).errors[0], /entry must be an object/);
+    assert.throws(() => gate.rendererComponentItems(declares([renderer(B), entry]), LABEL), (e) => e.message === `${LABEL}: cinatra.fieldRenderers[1] is not an object`);
+  }
+
+  // The logic names no package: no key of the list appears in the gate's source.
+  const source = readFileSync(GATE_SCRIPT, "utf8");
+  for (const key of Object.keys(JSON.parse(readFileSync(join(dirname(GATE_SCRIPT), "agent-extension-code-gate.baseline.json"), "utf8")).rendererComponents ?? {})) assert.ok(!source.includes(key), key);
+  assert.deepEqual(CLASSES.at(-1), "rendererComponents");
+  assert.ok(gate.LATER_CLASSES.has("rendererComponents"));
+});
+
+test("live: a field renderer component of an agent, skill or workflow pack fails until it is recorded; an artifact's or a plain connector's is not counted; a declaration the product does not read is a scanner error that names the package", () => {
+  withRoot({ packs: rendererPacks(), list: recorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[rendererComponents\] items the list does not hold \(an agent, skill or workflow extension declares no field renderer component\):\n  \+ @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:shape\n  \+ @example-org\/post-workflow: fieldRenderers: @example-org\/post-workflow:cta\n  \+ @example-org\/read-agent: fieldRenderers: @example-org\/read-agent:review\n/);
+    assert.doesNotMatch(res.out, /note-artifact|mail-connector|read-agent:plain/);
+    assert.match(runGate(root, ["--report"]).out, /3 rendererComponents in 3 key\(s\)/);
+  });
+  withRoot({ packs: rendererPacks(), list: rendererRecorded() }, (root) => {
+    const ok = runGate(root);
+    assert.equal(ok.status, 0, ok.out);
+
+    const agent = packDir(root, "read-agent");
+    const pkg = JSON.parse(readFileSync(join(agent, "package.json"), "utf8"));
+    writeJson(join(agent, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: [...pkg.cinatra.fieldRenderers, withComponent(`${READ}:more`)] } });
+    repin(root, "read-agent", READ);
+    const grew = runGate(root);
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /\+ @example-org\/read-agent: fieldRenderers: @example-org\/read-agent:more/);
+
+    writeJson(join(agent, "package.json"), pkg);
+    repin(root, "read-agent", READ);
+    const skill = packDir(root, "pick-skill");
+    const skillPkg = JSON.parse(readFileSync(join(skill, "package.json"), "utf8"));
+    writeJson(join(skill, "package.json"), { ...skillPkg, cinatra: { kind: "skill" } });
+    repin(root, "pick-skill", SKILL);
+    const stale = runGate(root);
+    assert.equal(stale.status, 1, stale.out);
+    assert.match(stale.out, /\[rendererComponents\] recorded items that are gone[^\n]*\n  - @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:shape/);
+
+    writeJson(join(skill, "package.json"), skillPkg);
+    for (const bad of ["./renderer.tsx", { [`${SKILL}:shape`]: withComponent(`${SKILL}:shape`) }, [withComponent(`${SKILL}:shape`), "./renderer.tsx"]]) {
+      writeJson(join(skill, "package.json"), { ...skillPkg, cinatra: { kind: "skill", fieldRenderers: bad } });
+      repin(root, "pick-skill", SKILL);
+      const res = runGate(root);
+      assert.equal(res.status, 2, res.out);
+      assert.match(res.out, /@example-org\/pick-skill \(extensions\/example-org\/pick-skill\/package\.json at the pinned commit [0-9a-f]{40}\): cinatra\.fieldRenderers(?: is not an array|\[1\] is not an object)/);
+    }
+  });
+});
+
+test("live base guard: a base list without the rendererComponents class seeds it once; then a component the base does not hold fails, and a removed class fails", () => {
+  withRoot({ packs: rendererPacks(), list: recorded() }, (root) => {
+    writeFile(join(root, "scripts", "audit", "agent-extension-code-gate.mjs"), "// the gate\n");
+    git(root, "init", "-q");
+    const before = commitAll(root, "base with a list of four classes");
+    writeJson(join(root, LIST_REL), rendererRecorded());
+    const seed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: before });
+    assert.equal(seed.status, 0, seed.out);
+    const seeded = commitAll(root, "seed the class");
+
+    const pack = packDir(root, "pick-skill");
+    const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+    writeJson(join(pack, "package.json"), { ...pkg, cinatra: { ...pkg.cinatra, fieldRenderers: [...pkg.cinatra.fieldRenderers, withComponent(`${SKILL}:more`)] } });
+    repin(root, "pick-skill", SKILL);
+    writeJson(join(root, LIST_REL), { ...rendererRecorded(), rendererComponents: { ...rendererRecorded().rendererComponents, [SKILL]: { count: 2, items: [`fieldRenderers: ${SKILL}:more`, `fieldRenderers: ${SKILL}:shape`] } } });
+    const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /GREW against the base[\s\S]*\[rendererComponents\] @example-org\/pick-skill: fieldRenderers: @example-org\/pick-skill:more \(the base does not hold it\)/);
+
+    writeJson(join(pack, "package.json"), pkg);
+    repin(root, "pick-skill", SKILL);
+    writeJson(join(root, LIST_REL), recorded());
+    const removed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(removed.status, 1, removed.out);
+    assert.match(removed.out, /\[rendererComponents\] the class is removed/);
   });
 });
