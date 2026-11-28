@@ -479,6 +479,30 @@ own in its manifest, and the gates read them; neither gate names a word.
   word-born admission (a new key whose file is byte-identical at the base,
   above and below) lets that pull request record it on the floor with its
   owner instead of turning `main` red.
+- **When a pin advances, the pack declares (cinatra#4896).** The bridge
+  empties by ordinary pack changes, not by a rollout: a pack declares its
+  words (or two empty lists and a reason) in the pull request that next
+  changes it. For every pack whose `resolvedSha` in either lock differs
+  between the base (`APPLICATION_BORDER_BASE`) and the head, a pack new to a
+  lock included (a pack removed from a lock is not judged), the manifest at
+  the newly pinned commit must carry a valid `cinatra.borderWords`, else the
+  check fails naming the pack and both commits; and the pack must leave the
+  bridge's `packages` list in the same pull request, else it fails ("its row
+  stays in the bridge"). A pack whose pin does not move is not judged and
+  keeps its row. So from now on a pull request that advances the pin of a
+  pack that does not declare yet fails until the pack declares (the connector
+  pin advance of cinatra#4966 would have failed): that is intended. Words
+  leave the bridge by hand, in the same pull request, when their last owner
+  declares; the shrink-only rules above keep them from coming back. Ownership
+  is not guessed: a bridge word stays allowed while at least one pack remains
+  in `packages`, and with an empty `packages` list a non-empty word list
+  fails. The locks are read at the base with `git show` and at the head from
+  the worktree; an absent lock holds no pin. A base that does not resolve or
+  a lock that cannot be parsed at the head or the base is a scanner error
+  (exit 2). Without a base variable (a local run) the rule does not run, as
+  the shrink check does not. The application border gate alone reports it
+  (`lib/border-words.mjs` `pinAdvanceProblems`); the vendor gate does not
+  repeat it.
 
 ## Application border gates — the shrink-only floors (cinatra#3821)
 

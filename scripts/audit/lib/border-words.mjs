@@ -32,6 +32,34 @@
 //     stays listed.
 // cinatra#4848 tracks the bridge to empty.
 //
+// WHEN A PIN ADVANCES, THE PACK DECLARES (cinatra#4896, pinAdvanceProblems).
+// The bridge empties by ordinary pack changes, not by a rollout: a pack
+// declares in the pull request that next changes it, and core enforces it
+// where the fact is read, at the pin. For every pack whose `resolvedSha` in
+// either lock (LOCKS) differs between the base reference and the head (a pack
+// new to a lock counts as advanced; a pack removed from a lock is not judged):
+//   1. the manifest at the newly pinned commit (the cloned extension tree is
+//      checked out at the head's pins) must carry a valid `cinatra.borderWords`
+//      (the same validation as above), else it FAILS naming the pack and both
+//      commits;
+//   2. the pack must no longer stand in the bridge's `packages` list at the
+//      head, else it FAILS ("its row stays in the bridge").
+// A pack whose pin does not move is not judged and keeps its bridge row. So
+// from cinatra#4896 on, a pull request that advances the pin of a pack that
+// does not declare yet FAILS until the pack declares (a connector pin advance
+// like the one of cinatra#4966 would have failed): that is intended.
+//   3. Words leave the bridge by hand, in the same pull request, when their
+//      last owner declares; the shrink-only rules above keep them from coming
+//      back. Ownership is not guessed: a bridge word stays allowed while at
+//      least one pack remains in `packages`; with an empty `packages` list,
+//      a non-empty word list FAILS.
+// The locks are read at the base with `git show` (the same base reference the
+// bridge's shrink check uses: VENDOR_TOKEN_BASE / APPLICATION_BORDER_BASE) and
+// at the head from the worktree. A base that is set but does not resolve, or a
+// lock that cannot be parsed at the head or the base, is a scanner error
+// (BorderWordsError). An absent lock holds no pin. Without a base reference
+// (a local run) the rule does not run, as the shrink check does not.
+//
 // FAIL CLOSED. An absent extension tree, a pinned package not found under
 // extensions/ by its manifest name, two directories naming one pinned package,
 // an unreadable pack manifest, an unreadable or malformed bridge, or SDK constants that
@@ -200,6 +228,7 @@ export function pinnedPackageNames(repoRoot) {
  * Read the border words under `repoRoot`. Returns {
  *   words:      { vendor: string[], domain: string[] }  (declared ∪ bridge, sorted — what the checks match),
  *   declared:   { vendor: Map<word, owners[]>, domain: Map<word, owners[]> },
+ *   declarations: Map<package name, issues[]> of every pinned pack ([] = a valid declaration),
  *   bridge:     { vendor: string[], domain: string[], packages: string[] },
  *   undeclared: package names of pinned packs without the declaration (sorted),
  *   problems:   failures (invalid declarations, a word declared in both lists by
@@ -252,17 +281,19 @@ export function loadBorderWords(repoRoot) {
   }
 
   const declared = { vendor: new Map(), domain: new Map() };
+  const declarations = new Map();
   const undeclared = [];
   const problems = [];
   let packCount = 0;
   for (const { pkg } of pinnedDirs.values()) {
     packCount += 1;
     const raw = pkg.cinatra?.borderWords;
+    const issues = borderWordsIssues(raw, rules);
+    declarations.set(pkg.name, issues);
     if (raw === undefined) {
       undeclared.push(pkg.name);
       continue;
     }
-    const issues = borderWordsIssues(raw, rules);
     if (issues.length) {
       for (const issue of issues) problems.push(`${pkg.name}: ${issue}`);
       continue;
@@ -318,7 +349,7 @@ export function loadBorderWords(repoRoot) {
   }
   const words = {};
   for (const list of BORDER_WORD_LISTS) words[list] = [...new Set([...declared[list].keys(), ...bridge[list]])].sort();
-  return { words, declared, bridge, undeclared, problems: problems.sort(), warnings, packCount };
+  return { words, declared, declarations, bridge, undeclared, problems: problems.sort(), warnings, packCount };
 }
 
 /**
@@ -384,4 +415,128 @@ export function fileUnchangedAtRef(repoRoot, ref, rel) {
   const path = join(repoRoot, rel);
   if (!existsSync(path)) return false;
   return Buffer.compare(atRef, readFileSync(path)) === 0;
+}
+
+/** The pins of one lock text: Map<packageName, resolvedSha>; throws on a lock that cannot be parsed. */
+export function parseLockPins(text, where) {
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch {
+    throw new BorderWordsError(`${where} cannot be parsed (not JSON)`);
+  }
+  if (!Array.isArray(doc?.packages)) throw new BorderWordsError(`${where} cannot be parsed ("packages" is not an array)`);
+  const pins = new Map();
+  for (const p of doc.packages) {
+    if (typeof p?.packageName !== "string" || !p.packageName || typeof p?.resolvedSha !== "string" || !p.resolvedSha) {
+      throw new BorderWordsError(`${where} cannot be parsed (an entry lacks packageName or resolvedSha)`);
+    }
+    if (pins.has(p.packageName)) throw new BorderWordsError(`${where} cannot be parsed ("${p.packageName}" appears twice)`);
+    pins.set(p.packageName, p.resolvedSha);
+  }
+  return pins;
+}
+
+function lockPinsAtRef(repoRoot, ref, rel) {
+  let listed;
+  try {
+    listed = execFileSync("git", ["ls-tree", "--name-only", ref, "--", rel], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    throw new BorderWordsError(`cannot read ${rel} at ${ref}`);
+  }
+  if (listed.trim() === "") return new Map();
+  let text;
+  try {
+    text = execFileSync("git", ["show", `${ref}:${rel}`], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      maxBuffer: 64 * 1024 * 1024,
+    });
+  } catch {
+    throw new BorderWordsError(`cannot read ${rel} at ${ref}`);
+  }
+  return parseLockPins(text, `${rel} at ${ref}`);
+}
+
+function lockPinsAtHead(repoRoot, rel) {
+  const path = join(repoRoot, rel);
+  if (!existsSync(path)) return new Map();
+  let text;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    throw new BorderWordsError(`${rel} cannot be parsed (unreadable)`);
+  }
+  return parseLockPins(text, rel);
+}
+
+/**
+ * The packs whose pin advanced between `baseRef` and the head:
+ * Map<packageName, ["<lock>: <base sha | not pinned> -> <head sha>", ...]>.
+ */
+export function advancedPins(repoRoot, baseRef) {
+  if (typeof baseRef !== "string" || baseRef.startsWith("-")) throw new BorderWordsError(`the base reference ${JSON.stringify(baseRef)} is not usable`);
+  try {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", `${baseRef}^{commit}`], {
+      cwd: repoRoot,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {
+    throw new BorderWordsError(`the base reference "${baseRef}" does not resolve — cannot read the locks at the base`);
+  }
+  const advanced = new Map();
+  for (const rel of LOCKS) {
+    const base = lockPinsAtRef(repoRoot, baseRef, rel);
+    for (const [name, sha] of lockPinsAtHead(repoRoot, rel)) {
+      const before = base.get(name);
+      if (before === sha) continue;
+      const moves = advanced.get(name) ?? [];
+      moves.push(`${rel}: ${before ?? "not pinned"} -> ${sha}`);
+      advanced.set(name, moves);
+    }
+  }
+  return advanced;
+}
+
+/**
+ * WHEN A PIN ADVANCES, THE PACK DECLARES (see the header). `loaded` is
+ * loadBorderWords' result at the head. Returns { ran, problems }: ran is false
+ * (no problem) without a base reference; throws BorderWordsError on a base that
+ * does not resolve or a lock that cannot be parsed.
+ */
+export function pinAdvanceProblems(repoRoot, baseRef, loaded) {
+  if (!baseRef) return { ran: false, problems: [] };
+  const problems = [];
+  const listed = new Set(loaded.bridge.packages);
+  for (const [name, moves] of advancedPins(repoRoot, baseRef)) {
+    const where = moves.join("; ");
+    const issues = loaded.declarations.get(name) ?? ["the pack is not found in the extension tree"];
+    if (issues.length) {
+      problems.push(
+        `${name}: its pin advanced (${where}) and the newly pinned manifest carries no valid cinatra.borderWords ` +
+          `(${issues.join("; ")}) — a pack declares when its pin advances`,
+      );
+    }
+    if (listed.has(name)) {
+      problems.push(
+        `${name}: its pin advanced (${where}) but its row stays in the bridge's "packages" list (${BRIDGE_REL}) — ` +
+          `remove it in the same pull request`,
+      );
+    }
+  }
+  if (loaded.bridge.packages.length === 0) {
+    const left = BORDER_WORD_LISTS.flatMap((list) => loaded.bridge[list].map((word) => `${list}: ${word}`));
+    if (left.length) {
+      problems.push(
+        `the bridge's "packages" list is empty but its word lists still hold ${left.length} word(s) (${left.join(", ")}) — ` +
+          `remove them from ${BRIDGE_REL}: no pack is left that could own them`,
+      );
+    }
+  }
+  return { ran: true, problems: problems.sort() };
 }

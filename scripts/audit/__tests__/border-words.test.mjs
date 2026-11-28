@@ -13,7 +13,12 @@
 //   B4 a pinned pack without the declaration: a warning only while the
 //      bridge's shrink-only `packages` list names it; a newly pinned, renamed
 //      or no-longer-declaring pack fails, and the list cannot grow;
-//   B5 the real tree: no problem, and the gate sources spell no bridge word.
+//   B5 the real tree: no problem, and the gate sources spell no bridge word;
+//   B6 when a pin advances, the pack declares (cinatra#4896): a pack whose
+//      commit in a lock differs from the base (or that is new to a lock) must
+//      carry a valid declaration at the new commit and leave the bridge's
+//      `packages` list; an empty `packages` list leaves no bridge word; an
+//      unreadable base or lock is a scanner error.
 //
 // Fixture trees live under a temporary directory and use an owner outside the
 // organisation's shape (`@example-org/...`); they are removed after the suite.
@@ -23,6 +28,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, copyFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import * as borderWords from "../lib/border-words.mjs";
 import {
   BRIDGE_REL,
   BorderWordsError,
@@ -232,7 +238,6 @@ describe("B3 the bridge", () => {
     expect(() => loadBorderWords(r)).toThrow(BorderWordsError);
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["acme"], domain: ["acme"], packages: [] }));
     expect(() => loadBorderWords(r)).toThrow(/appears twice/);
-    // red-first-expect: AssertionError: expected [Function] to throw an error
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [] }));
     expect(() => loadBorderWords(r)).toThrow(/"packages" must be an array/);
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [], packages: ["Not A Name"] }));
@@ -251,7 +256,6 @@ describe("B3 the bridge", () => {
 });
 
 describe("B3b a word leaves the bridge only into a declaration of its own list", () => {
-  // red-first-expect: TypeError: bridgeShrinkProblems is not a function
   const base = { vendor: ["acme", "legacy"], domain: ["ticket"] };
   const packs = { "@example-org/widget-artifacts": NO_WORD, "@example-org/acme-connector": { vendor: ["acme"], domain: [] } };
 
@@ -342,7 +346,6 @@ describe("B4 a pinned pack without the declaration", () => {
   });
 
   it("a newly pinned pack the list does not name fails, even while the bridge holds words", () => {
-    // red-first-expect: AssertionError: expected [] to deeply equal [ Array(1) ]
     const words = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: [] } }));
     expect(words.problems).toEqual([notListed(QUIET)]);
     expect(words.warnings).toEqual([]);
@@ -395,7 +398,6 @@ describe("B4 a pinned pack without the declaration", () => {
   });
 
   it("the packages list only shrinks against the base", () => {
-    // red-first-expect: AssertionError: expected [] to deeply equal [ 'packages: @example-org/new-agent' ]
     const base = { vendor: [], domain: [], packages: [QUIET] };
     expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [QUIET, "@example-org/new-agent"] })).toEqual(["packages: @example-org/new-agent"]);
     expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [] })).toEqual([]);
@@ -421,5 +423,136 @@ describe("B5 the real tree", () => {
       const spelled = all.filter((w) => text.includes(`"${w}"`) || text.includes(`'${w}'`));
       expect(spelled, rel).toEqual([]);
     }
+  });
+});
+
+describe("B6 when a pin advances, the pack declares", () => {
+  // red-first-expect: AssertionError: pinAdvanceProblems is exported: expected undefined to be type of 'function'
+  const QUIET = "@example-org/quiet-agent";
+  const WIDGET = "@example-org/widget-artifacts";
+  const LOCK = "cinatra-dev-extensions.lock.json";
+  const OLD = "1".repeat(40);
+  const NEW = "2".repeat(40);
+  const W = "3".repeat(40);
+  const lock = (pins) =>
+    JSON.stringify({ schemaVersion: 1, packages: Object.entries(pins).map(([packageName, resolvedSha]) => ({ packageName, repo: packageName.slice(1), resolvedSha })) });
+
+  /** A fixture repository whose base commit pins `basePins`; the worktree (the head) then pins `headPins`. */
+  function repoWithBase({ basePins, headPins, packs, bridge }) {
+    const r = makeTree({ packs, bridge, files: { [LOCK]: lock(basePins) } });
+    const git = (...args) =>
+      execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", ...args], {
+        cwd: r,
+        stdio: ["ignore", "pipe", "ignore"],
+        encoding: "utf8",
+      });
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "--no-verify", "-m", "base");
+    writeFileSync(join(r, LOCK), lock(headPins));
+    return { root: r, base: git("rev-parse", "HEAD").trim() };
+  }
+
+  function pinRule(root, base) {
+    expect(borderWords.pinAdvanceProblems, "pinAdvanceProblems is exported").toBeTypeOf("function");
+    return borderWords.pinAdvanceProblems(root, base, loadBorderWords(root));
+  }
+
+  it("a pin that advances to a commit that declares, with its row removed, passes", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W, [QUIET]: OLD },
+      headPins: { [WIDGET]: W, [QUIET]: NEW },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: NO_WORD },
+      bridge: { vendor: [], domain: [], packages: [] },
+    });
+    expect(loadBorderWords(root).problems).toEqual([]);
+    expect(pinRule(root, base)).toEqual({ ran: true, problems: [] });
+  });
+
+  it("a pin that advances to a commit without the declaration fails, naming the pack and both commits", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W, [QUIET]: OLD },
+      headPins: { [WIDGET]: W, [QUIET]: NEW },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: undefined },
+      bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] },
+    });
+    const { ran, problems } = pinRule(root, base);
+    expect(ran).toBe(true);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toContain(`${QUIET}: its pin advanced (${LOCK}: ${OLD} -> ${NEW})`);
+    expect(problems[0]).toContain("cinatra.borderWords is absent");
+    expect(problems[1]).toContain(`${QUIET}: its pin advanced (${LOCK}: ${OLD} -> ${NEW}) but its row stays in the bridge`);
+  });
+
+  it("a pin that advances to a commit that declares, while its row stays in the bridge, fails", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W, [QUIET]: OLD },
+      headPins: { [WIDGET]: W, [QUIET]: NEW },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: { vendor: [], domain: ["quietword"] } },
+      bridge: { vendor: [], domain: [], packages: [QUIET] },
+    });
+    const { problems } = pinRule(root, base);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain(`${QUIET}: its pin advanced (${LOCK}: ${OLD} -> ${NEW}) but its row stays in the bridge's "packages" list`);
+  });
+
+  it("a pin that does not move is not judged, declaration or not", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W, [QUIET]: OLD },
+      headPins: { [WIDGET]: W, [QUIET]: OLD },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: undefined },
+      bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] },
+    });
+    expect(pinRule(root, base)).toEqual({ ran: true, problems: [] });
+  });
+
+  it("a pack newly added to a lock without the declaration fails (not pinned there at the base)", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W },
+      headPins: { [WIDGET]: W, [QUIET]: NEW },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: undefined },
+      bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] },
+    });
+    const { problems } = pinRule(root, base);
+    expect(problems.some((p) => p.startsWith(`${QUIET}: its pin advanced (${LOCK}: not pinned -> ${NEW})`) && p.includes("cinatra.borderWords is absent"))).toBe(true);
+  });
+
+  it("a pack removed from a lock is not judged", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W, [QUIET]: OLD },
+      headPins: { [WIDGET]: W },
+      packs: { [WIDGET]: NO_WORD, [QUIET]: undefined },
+      bridge: { vendor: ["legacy"], domain: [], packages: [QUIET] },
+    });
+    expect(pinRule(root, base)).toEqual({ ran: true, problems: [] });
+  });
+
+  it("an empty packages list with words left in the bridge fails", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W },
+      headPins: { [WIDGET]: W },
+      packs: { [WIDGET]: NO_WORD },
+      bridge: { vendor: ["legacy"], domain: ["olddomain"], packages: [] },
+    });
+    const { problems } = pinRule(root, base);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/"packages" list is empty but its word lists still hold 2 word\(s\)/);
+  });
+
+  it("an unreadable base or an unparsable lock is a scanner error; no base means the rule did not run", () => {
+    const { root, base } = repoWithBase({
+      basePins: { [WIDGET]: W },
+      headPins: { [WIDGET]: W },
+      packs: { [WIDGET]: NO_WORD },
+      bridge: { vendor: [], domain: [], packages: [] },
+    });
+    expect(borderWords.pinAdvanceProblems, "pinAdvanceProblems is exported").toBeTypeOf("function");
+    const loaded = loadBorderWords(root);
+    expect(() => borderWords.pinAdvanceProblems(root, "0".repeat(40), loaded)).toThrow(BorderWordsError);
+    expect(borderWords.pinAdvanceProblems(root, undefined, loaded)).toEqual({ ran: false, problems: [] });
+    writeFileSync(join(root, LOCK), "{ not json");
+    expect(() => borderWords.pinAdvanceProblems(root, base, loaded)).toThrow(/cannot be parsed/);
+    writeFileSync(join(root, LOCK), JSON.stringify({ packages: [{ packageName: WIDGET }] }));
+    expect(() => borderWords.pinAdvanceProblems(root, base, loaded)).toThrow(/cannot be parsed/);
   });
 });
