@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
-  VENDOR_TOKENS,
+  vendorWords,
+  admittedGrowth,
   isExemptFile,
   isSanctionedSpecifier,
   subTokens,
@@ -50,7 +51,7 @@ describe("live tree vs committed baseline (the gate is green on main)", () => {
   });
 
   it("the nango-system mechanism model is NOT counted (nango is not a vendor token)", () => {
-    expect(VENDOR_TOKENS).not.toContain("nango");
+    expect(vendorWords()).not.toContain("nango");
     expect(Object.keys(current).some((k) => k.startsWith("src/app/api/nango/"))).toBe(false);
   });
 });
@@ -77,20 +78,24 @@ describe("segmentMatchesToken — exact short tokens, substring long tokens, cam
   });
 });
 
+// The fixture's vendor words. The real gate reads them from the pinned packs'
+// declarations and the bridge (lib/border-words.mjs, border-words.test.mjs).
+const FIXTURE_WORDS = ["wordpress", "wp", "drupal", "youtube"];
+
 describe("tokenHits — path/route segments and specifiers", () => {
   it("a Next.js route dir segment is a hit for the file under it", () => {
-    const hits = tokenHits("src/app/api/webhooks/wordpress/route.ts");
+    const hits = tokenHits("src/app/api/webhooks/wordpress/route.ts", FIXTURE_WORDS);
     expect(hits.get("wordpress")).toBe(1);
   });
 
   it("multiple tokens in one path are counted per token", () => {
-    const hits = tokenHits("src/lib/wp-drupal-contract.ts");
+    const hits = tokenHits("src/lib/wp-drupal-contract.ts", FIXTURE_WORDS);
     expect(hits.get("wp")).toBe(1);
     expect(hits.get("drupal")).toBe(1);
   });
 
   it("a clean path yields no hits", () => {
-    expect(tokenHits("src/lib/connector-readiness.server.ts").size).toBe(0);
+    expect(tokenHits("src/lib/connector-readiness.server.ts", FIXTURE_WORDS).size).toBe(0);
   });
 });
 
@@ -162,7 +167,7 @@ describe("scanVendorTokens — fixture tree", () => {
     ].join("\n") + "\n",
   );
   const files = ["src/lib/wordpress-api.ts", "src/lib/generic.ts"];
-  const occ = scanVendorTokens(root, files);
+  const occ = scanVendorTokens(root, files, FIXTURE_WORDS);
 
   it("counts the vendor filename and the generic->vendor import edge", () => {
     expect(occ["src/lib/wordpress-api.ts :: path :: wordpress"]).toBe(1);
@@ -175,7 +180,7 @@ describe("scanVendorTokens — fixture tree", () => {
   });
 
   it("a worktree-deleted file is not counted (scan reflects the worktree, not the index)", () => {
-    const occ2 = scanVendorTokens(root, [...files, "src/lib/youtube-api.ts"]);
+    const occ2 = scanVendorTokens(root, [...files, "src/lib/youtube-api.ts"], FIXTURE_WORDS);
     expect(Object.keys(occ2).some((k) => k.startsWith("src/lib/youtube-api.ts"))).toBe(false);
   });
 });
@@ -199,5 +204,21 @@ describe("diffGrown / diffShrunk — the shrink-only ratchet arithmetic", () => 
     const b = { "a.ts :: path :: wordpress": 1 };
     expect(diffGrown(b, { ...b })).toEqual([]);
     expect(diffShrunk(b, { ...b })).toEqual([]);
+  });
+});
+
+describe("admittedGrowth — the word-born admission (cinatra#4848)", () => {
+  it("a NEW key whose file is byte-identical at the base is admitted; a changed file is not", () => {
+    const base = { "a.ts :: path :: wordpress": 1 };
+    const committed = { ...base, "b.ts :: path :: acme": 1 };
+    expect(admittedGrowth(base, committed, { isUnchangedAtBase: (f) => f === "b.ts" })).toEqual([]);
+    expect(admittedGrowth(base, committed, { isUnchangedAtBase: () => false })).toEqual(["b.ts :: path :: acme (0 -> 1)"]);
+  });
+
+  it("a key already on the floor never grows this way", () => {
+    const base = { "a.ts :: path :: wordpress": 1 };
+    expect(admittedGrowth(base, { "a.ts :: path :: wordpress": 2 }, { isUnchangedAtBase: () => true })).toEqual([
+      "a.ts :: path :: wordpress (1 -> 2)",
+    ]);
   });
 });

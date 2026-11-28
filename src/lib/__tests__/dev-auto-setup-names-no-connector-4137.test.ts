@@ -8,8 +8,9 @@
 // passed it (cinatra#4113 did both). This guard reads the shell's WHOLE text —
 // code, comments, strings and log lines — against two vocabularies, both read
 // from the repository, never typed here:
-//   (1) the vendor tokens core must not hold: the frozen VENDOR_TOKENS of that
-//       gate, matched by its own `segmentMatchesToken`;
+//   (1) the vendor words core must not hold: the words that gate reads
+//       (`vendorWords`: the pinned packs' declared words and its bridge,
+//       cinatra#4848), matched by its own `segmentMatchesToken`;
 //   (2) the name of every connector the two committed extension locks pin:
 //       its package name, its package leaf (`<name>-connector`) and the first
 //       word of its name. A first word that is the first word of a host
@@ -25,7 +26,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  VENDOR_TOKENS,
+  vendorWords,
   segmentMatchesToken,
   subTokens,
 } from "../../../scripts/audit/vendor-token-core-gate.mjs";
@@ -81,7 +82,7 @@ function vocabulary(): Vocabulary {
     const word = firstWordOf(leaf).toLowerCase();
     if (!owned.has(word)) words.add(word);
   }
-  return { tokens: VENDOR_TOKENS, words: [...words].sort(), literals: [...literals].sort() };
+  return { tokens: vendorWords(REPO), words: [...words].sort(), literals: [...literals].sort() };
 }
 
 /** Every connector name the text holds, line by line (comments and strings included). */
