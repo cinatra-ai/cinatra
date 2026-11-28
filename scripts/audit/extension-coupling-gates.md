@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json` or `cinatra/agent.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -265,19 +265,17 @@ copy are not code coupling):
 2. **import specifiers** — static import / export-from, side-effect imports,
    dynamic `import()`, `require()`, after the shared lexical comment stripper.
 
-**Token set** (frozen in-gate as `VENDOR_TOKENS`): `wordpress`, `wp`,
-`drupal`, `linkedin`, `github`, `youtube`, `resend`, `google`, `twenty`,
-`apollo` — grounded in the epic #978 residual clusters. Tokens match path /
+**Words**: the `vendor` list of the border words (see "Border words — declared
+by the extensions" below); the gate names no word. Words match path /
 specifier sub-tokens exactly (camelCase-split, so `wordpressApi` counts);
-tokens of five or more characters also match as a segment substring (so a
+words of five or more characters also match as a segment substring (so a
 squashed `wordpressapi.ts` evasion counts). Explicit NON-members, mirroring
 the epic's non-goals: `nango` (the sanctioned credential-broker MECHANISM —
 the model core code is pointed AT) and the LLM-provider names
 `openai`/`anthropic`/`gemini` (the `packages/llm` provider layer plus its
 `/configuration` + `/setup` surfaces are core-owned model mechanism, not
 connector vendor code; extension-package coupling there is still policed by
-the pinned-empty lexeme gates). Growing or shrinking the token set is a
-reviewed change to the gate and its tests.
+the pinned-empty lexeme gates): no pack declares them as vendor words.
 
 **Sanctioned surfaces excluded from the scan** (the epic #978 categories
 (a)–(e); each is either byte-pinned, pure identity data, or the surface that
@@ -313,11 +311,82 @@ google-oauth glue, the twenty external-MCP proxy). The floor only shrinks:
   `--write-baseline` ratchets it down (no silent headroom to re-spend);
 - `--write-baseline` REFUSES growth vs the committed baseline;
 - the `VENDOR_TOKEN_BASE` monotonic guard refuses a committed baseline that
-  grew vs the base branch, failing CLOSED on flag-like/unresolvable refs.
+  grew vs the base branch, failing CLOSED on flag-like/unresolvable refs;
+- one growth is admitted, by `--write-baseline` run with `VENDOR_TOKEN_BASE`
+  set and by the base guard, exactly as class 1 of the application border
+  gate admits one: a NEW key whose file is byte-identical at the base — the
+  code did not change, only the words did (a pinned pack newly declaring a
+  word core already spells). A key already on the floor never grows this way.
 
 As the epic waves (#974–#977, #979) evict each cluster into its owning
 extension, the floor ratchets toward the sanctioned-surface set; the baseline
 file is the authoritative current count.
+
+## Border words — declared by the extensions (cinatra#4848)
+
+The vendor gate and class 2 of the application border gate find a crossing by
+a word. Those words belong to the extensions, so each extension declares its
+own in its manifest, and the gates read them; neither gate names a word.
+
+- **The declaration.** `cinatra.borderWords` =
+  `{ "vendor": [...], "domain": [...] }`, or two empty lists and a `reason`
+  for a pack that owns no word. Each word is one lower-case token of letters
+  and digits (at least two characters), not a kind word (`agent`, `connector`,
+  `artifact`, `skill`, `extension`, `cinatra` and their plurals), not a host
+  port name, not repeated and not in both lists. The SDK contract is
+  `packages/sdk-extensions/src/border-words.ts` (`borderWordsIssues`); the
+  gates read its data (word pattern, kind words, host port names) from that
+  source text and mirror its rules in `scripts/audit/lib/border-words.mjs`,
+  and a test runs both over the same cases.
+- **What the gates read.** The union, over the packs the two locks and
+  `cinatra.devExtensions` pin, of their declared words and the bridge below:
+  the `vendor` list for the vendor gate, the `domain` list for class 2. A word
+  declared a vendor word by one pack and a domain word by another fails.
+  Completeness is by identity: every pinned package must be found under
+  `extensions/` by its manifest `name` (the folder name does not matter). A
+  pinned package not found, two directories naming one pinned package, an
+  absent tree, an unreadable manifest or a malformed bridge is a scanner error
+  (exit 2), never a pass. A directory the locks do not pin is ignored for words
+  and never stands in for a missing one; a symlinked pack directory is not
+  followed, so its package counts as missing. Both CI jobs (`perpetual-core`
+  for the vendor gate, `gates-pnpm` for class 2) run the `clone-extensions`
+  action (`sync-dev-extensions.mjs --pinned`), which materializes every
+  `cinatra.devExtensions` entry, and the two locks are a subset of that set,
+  so both jobs have the whole pinned set on disk and no workflow changes.
+- **The bridge (temporary).** `scripts/audit/border-words-bridge.json` holds
+  the words no pinned pack declares yet: at introduction the 10 vendor and 16
+  domain words the gates held in their code before cinatra#4848, so the
+  findings on `main` did not change (49 vendor occurrences in 37 files; 72
+  class 2 entries in 71 files). It only shrinks: a word both in the bridge
+  and declared by a pinned pack fails (the pull request that advances that
+  pack's pin removes the word), a bridge that grew against the base
+  (`VENDOR_TOKEN_BASE`, `APPLICATION_BORDER_BASE`) fails, and a word that left
+  the bridge against the base fails unless a pinned pack declares it in the
+  SAME list at the head. So a word leaves the bridge only into a declaration,
+  never out of the words the gates read: removing it, moving it to the other
+  list, emptying the bridge, or unpinning the pack that declares it in the
+  same change all fail, naming the word. A deleted bridge is a scanner error,
+  and an unresolvable base fails, as the other base guards do. **The bridge
+  must reach empty; cinatra#4848 tracks it.**
+- **A pack without the declaration** fails unless the bridge's `packages`
+  list names it; a named pack is listed as a warning. The list holds the
+  118 packs that were pinned without the declaration when the bridge came in,
+  and it only shrinks: a list that grew against the base fails, like the word
+  lists. So a newly pinned pack must declare, a renamed pack too (a new name
+  is a new pin), and a pack that declared cannot drop its declaration (it is
+  not in the list and cannot be added). A pack re-pinned to a new commit keeps
+  its name and stays listed. A listed pack that declares (even invalidly) or
+  is no longer pinned fails until the same pull request removes it from the
+  list. The base's grandfathered set is this committed list, read at the base
+  with `git show`, because the packs' manifests are not in git (`extensions/`
+  is cloned at the head's pins); an unreadable or malformed base bridge fails.
+  Without a base variable (a local run) the list is enforced as committed and
+  only its growth goes unchecked, as for the word lists. An invalid
+  declaration fails whether or not the pack is listed.
+- **A pin advance that adds a word** can find a module core already holds; the
+  word-born admission (a new key whose file is byte-identical at the base,
+  above and below) lets that pull request record it on the floor with its
+  owner instead of turning `main` red.
 
 ## Application border gates — the shrink-only floors (cinatra#3821)
 
@@ -340,19 +409,17 @@ with the TypeScript compiler API and refuses a new occurrence of:
    has the id shape `<namespace>:<local>` under a namespace a claim declares, in
    any position — for example as the type of an artifact the application
    itself creates. Key `file :: type :: id`, with its count.
-2. **Class 2 (`names`)** — a module whose path carries a word of the frozen
-   domain set (`appointment`, `blog`, `campaign`, `campaigns`, `cms`, `crm`,
-   `email`, `icp`, `mail`, `newsletter`, `outreach`, `playbook`, `podcast`,
-   `portfolio`, `prospecting`, `social`) as a whole sub-token of a directory or
-   file segment (split on non-alphanumerics and camelCase, as the vendor gate
-   splits). The segments read are those after `src/`; for a package, its
-   directory name plus those after `packages/<name>/src/`. Key
-   `file :: name :: token`, with the number of segments. The set is frozen and
-   reviewed, not derived from the package names of the locks: derived words
-   (`client`, `mcp`, `server`, `list`, ...) read mostly generic modules, and a
-   derived set would move with every lock change, so a pin advance could turn
-   `main` red with no code change. Vendor words stay the vendor gate's, so one
-   path segment is counted by one gate.
+2. **Class 2 (`names`)** — a module whose path carries a domain word (the
+   `domain` list of the border words, see "Border words — declared by the
+   extensions" below; the gate names no word) as a whole sub-token of a
+   directory or file segment (split on non-alphanumerics and camelCase, as the
+   vendor gate splits). The segments read are those after `src/`; for a
+   package, its directory name plus those after `packages/<name>/src/`. Key
+   `file :: name :: token`, with the number of segments. The words are not
+   derived from the package names of the locks: such words (`client`, `mcp`,
+   `server`, `list`, ...) read mostly generic modules and miss words no
+   package name holds. A word is in one list only, so one path segment is
+   counted by one gate.
 3. **Class 3 (`ceilings`)** — growth of a module already on the class 1 or
    class 2 floor. Each such module carries a ceiling: its count of top-level
    value declarations (the names of top-level functions, classes and
@@ -444,13 +511,14 @@ Both floors only shrink, with the mechanics of the vendor gate:
   fail closed on a flag-like or unresolvable reference and refuse a committed
   floor that grew against the base (no constraint when the base holds no
   floor);
-- one growth of the class 1 floor is admitted, by `--write-baseline` run with
-  `APPLICATION_BORDER_BASE` set and by the base guard: a new class 1 key (and
-  the new ceiling its module then needs) whose file is byte-identical at the
-  base reference — the code did not change, only the vocabulary did (an
-  extension newly claiming an id the application already spells); a key
-  already on the floor never grows this way, and a count that is not a
-  non-negative integer fails;
+- one growth of the class 1 and class 2 floors is admitted, by
+  `--write-baseline` run with `APPLICATION_BORDER_BASE` set and by the base
+  guard: a new class 1 or class 2 key (and the new ceiling its module then
+  needs) whose file is byte-identical at the base reference — the code did not
+  change, only the vocabulary did (an extension newly claiming an id, or newly
+  declaring a domain word, the application already spells); a key already on
+  the floor never grows this way, and a count that is not a non-negative
+  integer fails;
 - every entry of the application border floor names its `owner`, the
   extension that will own the code, and every road names `removedBy`, the item
   that removes it; `--write-baseline` writes a new entry as `UNASSIGNED`, and
@@ -481,7 +549,7 @@ reviewer.
 - a type id assembled at run time or passed in a variable;
 - an id outside the vocabulary, such as one the application registers under
   its own namespace (`@cinatra-ai/objects:cms-content-snapshot`);
-- a module whose path holds no word of the frozen set;
+- a module whose path holds no border word;
 - growth inside an existing declaration, a nested function, a new branch, an
   interface or a type alias;
 - a road through a package root barrel, a registry or a slot that is not
@@ -768,12 +836,17 @@ regular file or does not parse, and a pack whose `cinatra.kind` cannot be
 read are scanner errors (exit 2), never a pass. Classes 2 to 4 apply to every
 pinned pack. Class 1 applies to every pack the product treats as an agent
 (the constant `AGENT_DEFINITION_PATHS`): its manifest says kind `agent`, OR
-its pinned tree holds an entry at (or below) `cinatra/oas.json` or
-`cinatra/agent.json`. These are the paths the product's discovery tests at a
-pack root `extensions/<scope>/<name>`: `collectDefinitions` in
-`src/lib/git-native-agent-ingest.ts` (it reads `cinatra/oas.json` and reports
-an old `cinatra/agent.json` without loading it) and the production seed
-`scripts/extensions/build-required-oas-seed.mjs` (`cinatra/oas.json`). The
+its pinned tree holds an entry at (or below) `cinatra/oas.json`, the one
+definition file the product's discovery reads at a pack root
+`extensions/<scope>/<name>`: `collectDefinitions` in
+`src/lib/git-native-agent-ingest.ts` and the production seed
+`scripts/extensions/build-required-oas-seed.mjs` (cinatra#4920). The old
+`cinatra/agent.json` and `agent.json` (`OLD_DEFINITION_PATHS`) are reported by
+the product and not loaded: a pinned pack that holds one of them and no
+`cinatra/oas.json` fails the gate (exit 1, also for `--write-baseline` and
+`--seed`) with the file to move to `cinatra/oas.json`; `--report` lists it.
+Stated limit: a pack that is not of kind `agent` and holds its flow under any
+other name is not judged as an agent. The
 ingest's two fallback layouts lie one level higher, outside any pack root. A
 test reads both source files and fails when their condition changes. So a
 connector, artifact or skill pack that adds a flow is judged as an agent; its
@@ -855,7 +928,7 @@ the issue), 167 files under test folders (`test/`, `tests/`,
 `.npmrc`, 3 `vitest.config.ts` and 2 other check scripts. No agent pack's
 pinned tree has a `skills/` folder, so counting such files changed none of
 these numbers. The agent rule (kind `agent`, or a pinned tree with
-`cinatra/oas.json` or `cinatra/agent.json`) adds no pack on these pins: every
+`cinatra/oas.json`; then also `cinatra/agent.json`) adds no pack on these pins: every
 pinned pack with such a file is of kind `agent` (117 pinned packs: 30 agent,
 30 connector, 30 artifact, 27 skill), so the 254 files stay. The test-file name rule then leaves out the `*.test.*`
 and `*.spec.*` files: the list holds 95.

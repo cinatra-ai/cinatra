@@ -54,6 +54,7 @@ import {
   validateFieldRendererDeclarations,
   mergeFieldRendererBindings,
   mergeRoleDeclarations,
+  resolveRoleArtifactTypes,
 } from "./agent-binding-kinds.mjs";
 import { validateArtifactObjectTypeClaims } from "./artifact-objecttypes-claims.mjs";
 // Assistant declaration (`cinatra/config.json` `assistant` block) build-time
@@ -2522,6 +2523,15 @@ export async function buildManifest() {
   const { roles: agentRoleBindings, errors: roleErrors } =
     mergeRoleDeclarations(roleDeclarations);
   bindingErrors.push(...mergeErrors, ...roleErrors);
+  // The type each role's claimant owns (cinatra#4849): host code that needs
+  // the claimant's TYPE reads it here instead of spelling a pack type id. A
+  // claimed type-bearing role that does not resolve to exactly one type is a
+  // generation error (TYPE_BEARING_ROLES in agent-binding-kinds.mjs).
+  const { types: roleArtifactTypes, errors: roleTypeErrors } = resolveRoleArtifactTypes(
+    agentRoleBindings,
+    Object.fromEntries(records.map((r) => [r.packageName, r.artifactObjectTypes ?? []])),
+  );
+  bindingErrors.push(...roleTypeErrors);
 
   // Field-renderer COMPONENT map (cinatra#1625, epic #1620 S8 — M3 spine): the
   // literal-import BUILD table of extension-shipped field-renderer components,
@@ -2633,6 +2643,7 @@ export async function buildManifest() {
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
+    roleArtifactTypes,
   };
 }
 
@@ -3567,7 +3578,7 @@ function emitClient() {
 // and server code (role resolution, a2ui translator wiring). Validated
 // fail-closed at generation by the shared validator
 // (scripts/extensions/agent-binding-kinds.mjs).
-function emitAgentBindings(fieldRendererBindings, roleBindings) {
+function emitAgentBindings(fieldRendererBindings, roleBindings, roleArtifactTypes = {}) {
   const script = "scripts/extensions/generate-extension-manifest.mjs";
   const entryLines = fieldRendererBindings
     .map((b) => {
@@ -3585,6 +3596,9 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
     .join("\n");
   const roleLines = Object.entries(roleBindings)
     .map(([role, pkg]) => `  ${JSON.stringify(role)}: ${JSON.stringify(pkg)},`)
+    .join("\n");
+  const roleTypeLines = Object.entries(roleArtifactTypes)
+    .map(([role, type]) => `  ${JSON.stringify(role)}: ${JSON.stringify(type)},`)
     .join("\n");
   return (
     `${HEADER(script)}\n` +
@@ -3622,6 +3636,15 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
     `// state in reduced universes).\n` +
     `export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {\n` +
     `${roleLines}\n` +
+    `};\n\n` +
+    `// The object type each role's claimant OWNS (cinatra#4849): role name ->\n` +
+    `// the one type id namespaced by the claimant's own package. A claimant\n` +
+    `// that owns none or several types has no entry, except that a claimed\n` +
+    `// role core reads a type from fails generation. Host code that needs the\n` +
+    `// claimant's TYPE (the dashboards twin) reads it here through\n` +
+    `// src/lib/extension-roles.ts instead of spelling a pack type id.\n` +
+    `export const GENERATED_ROLE_ARTIFACT_TYPES: Readonly<Record<string, string>> = {\n` +
+    `${roleTypeLines}\n` +
     `};\n`
   );
 }
@@ -3800,11 +3823,12 @@ async function main() {
     agentFieldRendererBindings,
     fieldRendererComponents,
     agentRoleBindings,
+    roleArtifactTypes,
   } = await buildManifest();
   const files = [
     [OUT_SERVER, emitServer(records, connectorEntryModules, connectorMcpModules, connectorPrimitiveHandlers, externalMcpToolboxes, widgetStreamAgents, chatWidgetModules, devSetupModules)],    [OUT_SETUP, emitConnectorSetupPages(connectorSetupPages, connectorSettingsPages, connectorSkillsSettingsTabs)],
     [OUT_CLIENT, emitClient()],
-    [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings)],
+    [OUT_AGENT_BINDINGS, emitAgentBindings(agentFieldRendererBindings, agentRoleBindings, roleArtifactTypes)],
     [OUT_WIDGET_PATHS, emitWidgetStreamPublicPaths(widgetStreamAgents)],
     [OUT_WEBHOOKS_SERVER, emitWebhooksServer(webhookHooks)],
     [OUT_WEBHOOK_PATHS, emitWebhookPublicPaths(webhookHooks)],

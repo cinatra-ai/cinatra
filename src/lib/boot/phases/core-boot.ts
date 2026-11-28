@@ -157,7 +157,13 @@ export function coreBootPhases(): BootPhase[] {
         // "dashboard-twin-backfill" purpose, minted PER ORG inside its sweep
         // (cinatra#1939 wave 1).
         const { mintSystemWriteAuthority } = await import("@/lib/org-write/authority");
+        // The twin's object type comes from the dashboard pack's generated
+        // declaration, through the twin writer (cinatra#4849).
+        const { DASHBOARD_OBJECT_TYPE } = await import(
+          "@/lib/dashboards/dashboard-artifact-twin-writer"
+        );
         await backfillDashboardArtifactTwins({
+          dashboardObjectType: DASHBOARD_OBJECT_TYPE,
           log: (msg) => console.log(`[boot] ${msg}`),
           mintOrgAuthority: (orgId) =>
             mintSystemWriteAuthority("dashboard-twin-backfill", orgId),

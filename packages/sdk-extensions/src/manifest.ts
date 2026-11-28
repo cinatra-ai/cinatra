@@ -21,6 +21,7 @@ import type { HostPortName } from "./host-context";
 import type { ExtensionDependency } from "./dependencies";
 import type { ConsumedPrimitive } from "./consumes";
 import type { DashboardContributionManifest } from "./dashboard-contribution-contract";
+import type { BorderWordsDeclaration } from "./border-words";
 
 /**
  * UI hot-pluggability classification (narrowed per cinatra#782 — the connector
@@ -296,6 +297,19 @@ export type CinatraManifest = {
    * `./consumes`.
    */
   consumes?: ConsumedPrimitive[];
+
+  /**
+   * The words that are this extension's own (cinatra#4848): its vendor or
+   * product words and its domain words. Core's border checks
+   * (`scripts/audit/vendor-token-core-gate.mjs`, class 2 of
+   * `scripts/audit/application-border-gate.mjs`) read the union of the
+   * declarations of the pinned extensions and refuse a core module path or
+   * import specifier that carries one; the checks name no word themselves.
+   * Every kind declares it; a pack that owns no word declares two empty lists
+   * and a `reason`. CI data only: no loader reads it. Shape and word rules:
+   * `borderWordsIssues` in `./border-words`.
+   */
+  borderWords?: BorderWordsDeclaration;
 
   // ---- legacy dependency shims (normalized into `dependencies`) ----
   /** @deprecated agent→agent map; normalized into `dependencies`. */
