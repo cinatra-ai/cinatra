@@ -116,7 +116,7 @@ jobs:
   validate-shape:
     permissions:
       contents: read
-    name: Validate agent definitions (cinatra/oas.json)
+    name: Validate agent.json shape (legacy schema check)
     if: ${{ !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.head_ref, 'merge-queue/') || startsWith(github.head_ref, 'merge-batch/'))) }}
     runs-on: ${{ fromJSON(vars.CI_RUNNER_GATE || '"ubuntu-latest"') }}
 
