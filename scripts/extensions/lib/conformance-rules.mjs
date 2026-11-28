@@ -286,17 +286,6 @@ export function loadLiveRules(sdkRepoRoot) {
 }
 
 /**
- * The extension-manifest package.json cinatra.formatVersion:2 marker
- * (materialized agent.json payload, closure-manifest install-refusal —
- * `hot-install-canary-harness.test.ts` CG-2, `agent-transfer.ts` "Unsupported
- * agent.json formatVersion"). Unlike the constants above, this is a BARE
- * literal repeated inline at every one of those call sites today — there is
- * no single named export to derive it from, so it is pinned here as one
- * documented literal instead of re-deriving a nonexistent source.
- */
-export const AGENT_JSON_FORMAT_VERSION = 2;
-
-/**
  * Non-port keys on `ExtensionHostContext` that are identity fields, not
  * ports — never flagged by the ctx-port-discipline check.
  */

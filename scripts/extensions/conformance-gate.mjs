@@ -48,7 +48,6 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loadLiveRules,
-  AGENT_JSON_FORMAT_VERSION,
   CTX_NON_PORT_KEYS,
   NODE_FS_ALLOWLIST,
   PROCESS_ENV_ALLOWLIST,
@@ -58,6 +57,10 @@ import {
   CONNECTOR_KNOWN_FINDINGS_FLOOR,
 } from "./lib/conformance-rules.mjs";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
+// The assistant validator the dedicated assistant check and ci-validate-agents use
+// (a mirror of the product's assistant schema). The reusable workflow's sparse
+// checkout fetches this file, so the import resolves in an extension repository.
+import { hasAssistantBlock, validateAssistantConfig } from "../audit/connector-access-config-gate.mjs";
 
 export const CONFORMANCE_GATE_VERSION = "0.1.0";
 
@@ -325,7 +328,7 @@ function checkManifest(pkgDir, pkg, rules) {
       });
     }
   } else if (kind === "agent") {
-    findings.push(...checkAgentManifest(pkgDir));
+    findings.push(...checkAgentManifest(pkgDir, pkg));
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
@@ -1488,61 +1491,94 @@ function checkWebhooksDeclaration(pkg) {
   return findings;
 }
 
-function checkAgentManifest(pkgDir) {
-  const findings = [];
-  const materializedAgentJson = join(pkgDir, "agent.json");
-  if (existsSync(materializedAgentJson)) {
-    // Materialized mode (core CI over extensions/cinatra-ai/<slug>): the
-    // build pipeline has written the root agent.json payload — assert its
-    // format version.
-    try {
-      const parsed = JSON.parse(readFileSync(materializedAgentJson, "utf8"));
-      if (parsed.formatVersion !== AGENT_JSON_FORMAT_VERSION) {
-        findings.push({
-          rule: "manifest.agent-json-format-version",
-          file: "agent.json",
-          detail: `materialized root agent.json must declare formatVersion:${AGENT_JSON_FORMAT_VERSION} (got ${JSON.stringify(parsed.formatVersion)}).`,
-        });
-      }
-    } catch (err) {
-      findings.push({
-        rule: "manifest.agent-json-invalid",
-        file: "agent.json",
-        detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-    return findings;
-  }
-  // Pre-materialization mode (a standalone agent-extension repo's own CI):
-  // there is no root agent.json yet — that's HOST build output, not authored
-  // source. The authored proxy is cinatra/oas.json; require it to exist and
-  // parse, and note the formatVersion:2 check is host-materialization-time
-  // only.
+// The definition of an agent extension is cinatra/oas.json, the only file the
+// product reads (#4920). An old cinatra/agent.json or root agent.json is not read:
+// without cinatra/oas.json the finding names the file to move. The other agent
+// form is a config-only assistant: no cinatra/oas.json and no old file, and a
+// cinatra/config.json with an `assistant` block (the order of
+// scripts/ci-validate-agents.mjs). The block gets the full validation of the
+// dedicated assistant check, and cinatra/config.json must ship, because the
+// product's loader reads the packaged config.
+const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
+
+function checkAgentManifest(pkgDir, pkg) {
   const oasPath = join(pkgDir, "cinatra", "oas.json");
-  if (!existsSync(oasPath)) {
-    findings.push({
+  if (existsSync(oasPath)) {
+    try {
+      JSON.parse(readFileSync(oasPath, "utf8"));
+      return [];
+    } catch (err) {
+      return [
+        {
+          rule: "manifest.agent-oas-invalid-json",
+          file: "cinatra/oas.json",
+          detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+    }
+  }
+  const old = OLD_AGENT_DEFINITIONS.filter((rel) => existsSync(join(pkgDir, rel)));
+  if (old.length > 0) {
+    return [
+      {
+        rule: "manifest.agent-missing-oas",
+        file: "cinatra/oas.json",
+        detail: `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`,
+      },
+    ];
+  }
+  const configPath = join(pkgDir, "cinatra", "config.json");
+  if (existsSync(configPath)) {
+    let config;
+    try {
+      config = JSON.parse(readFileSync(configPath, "utf8"));
+    } catch (err) {
+      return [
+        {
+          rule: "manifest.agent-assistant-config-invalid",
+          file: "cinatra/config.json",
+          detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)} (without cinatra/oas.json this file is the package's only possible definition).`,
+        },
+      ];
+    }
+    if (hasAssistantBlock(config)) return checkAssistantConfig(pkgDir, pkg, config);
+  }
+  return [
+    {
       rule: "manifest.agent-missing-oas",
       file: "cinatra/oas.json",
-      detail: "agent extensions must ship cinatra/oas.json (the source the host materializes into the root agent.json formatVersion:2 payload at build time).",
-    });
-    return findings;
+      detail: "agent extensions must ship cinatra/oas.json, the agent's one definition file, or declare an assistant in cinatra/config.json.",
+    },
+  ];
+}
+
+function checkAssistantConfig(pkgDir, pkg, config) {
+  const errors = validateAssistantConfig(config, pkg.name);
+  if (errors.length > 0) {
+    return [
+      {
+        rule: "manifest.agent-assistant-config-invalid",
+        file: "cinatra/config.json",
+        detail: `the assistant declaration is invalid: ${errors.join("; ")}.`,
+      },
+    ];
   }
-  try {
-    JSON.parse(readFileSync(oasPath, "utf8"));
-  } catch (err) {
-    findings.push({
-      rule: "manifest.agent-oas-invalid-json",
-      file: "cinatra/oas.json",
-      detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    });
-  }
-  findings.push({
-    rule: "manifest.agent-json-format-version-deferred",
-    file: "agent.json",
-    severity: "info",
-    detail: "no materialized root agent.json in this checkout (pre-materialization mode) — the formatVersion:2 check runs at core CI time over the materialized tree instead.",
-  });
-  return findings;
+  // The same shipment proof as checkDeclaredLogo: npm's packlist, the `files`
+  // heuristic only when the dry run is unavailable.
+  const rel = "cinatra/config.json";
+  const { files: packed } = resolvePacklist(pkgDir);
+  const ships = packed === null ? isInScope(rel, pkg.files) : packed.includes(rel);
+  if (ships) return [];
+  return [
+    {
+      rule: "manifest.agent-assistant-config-unpublished",
+      file: rel,
+      detail:
+        `cinatra/config.json declares the assistant but does not ship in the published package` +
+        `${packed === null ? ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)' : " (per `npm pack --dry-run`)"}` +
+        `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
+    },
+  ];
 }
 
 // ---------------------------------------------------------------------------
