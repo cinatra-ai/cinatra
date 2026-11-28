@@ -146,7 +146,9 @@ export async function POST(request: Request): Promise<Response> {
       400,
     );
   }
-  if (typeof version !== "string" || !isExactVersion(version)) {
+  // The canonical validator tolerates a leading "v" and surrounding spaces; the
+  // string is passed on as written, so those forms are refused here too.
+  if (typeof version !== "string" || !/^\d/.test(version) || /\s$/.test(version) || !isExactVersion(version)) {
     return json(
       { error: "`version` is required and must be an exact version (for example 1.2.3), not a range or a tag." },
       400,

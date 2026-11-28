@@ -157,6 +157,9 @@ describe("POST /api/cli/extensions/install", () => {
     ["an empty prerelease", { packageName: "@example-org/agent-hello", version: "1.2.3-" }],
     ["an empty build", { packageName: "@example-org/agent-hello", version: "1.2.3+" }],
     ["an equals-prefixed version", { packageName: "@example-org/agent-hello", version: "=1.2.3" }],
+    ["a v-prefixed version", { packageName: "@example-org/agent-hello", version: "v1.2.3" }],
+    ["a version with a leading space", { packageName: "@example-org/agent-hello", version: " 1.2.3" }],
+    ["a version with a trailing space", { packageName: "@example-org/agent-hello", version: "1.2.3 " }],
   ])("%s → 400 before any work", async (_label, body) => {
     const res = await POST(post(JSON.stringify(body)));
     expect(res.status).toBe(400);
