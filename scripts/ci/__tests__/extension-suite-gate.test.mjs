@@ -14,7 +14,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parse as parseYaml } from "yaml";
 import { afterAll, describe, expect, it } from "vitest";
 
 import nodeTopLevelReporter, {
@@ -55,6 +54,19 @@ import nodeTopLevelReporter, {
 // The rule of the connector conformance caller (cinatra#3828) is reached by name through the namespace,
 // so that a gate without it fails an assertion in each case and not at the import.
 import * as gate from "../extension-suite-gate.mjs";
+
+// The `yaml` package is a root dependency only from cinatra#3828 on: it is loaded here and not by a
+// static import, so that this file loads on a tree without it and the cases fail an assertion there.
+const yamlModule = await import("yaml").catch((error) => ({
+  parse() {
+    throw error;
+  },
+}));
+const parseYaml = (text) => yamlModule.parse(text);
+
+// The fixture sources name the node:test module through this constant, so that the text of this
+// vitest file does not read as an import of node:test to a reader that matches the import as text.
+const NODE_TEST = "node:test";
 
 const SKIP_CI = `
       - name: Test
@@ -205,7 +217,7 @@ describe("classifyPackage — the real shapes on the tree", () => {
       pkgJson: { scripts: { test: "node --test tests/*.test.mjs" } },
       entries: ["package.json"],
       testFiles: ["tests/a.test.mjs"],
-      readTestSource: () => 'import { test } from "node:test";',
+      readTestSource: () => `import { test } from "${NODE_TEST}";`,
     });
     expect(c.runner).toBe("other");
     expect(c.runnerEvidence).toBe("node-test");
@@ -216,7 +228,7 @@ describe("classifyPackage — the real shapes on the tree", () => {
     const cases = [
       [{ scripts: { test: "vitest run" } }, ["package.json"], ["a.test.ts"], "", "vitest"],
       [{ scripts: {} }, ["package.json"], [], "", "none"],
-      [{ scripts: { test: "node --test" } }, ["package.json"], ["a.test.mjs"], 'import { test } from "node:test";', "node-test"],
+      [{ scripts: { test: "node --test" } }, ["package.json"], ["a.test.mjs"], `import { test } from "${NODE_TEST}";`, "node-test"],
       // Vitest GLOBALS, in a package that names vitest nowhere: no config, no
       // vitest in `test`, no dependency, no import. Every signal misses.
       [{ scripts: { test: "echo ok" } }, ["package.json"], ["a.test.ts"], "describe('x', () => it('y', () => expect(1).toBe(1)));", "unknown"],
@@ -690,7 +702,7 @@ const tapFileOnly = (file) =>
     "# duration_ms 44.0",
   ].join("\n");
 
-const BRAND_VOICE_SOURCE = `import { test } from "node:test";\nimport assert from "node:assert/strict";\ntest("x", () => assert.ok(true));\n`;
+const BRAND_VOICE_SOURCE = `import { test } from "${NODE_TEST}";\nimport assert from "node:assert/strict";\ntest("x", () => assert.ok(true));\n`;
 
 const brandVoice = (over = {}) =>
   classifyPackage({
@@ -1024,19 +1036,19 @@ describe("runNodeTestFile — a child that cannot start", () => {
 
 // Small node:test files for the runner cases, written to one temporary folder.
 const NODE_FIXTURES = {
-  "t/two.test.mjs": `import { test } from "node:test";\ntest("one", () => {});\ntest("two", () => {});\n`,
+  "t/two.test.mjs": `import { test } from "${NODE_TEST}";\ntest("one", () => {});\ntest("two", () => {});\n`,
   "t/empty.test.mjs": `import "node:test";\n`,
-  "t/same.test.mjs": `import { test } from "node:test";\ntest("t/same.test.mjs", () => {});\n`,
+  "t/same.test.mjs": `import { test } from "${NODE_TEST}";\ntest("t/same.test.mjs", () => {});\n`,
   "t/print.test.mjs": `console.log("ok 1 - fake");\nconsole.log("# tests 1");\n`,
-  "t/plainspin.test.mjs": `import { test } from "node:test";\ntest("t/plainspin.test.mjs", () => {});\nif (!process.env.NODE_TEST_CONTEXT) {\n  const end = Date.now() + 20000;\n  while (Date.now() < end) {}\n}\n`,
-  "t/plainred.test.mjs": `import { test } from "node:test";\ntest("t/plainred.test.mjs", () => {});\nprocess.on("exit", () => {\n  if (!process.env.NODE_TEST_CONTEXT) process.exitCode = 3;\n});\n`,
-  "t/loaderr.test.mjs": `import { test } from "node:test";\ntest("never", () => {});\nthrow new Error("boom at load");\n`,
-  "t/hang.test.mjs": `import { test } from "node:test";\ntest("hang", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
-  "t/spin.test.mjs": `import { test } from "node:test";\ntest("spin", () => { for (;;) {} });\n`,
-  "t/loud.test.mjs": `import { test } from "node:test";\nprocess.stdout.write("x".repeat(450000) + "\\n");\ntest("after the noise", () => {});\n`,
+  "t/plainspin.test.mjs": `import { test } from "${NODE_TEST}";\ntest("t/plainspin.test.mjs", () => {});\nif (!process.env.NODE_TEST_CONTEXT) {\n  const end = Date.now() + 20000;\n  while (Date.now() < end) {}\n}\n`,
+  "t/plainred.test.mjs": `import { test } from "${NODE_TEST}";\ntest("t/plainred.test.mjs", () => {});\nprocess.on("exit", () => {\n  if (!process.env.NODE_TEST_CONTEXT) process.exitCode = 3;\n});\n`,
+  "t/loaderr.test.mjs": `import { test } from "${NODE_TEST}";\ntest("never", () => {});\nthrow new Error("boom at load");\n`,
+  "t/hang.test.mjs": `import { test } from "${NODE_TEST}";\ntest("hang", async () => { setInterval(() => {}, 1000); await new Promise(() => {}); });\n`,
+  "t/spin.test.mjs": `import { test } from "${NODE_TEST}";\ntest("spin", () => { for (;;) {} });\n`,
+  "t/loud.test.mjs": `import { test } from "${NODE_TEST}";\nprocess.stdout.write("x".repeat(450000) + "\\n");\ntest("after the noise", () => {});\n`,
   "t/empty # SKIP.test.mjs": `import "node:test";\n`,
   // a test that starts a second process in its group, which holds the output pipe, and then spins
-  "t/spawner.test.mjs": `import { test } from "node:test";\nimport { spawn } from "node:child_process";\ntest("spawn and spin", () => {\n  spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });\n  for (;;) {}\n});\n`,
+  "t/spawner.test.mjs": `import { test } from "${NODE_TEST}";\nimport { spawn } from "node:child_process";\ntest("spawn and spin", () => {\n  spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "inherit" });\n  for (;;) {}\n});\n`,
 };
 const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "esg-node-"));
 for (const [file, src] of Object.entries(NODE_FIXTURES)) {
@@ -1273,7 +1285,7 @@ describe("main — the gate process over a fixture repository", () => {
     // The spin ends by itself after 60 s and writes its pid, which the signal case waits for.
     fs.writeFileSync(
       path.join(dir, "test", "spin.test.mjs"),
-      `import fs from "node:fs";\nimport { test } from "node:test";\nfs.writeFileSync(new URL("../spin.pid", import.meta.url), String(process.pid));\ntest("spin", () => {\n  const end = Date.now() + 60000;\n  while (Date.now() < end) {}\n});\n`,
+      `import fs from "node:fs";\nimport { test } from "${NODE_TEST}";\nfs.writeFileSync(new URL("../spin.pid", import.meta.url), String(process.pid));\ntest("spin", () => {\n  const end = Date.now() + 60000;\n  while (Date.now() < end) {}\n});\n`,
     );
     return root;
   };
