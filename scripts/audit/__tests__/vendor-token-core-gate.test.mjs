@@ -397,7 +397,7 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
         "@example-org/sdk-a :: zorbSpace",
         "@example-org/sdk-a :: QuillRenamed",
         "@example-org/sdk-a :: ZorbOnlyType",
-        "@example-org/sdk-a :: default",
+        "@example-org/sdk-a :: sendZorb",
         "@example-org/sdk-a :: quillOverload",
         "@example-org/sdk-a :: zorb-kind",
         "@example-org/sdk-a/extra :: quillExtra",
@@ -686,9 +686,57 @@ describe("sdk-name-with-extension-word — a default export without a declared n
     it(`${title} is read by its declared name`, () => {
       const scan = gateFn("scanSdkExportNames");
       const root = makeSdkTree({ exportsMap, files });
-      expect(scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toEqual({ "@example-org/sdk-a :: default": ["zorb"] });
+      expect(scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toEqual({ "@example-org/sdk-a :: ZorbThing": ["zorb"] });
     });
   }
+
+  it("a recorded named default export renamed fails by its new name, and the old entry is stale", () => {
+    const check = gateFn("checkSdkNames");
+    const root = makeSdkTree({
+      exportsMap,
+      files: { "src/index.ts": `export default function ZorbOne() {}\n` },
+      sdkNames: { "@example-org/sdk-a :: ZorbOne :: zorb": REASON },
+    });
+    expect(check(root, { env: {}, packages: [FIXTURE_SDK] }).ok).toBe(true);
+    writeFileSync(join(root, FIXTURE_SDK, "src/index.ts"), `export default function ZorbTwo() {}\n`);
+    const r = check(root, { env: {}, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ZorbTwo (zorb)");
+    expect(r.lines.join("\n")).toContain("- @example-org/sdk-a :: ZorbOne :: zorb");
+  });
+
+  it("a recorded named default export renamed and re-recorded under its new name is refused against the base", () => {
+    const check = gateFn("checkSdkNames");
+    const root = makeSdkTree({
+      exportsMap,
+      files: { "src/index.ts": `export default function ZorbOne() {}\n` },
+      sdkNames: { "@example-org/sdk-a :: ZorbOne :: zorb": REASON },
+    });
+    git(root, "init", "-q", "-b", "main");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "base");
+    expect(check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] }).ok).toBe(true);
+    writeFileSync(join(root, FIXTURE_SDK, "src/index.ts"), `export default function ZorbTwo() {}\n`);
+    writeFileSync(
+      join(root, "scripts/audit/vendor-token-core-gate.baseline.json"),
+      JSON.stringify({ occurrences: {}, sdkNames: { "@example-org/sdk-a :: ZorbTwo :: zorb": REASON } }),
+    );
+    const r = check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ZorbTwo :: zorb");
+  });
+
+  it("a renamed re-export is matched and recorded by the exported name a pack imports", () => {
+    const check = gateFn("checkSdkNames");
+    const root = makeSdkTree({
+      exportsMap,
+      files: { "src/index.ts": `const Neutral = 1;\nexport { Neutral as ZorbAlias };\n` },
+      sdkNames: { "@example-org/sdk-a :: ZorbAlias :: zorb": REASON },
+    });
+    const r = check(root, { env: {}, packages: [FIXTURE_SDK] });
+    expect(r.lines).toEqual([]);
+    expect(r.found).toEqual({ "@example-org/sdk-a :: ZorbAlias": ["zorb"] });
+  });
 
   it("a named re-export as default that does not resolve is still a scanner error", () => {
     const scan = gateFn("scanSdkExportNames");

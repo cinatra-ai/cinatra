@@ -540,8 +540,8 @@ const symbolDeclName = (sym) => {
  * The SDK's top-level exported names that carry a border word:
  * `{ "<entry specifier> :: <name>": [words] }` (a namespace export by its own
  * name, its members not read; a default export by its declared name, keyed
- * `default`, and none for a default export of an expression that is no
- * declared name; an ambient module a non-module target declares is keyed by its
+ * by that declared name, and none for a default export of an expression that
+ * is no declared name; an ambient module a non-module target declares is keyed by its
  * module name). The program uses the root tsconfig.json's compiler options.
  * Throws SdkNamesError when the tsconfig, an entry, an `export ... from` module or an
  * exported name does not resolve.
@@ -599,9 +599,11 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
           if (!target?.declarations?.length) {
             throw new SdkNamesError(`${specifier}: the exported name "${sym.name}" does not resolve`);
           }
+          // One name per finding: the name that is matched is the name that
+          // is recorded and reported (a default export by its declared name).
           const read = sym.name === "default" ? symbolDeclName(target) ?? symbolDeclName(sym) ?? "" : sym.name;
           const hits = nameWordHits(read, wordSet);
-          if (hits.length) found[`${specifier} :: ${sym.name}`] = hits;
+          if (hits.length) found[`${specifier} :: ${read}`] = hits;
         }
       };
       const sf = program.getSourceFile(entry.file);
