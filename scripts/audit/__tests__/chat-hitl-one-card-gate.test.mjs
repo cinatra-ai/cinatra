@@ -28,7 +28,7 @@
 // The matcher is IMPORTED from the gate rather than re-implemented, so a fixture
 // can never assert a rule that differs from what CI enforces.
 
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -66,6 +66,15 @@ import {
   scanRegistry,
   stripUnreachable,
 } from "../chat-hitl-one-card-gate.mjs";
+// A namespace import, so that a tree without the host parity floor comparison
+// (cinatra#3832) still loads this file and fails by assertion.
+import * as oneCardGate from "../chat-hitl-one-card-gate.mjs";
+import {
+  NO_PULL_REQUEST_RUN,
+  PULL_REQUEST_RUN,
+  UNREADABLE_BASE_RUN,
+  makeFloorRepo,
+} from "./floor-base-fixture.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE_REL = "scripts/audit/chat-hitl-one-card-gate.mjs";
@@ -1691,5 +1700,96 @@ describe("exemptions and the live tree", () => {
     expect(out).toMatch(/6\/6 kinds drawn by a named owner/);
     expect(out).not.toMatch(/STILL A PLACEHOLDER/);
     expect(res.status).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The host parity floor may not weaken against the base branch (cinatra#3832).
+// ---------------------------------------------------------------------------
+
+describe("the host parity floor may not weaken against the base", () => {
+  const FLOOR = "scripts/audit/chat-hitl-anchor-contract.json";
+  const ALL_FOUR = {
+    chat_thread: "transcript",
+    site_widget: "transcript",
+    run_card: "composition",
+    page_gate_region: "composition",
+  };
+  const contract = (hostParity) => ({ specCommit: "abc", domExpectations: { carriage: {}, hostParity }, digest: "0" });
+  const parity = (over = {}) => ({
+    artifact_review_gate: { hosts: { ...ALL_FOUR }, owed: [] },
+    agent_hitl_screen: { hosts: { chat_thread: "transcript" }, owed: ["run_card"] },
+    ...over,
+  });
+  const cleanups = [];
+  afterAll(() => cleanups.forEach((c) => c()));
+
+  function guard(base, head, env = PULL_REQUEST_RUN) {
+    expect(typeof oneCardGate.checkHostParityFloorAgainstBase).toBe("function");
+    const f = makeFloorRepo({ base: { [FLOOR]: base }, head: { [FLOOR]: head } });
+    cleanups.push(f.cleanup);
+    return oneCardGate.checkHostParityFloorAgainstBase({ repoRoot: f.root, env });
+  }
+
+  it("a host cell the base records and the head drops FAILS, naming the cell", () => {
+    const three = { chat_thread: "transcript", site_widget: "transcript", page_gate_region: "composition" };
+    const r = guard(contract(parity()), contract(parity({ artifact_review_gate: { hosts: three, owed: [] } })));
+    expect(r).toMatchObject({ ok: false, status: "grew" });
+    expect(r.lines.join("\n")).toContain("WEAKENED");
+    expect(r.lines.join("\n")).toContain("artifact_review_gate on run_card: recorded by composition at the base, not recorded at the head");
+  });
+
+  it("a recorded cell moved to `owed` FAILS", () => {
+    const head = parity({ agent_hitl_screen: { hosts: {}, owed: ["chat_thread", "run_card"] } });
+    const r = guard(contract(parity()), contract(head));
+    expect(r).toMatchObject({ ok: false, status: "grew" });
+    expect(r.lines.join("\n")).toContain("agent_hitl_screen on chat_thread");
+  });
+
+  it("a cell observed by a weaker method FAILS", () => {
+    const head = parity({ agent_hitl_screen: { hosts: { chat_thread: "composition" }, owed: ["run_card"] } });
+    const r = guard(contract(parity()), contract(head));
+    expect(r).toMatchObject({ ok: false, status: "grew" });
+    expect(r.lines.join("\n")).toContain("by the weaker composition at the head");
+  });
+
+  it("a new cell, a struck owed row, a new kind and an unchanged floor PASS", () => {
+    const grown = parity({
+      agent_hitl_screen: { hosts: { chat_thread: "transcript", run_card: "composition" }, owed: [] },
+      publish_decision: { hosts: { ...ALL_FOUR }, owed: [] },
+    });
+    expect(guard(contract(parity()), contract(grown))).toMatchObject({ ok: true, status: "held" });
+    expect(guard(contract(parity()), contract(parity()))).toMatchObject({ ok: true, status: "held" });
+  });
+
+  it("an unreadable base, a base copy that is no host parity record, and a malformed head fail closed", () => {
+    const r = guard(contract(parity()), contract(parity()), UNREADABLE_BASE_RUN);
+    expect(r).toMatchObject({ ok: false, status: "unreadable" });
+    expect(r.lines[0]).toMatch(/cannot be compared with the base: the base "origin\/no-such-base-3832" did not resolve/);
+    for (const bad of ["not json", { domExpectations: {} }, contract({ artifact_review_gate: { hosts: { chat_thread: "seen" } } })]) {
+      expect(guard(bad, contract(parity())), JSON.stringify(bad)).toMatchObject({ ok: false, status: "unreadable" });
+      expect(guard(contract(parity()), bad), JSON.stringify(bad)).toMatchObject({ ok: false, status: "malformed" });
+    }
+  });
+
+  it("a base without the anchor contract fails closed with its reason", () => {
+    const f = makeFloorRepo({ base: { "README.md": "x" }, head: { [FLOOR]: contract(parity()) } });
+    cleanups.push(f.cleanup);
+    expect(typeof oneCardGate.checkHostParityFloorAgainstBase).toBe("function");
+    const r = oneCardGate.checkHostParityFloorAgainstBase({ repoRoot: f.root, env: PULL_REQUEST_RUN });
+    expect(r).toMatchObject({ ok: false, status: "unreadable" });
+    expect(r.lines[0]).toContain(`${FLOOR} is not on the base`);
+  });
+
+  it("a run that is no pull request says so and passes", () => {
+    const r = guard(contract(parity()), contract(parity({ artifact_review_gate: { hosts: {}, owed: [] } })), NO_PULL_REQUEST_RUN);
+    expect(r).toMatchObject({ ok: true, status: "no-base" });
+  });
+
+  it("the real anchor contract parses to the ratchet's recorded cells", () => {
+    expect(typeof oneCardGate.parseHostParityFloor).toBe("function");
+    const floor = oneCardGate.parseHostParityFloor(readFileSync(join(REPO_ROOT, FLOOR), "utf8"));
+    expect([...Object.keys(floor)].sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+    expect(floor.artifact_review_gate).toEqual(ALL_FOUR);
   });
 });
