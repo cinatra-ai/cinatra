@@ -63,8 +63,9 @@ import {
  *      column stays NULL, as before.
  *   4. `artifact_audit` — the substrate audit row. NOT outbox-gated (D3).
  *   5. `buildBindingReconcileQueries` — spliced VERBATIM (drift tier a). The
- *      dashboard object type is self-registered + NON-dedicated-claim, so the
- *      winner CTE is empty and this is a no-op; splicing it pins the invariant.
+ *      dashboard pack declares its type with `claim: dedicated`, so the winner
+ *      CTE finds that claim wherever it is active in the org and the reconcile
+ *      then writes the winner binding.
  *   6. MEANING ASSERTION (cinatra#1896 Scope 2) — ONLY when the MATERIALIZE
  *      writers explicitly request it (`ctx.mintMeaningAssertion` true) AND a pack
  *      is named (`ctx.extensionId` non-null). Splices `buildAssertSemanticTypeQueries`
@@ -79,8 +80,8 @@ import {
  *   0. `pg_advisory_xact_lock(hashtext(dashboardId))`.
  *   1. `buildSoftDeleteObjectQuery` VERBATIM (drift tier a): objects `deleted_at`
  *      tombstone + a 'delete' graphiti outbox op + change_set + object_change_event,
- *      one atomic CTE. No explicit claim-binding withdraw is required — a dashboard
- *      mints no dedicated claim binding, so the tombstone + delete outbox suffice.
+ *      one atomic CTE. This path writes no explicit claim-binding withdraw; it
+ *      writes the tombstone + delete outbox only.
  *   2. `artifact_audit` (action='delete').
  */
 
@@ -299,11 +300,11 @@ export function buildDashboardTwinQueries(
   // equal-rank authoring_skill and the INSERT re-creates it (net one eligible row;
   // the shared builder's supersede semantics, same as every other materializer that
   // calls `assertSemanticType`). A `user` pin (rank 3) OUTRANKS authoring_skill
-  // (rank 2) — the INSERT's `WHERE NOT EXISTS` guard leaves it untouched. No binding
-  // collision on `sa_active_unique_idx` is reachable: the twin artifact's object type
-  // is the self-registered NON-dedicated generic `@cinatra-ai/dashboard-artifact:dashboard`,
-  // so `buildBindingReconcileQueries`' winner CTE is always empty ⇒ no active binding
-  // row for this artifact to collide with the classic INSERT.
+  // (rank 2) — the INSERT's `WHERE NOT EXISTS` guard leaves it untouched. On
+  // `sa_active_unique_idx` (unique per org, artifact and extension): the twin's
+  // object type is the type its pack declares with `claim: dedicated`, so a winner
+  // binding row can exist; it carries the claiming pack, while this classic row
+  // carries the materializing pack (`ctx.extensionId`), a different package.
   //
   // No migration: the `semantic_assertion` table + the `authoring_skill` source
   // already exist (semantic-assertion-schema.ts / semantic-assertion-store.ts).
@@ -318,11 +319,11 @@ export function buildDashboardTwinQueries(
         }).queries
       : [];
 
-  // ORDER: `meaningOps` BEFORE `bindingOps`. For the real fleet this is
-  // immaterial — a dashboard twin's object type is the self-registered
-  // NON-dedicated generic `dashboard`, so `bindingOps`' winner CTE is empty and
-  // the reconcile is a total no-op (it neither archives nor inserts). The order
-  // only matters in the (grep-verified-absent, hypothetical) case where a pack
+  // ORDER: `meaningOps` BEFORE `bindingOps`. The dashboard pack declares the twin
+  // type with `claim: dedicated`, so the reconcile writes that pack's winner
+  // binding where the claim is active; that row carries a different extension
+  // than the classic meaning row. The order only matters in the
+  // (grep-verified-absent, hypothetical) case where a pack
   // holds a DEDICATED cross-claim over the base `dashboard` type AND materializes:
   // then the binding reconcile is the STRONGER identity, and running it AFTER the
   // classic mint lets its same-extension supersede archive the just-minted classic
