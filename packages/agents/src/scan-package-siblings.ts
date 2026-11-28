@@ -20,10 +20,12 @@
  * - Block non-example `.env*` files outright — even an empty `.env` is a
  *   smell. `.env.example` is allowed and scanned.
  * - Cap per-file scan size at 1 MB — emit a `warning`, never silently skip.
- * - The canonical OAS file (`cinatra/oas.json` / `cinatra/agent.json` at the
- *   package root) is skipped here — covered by the OAS scanner. Nested
- *   copies at any other path (e.g. `examples/agent.json`) ARE scanned;
- *   see CANONICAL_OAS_RELPATHS below.
+ * - The agent's definition file (`cinatra/oas.json` at the package root) is
+ *   skipped here — covered by the OAS scanner. So is an old-layout
+ *   `cinatra/agent.json`: nothing reads it and a publish never ships it
+ *   (OLD_LAYOUT_DEFINITION_FILES in verdaccio/client.ts). Nested copies at any
+ *   other path (e.g. `examples/agent.json`) ARE scanned; see
+ *   CANONICAL_OAS_RELPATHS below.
  * - Locations are deterministic: alphabetical traversal order, POSIX
  *   separators, `<relPath>:<lineNum>` format.
  * - Findings NEVER echo the matched secret — only the pattern label and
@@ -115,13 +117,14 @@ export const LOCKFILE_BASENAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Canonical relative paths of the agent's structured OAS file inside the
- * package root — handled by the OAS scanner, so we don't double-scan them.
+ * Relative paths inside the package root that this scan skips: the agent's
+ * definition file `cinatra/oas.json` (handled by the OAS scanner, so we don't
+ * double-scan it) and the old-layout `cinatra/agent.json` (never read, never
+ * shipped by a publish).
  *
  * These MUST be path-exact, not basename-only. Basename-only matching would
  * skip any file named `oas.json` / `agent.json` anywhere under the package,
  * leaving `examples/agent.json`, `tests/fixtures/oas.json`, etc. unscanned.
- * Only the canonical `cinatra/oas.json` and `cinatra/agent.json` are exempt.
  */
 const CANONICAL_OAS_RELPATHS: ReadonlySet<string> = new Set([
   "cinatra/oas.json",
@@ -168,8 +171,8 @@ export interface PackageFileEntry {
   /** True if basename is a forbidden `.env*` file. */
   isEnvBlocked: boolean;
   /**
-   * True if this file's relative path matches the canonical OAS location
-   * (`cinatra/oas.json` or `cinatra/agent.json`). Basename matching is too
+   * True if this file's relative path is `cinatra/oas.json` (or the old-layout
+   * `cinatra/agent.json`, which the scan also skips). Basename matching is too
    * broad — nested copies (examples/, fixtures/, docs/) MUST still be scanned.
    */
   isCanonicalOasFile: boolean;

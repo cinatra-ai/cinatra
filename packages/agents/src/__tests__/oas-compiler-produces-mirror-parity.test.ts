@@ -180,6 +180,20 @@ describe("the service-description produces mirror (cinatra#3095)", () => {
     const res = await compile(oasPath);
     expect(res.ok).toBe(true);
   });
+
+  it("reads the manifest one level above cinatra/ only: a package.json inside cinatra/ is not a manifest (cinatra#4920)", async () => {
+    // No <root>/package.json. The old probe fell back to <root>/cinatra/package.json
+    // and refused the mirror against it; with no manifest above cinatra/ the
+    // parity check is skipped, as for any package without a readable manifest.
+    const oasPath = writeFixture({ mirror: [{ extension: "@example-org/mirror-ext" }], manifestProduces: [] });
+    rmSync(path.join(tempDir, "package.json"));
+    writeFileSync(
+      path.join(tempDir, "cinatra", "package.json"),
+      JSON.stringify({ name: "@example-org/mirror-agent", version: "1.0.0", cinatra: { produces: [{ extension: "@example-org/other-ext" }] } }),
+    );
+    const res = await compile(oasPath);
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("compareAgentProducesMirror (the pure rule)", () => {
