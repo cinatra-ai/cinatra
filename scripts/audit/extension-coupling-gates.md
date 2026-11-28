@@ -321,6 +321,99 @@ As the epic waves (#974–#977, #979) evict each cluster into its owning
 extension, the floor ratchets toward the sanctioned-surface set; the baseline
 file is the authoritative current count.
 
+### The SDK's exported names (cinatra#4875)
+
+The path scan above excludes `packages/sdk-extensions/`, so a port contract
+named for a connector family or a vendor (`CrmConnector`, `BlogConnector`,
+`CrmPointerWriterProvider`) passed every gate. The same gate, in the same step
+of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
+
+- **What it reads.** The names a pack can import from the two SDK packages
+  the conformance gate lets a pack depend on (`@cinatra-ai/sdk-extensions` and
+  `@cinatra-ai/sdk-ui`). The scope is deliberately narrow and fails closed. Of
+  each package's `exports` map the rule reads exactly the two entry forms the
+  SDK packages use today:
+  - (A) a string target to a TypeScript source file (`./src/x.ts` or
+    `./src/x.tsx`, not a declaration file) that exists in the package: that
+    file is the entry;
+  - (B) a conditions object whose keys are exactly `types` and then `default`,
+    both string targets to files that exist in the package, `types` a
+    declaration file (`.d.ts`, `.d.mts`, `.d.cts`): the `types` file is the
+    entry (the names a TypeScript consumer gets).
+
+  Any other form fails the check as a scanner error (exit 2), "export form not
+  read yet", naming the package and the subpath: a conditions object at the
+  root of `exports`, any other condition name or order, a fallback array, a
+  null, a subpath pattern or folder subpath, an extensionless target, a
+  JavaScript or declaration-file string target, and a target that names no
+  file inside the package. A form the rule does not read never passes unread.
+- **The names of an entry.** The top-level exported names as the TypeScript
+  type checker gives them for the entry file (`getExportsOfModule`), in a
+  program with the compiler options of the repository's root `tsconfig.json`
+  (`paths` and module resolution included; its root files are the SDK entry
+  files only): named exports, re-exports under their exported name, the names
+  `export *` brings, a namespace export (`export * as ns`, `export namespace`)
+  by its own name only, and type-only exports. The export named `default`
+  contributes no name, whatever its form (`export default` of any expression
+  or declaration, `export { X as default }`, `export { default } from`,
+  `export =`): a consumer of a default export chooses the import name itself
+  (`import Anything from "..."`), so the declared name of a default export is
+  not a name a pack must spell. It is skipped silently and nothing about it is
+  resolved; reading it is a later stage. A named export of another module's
+  default (`export { default as X } from "./x"`) is read by its exported name
+  `X`. A declaration file that is no module is read through the ambient
+  modules it declares (`declare module "x" { ... }`), each under its module
+  name. Members of an exported namespace, interface, class, enum or const
+  object are not read: the port rule of cinatra#4872
+  (`scripts/ci/core-extension-border-gate.mjs`) reads port members.
+- **How a name matches.** The matched text is what a pack writes: the
+  exported name as the consumer imports it (`export { A as B }` by `B`,
+  `export * as ns` by `ns`, a string export name as written), never the name
+  of the declaration it aliases. The same name is matched, recorded and
+  reported. It is split into words
+  on `_`, `-`, camelCase, acronym runs (`CRMConnector` gives `crm`,
+  `connector`) and digits. It is a finding when one word, or a run of
+  consecutive words written together (`WordPress` gives `wordpress`), equals a
+  border word of either list (vendor or domain), case-insensitively. A border
+  word inside a longer word is not found (whole words only).
+- **The words.** Both lists of `scripts/audit/lib/border-words.mjs`; the gate
+  names no pack and no word.
+- **Fail closed.** Besides an export form the rule does not read, an
+  `export ... from` whose module does not resolve and an exported name that
+  does not resolve are scanner errors (exit 2) that name the entry.
+- **The record.** Each finding is an entry of `sdkNames` in
+  `vendor-token-core-gate.baseline.json`, one per entry specifier, name and
+  matched word (`@cinatra-ai/sdk-extensions/blog-contract :: BlogConnector :: blog`),
+  each with a reason (a sentence of six words or more); the record is edited
+  by hand and the floor writer keeps it. A name with a word not recorded for
+  it fails (a new name, or a recorded name that gains a newly declared word),
+  a recorded word the name no longer carries fails as stale (the entry is
+  removed), and an entry without a reason fails. The record only shrinks
+  against `VENDOR_TOKEN_BASE` through the shared floor base guard (below): an
+  entry the base's record does not hold fails, whatever changed or did not
+  change, so a head entry may not hold a word the base's entry for that name
+  does not hold (the word-born admission of the path scan does not apply to
+  this record). The section is never removed, as `agent-extension-code-gate.mjs`
+  fails a removed class: a head baseline without the `sdkNames` property
+  fails ("the section is removed"), also when the section would be empty; an
+  empty section is written as `{}` and stays. The one-time seed applies only
+  when the BASE baseline has no `sdkNames` property (before cinatra#4875);
+  because the head must always carry the property, the seed cannot recur. If
+  cinatra#4850 decides that a family contract stays in the SDK, its entries
+  stay with that reason.
+- **Limits.** For form (B) the names come from the declaration file: names
+  that only the JavaScript file exports at run time are not read (for example
+  a JavaScript file that re-exports from another JavaScript file whose
+  declaration file differs). Every other export form fails until a later stage
+  reads it. A word hidden by an abbreviation or a deliberate misspelling, or
+  written into a longer word without a case or separator boundary, is not
+  found; names reachable only as members of an exported namespace, value or
+  type are not read, and the subpath names of the `exports` map are not
+  matched. The declared name of a default export is not read (a consumer
+  names the import itself); neither SDK package has a default export today. When an extension newly declares a word that an SDK name carries,
+  also a name already recorded for another word, the record cannot grow: that
+  pin advance fails until the SDK name is renamed or the owner decides.
+
 ## Border words — declared by the extensions (cinatra#4848)
 
 The vendor gate and class 2 of the application border gate find a crossing by
@@ -1029,6 +1122,7 @@ for its floor:
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
 | `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | an item the base does not hold in any class (as a multiset), or a class removed | `AGENT_EXTENSION_CODE_BASE` |
+| `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` only) | `sdkNames` in `vendor-token-core-gate.baseline.json` | a new (entry specifier, name, word) entry, whatever changed, or the `sdkNames` section removed; only a base without `sdkNames` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
 | `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
