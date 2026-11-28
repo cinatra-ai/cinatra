@@ -233,7 +233,10 @@ describe("resolveRoleArtifactTypes + the artifact-dashboard-twin role", () => {
       { packageName: PANEL, roles: undefined },
     ]);
     expect(errors).toEqual([]);
-    expect(resolve(roles, TYPES)).toEqual({ "artifact-dashboard-twin": `${BOARD}:board` });
+    expect(resolve(roles, TYPES)).toEqual({
+      types: { "artifact-dashboard-twin": `${BOARD}:board` },
+      errors: [],
+    });
   });
 
   it("FAILS when two packs claim the artifact-dashboard-twin role", () => {
@@ -247,17 +250,64 @@ describe("resolveRoleArtifactTypes + the artifact-dashboard-twin role", () => {
   });
 
   it("gives no type to a claimant that owns none or several (foreign claims do not count)", () => {
+    // A role core reads a type from FAILS generation instead; any other role
+    // simply has no entry.
+    const result = resolve(
+      { "artifact-dashboard-twin": BOARD, "artifact-other": PANEL },
+      {
+        [BOARD]: [{ type: "@example-org/other-artifact:thing", claim: "dedicated" }],
+        [PANEL]: [
+          { type: `${PANEL}:a`, claim: "dedicated" },
+          { type: `${PANEL}:b`, claim: "dedicated" },
+        ],
+      },
+    );
+    expect(result.types).toEqual({});
+    expect(result.errors).toEqual([
+      'role "artifact-dashboard-twin" is claimed by @example-org/board-artifact, which owns 0 ' +
+        "object types (a role that carries a type must resolve to exactly one)",
+    ]);
+  });
+
+  it("FAILS generation when the type-bearing role's claimant owns two types, naming role, pack and count", () => {
+    const { types, errors } = resolve(
+      { "artifact-dashboard-twin": PANEL },
+      {
+        [PANEL]: [
+          { type: `${PANEL}:a`, claim: "dedicated" },
+          { type: `${PANEL}:b`, claim: "dedicated" },
+        ],
+      },
+    );
+    expect(types).toEqual({});
+    expect(errors.join("\n")).toMatch(
+      /role "artifact-dashboard-twin" is claimed by @example-org\/panel-artifact, which owns 2 object types/,
+    );
+  });
+
+  it("FAILS generation when the type-bearing role's claimant owns no type", () => {
+    const { types, errors } = resolve({ "artifact-dashboard-twin": BOARD }, { [BOARD]: [] });
+    expect(types).toEqual({});
+    expect(errors.join("\n")).toMatch(
+      /role "artifact-dashboard-twin" is claimed by @example-org\/board-artifact, which owns 0 object types/,
+    );
+  });
+
+  it("still generates for a role that carries no type, claimed by a pack with two types", () => {
     expect(
       resolve(
-        { "artifact-dashboard-twin": BOARD, "artifact-other": PANEL },
+        { "artifact-other": PANEL },
         {
-          [BOARD]: [{ type: "@example-org/other-artifact:thing", claim: "dedicated" }],
           [PANEL]: [
             { type: `${PANEL}:a`, claim: "dedicated" },
             { type: `${PANEL}:b`, claim: "dedicated" },
           ],
         },
       ),
-    ).toEqual({});
+    ).toEqual({ types: {}, errors: [] });
+  });
+
+  it("still generates when no pack claims the type-bearing role (a presence-degraded universe)", () => {
+    expect(resolve({}, {})).toEqual({ types: {}, errors: [] });
   });
 });

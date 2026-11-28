@@ -74,7 +74,8 @@ export const GENERATED_AGENT_ROLE_BINDINGS: Readonly<Record<string, string>> = {
 
 // The object type each role's claimant OWNS (cinatra#4849): role name ->
 // the one type id namespaced by the claimant's own package. A claimant
-// that owns none or several types has no entry. Host code that needs the
+// that owns none or several types has no entry, except that a claimed
+// role core reads a type from fails generation. Host code that needs the
 // claimant's TYPE (the dashboards twin) reads it here through
 // src/lib/extension-roles.ts instead of spelling a pack type id.
 export const GENERATED_ROLE_ARTIFACT_TYPES: Readonly<Record<string, string>> = {

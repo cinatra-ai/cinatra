@@ -2501,11 +2501,14 @@ export async function buildManifest() {
     mergeRoleDeclarations(roleDeclarations);
   bindingErrors.push(...mergeErrors, ...roleErrors);
   // The type each role's claimant owns (cinatra#4849): host code that needs
-  // the claimant's TYPE reads it here instead of spelling a pack type id.
-  const roleArtifactTypes = resolveRoleArtifactTypes(
+  // the claimant's TYPE reads it here instead of spelling a pack type id. A
+  // claimed type-bearing role that does not resolve to exactly one type is a
+  // generation error (TYPE_BEARING_ROLES in agent-binding-kinds.mjs).
+  const { types: roleArtifactTypes, errors: roleTypeErrors } = resolveRoleArtifactTypes(
     agentRoleBindings,
     Object.fromEntries(records.map((r) => [r.packageName, r.artifactObjectTypes ?? []])),
   );
+  bindingErrors.push(...roleTypeErrors);
 
   // Field-renderer COMPONENT map (cinatra#1625, epic #1620 S8 — M3 spine): the
   // literal-import BUILD table of extension-shipped field-renderer components,
@@ -3607,7 +3610,8 @@ function emitAgentBindings(fieldRendererBindings, roleBindings, roleArtifactType
     `};\n\n` +
     `// The object type each role's claimant OWNS (cinatra#4849): role name ->\n` +
     `// the one type id namespaced by the claimant's own package. A claimant\n` +
-    `// that owns none or several types has no entry. Host code that needs the\n` +
+    `// that owns none or several types has no entry, except that a claimed\n` +
+    `// role core reads a type from fails generation. Host code that needs the\n` +
     `// claimant's TYPE (the dashboards twin) reads it here through\n` +
     `// src/lib/extension-roles.ts instead of spelling a pack type id.\n` +
     `export const GENERATED_ROLE_ARTIFACT_TYPES: Readonly<Record<string, string>> = {\n` +

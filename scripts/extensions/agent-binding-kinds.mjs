@@ -294,19 +294,29 @@ export function mergeRoleDeclarations(declarations) {
 }
 
 /**
+ * The roles host code reads a TYPE from (cinatra#4849): the dashboards twin
+ * writes the type the `artifact-dashboard-twin` claimant owns. A claimed role
+ * in this list must resolve to exactly one owned type, or generation fails.
+ */
+export const TYPE_BEARING_ROLES = Object.freeze(["artifact-dashboard-twin"]);
+
+/**
  * The object type each role's claimant OWNS (cinatra#4849), for host code that
- * needs the claimant's TYPE rather than its package (the dashboards twin
- * writes the type the `artifact-dashboard-twin` claimant owns).
+ * needs the claimant's TYPE rather than its package.
  * Input: the merged `{ role -> packageName }` map and
- * `{ packageName -> declared objectTypes }`. Output: `{ role -> type }`
- * (sorted keys) for every role whose claimant owns exactly ONE type (an id
- * namespaced by the claimant's own package; a foreign claim is not owned). A
- * claimant that owns none or several has no single type and gets no entry;
- * the role itself still binds its package. Single claimant per role is
- * enforced by `mergeRoleDeclarations`; what a pack accepts plays no part.
+ * `{ packageName -> declared objectTypes }`. Output: `{ types, errors }`, where
+ * `types` is `{ role -> type }` (sorted keys) for every role whose claimant owns
+ * exactly ONE type (an id namespaced by the claimant's own package; a foreign
+ * claim is not owned). A claimant that owns none or several has no entry; for a
+ * role in TYPE_BEARING_ROLES that is an ERROR naming the role, the claimant and
+ * the count, while any other role still binds its package with no type. An
+ * unclaimed role has no entry and no error: a presence-degraded universe (a
+ * fresh clone without the extension tree) still generates. Single claimant per
+ * role is enforced by `mergeRoleDeclarations`; what a pack accepts plays no part.
  */
 export function resolveRoleArtifactTypes(roleBindings, objectTypesByPackage) {
   const out = [];
+  const errors = [];
   for (const [role, packageName] of Object.entries(roleBindings)) {
     const declared = objectTypesByPackage[packageName];
     const owned = [
@@ -316,7 +326,14 @@ export function resolveRoleArtifactTypes(roleBindings, objectTypesByPackage) {
           .filter((type) => type !== null && type.startsWith(`${packageName}:`)),
       ),
     ];
-    if (owned.length === 1) out.push([role, owned[0]]);
+    if (owned.length === 1) {
+      out.push([role, owned[0]]);
+    } else if (TYPE_BEARING_ROLES.includes(role)) {
+      errors.push(
+        `role "${role}" is claimed by ${packageName}, which owns ${owned.length} object types ` +
+          `(a role that carries a type must resolve to exactly one)`,
+      );
+    }
   }
-  return Object.fromEntries(out.sort(([a], [b]) => a.localeCompare(b)));
+  return { types: Object.fromEntries(out.sort(([a], [b]) => a.localeCompare(b))), errors };
 }
