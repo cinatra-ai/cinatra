@@ -476,7 +476,6 @@
       "@cinatra-ai/linkedin-oauth-connector/actions": ["./extensions/cinatra-ai/linkedin-oauth-connector/src/actions.ts"],
       "@cinatra-ai/apollo-connector/widgets": ["./extensions/cinatra-ai/apollo-connector/src/widgets/index.ts"],
       "@cinatra-ai/apollo-connector/widgets/manifest": ["./extensions/cinatra-ai/apollo-connector/src/widgets/manifest.ts"],
-      "@cinatra-ai/trigger-email-send": ["./packages/trigger-email-send/src/index.ts"],
       "@cinatra-ai/trigger": ["./packages/trigger/src/index.ts"],
       "@cinatra-ai/trigger/module": ["./packages/trigger/src/integration/module.ts"],
       "@cinatra-ai/permissions/mcp-handlers": ["./packages/permissions/src/mcp/handlers.ts"],

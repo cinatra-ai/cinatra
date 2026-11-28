@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json` or `cinatra/agent.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -768,12 +768,17 @@ regular file or does not parse, and a pack whose `cinatra.kind` cannot be
 read are scanner errors (exit 2), never a pass. Classes 2 to 4 apply to every
 pinned pack. Class 1 applies to every pack the product treats as an agent
 (the constant `AGENT_DEFINITION_PATHS`): its manifest says kind `agent`, OR
-its pinned tree holds an entry at (or below) `cinatra/oas.json` or
-`cinatra/agent.json`. These are the paths the product's discovery tests at a
-pack root `extensions/<scope>/<name>`: `collectDefinitions` in
-`src/lib/git-native-agent-ingest.ts` (it reads `cinatra/oas.json` and reports
-an old `cinatra/agent.json` without loading it) and the production seed
-`scripts/extensions/build-required-oas-seed.mjs` (`cinatra/oas.json`). The
+its pinned tree holds an entry at (or below) `cinatra/oas.json`, the one
+definition file the product's discovery reads at a pack root
+`extensions/<scope>/<name>`: `collectDefinitions` in
+`src/lib/git-native-agent-ingest.ts` and the production seed
+`scripts/extensions/build-required-oas-seed.mjs` (cinatra#4920). The old
+`cinatra/agent.json` and `agent.json` (`OLD_DEFINITION_PATHS`) are reported by
+the product and not loaded: a pinned pack that holds one of them and no
+`cinatra/oas.json` fails the gate (exit 1, also for `--write-baseline` and
+`--seed`) with the file to move to `cinatra/oas.json`; `--report` lists it.
+Stated limit: a pack that is not of kind `agent` and holds its flow under any
+other name is not judged as an agent. The
 ingest's two fallback layouts lie one level higher, outside any pack root. A
 test reads both source files and fails when their condition changes. So a
 connector, artifact or skill pack that adds a flow is judged as an agent; its
@@ -855,7 +860,7 @@ the issue), 167 files under test folders (`test/`, `tests/`,
 `.npmrc`, 3 `vitest.config.ts` and 2 other check scripts. No agent pack's
 pinned tree has a `skills/` folder, so counting such files changed none of
 these numbers. The agent rule (kind `agent`, or a pinned tree with
-`cinatra/oas.json` or `cinatra/agent.json`) adds no pack on these pins: every
+`cinatra/oas.json`; then also `cinatra/agent.json`) adds no pack on these pins: every
 pinned pack with such a file is of kind `agent` (117 pinned packs: 30 agent,
 30 connector, 30 artifact, 27 skill), so the 254 files stay. The test-file name rule then leaves out the `*.test.*`
 and `*.spec.*` files: the list holds 95.

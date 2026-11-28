@@ -61,9 +61,8 @@
 //
 // The strictness the trust root depends on is untouched in both modes: the
 // same scope-derived `<root>/<vendor>/<slug>/cinatra/oas.json` naming rule,
-// the same parsePackageId traversal guard, `cinatra/oas.json` ONLY (no
-// agent.json / legacy-flat fallback), and the mount keeps precedence so an
-// explicitly installed package always wins.
+// the same parsePackageId traversal guard, `cinatra/oas.json` ONLY, and the
+// mount keeps precedence so an explicitly installed package always wins.
 
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -98,9 +97,8 @@ function oasPathIfExists(root: string, vendor: string, name: string): string | n
  *
  * `cinatra/oas.json` ONLY: the materializer REQUIRES it (a mount dir without
  * it never finalizes), and the trust-root consumers (the context routes)
- * deliberately stay strict — no agent.json / legacy-flat-layout fallback
- * here. First-party (`@cinatra-ai/...`) and operator/third-party vendors
- * resolve identically (cinatra#1196).
+ * deliberately stay strict. First-party (`@cinatra-ai/...`) and
+ * operator/third-party vendors resolve identically (cinatra#1196).
  */
 export function resolveInstalledOasPathForRead(packageName: string): string | null {
   // Semantics deliberately UNCHANGED from the pre-#2297 resolver, down to the

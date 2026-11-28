@@ -78,7 +78,7 @@ export type PurgeDeps = {
   loadVerdaccioConfig: () => Promise<ResolvedVerdaccioConfig>;
   /**
    * Authoritative kind: the `cinatra.kind` field from the package.json as
-   * stored in the registry packument (NOT the agent.json extractor, which
+   * stored in the registry packument (NOT the cinatra/oas.json extractor, which
    * throws for skill/connector packages). Returns null when no explicit kind
    * is declared (legacy agents) or the package is absent.
    */
@@ -199,7 +199,7 @@ export async function planExtensionPurge(
 
   // (1) AUTHORITATIVE kind — the package.json `cinatra.kind` field as stored
   //     in the registry packument manifest. This is the ONLY trustworthy
-  //     kind source: getAgentPackage extracts agent.json and THROWS for
+  //     kind source: getAgentPackage extracts cinatra/oas.json and THROWS for
   //     skill/connector packages (no agent payload). Relying on it would
   //     mis-resolve a connector/skill as a legacy null->"agent" agent, so
   //     resolvePackageKind reads package.json directly.
