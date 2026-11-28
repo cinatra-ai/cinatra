@@ -24,6 +24,7 @@ import { resolve } from "node:path";
 
 import { CLASSIFICATION_ENTRIES, lookupClassification, type Action } from "../registry";
 import { PRIMITIVE_CLASSIFICATIONS } from "../inventory-augment";
+import * as augmentModule from "../inventory-augment";
 import { CARVE_OUTS } from "../carve-out";
 import type { ResourceType } from "../resource-ref";
 
@@ -32,8 +33,20 @@ const INVENTORY_PATH = resolve(REPO_ROOT, "src/lib/authz/__generated__/inventory
 
 type InventoryFile = {
   generatedBy: string;
-  primitives: { primitiveName: string; file: string; line: number }[];
+  primitives: { primitiveName: string; file: string; line: number; road?: string }[];
 };
+
+// cinatra#4895: a passthrough row is classified in its own map, which the MCP
+// boundary never reads; every other row in the MCP map.
+type RowClassification = { resourceType: string; action: string; status: string };
+const PASSTHROUGH_CLASSIFICATIONS = ((augmentModule as Record<string, unknown>).PASSTHROUGH_TOOL_CLASSIFICATIONS ??
+  {}) as Record<string, RowClassification>;
+
+function classificationOfRow(p: { primitiveName: string; road?: string }): unknown {
+  return p.road === "passthrough"
+    ? PASSTHROUGH_CLASSIFICATIONS[p.primitiveName]
+    : PRIMITIVE_CLASSIFICATIONS[p.primitiveName];
+}
 
 function loadInventory(): InventoryFile {
   return JSON.parse(readFileSync(INVENTORY_PATH, "utf8"));
@@ -44,7 +57,7 @@ describe("authz invariant coverage", () => {
     const inv = loadInventory();
     const missing: string[] = [];
     for (const p of inv.primitives) {
-      if (!PRIMITIVE_CLASSIFICATIONS[p.primitiveName]) missing.push(p.primitiveName);
+      if (!classificationOfRow(p)) missing.push(p.primitiveName);
     }
     if (missing.length > 0) {
       // De-duplicate before reporting: one primitive may appear N times in
@@ -60,7 +73,10 @@ describe("authz invariant coverage", () => {
 
   it("every classification's (resourceType, action) exists in the registry", () => {
     const orphans: string[] = [];
-    for (const [name, cls] of Object.entries(PRIMITIVE_CLASSIFICATIONS)) {
+    for (const [name, cls] of [
+      ...Object.entries(PRIMITIVE_CLASSIFICATIONS),
+      ...Object.entries(PASSTHROUGH_CLASSIFICATIONS),
+    ]) {
       const reg = lookupClassification(cls.resourceType as ResourceType, cls.action as Action);
       if (!reg) orphans.push(`${name} → ${cls.resourceType}::${cls.action}`);
     }
@@ -71,6 +87,23 @@ describe("authz invariant coverage", () => {
       );
     }
     expect(orphans).toEqual([]);
+  });
+
+  it("every inventory row records its road, and a passthrough classification names a passthrough row", () => {
+    const inv = loadInventory();
+    const roadless = inv.primitives
+      .filter((p) => p.road !== "mcp" && p.road !== "passthrough")
+      .map((p) => `${p.primitiveName} (${p.file})`);
+    expect(roadless).toEqual([]);
+    const passthroughRows = new Set(
+      inv.primitives.filter((p) => p.road === "passthrough").map((p) => p.primitiveName),
+    );
+    const stale = Object.keys(PASSTHROUGH_CLASSIFICATIONS).filter((n) => !passthroughRows.has(n));
+    expect(stale).toEqual([]);
+    const notAtRoute = Object.entries(PASSTHROUGH_CLASSIFICATIONS)
+      .filter(([, c]) => c.status !== "passthrough_route")
+      .map(([n]) => n);
+    expect(notAtRoute).toEqual([]);
   });
 
   it("every CarveOut targets a real primitive (no stale entries)", () => {

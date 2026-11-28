@@ -2,10 +2,20 @@
 /**
  * Authz inventory builder.
  *
- * Statically scans every `server.registerTool(...)` invocation across
+ * Statically scans every road by which a tool is registered across
  * `packages/`, `extensions/`, and `src/` and emits a machine-readable JSON
  * matrix consumed by the authz inventory guard test at:
  *   src/lib/authz/__tests__/drift-gate.test.ts
+ *
+ * Each row records its road (cinatra#4895):
+ *   - "mcp": a tool on the MCP server — a literal `server.registerTool(name`,
+ *     a `*TOOL_META*` block key, or a pack's `ctx.mcp.registerTool({ name`.
+ *   - "passthrough": a name the deterministic passthrough route admits
+ *     (`ALLOWED_TOOLS` in src/app/api/agents/passthrough/route.ts, with the sets
+ *     it spreads in) that no MCP road registers. A name the route admits that
+ *     IS an MCP tool is dispatched to that tool's handler and keeps its mcp row.
+ * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
+ * that pack, any other path is core.
  *
  * Hand-augmentation of classification per primitive lives in:
  *   src/lib/authz/inventory-augment.ts
@@ -20,7 +30,12 @@ import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(fileURLToPath(import.meta.url), "../..");
+const args = process.argv.slice(2);
+const check = args.includes("--check");
+// `--root <dir>` runs the builder on another tree (a test fixture).
+const rootArg = args.indexOf("--root");
+const ROOT =
+  rootArg === -1 ? resolve(fileURLToPath(import.meta.url), "../..") : resolve(args[rootArg + 1] ?? "");
 const ROOTS = ["packages", "extensions", "src"];
 const OUT = join(ROOT, "src/lib/authz/__generated__/inventory.json");
 
@@ -32,14 +47,17 @@ const REGISTER_RE = /server\s*\.\s*registerTool\s*\(\s*["'`]([a-zA-Z0-9_]+)["'`]
 // never appear in a registerTool string arg. Scan for those too.
 const TOOL_META_BLOCK_RE = /(?:[A-Z_]*TOOL_META[A-Z_]*)\s*:\s*Record<[^>]+>\s*=\s*\{([\s\S]*?)\n\}\s*;/g;
 const TOOL_META_KEY_RE = /^\s{2,}(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s*:\s*\{/gm;
-// Some packages register tools inline (no TOOL_META) — pick up `name:` keys
-// inside `createXxxHandlers()` return blocks.
-const HANDLER_FACTORY_RE = /createPrimitiveHandlers|createReleaseWorkflowsHandlers|createSkillsPrimitiveHandlers|createObjectsPrimitiveHandlers|createListsPrimitiveHandlers|createDashboardsPrimitiveHandlers|createAccountsPrimitiveHandlers|createContactsPrimitiveHandlers|createMetricCostHandlers|createMetricUsageHandlers|createTriggerPrimitiveHandlers|createChatPrimitiveHandlers|createAgentsPrimitiveHandlers|createExtensionsPrimitiveHandlers|createMcpHandlers|createMcpModuleHandlers|createMcpHandlersModule/;
+// A pack's `register(ctx)` registers on the host MCP server through its port.
+const CTX_REGISTER_RE = /\.mcp\s*\.\s*registerTool\s*\(\s*\{\s*name\s*:\s*["'`]([a-zA-Z0-9_]+)["'`]/g;
+// The passthrough road: the route's allow list and the sets it spreads in.
+const PASSTHROUGH_ROUTE = "src/app/api/agents/passthrough/route.ts";
 
 /** @param {string} dir */
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
     if (entry === "node_modules" || entry === ".next" || entry === "dist" || entry === "__generated__") continue;
+    // Test files register fixture tools; they are not registration roads.
+    if (entry === "__tests__" || /\.test\.tsx?$/.test(entry)) continue;
     const full = join(dir, entry);
     let s;
     try {
@@ -82,6 +100,10 @@ function scan() {
           line,
         });
       }
+      CTX_REGISTER_RE.lastIndex = 0;
+      while ((m = CTX_REGISTER_RE.exec(body)) !== null) {
+        records.push({ primitiveName: m[1], file: relative(ROOT, file), line: lineAt(body, m.index) });
+      }
       // Also collect TOOL_META block keys — these are the canonical primitive
       // names every registry exposes through the per-handler iterator.
       TOOL_META_BLOCK_RE.lastIndex = 0;
@@ -117,11 +139,70 @@ function scan() {
     const prev = dedupe.get(key);
     if (!prev || prev.line > r.line) dedupe.set(key, r);
   }
-  const deduped = [...dedupe.values()];
+  const mcpNames = new Set(records.map((r) => r.primitiveName));
+  for (const r of dedupe.values()) r.road = "mcp";
+  for (const r of scanPassthrough()) {
+    if (mcpNames.has(r.primitiveName)) continue;
+    const key = `${r.primitiveName}::${r.file}`;
+    if (!dedupe.has(key)) dedupe.set(key, { ...r, road: "passthrough" });
+  }
+  const deduped = [...dedupe.values()].map(({ primitiveName, file, line, road }) => ({ primitiveName, file, road, line }));
   deduped.sort((a, b) =>
     a.primitiveName === b.primitiveName ? a.file.localeCompare(b.file) : a.primitiveName.localeCompare(b.primitiveName),
   );
   return deduped;
+}
+
+/** @param {string} body @param {number} index */
+function lineAt(body, index) {
+  return body.slice(0, index).split("\n").length;
+}
+
+/** @param {string} rel */
+function readRel(rel) {
+  try {
+    return readFileSync(join(ROOT, rel), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The names in one `NAME = new Set...([ ... ])` block of `rel`: string
+ * literals, constants declared in the same file as `export const X = "name"`,
+ * and `...SET` spreads followed to the file `rel` imports them from (`@/` is
+ * `src/`).
+ * @param {string} rel @param {string} setName @param {Set<string>} seen
+ * @returns {Array<{primitiveName:string,file:string,line:number}>}
+ */
+function namesOfSet(rel, setName, seen) {
+  const key = `${rel}::${setName}`;
+  if (seen.has(key)) return [];
+  seen.add(key);
+  const body = readRel(rel);
+  if (body === null) return [];
+  const block = new RegExp(`\\b${setName}\\b[^=\\n]*=\\s*new Set(?:<[^>]*>)?\\(\\[([\\s\\S]*?)\\]\\)`).exec(body);
+  if (!block) return [];
+  const blockStart = block.index + block[0].indexOf(block[1]);
+  const out = [];
+  const entryRe = /^\s*(?:"([a-z_][a-z0-9_]*)"|\.\.\.([A-Za-z_][A-Za-z0-9_]*)|([A-Z_][A-Z0-9_]*))\s*,?\s*(?:\/\/.*)?$/gm;
+  let e;
+  while ((e = entryRe.exec(block[1])) !== null) {
+    if (e[1]) {
+      out.push({ primitiveName: e[1], file: rel, line: lineAt(body, blockStart + e.index + e[0].indexOf('"')) });
+    } else if (e[2]) {
+      const imp = new RegExp(`import\\s*\\{[^}]*\\b${e[2]}\\b[^}]*\\}\\s*from\\s*["']@/([^"']+)["']`).exec(body);
+      out.push(...namesOfSet(imp ? `src/${imp[1]}.ts` : rel, e[2], seen));
+    } else if (e[3]) {
+      const decl = new RegExp(`export const ${e[3]}\\s*=\\s*"([a-z_][a-z0-9_]*)"`).exec(body);
+      if (decl) out.push({ primitiveName: decl[1], file: rel, line: lineAt(body, decl.index) });
+    }
+  }
+  return out;
+}
+
+function scanPassthrough() {
+  return namesOfSet(PASSTHROUGH_ROUTE, "ALLOWED_TOOLS", new Set());
 }
 
 function emit() {
@@ -137,9 +218,6 @@ function emit() {
   };
   return JSON.stringify(out, null, 2) + "\n";
 }
-
-const args = process.argv.slice(2);
-const check = args.includes("--check");
 
 const next = emit();
 if (check) {
