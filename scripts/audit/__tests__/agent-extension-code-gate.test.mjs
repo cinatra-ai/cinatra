@@ -1021,19 +1021,16 @@ test("live base guard: a base list without the hitlDeclarations class seeds it o
 });
 
 // The screen-file rule (cinatra#4532): an agent, skill or workflow pack (the role
-// packs, decided as the other rules decide) ships no `.tsx` or `.jsx` file. What
-// a pack ships is its manifest `files` list, read by `isInScope` of the
-// conformance gate; a pack without a usable list is read by its tracked files.
-// Test files are left out by the check's own `isTestFile`. Read through the
-// module namespaces so this file still loads where the gate has no such export.
-const CONFORMANCE_SOURCE = fileURLToPath(new URL("../../extensions/conformance-gate.mjs", import.meta.url));
-const conformance = await import(CONFORMANCE_SOURCE);
-
+// packs, decided as the other rules decide) tracks no `.tsx` or `.jsx` file at
+// its pinned commit. What a pack publishes is not read: the manifest `files`
+// list, `.npmignore` and npm's exclusions play no part. Test files are left out
+// by the check's own `isTestFile` (the base name only).
 const KEPT_SKILL = "@example-org/kept-skill";
 const SCREEN = "export {};\n";
 
 const jsxPacks = () => {
   const p = packs();
+  // A `files` list that keeps the tests out: it does not decide, every tracked file is read.
   p["read-agent"].packageJson.files = ["cinatra", "src", "!src/__tests__"];
   Object.assign(p["read-agent"].files, {
     "src/review.tsx": SCREEN,
@@ -1045,9 +1042,10 @@ const jsxPacks = () => {
     packageJson: { name: SKILL, cinatra: { kind: "skill" }, files: ["SKILL.md", "src"] },
     files: { "SKILL.md": "# pick\n", "src/panel.tsx": SCREEN, "src/panel.test.tsx": SCREEN, "src/panel-helper.ts": SCREEN, "scripts/preview.tsx": SCREEN },
   };
-  // No `files` list: every tracked file is read, and no folder name decides.
+  // No `files` list: no folder name decides either.
   p["post-workflow"] = { packageJson: { name: WORKFLOW, cinatra: { kind: "workflow" } }, files: { "lib/step-view.jsx": SCREEN, "lib/step-view.spec.jsx": SCREEN, "tests/helper.tsx": SCREEN } };
-  p["kept-skill"] = { packageJson: { name: KEPT_SKILL, cinatra: { kind: "skill" }, files: ["SKILL.md"] }, files: { "SKILL.md": "# kept\n", "dev/preview.tsx": SCREEN } };
+  // A tracked file that no `files` entry publishes is counted all the same, and a glob in the list is no error.
+  p["kept-skill"] = { packageJson: { name: KEPT_SKILL, cinatra: { kind: "skill" }, files: ["src/**/*.ts"] }, files: { "src/index.ts": "export {};\n", "tools/preview.tsx": SCREEN } };
   p["note-artifact"] = { packageJson: { name: NOTE_ARTIFACT, cinatra: { kind: "artifact" }, files: ["src"] }, files: { "src/renderers/detail.tsx": SCREEN } };
   p["mail-connector"].files["src/setup-page.tsx"] = SCREEN;
   // A connector whose pinned tree holds `cinatra/oas.json` is an agent by the check's own rule.
@@ -1062,51 +1060,38 @@ const jsxRecorded = () => ({
     [READ]: { count: 5, items: ["cinatra/tools/read.mjs", "src/legacy-view.JSX", "src/review.tsx", "test/helper.mjs", "tests/doubles/stub.tsx"] },
   },
   jsxFiles: {
+    [KEPT_SKILL]: { count: 1, items: ["tools/preview.tsx"] },
     [OAS_CONNECTOR]: { count: 1, items: ["src/view.tsx"] },
-    [SKILL]: { count: 1, items: ["src/panel.tsx"] },
+    [SKILL]: { count: 2, items: ["scripts/preview.tsx", "src/panel.tsx"] },
     [WORKFLOW]: { count: 2, items: ["lib/step-view.jsx", "tests/helper.tsx"] },
-    [READ]: { count: 2, items: ["src/legacy-view.JSX", "src/review.tsx"] },
+    [READ]: { count: 3, items: ["src/legacy-view.JSX", "src/review.tsx", "tests/doubles/stub.tsx"] },
   },
 });
 const jsxWithoutClass = () => {
   const { jsxFiles: _dropped, ...rest } = jsxRecorded();
   return rest;
 };
+const JSX_SUMMARY = /9 jsxFiles in 5 key\(s\)/;
 
-test("the screen-file rule: a .tsx or .jsx file is an item unless the check's own test-file predicate leaves it out; a pack ships what its files list says, as the conformance gate reads it, and every tracked file without a usable list; a list that cannot be read where it decides is refused", () => {
+test("the screen-file rule: a .tsx or .jsx file is an item unless the check's own test-file predicate leaves it out; the manifest files list plays no part", () => {
   assert.equal(typeof gate.jsxFileItems, "function", "the gate has no jsxFileItems");
-  assert.equal(typeof conformance.isInScope, "function", "conformance-gate.mjs does not export isInScope");
-  const LABEL = "@example-org/p (extensions/example-org/p/package.json at the pinned commit abc)";
-  const items = (rels, files) => gate.jsxFileItems(plain(...rels), files === undefined ? { name: "@example-org/p" } : { name: "@example-org/p", files }, LABEL);
+  const items = (...rels) => gate.jsxFileItems(plain(...rels));
 
   // The file kinds: `.tsx` and `.jsx`, whatever the case of the extension; no other kind.
-  assert.deepEqual(items(["a.tsx", "b.jsx", "C.TSX", "d.JSX", "e.ts", "f.js", "g.mjs", "h.mdx", "i.tsx.map", "j.json", "tsx", "src/k.jsx.ts"]), ["C.TSX", "a.tsx", "b.jsx", "d.JSX"]);
+  assert.deepEqual(items("a.tsx", "b.jsx", "C.TSX", "d.JSX", "e.ts", "f.js", "g.mjs", "h.mdx", "i.tsx.map", "j.json", "tsx", "src/k.jsx.ts"), ["C.TSX", "a.tsx", "b.jsx", "d.JSX"]);
 
   // Test files: by the check's own predicate, the base name only; a folder never decides.
   const names = ["a.test.tsx", "b.spec.jsx", "src/c.test.tsx", "src/__tests__/d.spec.jsx", "tests/helper.tsx", "__tests__/e.tsx", "test/f.jsx", "g.tests.tsx", "h.test.tsx.bak"];
-  for (const n of names) assert.deepEqual(items([n]), isTestFile(n) || !/\.(?:tsx|jsx)$/i.test(n) ? [] : [n], n);
-  assert.deepEqual(items(names), ["__tests__/e.tsx", "g.tests.tsx", "test/f.jsx", "tests/helper.tsx"]);
+  for (const n of names) assert.deepEqual(items(n), isTestFile(n) || !/\.(?:tsx|jsx)$/i.test(n) ? [] : [n], n);
+  assert.deepEqual(items(...names), ["__tests__/e.tsx", "g.tests.tsx", "test/f.jsx", "tests/helper.tsx"]);
+  for (const n of ["x.test.tsx", "src/x.test.jsx", "src/deep/x.spec.tsx", "tools/x.spec.JSX"]) assert.deepEqual(items(n), [], n);
 
-  // "Ships": the manifest files list, read by the conformance gate's own `isInScope`.
-  const tree = ["src/a.tsx", "src/__tests__/b.tsx", "cinatra/c.jsx", "lib/d.tsx", "tests/e.tsx", "root.tsx", "src2/f.tsx", "src/deep/g.jsx"];
-  for (const files of [["src"], ["src", "!src/__tests__"], ["src/", "!src/__tests__/"], ["cinatra", "lib"], ["root.tsx"], ["src/a.tsx"], ["src", "!src"]]) {
-    assert.deepEqual(items(tree, files), tree.filter((r) => conformance.isInScope(r, files)).sort(), JSON.stringify(files));
-  }
-  assert.deepEqual(items(tree, ["src", "!src/__tests__"]), ["src/a.tsx", "src/deep/g.jsx"]);
-  assert.deepEqual(items(tree, ["cinatra", "lib"]), ["cinatra/c.jsx", "lib/d.tsx"]);
-  // Without a usable list npm packs every file that is not ignored: every tracked file is read.
-  for (const files of [undefined, null, []]) assert.deepEqual(items(tree, files), [...tree].sort(), JSON.stringify(files));
+  // The path alone decides: a link counts like a file, and a nested path is the item as it stands in the tree.
+  assert.deepEqual(gate.jsxFileItems([{ rel: "src/view.tsx", link: true }, { rel: "tools/preview.tsx", link: false }]), ["src/view.tsx", "tools/preview.tsx"]);
 
-  // Fail closed where the list decides: a value that is no list of paths, and an entry the plain-path reading cannot place.
-  for (const files of ["src", 7, true, { src: true }, ["src", 7], ["src", null], [["src"]]]) {
-    assert.throws(() => items(tree, files), (e) => e instanceof Error && e.message === `${LABEL}: files is not a list of paths`, JSON.stringify(files));
-  }
-  for (const odd of ["src/**/*.tsx", "*.tsx", "!src/*.test.tsx", "src/{a,b}", "src/[ab]", "src/(a)", "src/a?", "./src", "/src", ".", "..", "../x", "!", "", "a\\b", "!!src"]) {
-    assert.throws(() => items(tree, ["src", odd]), (e) => e instanceof Error && e.message === `${LABEL}: files entry ${JSON.stringify(odd)} is not a plain relative path; the check cannot tell what it ships`, JSON.stringify(odd));
-  }
-  // ... and only there: the list is not read for a pack that holds no file this rule could count.
-  assert.deepEqual(items(["src/a.ts", "a.test.tsx", "README.md"], ["src/**"]), []);
-  assert.deepEqual(items([], 7), []);
+  // The function reads the tree only: no manifest value changes what it returns, and it takes none.
+  assert.equal(gate.jsxFileItems.length, 1);
+  assert.deepEqual(gate.jsxFileItems(plain("src/a.tsx", "tools/preview.tsx"), { files: ["src/**/*.ts"] }), ["src/a.tsx", "tools/preview.tsx"]);
 
   // The logic names no package: no key of the list appears in the gate's source.
   const source = readFileSync(GATE_SCRIPT, "utf8");
@@ -1115,42 +1100,48 @@ test("the screen-file rule: a .tsx or .jsx file is an item unless the check's ow
   assert.ok(gate.LATER_CLASSES.has("jsxFiles"));
 });
 
-test("live: a .tsx or .jsx file that an agent, skill or workflow pack ships fails until it is recorded; a test file, a file outside the files list and another kind's screens are not counted; the pinned commit decides", () => {
+test("live: a .tsx or .jsx file that an agent, skill or workflow pack tracks fails until it is recorded; a test file and another kind's screens are not counted; the pinned commit decides", () => {
   withRoot({ packs: jsxPacks(), list: recorded() }, (root) => {
     const res = runGate(root);
     assert.equal(res.status, 1, res.out);
     // Class 1 already reads every non-test file of an agent: a screen of an agent is in both classes.
     assert.match(res.out, /\[nonContentFiles\] items the list does not hold[^\n]*\n(?:  [+-] [^\n]*\n)*  \+ @example-org\/read-agent: src\/review\.tsx\n/);
     const own = res.out.slice(res.out.indexOf("[jsxFiles]"));
-    assert.match(own, /^\[jsxFiles\] items the list does not hold \(an agent, skill or workflow extension ships no \.tsx or \.jsx file\):\n  \+ @example-org\/oas-connector: src\/view\.tsx\n  \+ @example-org\/pick-skill: src\/panel\.tsx\n  \+ @example-org\/post-workflow: lib\/step-view\.jsx\n  \+ @example-org\/post-workflow: tests\/helper\.tsx\n  \+ @example-org\/read-agent: src\/legacy-view\.JSX\n  \+ @example-org\/read-agent: src\/review\.tsx\n\[agent-extension-code\] Fix:/);
-    assert.doesNotMatch(own, /kept-skill|note-artifact|mail-connector|test\.tsx|spec\.jsx|stub\.tsx|preview\.tsx|panel-helper/);
-    assert.match(runGate(root, ["--report"]).out, /6 jsxFiles in 4 key\(s\)/);
+    assert.match(own, /^\[jsxFiles\] items the list does not hold \(an agent, skill or workflow extension tracks no \.tsx or \.jsx file\):\n  \+ @example-org\/kept-skill: tools\/preview\.tsx\n  \+ @example-org\/oas-connector: src\/view\.tsx\n  \+ @example-org\/pick-skill: scripts\/preview\.tsx\n  \+ @example-org\/pick-skill: src\/panel\.tsx\n  \+ @example-org\/post-workflow: lib\/step-view\.jsx\n  \+ @example-org\/post-workflow: tests\/helper\.tsx\n  \+ @example-org\/read-agent: src\/legacy-view\.JSX\n  \+ @example-org\/read-agent: src\/review\.tsx\n  \+ @example-org\/read-agent: tests\/doubles\/stub\.tsx\n\[agent-extension-code\] Fix:/);
+    assert.doesNotMatch(own, /note-artifact|mail-connector|test\.tsx|spec\.jsx|panel-helper/);
+    assert.match(runGate(root, ["--report"]).out, JSX_SUMMARY);
   });
   withRoot({ packs: jsxPacks(), list: jsxRecorded() }, (root) => {
     const ok = runGate(root);
     assert.equal(ok.status, 0, ok.out);
-    assert.match(ok.out, /6 jsxFiles in 4 key\(s\)/);
+    assert.match(ok.out, JSX_SUMMARY);
 
-    // Another kind's screens, and a test file or a file outside the files list of a role pack, are not counted.
-    for (const [dir, rel] of [["note-artifact", "src/renderers/list-row.tsx"], ["mail-connector", "src/widget.jsx"], ["pick-skill", "src/more.test.jsx"], ["pick-skill", "docs/more.tsx"], ["read-agent", "src/__tests__/more.spec.tsx"]]) {
+    // Another kind's screens, and a test file of a role pack, are not counted.
+    for (const [dir, rel] of [["note-artifact", "src/renderers/list-row.tsx"], ["mail-connector", "src/widget.jsx"], ["pick-skill", "src/more.test.jsx"], ["kept-skill", "tools/preview.test.tsx"], ["read-agent", "src/__tests__/more.spec.tsx"]]) {
       writeFile(join(packDir(root, dir), rel), SCREEN);
     }
     repin(root, "note-artifact", NOTE_ARTIFACT);
     repin(root, "mail-connector", CONNECTOR);
     repin(root, "pick-skill", SKILL);
-    const kept = runGate(root);
-    // The agent's own new test file is no item of class 1 or of this class.
+    repin(root, "kept-skill", KEPT_SKILL);
     repin(root, "read-agent", READ);
-    assert.equal(runGate(root).status, 0, `${kept.out}\n${runGate(root).out}`);
+    const tests = runGate(root);
+    assert.equal(tests.status, 0, tests.out);
 
-    // The manifest decides what ships: once its list names the folder, the file ships.
+    // The manifest does not decide: a file in a folder its `files` list leaves out is counted, and adding the folder to the list changes nothing.
     const skill = packDir(root, "pick-skill");
     const pkg = JSON.parse(readFileSync(join(skill, "package.json"), "utf8"));
+    writeFile(join(skill, "docs/more.tsx"), SCREEN);
+    repin(root, "pick-skill", SKILL);
+    const tracked = runGate(root);
+    assert.equal(tracked.status, 1, tracked.out);
+    assert.match(tracked.out, /\+ @example-org\/pick-skill: docs\/more\.tsx\n/);
     writeJson(join(skill, "package.json"), { ...pkg, files: [...pkg.files, "docs"] });
     repin(root, "pick-skill", SKILL);
-    const shipped = runGate(root);
-    assert.equal(shipped.status, 1, shipped.out);
-    assert.match(shipped.out, /\+ @example-org\/pick-skill: docs\/more\.tsx\n/);
+    const listed = runGate(root);
+    assert.equal(listed.status, 1, listed.out);
+    assert.match(listed.out, /\+ @example-org\/pick-skill: docs\/more\.tsx\n/);
+    rmSync(join(skill, "docs"), { recursive: true });
     writeJson(join(skill, "package.json"), pkg);
     repin(root, "pick-skill", SKILL);
     assert.equal(runGate(root).status, 0);
@@ -1181,8 +1172,31 @@ test("live: a .tsx or .jsx file that an agent, skill or workflow pack ships fail
   });
 });
 
-test("live: a role pack whose file list cannot be read, and a files list that cannot be read where it decides, are scanner errors that name the package; a list nothing depends on is not read", () => {
-  const BAD = ["src", { src: true }, ["src", 7], ["src/**/*.tsx"], ["src", "!src/*.test.tsx"], ["./src"], ["/src"], ["src", "{a,b}"]];
+test("live: a role pack with a tracked tools/preview.tsx is reported for that file under any files list, and the list is no scanner error; a *.test.tsx file is not reported; a pinned pack whose file list cannot be read is a scanner error", () => {
+  const LISTS = [undefined, null, [], ["SKILL.md"], ["src/**/*.ts"], ["src/**/*.tsx", "!src/*.test.tsx"], ["./src", "/tools", "{a,b}", "src/[ab]"], "src", 7, { src: true }, ["src", 7]];
+  const listOf = (jsxFiles) => ({ nonContentFiles: {}, toolDeclarations: {}, extensionToolSteps: {}, unreadableSteps: {}, jsxFiles });
+  const skillPacks = (files) => ({
+    "kept-skill": {
+      packageJson: { name: KEPT_SKILL, cinatra: { kind: "skill" }, ...(files === undefined ? {} : { files }) },
+      files: { "SKILL.md": "# kept\n", "src/index.ts": "export {};\n", "tools/preview.tsx": SCREEN, "tools/preview.test.tsx": SCREEN },
+    },
+  });
+  for (const files of LISTS) {
+    withRoot({ packs: skillPacks(files), pinned: [KEPT_SKILL], list: listOf({}) }, (root) => {
+      const res = runGate(root);
+      const what = `${JSON.stringify(files)}\n${res.out}`;
+      // Reported for the one file, as an item the list does not hold; no scanner error, the exit is a finding.
+      assert.equal(res.status, 1, what);
+      assert.doesNotMatch(res.out, /scanner error/, what);
+      assert.match(res.out, /\[jsxFiles\] items the list does not hold[^\n]*\n  \+ @example-org\/kept-skill: tools\/preview\.tsx\n\[agent-extension-code\] Fix:/, what);
+      assert.doesNotMatch(res.out, /preview\.test\.tsx/, what);
+      // Recorded, it passes: the test file is not an item, so the list holds the one file.
+      writeJson(join(root, LIST_REL), listOf({ [KEPT_SKILL]: { count: 1, items: ["tools/preview.tsx"] } }));
+      const ok = runGate(root);
+      assert.equal(ok.status, 0, `${what}\n${ok.out}`);
+      assert.match(ok.out, /1 jsxFiles in 1 key\(s\)/, what);
+    });
+  }
   withRoot({ packs: jsxPacks(), list: jsxRecorded() }, (root) => {
     assert.equal(runGate(root).status, 0);
     // A pinned role pack whose tree cannot be read is never skipped.
@@ -1192,41 +1206,6 @@ test("live: a role pack whose file list cannot be read, and a files list that ca
     const unreadable = runGate(root);
     assert.equal(unreadable.status, 2, unreadable.out);
     assert.match(unreadable.out, /scanner error: git ls-tree of [0-9a-f]{40} failed in extensions\/example-org\/kept-skill: /);
-  });
-  withRoot({ packs: jsxPacks(), list: jsxRecorded() }, (root) => {
-    for (const [dir, name] of [["pick-skill", SKILL], ["read-agent", READ], ["oas-connector", OAS_CONNECTOR]]) {
-      const pack = packDir(root, dir);
-      const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
-      for (const files of BAD) {
-        writeJson(join(pack, "package.json"), { ...pkg, files });
-        repin(root, dir, name);
-        const res = runGate(root);
-        assert.equal(res.status, 2, `${name} ${JSON.stringify(files)} ${res.out}`);
-        assert.match(res.out, new RegExp(`${name} \\(extensions/example-org/${dir}/package\\.json at the pinned commit [0-9a-f]{40}\\): files(?: is not a list of paths| entry "[^"]*" is not a plain relative path; the check cannot tell what it ships)`));
-      }
-      writeJson(join(pack, "package.json"), pkg);
-      repin(root, dir, name);
-      assert.equal(runGate(root).status, 0);
-    }
-    // Other kinds are not judged, so their files list is not read.
-    for (const [dir, name] of [["note-artifact", NOTE_ARTIFACT], ["mail-connector", CONNECTOR]]) {
-      const pack = packDir(root, dir);
-      const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
-      writeJson(join(pack, "package.json"), { ...pkg, files: ["src/**"] });
-      repin(root, dir, name);
-      assert.equal(runGate(root).status, 0);
-    }
-    // A role pack with no file this rule could count is not read for its files list: the stale item is the only failure.
-    const skill = packDir(root, "pick-skill");
-    const skillPkg = JSON.parse(readFileSync(join(skill, "package.json"), "utf8"));
-    writeJson(join(skill, "package.json"), { ...skillPkg, files: ["src/**"] });
-    rmSync(join(skill, "src/panel.tsx"));
-    rmSync(join(skill, "scripts"), { recursive: true });
-    repin(root, "pick-skill", SKILL);
-    const res = runGate(root);
-    assert.equal(res.status, 1, res.out);
-    assert.doesNotMatch(res.out, /scanner error/);
-    assert.match(res.out, /\[jsxFiles\] recorded items that are gone[^\n]*\n  - @example-org\/pick-skill: src\/panel\.tsx\n/);
   });
 });
 
@@ -1238,13 +1217,13 @@ test("live base guard: a base list without the jsxFiles class seeds it once; the
     writeJson(join(root, LIST_REL), jsxRecorded());
     const seed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: before });
     assert.equal(seed.status, 0, seed.out);
-    assert.match(seed.out, /6 jsxFiles in 4 key\(s\)/);
+    assert.match(seed.out, JSX_SUMMARY);
     const seeded = commitAll(root, "seed the class");
 
     const pack = packDir(root, "pick-skill");
     writeFile(join(pack, "src/more.tsx"), SCREEN);
     repin(root, "pick-skill", SKILL);
-    writeJson(join(root, LIST_REL), { ...jsxRecorded(), jsxFiles: { ...jsxRecorded().jsxFiles, [SKILL]: { count: 2, items: ["src/more.tsx", "src/panel.tsx"] } } });
+    writeJson(join(root, LIST_REL), { ...jsxRecorded(), jsxFiles: { ...jsxRecorded().jsxFiles, [SKILL]: { count: 3, items: ["scripts/preview.tsx", "src/more.tsx", "src/panel.tsx"] } } });
     const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
     assert.equal(grew.status, 1, grew.out);
     assert.match(grew.out, /GREW against the base[\s\S]*\[jsxFiles\] @example-org\/pick-skill: src\/more\.tsx \(the base does not hold it\)/);

@@ -120,7 +120,7 @@ const isSourceFile = (rel) => SOURCE_EXTENSIONS.some((ext) => rel.endsWith(ext))
 // npm's own `pack` all agree on.
 const DEFAULT_SCOPE_DIRS = ["src", "cinatra"];
 
-export function isInScope(relPath, filesField) {
+function isInScope(relPath, filesField) {
   const entries = Array.isArray(filesField) && filesField.length > 0 ? filesField : DEFAULT_SCOPE_DIRS;
   // npm's `files` glob entries tolerate a trailing slash on a directory
   // entry ("src/__tests__/" === "src/__tests__") — strip it before matching,

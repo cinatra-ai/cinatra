@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`) and `cinatra.fieldRenderers` entries that carry a `component` (`rendererComponents`); in a skill, workflow or connector pack that is no agent, any `cinatra.fieldRenderers` entry (`hitlDeclarations`); in an agent, skill or workflow pack, the `.tsx` and `.jsx` files it ships (`jsxFiles`), all cinatra#4532 | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`) and `cinatra.fieldRenderers` entries that carry a `component` (`rendererComponents`); in a skill, workflow or connector pack that is no agent, any `cinatra.fieldRenderers` entry (`hitlDeclarations`); in an agent, skill or workflow pack, the `.tsx` and `.jsx` files it tracks (`jsxFiles`), all cinatra#4532 | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -813,11 +813,9 @@ and a file under a `skills/` folder of an agent pack counts like any other.
 of `.github/workflows/build-image.yml` directly after the companion
 repositories are cloned and BEFORE `pnpm install`, followed by its
 `node --test` step: an install can run lifecycle scripts of companion
-packages, and the check imports only node built-ins and files of this
-repository (its own library, and `scripts/extensions/conformance-gate.mjs` for
-class 8, which imports node built-ins only). It needs no judgement about a
-file: no folder reading but `.git`, and no "build" or "bin" reading; only class 8
-reads what a pack ships, by the manifest `files` list. It classifies nothing
+packages, and the check imports only node built-ins and its own library
+files. It needs no judgement about a
+file: no folder reading but `.git`, and no "build", "shipped" or "bin" reading. It classifies nothing
 beyond one closed content rule, one test-file name rule and one agent rule, and records items.
 
 **The universe** is the pinned extensions: every `packageName` of both
@@ -970,38 +968,33 @@ connector's code is not judged here).
    class is recorded empty, so any entry that appears fails. A list may omit
    the class as it may omit class 5 (`LATER_CLASSES`).
 8. `jsxFiles` (per pack, cinatra#4532) — an agent, a skill or a workflow
-   ships no `.tsx` or `.jsx` file: it has no screen of its own. It is judged
-   for the same packs as class 5. Read, in the file list of the pinned commit
-   (`git ls-tree`, a link too): a path that ends in `.tsx` or `.jsx` (any case)
-   and is not a test file by the base-name rule of class 1 (`isTestFile`: a
-   `*.test.<ext>` or `*.spec.<ext>` name; no folder name decides, so a helper
-   under `tests/` counts when it ships). Items: the path inside the pack.
-   **What ships** is the manifest `files` list, read by `isInScope` of
-   `scripts/extensions/conformance-gate.mjs`, the reading that gate applies to
-   the published scope (its fallback for npm's packlist, the declared logo and
-   the declared renderer entries): an entry names a file or a folder, a `!`
-   entry leaves out. A pack with no usable list (absent, `null` or `[]`) is
-   read by all its tracked files, as npm packs every file it does not ignore.
-   `npm pack --dry-run`, the conformance gate's first choice, needs a
-   materialised tree, and this check reads git objects only. The list is read
-   only when a file would count, and then it fails closed: a value that is not
-   a list of strings, or an entry that is a pattern (`*`, `?`, `[`, `{`, `(`)
-   or begins with `./` or `/`, is a scanner error that names the pack, because
-   `isInScope` matches plain paths and cannot place such an entry. On the day
-   it landed (pins of main at bea855b35): 5 items in 2 agent packs, 3 in
-   `blog-linkedin-publish-agent` (two of them primitive copies under
-   `src/components/ui/`) and 2 in `list-curator-agent`; no skill pack ships
-   one and no workflow pack is pinned; for all 58 agent and skill packs the
-   `files` reading and `npm pack --dry-run` name the same files. **Overlap:**
-   class 1 reads every non-test file of an agent, a `.tsx` included, so a
-   screen of an agent is an item of class 1 and of this class, and each class
-   is recorded and shrunk on its own; this class adds the skill and workflow
-   packs, which class 1 does not read, and leaves out what an agent does not
-   ship (a `.tsx` under a folder outside its `files` list). Stated limits: a
-   screen written in a `.ts` or `.js` file (a renderer built with
-   `createElement`), a file that npm packs because `main` or `bin` names it
-   outside `files`, and a screen that no file name shows are not seen. A list
-   may omit the class as it may omit class 5 (`LATER_CLASSES`).
+   tracks no `.tsx` or `.jsx` file at its pinned commit: it has no screen of
+   its own. It is judged for the same packs as class 5. Read, in the file list
+   of the pinned commit (`git ls-tree`, a link too): a path that ends in `.tsx`
+   or `.jsx` (any case) and is not a test file by the base-name rule of class 1
+   (`isTestFile`: a `*.test.<ext>` or `*.spec.<ext>` name; no folder name
+   decides, so a helper under `tests/` counts). Items: the path inside the
+   pack. A pack whose file list cannot be read is a scanner error, as for every
+   class. **The class reads what a pack tracks, not what it publishes.** The
+   manifest `files` list, `.npmignore` and npm's built-in exclusions are not
+   read; the rule never places a file against npm's packlist. Reading that
+   packlist from git objects is a general problem that the conformance gate
+   solves for a materialised tree (`npm pack --dry-run`), and this check does
+   not take it on. On the day it landed (pins of main at bea855b35): 6 items
+   in 2 agent packs, 3 in `blog-linkedin-publish-agent` (two of them primitive
+   copies under `src/components/ui/`) and 3 in `list-curator-agent` (two
+   renderers and `tests/doubles/design-primitives.tsx`, a double that
+   `isTestFile` does not leave out because it decides by base name only); no
+   skill pack tracks one and no workflow pack is pinned. **Overlap:** class 1
+   reads every non-test file of an agent, a `.tsx` included, so a screen of an
+   agent is an item of class 1 and of this class, and each class is recorded
+   and shrunk on its own; this class adds the skill and workflow packs, which
+   class 1 does not read. Stated limits: a tracked file that is not published
+   (kept out by `files` or `.npmignore`) is counted too; it is recorded like
+   any other and leaves the list when the pack removes or moves it. A screen
+   written in a `.ts` or `.js` file (a renderer built with `createElement`) and
+   a screen that no file name shows are not seen. A list may omit the class as it may
+   omit class 5 (`LATER_CLASSES`).
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:

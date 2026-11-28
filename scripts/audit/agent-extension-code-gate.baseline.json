@@ -421,10 +421,11 @@
       ]
     },
     "@cinatra-ai/list-curator-agent": {
-      "count": 2,
+      "count": 3,
       "items": [
         "src/list-curator-final-list-renderer.tsx",
-        "src/list-curator-scrape-schema-renderer.tsx"
+        "src/list-curator-scrape-schema-renderer.tsx",
+        "tests/doubles/design-primitives.tsx"
       ]
     }
   }
