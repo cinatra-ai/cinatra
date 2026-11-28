@@ -70,7 +70,9 @@
 // leaves it only when a pinned pack declares it as a domain word. A pinned
 // pack without the declaration fails unless the bridge's `packages` list
 // names it, and that list too only shrinks against APPLICATION_BORDER_BASE
-// (lib/border-words.mjs). Every entry names its `owner`, the extension that will own the
+// (lib/border-words.mjs). A pack whose pin in a lock advanced against
+// APPLICATION_BORDER_BASE must declare at its new commit and leave that list
+// (cinatra#4896, pinAdvanceProblems; this gate alone reports it). Every entry names its `owner`, the extension that will own the
 // code; `--write-baseline` writes a new entry with owner UNASSIGNED and the
 // check fails on any UNASSIGNED or empty owner.
 //
@@ -106,6 +108,7 @@ import {
   bridgeAtRef,
   bridgeGrowth,
   bridgeShrinkProblems,
+  pinAdvanceProblems,
   fileUnchangedAtRef,
   loadBorderWords,
 } from "./lib/border-words.mjs";
@@ -561,6 +564,24 @@ function main() {
           `(a word leaves the bridge only into a cinatra.borderWords declaration; cinatra#4848):`,
       );
       bridgeDropped.forEach((g) => console.error(`  - ${g}`));
+      process.exit(1);
+    }
+    // When a pin advances, the pack declares (cinatra#4896, lib/border-words.mjs
+    // pinAdvanceProblems): read here only, the vendor gate does not repeat it.
+    let pinAdvance;
+    try {
+      pinAdvance = pinAdvanceProblems(REPO_ROOT, baseRef, words);
+    } catch (err) {
+      if (!(err instanceof BorderWordsError)) throw err;
+      console.error(`${TAG} scanner error: ${err.message}`);
+      process.exit(2);
+    }
+    if (pinAdvance.problems.length) {
+      console.error(
+        `${TAG} FAIL — ${pinAdvance.problems.length} pin advance problem(s) vs ${baseRef} ` +
+          `(when a pin advances, the pack declares cinatra.borderWords and leaves the bridge; cinatra#4896):`,
+      );
+      pinAdvance.problems.forEach((p) => console.error(`  ! ${p}`));
       process.exit(1);
     }
     let baseText = null;
