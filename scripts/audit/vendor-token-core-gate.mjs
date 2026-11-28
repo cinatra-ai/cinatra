@@ -119,6 +119,22 @@
 // empty (an empty section is `{}`). The one-time seed applies only when the
 // BASE baseline has no `sdkNames` property, so it cannot recur.
 //
+// THE SDK'S SUBPATH NAMES (cinatra#4875, stage 2 of the same class). A pack
+// imports an SDK surface by its subpath, so a subpath named for one
+// extension's vendor or domain is the same crossing as an exported name. Of
+// each SDK package's `exports` map this stage reads only the KEYS of the
+// top-level object (`"./<subpath>"`); the key `"."` has no name and is
+// skipped; targets are not read (their forms stay stage 1's). An unreadable
+// manifest, or an `exports` that is not an object, is a scanner error naming
+// the package. The leading `./` is stripped, the rest split on `/` into
+// segments, and each segment split and matched as a name above (one word, or
+// a run of words written together within a segment). Today's findings are
+// recorded in the baseline's `sdkSubpaths` (`<package> :: <subpath> ::
+// <word>`, a reason each), with the same list logic as `sdkNames`
+// (checkRecordedSection): new fails, stale fails, no reason fails,
+// shrink-only against VENDOR_TOKEN_BASE, never removed, seeded once when the
+// base baseline has no `sdkSubpaths` property.
+//
 // Usage:
 //   node scripts/audit/vendor-token-core-gate.mjs                  # --check (default)
 //   node scripts/audit/vendor-token-core-gate.mjs --write-baseline # ratchet the floor down
@@ -634,63 +650,64 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
 }
 
 /**
- * The `sdkNames` section of a baseline document. The section is never
- * removed: a document without the property throws "the section is removed"
- * (an empty section is written as `{}` and stays), as
+ * One recorded section (`sdkNames`, `sdkSubpaths`) of a baseline document. A
+ * section is never removed: a document without the property throws "the
+ * section is removed" (an empty section is written as `{}` and stays), as
  * agent-extension-code-gate.mjs fails a removed class. Throws when malformed.
  */
-export function readSdkNamesFloor(doc) {
-  if (!isPlainObject(doc) || !hasOwn(doc, "sdkNames")) {
-    throw new Error('the "sdkNames" section is removed (a section is never removed; an empty one is written as {})');
+export function readSectionFloor(doc, section) {
+  if (!isPlainObject(doc) || !hasOwn(doc, section)) {
+    throw new Error(`the "${section}" section is removed (a section is never removed; an empty one is written as {})`);
   }
-  const floor = doc.sdkNames;
-  if (!isPlainObject(floor)) throw new Error('"sdkNames" is not an object');
+  const floor = doc[section];
+  if (!isPlainObject(floor)) throw new Error(`"${section}" is not an object`);
   return floor;
 }
 
+/** The `sdkNames` section of a baseline document (readSectionFloor). */
+export function readSdkNamesFloor(doc) {
+  return readSectionFloor(doc, "sdkNames");
+}
+
 /**
- * The class `sdk-name-with-extension-word` against the committed record and
- * the base. Returns `{ ok, lines, found }`; `lines` are failures when not ok.
- * Throws SdkNamesError / BorderWordsError on a scanner error.
+ * The findings `{ "<key>": [words] }` of one class against its recorded
+ * `section` of the committed baseline and against the base. Each entry binds
+ * ONE word, keyed `<key> :: <word>`, with a reason. A key that carries a word
+ * not recorded for it fails; a recorded word it no longer carries is stale;
+ * an entry without a reason fails; the section only shrinks against
+ * VENDOR_TOKEN_BASE, is never removed, and is seeded once, when the base list
+ * has no such property. `what` is the finding's sentence, `gone` says what a
+ * stale entry means. Returns `{ ok, lines, found, guardLines }`.
  */
-export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, packages = SDK_PACKAGE_DIRS } = {}) {
-  const all = words ?? (() => {
-    const loaded = loadBorderWords(repoRoot).words;
-    return [...loaded.vendor, ...loaded.domain];
-  })();
-  const found = scanSdkExportNames(repoRoot, all, { packages });
+export function checkRecordedSection(repoRoot, { section, found, what, gone, env = process.env }) {
   let floor;
   try {
-    floor = readSdkNamesFloor(JSON.parse(readFileSync(join(repoRoot, BASELINE_REL), "utf8")));
+    floor = readSectionFloor(JSON.parse(readFileSync(join(repoRoot, BASELINE_REL), "utf8")), section);
   } catch (err) {
     return { ok: false, found, lines: [`[vendor-token-core-gate] FAIL — ${BASELINE_REL}: ${err?.message ?? err}.`] };
   }
   const lines = [];
-  // An entry binds a name to ONE word it was recorded for: the key is
-  // `<entry specifier> :: <name> :: <word>`. A recorded name that carries a
-  // word not recorded for it fails; a recorded word it no longer carries is stale.
   const foundPairs = new Set(Object.entries(found).flatMap(([k, ws]) => ws.map((w) => `${k} :: ${w}`)));
   const added = Object.keys(found)
     .map((k) => [k, found[k].filter((w) => !hasOwn(floor, `${k} :: ${w}`))])
     .filter(([, ws]) => ws.length);
   if (added.length) {
     lines.push(
-      `[vendor-token-core-gate] FAIL — ${added.length} ${SDK_NAME_CLASS}: an SDK export a pack can import is named with a word an extension declares ` +
-        `(name the contract for what it does, or move it into the extension that owns the word; cinatra#4875):`,
+      `[vendor-token-core-gate] FAIL — ${added.length} ${SDK_NAME_CLASS}: ${what}:`,
       ...added.map(([k, ws]) => `  + ${k} (${ws.join(", ")})`),
     );
   }
   const stale = Object.keys(floor).filter((k) => !foundPairs.has(k));
   if (stale.length) {
     lines.push(
-      `[vendor-token-core-gate] FAIL — ${stale.length} stale "sdkNames" entr${stale.length === 1 ? "y" : "ies"} in ${BASELINE_REL} (the name is gone or no longer carries that border word; remove the entry):`,
+      `[vendor-token-core-gate] FAIL — ${stale.length} stale "${section}" entr${stale.length === 1 ? "y" : "ies"} in ${BASELINE_REL} (${gone}; remove the entry):`,
       ...stale.map((k) => `  - ${k}`),
     );
   }
   const unreasoned = Object.keys(floor).filter((k) => !isPermitReason(floor[k]));
   if (unreasoned.length) {
     lines.push(
-      `[vendor-token-core-gate] FAIL — "sdkNames" entr${unreasoned.length === 1 ? "y" : "ies"} without a reason (a sentence of six words or more):`,
+      `[vendor-token-core-gate] FAIL — "${section}" entr${unreasoned.length === 1 ? "y" : "ies"} without a reason (a sentence of six words or more):`,
       ...unreasoned.map((k) => `  ! ${k}`),
     );
   }
@@ -703,10 +720,10 @@ export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, 
     env,
     parse: (text) => {
       const doc = JSON.parse(text);
-      // The one-time seed: only a base list without the `sdkNames` property
-      // (before cinatra#4875). The head must always carry the property
-      // (readSdkNamesFloor above), so the seed cannot recur.
-      return isPlainObject(doc) && !hasOwn(doc, "sdkNames") ? null : readSdkNamesFloor(doc);
+      // The one-time seed: only a base list without the section's property.
+      // The head must always carry the property (readSectionFloor above), so
+      // the seed cannot recur.
+      return isPlainObject(doc) && !hasOwn(doc, section) ? null : readSectionFloor(doc, section);
     },
     grown: (base, head) => {
       if (base === null) return [];
@@ -717,10 +734,95 @@ export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, 
   return { ok: lines.length === 0, found, lines, guardLines: guard.ok ? guard.lines : [] };
 }
 
+const allBorderWords = (repoRoot, words) =>
+  words ??
+  (() => {
+    const loaded = loadBorderWords(repoRoot).words;
+    return [...loaded.vendor, ...loaded.domain];
+  })();
+
+/**
+ * The class `sdk-name-with-extension-word` against the committed record and
+ * the base. Returns `{ ok, lines, found }`; `lines` are failures when not ok.
+ * Throws SdkNamesError / BorderWordsError on a scanner error.
+ */
+export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, packages = SDK_PACKAGE_DIRS } = {}) {
+  const found = scanSdkExportNames(repoRoot, allBorderWords(repoRoot, words), { packages });
+  // An entry binds a name to ONE word it was recorded for: the key is
+  // `<entry specifier> :: <name> :: <word>`.
+  return checkRecordedSection(repoRoot, {
+    section: "sdkNames",
+    found,
+    env,
+    what:
+      "an SDK export a pack can import is named with a word an extension declares " +
+      "(name the contract for what it does, or move it into the extension that owns the word; cinatra#4875)",
+    gone: "the name is gone or no longer carries that border word",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// The SDK's subpath names (cinatra#4875, stage 2) — the keys of `exports`.
+// ---------------------------------------------------------------------------
+
+/**
+ * The subpath names of the SDK packages' `exports` maps that carry a border
+ * word: `{ "<package> :: <subpath>": [words] }`. Only the KEYS of the
+ * top-level `exports` object are read (the key `"."` has no name and is
+ * skipped); targets are not read here (their forms are stage 1's). A key's
+ * words: the leading `./` is stripped, the rest is split on `/` into
+ * segments, and each segment is split and matched as an exported name is
+ * (nameWordHits): a word, or a run of consecutive words written together
+ * within a segment. Throws SdkNamesError when a manifest is unreadable, names
+ * no package, or its `exports` is not an object.
+ */
+export function scanSdkSubpathNames(repoRoot = REPO_ROOT, words = [], { packages = SDK_PACKAGE_DIRS } = {}) {
+  const wordSet = new Set(words);
+  const found = {};
+  for (const pkgDir of packages) {
+    let pkg;
+    try {
+      pkg = JSON.parse(readFileSync(join(repoRoot, pkgDir, "package.json"), "utf8"));
+    } catch {
+      throw new SdkNamesError(`${pkgDir}/package.json is unreadable`);
+    }
+    if (typeof pkg?.name !== "string" || !pkg.name) throw new SdkNamesError(`${pkgDir}/package.json names no package`);
+    if (!isPlainObject(pkg.exports)) {
+      throw new SdkNamesError(`${pkg.name}: the exports field is not an object of subpaths, so its subpath names cannot be read`);
+    }
+    for (const key of Object.keys(pkg.exports)) {
+      if (key === ".") continue;
+      const path = key.startsWith("./") ? key.slice(2) : key;
+      const hits = new Set(path.split("/").flatMap((segment) => nameWordHits(segment, wordSet)));
+      if (hits.size) found[`${pkg.name} :: ${key}`] = [...hits].sort();
+    }
+  }
+  return sortKeys(found);
+}
+
+/**
+ * Stage 2 of `sdk-name-with-extension-word`: the subpath names against the
+ * `sdkSubpaths` section (`<package> :: <subpath> :: <word>`), with the same
+ * list logic as `sdkNames` (checkRecordedSection). Throws SdkNamesError /
+ * BorderWordsError on a scanner error.
+ */
+export function checkSdkSubpaths(repoRoot = REPO_ROOT, { words, env = process.env, packages = SDK_PACKAGE_DIRS } = {}) {
+  const found = scanSdkSubpathNames(repoRoot, allBorderWords(repoRoot, words), { packages });
+  return checkRecordedSection(repoRoot, {
+    section: "sdkSubpaths",
+    found,
+    env,
+    what:
+      "an SDK subpath a pack can import is named with a word an extension declares " +
+      "(name the subpath for what it does, or move the surface into the extension that owns the word; cinatra#4875)",
+    gone: "the subpath is gone or no longer carries that border word",
+  });
+}
+
 function writeBaselineFile(occurrences) {
   const total = Object.values(occurrences).reduce((a, b) => a + b, 0);
-  // The `sdkNames` record (cinatra#4875) carries a reason per entry and is
-  // edited by hand; the floor writer keeps it as committed.
+  // The `sdkNames` and `sdkSubpaths` records (cinatra#4875) carry a reason per
+  // entry and are edited by hand; the floor writer keeps them as committed.
   const committed = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELINE_PATH, "utf8")) : {};
   writeFileSync(
     BASELINE_PATH,
@@ -737,6 +839,8 @@ function writeBaselineFile(occurrences) {
         occurrences: sortKeys(occurrences),
         ...(committed.sdkNamesNote !== undefined ? { sdkNamesNote: committed.sdkNamesNote } : {}),
         ...(committed.sdkNames !== undefined ? { sdkNames: committed.sdkNames } : {}),
+        ...(committed.sdkSubpathsNote !== undefined ? { sdkSubpathsNote: committed.sdkSubpathsNote } : {}),
+        ...(committed.sdkSubpaths !== undefined ? { sdkSubpaths: committed.sdkSubpaths } : {}),
       },
       null,
       2,
@@ -907,22 +1011,26 @@ function main() {
     process.exit(1);
   }
 
-  // The SDK's exported names (cinatra#4875): both word lists.
+  // The SDK's exported names and subpath names (cinatra#4875): both word lists.
   let sdk;
+  let subpaths;
   try {
-    sdk = checkSdkNames(REPO_ROOT, { words: [...words.words.vendor, ...words.words.domain] });
+    const all = [...words.words.vendor, ...words.words.domain];
+    sdk = checkSdkNames(REPO_ROOT, { words: all });
+    subpaths = checkSdkSubpaths(REPO_ROOT, { words: all });
   } catch (err) {
     const why = err instanceof SdkNamesError ? err.message : err?.stack ?? String(err);
     console.error(`[vendor-token-core-gate] scanner error (${SDK_NAME_CLASS}): ${why}`);
     process.exit(2);
   }
-  if (!sdk.ok) {
-    sdk.lines.forEach((l) => console.error(l));
+  if (!sdk.ok || !subpaths.ok) {
+    [...sdk.lines, ...subpaths.lines].forEach((l) => console.error(l));
     process.exit(1);
   }
-  sdk.guardLines.forEach((l) => console.log(l));
+  [...new Set([...sdk.guardLines, ...subpaths.guardLines])].forEach((l) => console.log(l));
   console.log(
-    `[vendor-token-core-gate] OK — ${Object.keys(sdk.found).length} recorded ${SDK_NAME_CLASS} name(s) in ${SDK_PACKAGE_DIRS.join(", ")}; 0 new.`,
+    `[vendor-token-core-gate] OK — ${Object.keys(sdk.found).length} recorded ${SDK_NAME_CLASS} name(s) and ` +
+      `${Object.keys(subpaths.found).length} recorded subpath name(s) in ${SDK_PACKAGE_DIRS.join(", ")}; 0 new.`,
   );
 
   console.log(

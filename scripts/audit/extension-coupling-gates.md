@@ -408,11 +408,34 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   reads it. A word hidden by an abbreviation or a deliberate misspelling, or
   written into a longer word without a case or separator boundary, is not
   found; names reachable only as members of an exported namespace, value or
-  type are not read, and the subpath names of the `exports` map are not
-  matched. The declared name of a default export is not read (a consumer
+  type are not read. The subpath names of the `exports` map are matched by
+  stage 2 (below), not by this name reading. The declared name of a default export is not read (a consumer
   names the import itself); neither SDK package has a default export today. When an extension newly declares a word that an SDK name carries,
   also a name already recorded for another word, the record cannot grow: that
   pin advance fails until the SDK name is renamed or the owner decides.
+- **Stage 2: the subpath names (cinatra#4875).** A pack imports an SDK
+  surface by its subpath (`@cinatra-ai/sdk-extensions/blog-contract`), so a
+  subpath named for one extension's vendor or domain is the same crossing as
+  an exported name. The rule also reads the KEYS of the top-level `exports`
+  object of the same two packages (`"./blog-contract"`,
+  `"./artifacts/pdf-detail-shell"`); the key `"."` has no name and is
+  skipped. It reads only the keys and makes no claim about targets: an
+  export form the name reading refuses stays refused there. The leading `./`
+  is stripped, the rest is split on `/` into segments, and each segment is
+  split and matched as a name is (above): a finding is one word, or a run of
+  consecutive words written together within one segment, equal to a border
+  word of either list. An unreadable `package.json`, one that names no
+  package, and an `exports` field that is not an object are scanner errors
+  (exit 2) naming the package. Each finding is an entry of `sdkSubpaths` in
+  `vendor-token-core-gate.baseline.json`, one per package, subpath and word
+  (`@cinatra-ai/sdk-extensions :: ./blog-contract :: blog`), each with a
+  reason. The list logic is the one of `sdkNames` (the same function, with
+  the section name): a subpath with a word not recorded for it fails, a
+  recorded word no longer matched is stale and fails, an entry without a
+  reason fails, the section only shrinks against `VENDOR_TOKEN_BASE`, is
+  never removed, and its one-time seed applies only when the BASE baseline
+  has no `sdkSubpaths` property. Not read in this stage: the file names of
+  the entry targets (`./src/blog-connector-contract.ts`).
 
 ## Border words — declared by the extensions (cinatra#4848)
 
@@ -1123,6 +1146,7 @@ for its floor:
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
 | `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | an item the base does not hold in any class (as a multiset), or a class removed | `AGENT_EXTENSION_CODE_BASE` |
 | `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` only) | `sdkNames` in `vendor-token-core-gate.baseline.json` | a new (entry specifier, name, word) entry, whatever changed, or the `sdkNames` section removed; only a base without `sdkNames` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
+| `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` stage 2 only) | `sdkSubpaths` in `vendor-token-core-gate.baseline.json` | a new (package, subpath, word) entry, whatever changed, or the `sdkSubpaths` section removed; only a base without `sdkSubpaths` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
 | `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
