@@ -108,9 +108,23 @@ type ExtensionsInstallResult =
       message: string;
     };
 
+/**
+ * Options of a non-MCP caller of `extensions_install` (cinatra#4920). The MCP
+ * tool passes none. `allowedKinds` restricts the ROOT to these kinds: the kind
+ * is read from the primitive's own lifecycle resolution, so a refusal happens
+ * after resolution and the visibility gate and BEFORE any install work.
+ */
+export type ExtensionsInstallOptions = {
+  allowedKinds?: readonly string[];
+};
+
+/** `code` of the refusal `allowedKinds` raises. */
+export const EXTENSION_KIND_NOT_ALLOWED = "EXTENSION_KIND_NOT_ALLOWED";
+
 async function extensionsInstallBody(
   input: { packageName: string; packageVersion: string },
   actor: Actor,
+  options?: ExtensionsInstallOptions,
 ): Promise<ExtensionsInstallResult> {
   // Kind-agnostic resolution plus uniform visibility checking. Inside the
   // grant context this DERIVES from the root grant (no second authorize).
@@ -119,6 +133,14 @@ async function extensionsInstallBody(
     input.packageVersion,
   );
   enforceVisibility(resolution, input.packageName);
+  if (options?.allowedKinds && !options.allowedKinds.includes(resolution.kind)) {
+    throw Object.assign(
+      new Error(
+        `Package ${input.packageName} is of kind "${resolution.kind}", which this install surface does not accept.`,
+      ),
+      { code: EXTENSION_KIND_NOT_ALLOWED, kind: resolution.kind },
+    );
+  }
   // Dispatch + record the EXACT resolved version, not the raw input. The
   // authorize/resolution step already pins a concrete version: gatekept ON
   // → the exact authorized storefront version; OFF → the legacy packument
@@ -232,6 +254,7 @@ export function createExtensionsPrimitiveHandlers() {
     async extensions_install(
       input: { packageName: string; packageVersion: string },
       actor: Actor,
+      options?: ExtensionsInstallOptions,
     ) {
       // AUTHORIZE-ONCE (#180): on the gatekept path, authorize the ROOT here
       // — BEFORE the lifecycle/kind resolution — and run the ENTIRE install
@@ -256,10 +279,10 @@ export function createExtensionsPrimitiveHandlers() {
             resolution: rootResolution,
             memberKinds: new Map(),
           },
-          () => extensionsInstallBody(input, actor),
+          () => extensionsInstallBody(input, actor, options),
         );
       }
-      return extensionsInstallBody(input, actor);
+      return extensionsInstallBody(input, actor, options);
     },
 
     async extensions_update(
