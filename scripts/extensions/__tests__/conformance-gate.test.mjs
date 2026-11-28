@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runConformanceGate, CONFORMANCE_GATE_VERSION } from "../conformance-gate.mjs";
 import { loadLiveRules } from "../lib/conformance-rules.mjs";
+import { classifyAgentDefinition } from "../../ci-validate-agents.mjs";
 import * as conformanceRules from "../lib/conformance-rules.mjs";
 import * as gateModule from "../conformance-gate.mjs";
 import * as clientBundle from "@cinatra-ai/sdk-extensions/artifact-client-bundle";
@@ -425,6 +426,58 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
       },
     ]);
     rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // A config-only assistant (#4920 review): kind agent, no cinatra/oas.json, and a
+  // cinatra/config.json with an `assistant` block, the same condition as
+  // scripts/ci-validate-agents.mjs `classifyAgentDefinition` (shared predicates).
+  const assistantAgent = (config) =>
+    writeFixture({
+      "package.json": JSON.stringify({
+        name: "@example-org/fixture-assistant",
+        version: "0.0.1",
+        license: "Apache-2.0",
+        files: ["cinatra"],
+        cinatra: { kind: "agent", apiVersion: "cinatra.ai/v1", dependencies: [] },
+      }),
+      "README.md": "# Fixture Assistant\n",
+      ...(config === undefined ? {} : { "cinatra/config.json": typeof config === "string" ? config : JSON.stringify(config) }),
+    });
+  const VALID_ASSISTANT_CONFIG = {
+    formatVersion: 1,
+    assistant: {
+      abiVersion: 1,
+      displayName: "Fixture",
+      preferredTag: "fixture",
+      persona: "You are a fixture assistant.",
+      skillBundle: ["chat-assistant-core"],
+      launch: { kind: "local" },
+      delivery: { kind: "host-runtime" },
+    },
+  };
+  const agentRules = (pkgDir) => {
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    rmSync(pkgDir, { recursive: true, force: true });
+    return [...result.blocking, ...result.known, ...result.advisory].filter((f) => /^manifest\.agent-/.test(f.rule));
+  };
+
+  it("accepts a config-only assistant agent package without cinatra/oas.json, as ci-validate-agents does", () => {
+    expect(classifyAgentDefinition({ hasOas: false, hasLegacy: false, config: VALID_ASSISTANT_CONFIG, packageName: "@example-org/fixture-assistant" })).toEqual({ verdict: "assistant" });
+    expect(agentRules(assistantAgent(VALID_ASSISTANT_CONFIG))).toEqual([]);
+  });
+
+  it("still fails an agent package with neither cinatra/oas.json nor an assistant declaration", () => {
+    for (const config of [undefined, { formatVersion: 1 }]) {
+      expect(agentRules(assistantAgent(config)).map((f) => f.rule)).toEqual(["manifest.agent-missing-oas"]);
+    }
+  });
+
+  it("fails an agent package whose assistant declaration is invalid or whose config.json does not parse", () => {
+    const bad = { formatVersion: 1, assistant: { ...VALID_ASSISTANT_CONFIG.assistant, preferredTag: "Not A Token" } };
+    const invalid = agentRules(assistantAgent(bad));
+    expect(invalid.map((f) => f.rule)).toEqual(["manifest.agent-assistant-invalid"]);
+    expect(invalid[0].detail).toContain("preferredTag");
+    expect(agentRules(assistantAgent("{ not json")).map((f) => f.rule)).toEqual(["manifest.agent-assistant-invalid"]);
   });
 });
 

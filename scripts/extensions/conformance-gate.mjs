@@ -57,6 +57,7 @@ import {
   CONNECTOR_KNOWN_FINDINGS_FLOOR,
 } from "./lib/conformance-rules.mjs";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
+import { hasAssistantBlock, validateAssistantConfig } from "../audit/connector-access-config-gate.mjs";
 
 export const CONFORMANCE_GATE_VERSION = "0.1.0";
 
@@ -324,7 +325,7 @@ function checkManifest(pkgDir, pkg, rules) {
       });
     }
   } else if (kind === "agent") {
-    findings.push(...checkAgentManifest(pkgDir));
+    findings.push(...checkAgentManifest(pkgDir, pkg.name));
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
@@ -1490,15 +1491,32 @@ function checkWebhooksDeclaration(pkg) {
 // The definition of an agent extension is cinatra/oas.json, the only file the
 // product reads (#4920). An old cinatra/agent.json or root agent.json is not
 // read: without cinatra/oas.json the finding names the file to move.
+// The other agent form is a config-only assistant: no cinatra/oas.json and no old
+// file, and a cinatra/config.json with a non-null `assistant` block (the product's
+// runtime-loader and assistant-declaration-host read it); it is judged by the same
+// shared predicates as scripts/ci-validate-agents.mjs `classifyAgentDefinition`.
 // Limit: only a package whose cinatra.kind is "agent" is checked here.
 const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
-function checkAgentManifest(pkgDir) {
+function checkAgentManifest(pkgDir, packageName) {
   const oasPath = join(pkgDir, "cinatra", "oas.json");
   if (!existsSync(oasPath)) {
     const old = OLD_AGENT_DEFINITIONS.filter((rel) => existsSync(join(pkgDir, rel)));
+    const configPath = join(pkgDir, "cinatra", "config.json");
+    if (old.length === 0 && existsSync(configPath)) {
+      let config;
+      try {
+        config = JSON.parse(readFileSync(configPath, "utf8"));
+      } catch (err) {
+        return [{ rule: "manifest.agent-assistant-invalid", file: "cinatra/config.json", detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}` }];
+      }
+      if (hasAssistantBlock(config)) {
+        const errors = validateAssistantConfig(config, packageName);
+        return errors.length ? [{ rule: "manifest.agent-assistant-invalid", file: "cinatra/config.json", detail: `assistant declaration invalid: ${errors.join("; ")}` }] : [];
+      }
+    }
     const detail = old.length
       ? `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`
-      : "agent extensions must ship cinatra/oas.json, the agent's one definition file.";
+      : "agent extensions must ship cinatra/oas.json, the agent's one definition file, or declare an assistant in cinatra/config.json.";
     return [{ rule: "manifest.agent-missing-oas", file: "cinatra/oas.json", detail }];
   }
   try {
