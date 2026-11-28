@@ -248,12 +248,18 @@ afterAll(() => {
   for (const r of sdkRoots) rmSync(r, { recursive: true, force: true });
 });
 
+/** The fixture tree's own small tsconfig: the scanner reads module resolution and `paths` from it. */
+const FIXTURE_TSCONFIG = {
+  compilerOptions: { module: "esnext", moduleResolution: "bundler", allowJs: true, paths: { "@/*": ["./src/*"] } },
+};
+
 /**
  * A fixture repository: the SDK rule sources, a bridge, one pinned pack that
  * declares `borderWords`, one SDK package at packages/sdk-a with `exports` and
- * `files`, and the gate's baseline with `sdkNames`.
+ * `files`, files at the repository root (`rootFiles`), a root tsconfig.json,
+ * and the gate's baseline with `sdkNames`.
  */
-function makeSdkTree({ exportsMap, files, sdkNames = {}, borderWords = { vendor: ["zorb"], domain: ["quill"] }, baseline }) {
+function makeSdkTree({ exportsMap, files, rootFiles = {}, sdkNames = {}, borderWords = { vendor: ["zorb"], domain: ["quill"] }, baseline }) {
   const root = mkdtempSync(join(tmpdir(), "vendor-sdk-names-"));
   sdkRoots.push(root);
   const all = {
@@ -265,6 +271,8 @@ function makeSdkTree({ exportsMap, files, sdkNames = {}, borderWords = { vendor:
     }),
     [`${FIXTURE_SDK}/package.json`]: JSON.stringify({ name: "@example-org/sdk-a", exports: exportsMap }),
     "scripts/audit/vendor-token-core-gate.baseline.json": JSON.stringify(baseline ?? { occurrences: {}, sdkNames }),
+    "tsconfig.json": JSON.stringify(FIXTURE_TSCONFIG),
+    ...rootFiles,
   };
   for (const [rel, text] of Object.entries(files)) all[`${FIXTURE_SDK}/${rel}`] = text;
   for (const rel of SDK_RULE_FILES) all[rel] = readFileSync(join(REPO_ROOT_4875, rel), "utf8");
@@ -430,6 +438,40 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
       "@example-org/sdk-a/c :: ZorbCommon",
       "@example-org/sdk-a/m :: QuillShape",
     ]);
+  });
+
+  it("an ambient external module declared in a types target is read: its exported names are found under the module's name", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": { types: "./src/ambient.d.ts", default: "./src/index.js" } },
+      files: {
+        "src/ambient.d.ts": [
+          `declare module "@example-org/sdk-a/x" {`,
+          `  export interface ZorbShape {}`,
+          `  export const neutralAmbient: number;`,
+          `}`,
+        ].join("\n"),
+        "src/index.js": `export const neutral = 1;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] }))).toEqual(["@example-org/sdk-a/x :: ZorbShape"]);
+  });
+
+  it("a re-export through a path alias of the repository's tsconfig resolves: a neutral one passes, a word-carrying one is found", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files: { "src/index.ts": `export * from "@/components/neutral-panel";\nexport { QuillPanel } from "@/components/quill-panel";\n` },
+      rootFiles: {
+        "src/components/neutral-panel.ts": `export const NeutralPanel = 1;\n`,
+        "src/components/quill-panel.ts": `export const QuillPanel = 1;\n`,
+      },
+    });
+    let found = {};
+    expect(() => {
+      found = scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] });
+    }).not.toThrow();
+    expect(Object.keys(found)).toEqual(["@example-org/sdk-a :: QuillPanel"]);
   });
 
   it("a root conditions object is the \".\" entry; a root mixing conditions and subpaths fails closed", () => {

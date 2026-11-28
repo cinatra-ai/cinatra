@@ -470,6 +470,42 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
   return entries;
 }
 
+/**
+ * The compiler options of the repository's own root tsconfig.json (module
+ * resolution, `baseUrl` and `paths` included), so a name resolves as in the
+ * product's typecheck. Its `include` files are not read: the program's root
+ * files are the SDK entry files only. Throws SdkNamesError when unreadable.
+ */
+function repoCompilerOptions(ts, repoRoot) {
+  const path = join(repoRoot, "tsconfig.json");
+  const read = ts.readConfigFile(path, ts.sys.readFile);
+  if (read.error) {
+    throw new SdkNamesError(`tsconfig.json is unreadable: ${ts.flattenDiagnosticMessageText(read.error.messageText, " ")}`);
+  }
+  const host = { ...ts.sys, readDirectory: () => [] };
+  const parsed = ts.parseJsonConfigFileContent(read.config, host, repoRoot, undefined, path);
+  const errors = parsed.errors.filter((d) => d.code !== 18003); // 18003: no input files (include is not read)
+  if (errors.length) {
+    throw new SdkNamesError(`tsconfig.json is invalid: ${ts.flattenDiagnosticMessageText(errors[0].messageText, " ")}`);
+  }
+  return {
+    ...parsed.options,
+    allowJs: true,
+    noEmit: true,
+    skipLibCheck: true,
+    types: [],
+    incremental: false,
+    composite: false,
+    tsBuildInfoFile: undefined,
+    plugins: undefined,
+  };
+}
+
+/** The ambient external modules (`declare module "x" { ... }`) a file that is no module declares. */
+function ambientModulesOf(ts, sf) {
+  return sf.statements.filter((s) => ts.isModuleDeclaration(s) && ts.isStringLiteral(s.name) && s.body && ts.isModuleBlock(s.body));
+}
+
 const symbolDeclName = (sym) => {
   const decl = sym?.declarations?.[0];
   return decl?.name && typeof decl.name.text === "string" ? decl.name.text : undefined;
@@ -479,30 +515,20 @@ const symbolDeclName = (sym) => {
  * The SDK's top-level exported names that carry a border word:
  * `{ "<entry specifier> :: <name>": [words] }` (a namespace export by its own
  * name, its members not read; a default export by its declared name, keyed
- * `default`).
- * Throws SdkNamesError when an entry, an `export ... from` module or an
+ * `default`; an ambient module a non-module target declares is keyed by its
+ * module name). The program uses the root tsconfig.json's compiler options.
+ * Throws SdkNamesError when the tsconfig, an entry, an `export ... from` module or an
  * exported name does not resolve.
  */
 export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages = SDK_PACKAGE_DIRS } = {}) {
   const ts = loadTypeScript();
   const wordSet = new Set(words);
   const found = {};
+  let options;
   for (const pkgDir of packages) {
     const entries = sdkEntryPoints(repoRoot, pkgDir);
-    const program = ts.createProgram(
-      entries.flatMap((e) => e.files),
-      {
-        allowJs: true,
-        noEmit: true,
-        skipLibCheck: true,
-        types: [],
-        module: ts.ModuleKind.ESNext,
-        moduleResolution: ts.ModuleResolutionKind.Bundler,
-        target: ts.ScriptTarget.ES2022,
-        jsx: ts.JsxEmit.Preserve,
-        resolveJsonModule: true,
-      },
-    );
+    options ??= repoCompilerOptions(ts, repoRoot);
+    const program = ts.createProgram(entries.flatMap((e) => e.files), options);
     const checker = program.getTypeChecker();
     const resolveAlias = (sym) => (sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym);
     for (const entry of entries) {
@@ -515,7 +541,10 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
         if (!sf) throw new SdkNamesError(`${entry.specifier}: an entry file could not be read by the TypeScript program`);
         if (seenFiles.has(sf.fileName)) continue;
         seenFiles.add(sf.fileName);
-        for (const stmt of sf.statements) {
+        // A file that is no module is read through the ambient modules it declares.
+        const isModule = Boolean(checker.getSymbolAtLocation(sf));
+        const stmts = isModule ? sf.statements : ambientModulesOf(ts, sf).flatMap((m) => m.body.statements);
+        for (const stmt of stmts) {
           if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier) continue;
           const mod = checker.getSymbolAtLocation(stmt.moduleSpecifier);
           const text = stmt.moduleSpecifier.text;
@@ -532,19 +561,31 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
       // by its new name, a string export name as written); a default export is
       // read by its declared name. Only the top-level names of the entry are
       // read: a namespace export by its own name, never its members.
-      for (const file of entry.files) {
-        const sf = program.getSourceFile(file);
-        const moduleSym = sf && checker.getSymbolAtLocation(sf);
-        // A file with no import or export is no module and exports nothing.
-        if (!moduleSym) continue;
+      const readModule = (moduleSym, specifier) => {
         for (const sym of checker.getExportsOfModule(moduleSym)) {
           const target = resolveAlias(sym);
           if (!target?.declarations?.length) {
-            throw new SdkNamesError(`${entry.specifier}: the exported name "${sym.name}" does not resolve`);
+            throw new SdkNamesError(`${specifier}: the exported name "${sym.name}" does not resolve`);
           }
           const read = sym.name === "default" ? symbolDeclName(target) ?? symbolDeclName(sym) ?? "" : sym.name;
           const hits = nameWordHits(read, wordSet);
-          if (hits.length) found[`${entry.specifier} :: ${sym.name}`] = hits;
+          if (hits.length) found[`${specifier} :: ${sym.name}`] = hits;
+        }
+      };
+      for (const file of entry.files) {
+        const sf = program.getSourceFile(file);
+        const moduleSym = sf && checker.getSymbolAtLocation(sf);
+        if (moduleSym) {
+          readModule(moduleSym, entry.specifier);
+          continue;
+        }
+        // A file with no import or export is no module: what it makes
+        // importable are the ambient modules it declares, each read under the
+        // module name a pack imports. A file that declares none exports nothing.
+        for (const decl of sf ? ambientModulesOf(ts, sf) : []) {
+          const ambient = checker.getSymbolAtLocation(decl.name);
+          if (!ambient) throw new SdkNamesError(`${entry.specifier}: the ambient module "${decl.name.text}" does not resolve`);
+          readModule(ambient, decl.name.text);
         }
       }
     }

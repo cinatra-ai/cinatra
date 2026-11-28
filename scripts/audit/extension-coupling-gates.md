@@ -339,8 +339,13 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   with a subpath pattern (`*` in a key) or a `null` target fails closed ("the
   exports map of <package> uses a pattern or a null target, which this rule
   does not read yet"): precedence between overlapping keys is not resolved
-  here, and neither SDK package uses one today. The TypeScript program and type
-  checker resolve each entry (`getExportsOfModule`), so `export *`, a renamed
+  here, and neither SDK package uses one today. The TypeScript program, built
+  with the compiler options of the repository's root `tsconfig.json` (`paths`
+  and module resolution included; its root files are the SDK entry files only),
+  and its type checker resolve each entry (`getExportsOfModule`). A target file
+  that is no module is read through the ambient modules it declares
+  (`declare module "x" { ... }`), each under its module name; one that declares
+  none exports nothing. So `export *`, a renamed
   re-export (`export { a as B }`), a type-only export and an arbitrary string
   export name count; a default export is read by its declared name. Only the
   TOP-LEVEL names of an entry are read: a namespace export (`export * as ns`,
