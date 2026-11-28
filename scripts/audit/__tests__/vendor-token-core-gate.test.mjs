@@ -8,8 +8,10 @@
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
+import * as gate from "../vendor-token-core-gate.mjs";
 import {
   vendorWords,
   admittedGrowth,
@@ -220,5 +222,343 @@ describe("admittedGrowth — the word-born admission (cinatra#4848)", () => {
     expect(admittedGrowth(base, { "a.ts :: path :: wordpress": 2 }, { isUnchangedAtBase: () => true })).toEqual([
       "a.ts :: path :: wordpress (1 -> 2)",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The SDK's exported names (cinatra#4875, class `sdk-name-with-extension-word`).
+// The gate is read through its namespace so this file loads on a base without
+// the class and fails there by assertion. Fixtures use the `@example-org` scope
+// and made-up words (`zorb` vendor, `quill` domain).
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT_4875 = join(import.meta.dirname, "..", "..", "..");
+const SDK_RULE_FILES = ["packages/sdk-extensions/src/border-words.ts", "packages/sdk-extensions/src/host-context.ts"];
+const FIXTURE_SDK = "packages/sdk-a";
+const REASON = "A fixture name recorded with a reason for the test of this class.";
+
+/** A function of the gate by name; fails by assertion when the gate lacks it. */
+function gateFn(name) {
+  expect(typeof gate[name], `vendor-token-core-gate exports ${name}`).toBe("function");
+  return gate[name];
+}
+
+const sdkRoots = [];
+afterAll(() => {
+  for (const r of sdkRoots) rmSync(r, { recursive: true, force: true });
+});
+
+/**
+ * A fixture repository: the SDK rule sources, a bridge, one pinned pack that
+ * declares `borderWords`, one SDK package at packages/sdk-a with `exports` and
+ * `files`, and the gate's baseline with `sdkNames`.
+ */
+function makeSdkTree({ exportsMap, files, sdkNames = {}, borderWords = { vendor: ["zorb"], domain: ["quill"] }, baseline }) {
+  const root = mkdtempSync(join(tmpdir(), "vendor-sdk-names-"));
+  sdkRoots.push(root);
+  const all = {
+    "package.json": JSON.stringify({ name: "example-app", cinatra: { devExtensions: { "@example-org/zorb-pack": "0.0.0" } } }),
+    "scripts/audit/border-words-bridge.json": JSON.stringify({ note: "fixture", vendor: [], domain: [], packages: [] }),
+    "extensions/example-org/zorb-pack/package.json": JSON.stringify({
+      name: "@example-org/zorb-pack",
+      cinatra: { kind: "connector", borderWords },
+    }),
+    [`${FIXTURE_SDK}/package.json`]: JSON.stringify({ name: "@example-org/sdk-a", exports: exportsMap }),
+    "scripts/audit/vendor-token-core-gate.baseline.json": JSON.stringify(baseline ?? { occurrences: {}, sdkNames }),
+  };
+  for (const [rel, text] of Object.entries(files)) all[`${FIXTURE_SDK}/${rel}`] = text;
+  for (const rel of SDK_RULE_FILES) all[rel] = readFileSync(join(REPO_ROOT_4875, rel), "utf8");
+  for (const [rel, text] of Object.entries(all)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true });
+    writeFileSync(join(root, rel), text);
+  }
+  return root;
+}
+
+const git = (root, ...args) =>
+  execFileSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "user.name=fixture", "-c", "user.email=fixture@example.org", ...args], { cwd: root, encoding: "utf8" });
+
+describe("sdk-name-with-extension-word — splitting a name and matching a word (cinatra#4875)", () => {
+  const words = ["zorb", "quill", "zorbnet", "a2b"];
+
+  it("camelCase, PascalCase, CONSTANT_CASE, kebab-case and acronym runs are split into words", () => {
+    const tokens = gateFn("nameTokens");
+    expect(tokens("sendZorb")).toEqual(["send", "zorb"]);
+    expect(tokens("ZorbSender")).toEqual(["zorb", "sender"]);
+    expect(tokens("ZORB_KIND")).toEqual(["zorb", "kind"]);
+    expect(tokens("zorb-kind")).toEqual(["zorb", "kind"]);
+    expect(tokens("QUILLConnector")).toEqual(["quill", "connector"]);
+    expect(tokens("a2bClient")).toEqual(["a", "2", "b", "client"]);
+  });
+
+  it("a word matches a whole word, case-insensitively, or a run of words written together", () => {
+    const hits = gateFn("nameWordHits");
+    expect(hits("sendZorb", words)).toEqual(["zorb"]);
+    expect(hits("ZorbSender", words)).toEqual(["zorb"]);
+    expect(hits("ZORB_KIND", words)).toEqual(["zorb"]);
+    expect(hits("zorb-kind", words)).toEqual(["zorb"]);
+    expect(hits("zorbX", words)).toEqual(["zorb"]);
+    expect(hits("HostZorbNetService", words)).toEqual(["zorb", "zorbnet"]);
+    expect(hits("a2bClient", words)).toEqual(["a2b"]);
+  });
+
+  it("a word inside a longer word is not found (whole words only)", () => {
+    const hits = gateFn("nameWordHits");
+    expect(hits("ZorbaDance", words)).toEqual([]);
+    expect(hits("unzorbed", words)).toEqual([]);
+    expect(hits("Quilling", words)).toEqual([]);
+  });
+});
+
+describe("sdk-name-with-extension-word — what a pack can import is read (cinatra#4875)", () => {
+  it("a new pack word and an SDK export named with it in a neutral module fail the gate without an edit to the gate code", () => {
+    const check = gateFn("checkSdkNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files: {
+        "src/index.ts": `export * from "./shapes";\n`,
+        "src/shapes.ts": `export interface ZorbWidget { id: string }\nexport const neutral = 1;\n`,
+      },
+    });
+    const result = check(root, { env: {}, packages: [FIXTURE_SDK] });
+    expect(result.ok).toBe(false);
+    expect(result.lines.join("\n")).toContain("sdk-name-with-extension-word");
+    expect(result.lines.join("\n")).toContain("@example-org/sdk-a :: ZorbWidget (zorb)");
+  });
+
+  it("a recorded name with a reason passes; a recorded name no longer found is stale; an entry without a reason fails", () => {
+    const check = gateFn("checkSdkNames");
+    const files = { "src/index.ts": `export interface ZorbWidget { id: string }\n` };
+    const ok = makeSdkTree({ exportsMap: { ".": "./src/index.ts" }, files, sdkNames: { "@example-org/sdk-a :: ZorbWidget": REASON } });
+    expect(check(ok, { env: {}, packages: [FIXTURE_SDK] }).ok).toBe(true);
+
+    const stale = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files,
+      sdkNames: { "@example-org/sdk-a :: ZorbWidget": REASON, "@example-org/sdk-a :: QuillGone": REASON },
+    });
+    const s = check(stale, { env: {}, packages: [FIXTURE_SDK] });
+    expect(s.ok).toBe(false);
+    expect(s.lines.join("\n")).toContain("- @example-org/sdk-a :: QuillGone");
+
+    const bare = makeSdkTree({ exportsMap: { ".": "./src/index.ts" }, files, sdkNames: { "@example-org/sdk-a :: ZorbWidget": "ok" } });
+    const b = check(bare, { env: {}, packages: [FIXTURE_SDK] });
+    expect(b.ok).toBe(false);
+    expect(b.lines.join("\n")).toContain("without a reason");
+  });
+
+  it("every top-level form of export a pack can import is read; members of an exported namespace, type, class, enum or const object are not", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts", "./extra": { types: "./src/extra.d.ts", default: "./src/extra.js" } },
+      files: {
+        "src/index.ts": [
+          `export * from "./star";`,
+          `export * as zorbSpace from "./ns-target";`,
+          `export { plain as QuillRenamed } from "./plain";`,
+          `export type { ZorbOnlyType } from "./types";`,
+          `export { default } from "./default-fn";`,
+          `export namespace Holder { export const zorbInside = 1; }`,
+          `export enum Kinds { ZorbMember = 1 }`,
+          `export const table = { zorbKey: 1 };`,
+          `export class Service { zorbMethod() {} }`,
+          `export class Merged { static zorbMember = 1; }`,
+          `export namespace Merged { export const quillMerged = 1; }`,
+          `export enum MergedKinds { ZorbValue = 1 }`,
+          `export namespace MergedKinds { export const quillExtraKind = 1; }`,
+          `export interface Port { sendZorb(): void }`,
+          `export function quillOverload(a: string): void;`,
+          `export function quillOverload(a: number): void;`,
+          `export function quillOverload(a: unknown): void {}`,
+          `const literal = 1;`,
+          `export { literal as "zorb-kind" };`,
+        ].join("\n"),
+        "src/star.ts": `export const ZORB_KIND = "k";\n`,
+        "src/ns-target.ts": `export const neutralInside = 1;\nexport const QuillInside = 2;\n`,
+        "src/plain.ts": `export const plain = 1;\n`,
+        "src/types.ts": `export type ZorbOnlyType = string;\n`,
+        "src/default-fn.ts": `export default function sendZorb() {}\n`,
+        "src/extra.d.ts": `export declare const quillExtra: number;\n`,
+        "src/extra.js": `export const quillExtra = 1;\n`,
+      },
+    });
+    const found = scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] });
+    expect(Object.keys(found).sort()).toEqual(
+      [
+        "@example-org/sdk-a :: ZORB_KIND",
+        "@example-org/sdk-a :: zorbSpace",
+        "@example-org/sdk-a :: QuillRenamed",
+        "@example-org/sdk-a :: ZorbOnlyType",
+        "@example-org/sdk-a :: default",
+        "@example-org/sdk-a :: quillOverload",
+        "@example-org/sdk-a :: zorb-kind",
+        "@example-org/sdk-a/extra :: quillExtra",
+      ].sort(),
+    );
+  });
+
+  it("each condition target of an entry is read: a types target and a default target that export different names are both found", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": { types: "./src/index.d.ts", default: "./src/index.js" } },
+      files: {
+        "src/index.d.ts": `export declare const ZorbTyped: number;\n`,
+        "src/index.js": `export const QuillCoded = 1;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] })).sort()).toEqual([
+      "@example-org/sdk-a :: QuillCoded",
+      "@example-org/sdk-a :: ZorbTyped",
+    ]);
+  });
+
+  it("a JavaScript target is read with the declaration TypeScript resolves beside it (.d.ts, .d.mts, .d.cts)", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./dist/index.js", "./m": "./dist/m.mjs", "./c": { default: "./dist/c.cjs" } },
+      files: {
+        "dist/index.js": `export const neutral = 1;\n`,
+        "dist/index.d.ts": `export declare const neutral: number;\nexport type ZorbWidget = string;\n`,
+        "dist/m.mjs": `export const neutralM = 1;\n`,
+        "dist/m.d.mts": `export declare const neutralM: number;\nexport interface QuillShape { a: 1 }\n`,
+        "dist/c.cjs": `exports.neutralC = 1;\n`,
+        "dist/c.d.cts": `export declare const neutralC: number;\nexport type ZorbCommon = number;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb", "quill"], { packages: [FIXTURE_SDK] })).sort()).toEqual([
+      "@example-org/sdk-a :: ZorbWidget",
+      "@example-org/sdk-a/c :: ZorbCommon",
+      "@example-org/sdk-a/m :: QuillShape",
+    ]);
+  });
+
+  it("a root conditions object is the \".\" entry; a root mixing conditions and subpaths fails closed", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { types: "./dist/index.d.ts", default: "./dist/index.js" },
+      files: {
+        "dist/index.d.ts": `export declare const ZorbRoot: number;\n`,
+        "dist/index.js": `export const ZorbRoot = 1;\n`,
+      },
+    });
+    let found = {};
+    expect(() => {
+      found = scan(root, ["zorb"], { packages: [FIXTURE_SDK] });
+    }).not.toThrow();
+    expect(Object.keys(found)).toEqual(["@example-org/sdk-a :: ZorbRoot"]);
+    const mixed = makeSdkTree({
+      exportsMap: { types: "./dist/index.d.ts", "./extra": "./dist/index.js" },
+      files: { "dist/index.d.ts": `export declare const ZorbRoot: number;\n`, "dist/index.js": `export const ZorbRoot = 1;\n` },
+    });
+    expect(() => scan(mixed, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow('package.json has no subpath "exports" map');
+  });
+
+  it("an exports map with a subpath pattern fails closed (precedence is not read); the real SDK packages hold none", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { "./public": "./src/public.ts", "./*": "./src/*.ts" },
+      files: { "src/public.ts": `export const ZorbPublic = 1;\n` },
+    });
+    expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
+      "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
+    );
+    for (const dir of ["packages/sdk-extensions", "packages/sdk-ui"]) {
+      expect(() => gateFn("sdkEntryPoints")(REPO_ROOT_4875, dir)).not.toThrow();
+    }
+  });
+
+  it("an exports map with a null target fails closed, also inside a conditions object", () => {
+    const scan = gateFn("scanSdkExportNames");
+    for (const exportsMap of [
+      { ".": "./src/index.ts", "./hidden": null },
+      { ".": { types: "./src/index.ts", browser: null } },
+    ]) {
+      const root = makeSdkTree({ exportsMap, files: { "src/index.ts": `export const ZorbIndex = 1;\n` } });
+      expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
+        "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
+      );
+    }
+  });
+});
+
+describe("sdk-name-with-extension-word — fails closed (cinatra#4875)", () => {
+  const cases = [
+    ["an entry whose target does not exist", { ".": "./src/missing.ts" }, {}, `@example-org/sdk-a exports "."`],
+    ["an export from a module that does not resolve", { ".": "./src/index.ts" }, { "src/index.ts": `export * from "./gone";\n` }, `export ... from "./gone"`],
+    [
+      "an exported name that does not resolve",
+      { ".": "./src/index.ts" },
+      { "src/index.ts": `export { Nope } from "./real";\n`, "src/real.ts": `export const real = 1;\n` },
+      `"Nope" does not resolve`,
+    ],
+  ];
+  for (const [title, exportsMap, files, text] of cases) {
+    it(`${title} is a scanner error naming the entry`, () => {
+      const scan = gateFn("scanSdkExportNames");
+      const root = makeSdkTree({ exportsMap, files });
+      expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(text);
+    });
+  }
+});
+
+describe("sdk-name-with-extension-word — the record only shrinks against the base (cinatra#4875)", () => {
+  const exportsMap = { ".": "./src/index.ts" };
+
+  function committedTree(sdkNames, files, borderWords) {
+    const root = makeSdkTree({ exportsMap, files, sdkNames, ...(borderWords ? { borderWords } : {}) });
+    git(root, "init", "-q", "-b", "main");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "base");
+    return root;
+  }
+  const writeFloor = (root, sdkNames) =>
+    writeFileSync(join(root, "scripts/audit/vendor-token-core-gate.baseline.json"), JSON.stringify({ occurrences: {}, sdkNames }));
+
+  it("a new name added to the SDK and to the record in the same change is refused against the base", () => {
+    const check = gateFn("checkSdkNames");
+    const root = committedTree({}, { "src/index.ts": `export const neutral = 1;\n` });
+    writeFileSync(join(root, FIXTURE_SDK, "src/index.ts"), `export const neutral = 1;\nexport const ZorbNew = 2;\n`);
+    writeFloor(root, { "@example-org/sdk-a :: ZorbNew": REASON });
+    const r = check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ZorbNew");
+  });
+
+  it("a word a pack newly declares for an unchanged SDK name is refused: the record cannot grow, whatever changed", () => {
+    const check = gateFn("checkSdkNames");
+    const root = committedTree({}, { "src/index.ts": `export const QuillOld = 1;\n` }, { vendor: ["zorb"], domain: [], reason: undefined });
+    writeFileSync(
+      join(root, "extensions/example-org/zorb-pack/package.json"),
+      JSON.stringify({ name: "@example-org/zorb-pack", cinatra: { kind: "connector", borderWords: { vendor: ["zorb"], domain: ["quill"] } } }),
+    );
+    writeFloor(root, { "@example-org/sdk-a :: QuillOld": REASON });
+    const r = check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("@example-org/sdk-a :: QuillOld");
+  });
+
+  it("a base without the record is the one-time seed; a flag-like base fails closed", () => {
+    const check = gateFn("checkSdkNames");
+    const root = makeSdkTree({ exportsMap, files: { "src/index.ts": `export const ZorbSeed = 1;\n` }, baseline: { occurrences: {} } });
+    git(root, "init", "-q", "-b", "main");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "base");
+    writeFloor(root, { "@example-org/sdk-a :: ZorbSeed": REASON });
+    expect(check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] }).ok).toBe(true);
+    const flag = check(root, { env: { VENDOR_TOKEN_BASE: "--output=x" }, packages: [FIXTURE_SDK] });
+    expect(flag.ok).toBe(false);
+    expect(flag.lines.join("\n")).toContain("flag-like");
+  });
+});
+
+describe("sdk-name-with-extension-word — the real tree (cinatra#4875)", () => {
+  it("passes on the real SDK with the record committed, and the record holds the names the issue named", () => {
+    const check = gateFn("checkSdkNames");
+    const result = check(REPO_ROOT_4875, { env: {} });
+    expect(result.lines).toEqual([]);
+    expect(result.ok).toBe(true);
+    for (const name of ["CrmConnector", "BlogConnector", "CrmPointerWriterProvider"]) {
+      expect(Object.keys(result.found)).toContain(`@cinatra-ai/sdk-extensions :: ${name}`);
+    }
   });
 });
