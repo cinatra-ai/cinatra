@@ -122,7 +122,7 @@ describe("server source maps by upload variables (cinatra#4103)", () => {
 
 describe("bundler ignore hint on run-time path calls (cinatra#4103)", () => {
   // The second memory trace named twenty calls, and fifteen keep the hint (a sixteenth went with the old-layout agent read, cinatra#4920); each builds a folder path at run time. In the fixture readings only the process.cwd()-first hint forms take the trace from 38 to 1; the other retained forms do not stop it. This test counts the hint only.
-  it("counts the hint on exactly the 15 path calls the build trace named (a count only: it does not prove the bundler stops tracing)", () => {
+  it("counts the hint on exactly the 16 path calls the build trace named (a count only: it does not prove the bundler stops tracing)", () => {
     const callBefore = /([A-Za-z_$][\w$.]*)\(\/\* turbopackIgnore: true \*\/ (?=[^)\s])/g;
     let total = 0;
     for (const [file, callees] of Object.entries(SITES)) {
@@ -132,6 +132,8 @@ describe("bundler ignore hint on run-time path calls (cinatra#4103)", () => {
       expect(code.split(HINT).length - 1, file).toBe(callees.length);
       total += found.length;
     }
+    // The title keeps its first wording. Fifteen calls remain: the sixteenth stood in the old-layout agent read, which is gone (cinatra#4920).
+    expect(codeLines(read("packages/agents/src/mcp/agent-source-paths.ts")).split(HINT).length - 1).toBe(0);
     expect(total).toBe(15);
   });
 
