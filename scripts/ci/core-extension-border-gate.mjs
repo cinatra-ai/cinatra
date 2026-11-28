@@ -268,6 +268,27 @@ export function packTypeNamespaces(packs, workspacePackages = new Set()) {
   return ns;
 }
 
+/** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
+ *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
+ *  hand-listed. Only a leaf that ends in a kind suffix (ROLE_SUFFIX_RE: `-agent`, `-artifact(s)`,
+ *  `-connector`, `-skill`, ...) is read, so a one-word or generic leaf cannot make an ordinary word a
+ *  finding; a leaf that a workspace package of this repository or a dependency name also carries is
+ *  not read either, because there it names that package, not the pack. */
+export function packLeafNames(packs, { workspacePackages = new Set(), dependencyNames = new Set() } = {}) {
+  const leafOf = (p) => String(p).replace(/^@[^/]+\//, "");
+  const owned = new Set([...workspacePackages].map(leafOf));
+  const leaves = new Map();
+  for (const p of packs) {
+    const leaf = leafOf(p);
+    if (!ROLE_SUFFIX_RE.test(leaf) || owned.has(leaf) || dependencyNames.has(leaf)) continue;
+    leaves.set(leaf, [...(leaves.get(leaf) ?? []), String(p)].sort());
+  }
+  return leaves;
+}
+
+/** A string literal in any quote; a template literal is read as written, `${...}` pieces included. */
+const STRING_LITERAL_RE = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+
 /** A repeated crossing is a SEPARATE crossing. The second and later occurrence
  *  of the same rule and detail carries its ordinal into the detail, so it gets
  *  its own key and cannot ride the entry that covers the first. */
@@ -278,9 +299,9 @@ function occurrenceDetail(counts, rule, detail) {
   return n === 1 ? detail : `${detail} (occurrence ${n})`;
 }
 
-/** The three text-level crossing classes: a pack's physical table name, a
- *  pack's type id, and a branch on a pack's package name. */
-export function scanTextForCrossings({ file, text, packs, workspacePackages }) {
+/** The text-level crossing classes: a pack's physical table name, a pack's
+ *  type id, a branch on a pack's package name, and a pack's leaf in a literal. */
+export function scanTextForCrossings({ file, text, packs, workspacePackages, dependencyNames = new Set() }) {
   const namespaces = packTypeNamespaces(packs, workspacePackages);
   const masked = maskComments(text);
   const out = [];
@@ -339,6 +360,24 @@ export function scanTextForCrossings({ file, text, packs, workspacePackages }) {
         "product code branches on a package name; behaviour follows a declaration, never an identity",
       );
     }
+  }
+
+  // `pack-slug-in-core` (cinatra#4531): a literal that IS a pack's leaf, or holds it as a whole
+  // `/`-separated segment. A segment right after an `@scope` segment is a package name, which the
+  // package-name rule and the coupling checks own, so it is not read here.
+  const leaves = packLeafNames(packs, { workspacePackages, dependencyNames });
+  for (const m of masked.matchAll(STRING_LITERAL_RE)) {
+    const segments = (m[1] ?? m[2] ?? m[3]).split("/");
+    segments.forEach((segment, i) => {
+      const owners = leaves.get(segment);
+      if (!owners || segments[i - 1]?.startsWith("@")) return;
+      push(
+        "pack-slug-in-core",
+        lineOf(masked, m.index),
+        `${segment} (${owners.join(", ")})`,
+        `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+      );
+    });
   }
 
   return out.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));
@@ -1014,6 +1053,19 @@ export function loadPackUniverse(repoRoot, baselineEntries = []) {
     for (const m of String(e?.key ?? "").matchAll(/(@cinatra-ai\/[a-z0-9][a-z0-9.-]*)/g)) packs.add(m[1]);
   }
   const workspacePackages = new Set();
+  // The names the repository's own manifests depend on (cinatra#4531): a pack leaf that is also
+  // such a name is not read by `pack-slug-in-core`.
+  const dependencyNames = new Set();
+  const readDependencies = (json) => {
+    for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+      for (const name of Object.keys(json?.[field] ?? {})) dependencyNames.add(name);
+    }
+  };
+  try {
+    readDependencies(JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")));
+  } catch {
+    /* no root manifest — it simply shields no name */
+  }
   const pkgDir = join(repoRoot, "packages");
   if (existsSync(pkgDir)) {
     for (const d of readdirSync(pkgDir, { withFileTypes: true })) {
@@ -1021,15 +1073,16 @@ export function loadPackUniverse(repoRoot, baselineEntries = []) {
       const manifest = join(pkgDir, d.name, "package.json");
       if (!existsSync(manifest)) continue;
       try {
-        const name = JSON.parse(readFileSync(manifest, "utf8")).name;
-        if (name) workspacePackages.add(name);
+        const json = JSON.parse(readFileSync(manifest, "utf8"));
+        if (json.name) workspacePackages.add(json.name);
+        readDependencies(json);
       } catch {
         /* unreadable manifest — the package simply does not shield a name */
       }
     }
   }
   for (const w of workspacePackages) packs.delete(w);
-  return { packs, workspacePackages };
+  return { packs, workspacePackages, dependencyNames };
 }
 
 export const KNOWN_RULES = new Set([
@@ -1042,6 +1095,7 @@ export const KNOWN_RULES = new Set([
   "pack-shaped-core-domain",
   "pack-step-kind-in-core",
   "unbounded-port-member",
+  "pack-slug-in-core",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1237,7 +1291,7 @@ export function violationsOf(findings, baselineKeys) {
  *  entries whose crossing is gone. */
 export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DEFAULT_BASELINE, ports = true } = {}) {
   const baseline = readBaseline(baselinePath);
-  const { packs, workspacePackages } = loadPackUniverse(repoRoot, baseline.entries);
+  const { packs, workspacePackages, dependencyNames } = loadPackUniverse(repoRoot, baseline.entries);
   const findings = [];
   let kindTables = 0;
 
@@ -1245,7 +1299,7 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot)) {
       const file = relative(repoRoot, abs).split(sep).join("/");
       const text = readFileSync(abs, "utf8");
-      findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages }));
+      findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages, dependencyNames }));
       findings.push(...scanScopedToolAdmissions({ file, text, packs }));
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);

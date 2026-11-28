@@ -59,6 +59,7 @@ type GateModule = {
     text: string;
     packs: Set<string>;
     workspacePackages: Set<string>;
+    dependencyNames?: Set<string>;
   }) => Finding[];
   scanScopedToolAdmissions: (input: { file: string; text: string; packs: Set<string> }) => Finding[];
   legacyExceptionFindings: (input: { file: string; doc: unknown }) => Finding[];
@@ -1401,6 +1402,104 @@ describe("core/extension border — unbounded-port-member", () => {
       expect(list).toEqual(["jobs.enqueue", "mcp.callPrimitive", "objects.write", "settings.set"].map((d) => `${file}::${d}`));
       const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
       expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(list);
+    }, 60_000);
+  });
+});
+
+// cinatra#4531: `pack-slug-in-core`. A string literal in core that IS a locked pack's leaf (the name
+// without its scope), or holds it as a whole path segment, names that pack. Only a leaf with a kind
+// suffix is read. Every case compares the whole list of this rule's details, so on a tree without
+// the rule a case fails by assertion.
+describe("core/extension border — pack-slug-in-core", () => {
+  const RULE = "pack-slug-in-core";
+  const SLUG_PACKS = new Set([
+    "@example-org/quill-ledger-connector",
+    "@example-org/tide-planner-agent",
+    "@example-org/glyph-artifacts",
+    "@example-org/report",
+  ]);
+  const slugs = (text: string, extra: { workspacePackages?: Set<string>; dependencyNames?: Set<string> } = {}) =>
+    gate
+      .scanTextForCrossings({ file: "src/lib/x.ts", text, packs: SLUG_PACKS, workspacePackages: WORKSPACE, ...extra })
+      .filter((f) => f.rule === RULE)
+      .map((f) => `${f.line} ${f.detail}`);
+  const QUILL = "quill-ledger-connector (@example-org/quill-ledger-connector)";
+  const TIDE = "tide-planner-agent (@example-org/tide-planner-agent)";
+
+  it("reports a leaf written as a whole string literal, in any quote", () => {
+    expect(slugs('const a = "quill-ledger-connector";\nconst b = \'glyph-artifacts\';\nconst c = `tide-planner-agent`;\n')).toEqual([
+      `1 ${QUILL}`,
+      "2 glyph-artifacts (@example-org/glyph-artifacts)",
+      `3 ${TIDE}`,
+    ]);
+  });
+
+  it("reports a leaf held as a whole path segment, also in a template literal", () => {
+    expect(
+      slugs('const href = "/agents/example-org/tide-planner-agent/new";\nconst h = `/connectors/${vendor}/quill-ledger-connector/setup`;\n'),
+    ).toEqual([`1 ${TIDE}`, `2 ${QUILL}`]);
+  });
+
+  it("a part of a segment, another spelling, a comment and a leaf without a kind suffix are not read", () => {
+    const text = [
+      'const a = "tide-planner-agent-v2";',
+      'const b = "my-tide-planner-agent";',
+      'const c = "tide_planner_agent";',
+      'const d = "report";',
+      "// the quill-ledger-connector pack is named here only in a comment",
+      'const e = "quill-ledger-connector";',
+    ].join("\n");
+    expect(slugs(text)).toEqual([`6 ${QUILL}`]);
+  });
+
+  it("a scoped package name is not a leaf use, also under another scope", () => {
+    const text = 'const a = "@other-org/quill-ledger-connector";\nconst b = "@example-org/tide-planner-agent/sub";\nconst c = "tide-planner-agent";\n';
+    expect(slugs(text)).toEqual([`3 ${TIDE}`]);
+  });
+
+  it("a leaf a workspace package or a dependency of this repository also carries is not read", () => {
+    const text = 'const a = "quill-ledger-connector";\nconst b = "tide-planner-agent";\nconst c = "glyph-artifacts";\n';
+    expect(
+      slugs(text, {
+        workspacePackages: new Set([...WORKSPACE, "@example-host/quill-ledger-connector"]),
+        dependencyNames: new Set(["tide-planner-agent"]),
+      }),
+    ).toEqual(["3 glyph-artifacts (@example-org/glyph-artifacts)"]);
+  });
+
+  it("a repeated leaf in one file is its own finding", () => {
+    expect(slugs('const a = "quill-ledger-connector";\nconst b = "/x/quill-ledger-connector";\n')).toEqual([
+      `1 ${QUILL}`,
+      `2 ${QUILL} (occurrence 2)`,
+    ]);
+  });
+
+  describe("the ledger of this rule", () => {
+    const KEY = `src/lib/example-module.ts::${QUILL}`;
+    const e = (key: string) => ({ rule: RULE, key, reason: "a standing leaf recorded in a fixture ledger" });
+    const growth = (base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({
+        base: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: base } },
+        head: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: head } },
+      });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+    it("the base guard refuses a new entry of the rule and lets a shrink pass", () => {
+      const grew = growth([e(KEY)], [e(KEY), e(`${KEY} (occurrence 2)`)]);
+      expect(grew.ok).toBe(false);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY} (occurrence 2)`]);
+      expect(growth([e(KEY), e(`${KEY} (occurrence 2)`)], [e(KEY)]).ok).toBe(true);
+    });
+    it("the real tree: every finding of the rule is recorded, and nothing else is", () => {
+      const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+      const found = r.findings.filter((f) => f.rule === RULE).map((f) => `${f.file}::${f.detail}`).sort();
+      expect(found.length).toBeGreaterThan(0);
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(found);
     }, 60_000);
   });
 });

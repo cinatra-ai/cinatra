@@ -6,6 +6,7 @@
     "pack-named-passthrough",
     "pack-package-name-branch",
     "pack-shaped-core-domain",
+    "pack-slug-in-core",
     "pack-step-kind-in-core",
     "pack-table-literal",
     "pack-type-id-in-core",
@@ -101,6 +102,811 @@
         "src/lib/blog/store.ts": 1605,
         "src/lib/blog/wordpress.ts": 465
       }
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/agent-source-dirs.ts::drupal-agent (@cinatra-ai/drupal-agent)",
+      "reason": "The agent source-directory map keys the content-editor agents by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/agent-source-dirs.ts::wordpress-agent (@cinatra-ai/wordpress-agent)",
+      "reason": "The agent source-directory map keys the content-editor agents by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/oas-compiler.ts::drupal-agent (@cinatra-ai/drupal-agent)",
+      "reason": "The OAS compiler keys the content-editor agents by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/oas-compiler.ts::wordpress-agent (@cinatra-ai/wordpress-agent)",
+      "reason": "The OAS compiler keys the content-editor agents by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::apify-connector (@cinatra-ai/apify-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::email-connector (@cinatra-ai/email-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::gemini-connector (@cinatra-ai/gemini-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::gmail-connector (@cinatra-ai/gmail-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::google-appointment-schedules-connector (@cinatra-ai/google-appointment-schedules-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::google-calendar-connector (@cinatra-ai/google-calendar-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::mcp-client-connector (@cinatra-ai/mcp-client-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::media-feeds-connector (@cinatra-ai/media-feeds-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/reserved-workspace-slugs.ts::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "The reserved workspace slug list names connector packages by their unscoped names to prevent slug collisions. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::a2a-server-connector (@cinatra-ai/a2a-server-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::a2a-server-connector (@cinatra-ai/a2a-server-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::anthropic-connector (@cinatra-ai/anthropic-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::anthropic-connector (@cinatra-ai/anthropic-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::apify-connector (@cinatra-ai/apify-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::apify-connector (@cinatra-ai/apify-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::apollo-connector (@cinatra-ai/apollo-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::drupal-assistant-connector (@cinatra-ai/drupal-assistant-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::gemini-connector (@cinatra-ai/gemini-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::gemini-connector (@cinatra-ai/gemini-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::github-connector (@cinatra-ai/github-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::gmail-connector (@cinatra-ai/gmail-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::gmail-connector (@cinatra-ai/gmail-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-appointment-schedules-connector (@cinatra-ai/google-appointment-schedules-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-calendar-connector (@cinatra-ai/google-calendar-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-calendar-connector (@cinatra-ai/google-calendar-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-calendar-connector (@cinatra-ai/google-calendar-connector) (occurrence 3)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-oauth-connector (@cinatra-ai/google-oauth-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::google-oauth-connector (@cinatra-ai/google-oauth-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::linkedin-connector (@cinatra-ai/linkedin-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::linkedin-oauth-connector (@cinatra-ai/linkedin-oauth-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::mcp-client-connector (@cinatra-ai/mcp-client-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::openai-connector (@cinatra-ai/openai-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::plane-connector (@cinatra-ai/plane-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::tailscale-connector (@cinatra-ai/tailscale-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::tailscale-connector (@cinatra-ai/tailscale-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::tailscale-connector (@cinatra-ai/tailscale-connector) (occurrence 3)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::twenty-connector (@cinatra-ai/twenty-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/src/descriptors.mjs::youtube-connector (@cinatra-ai/youtube-connector) (occurrence 2)",
+      "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors/src/connectors-client.tsx::drupal-assistant-connector (@cinatra-ai/drupal-assistant-connector)",
+      "reason": "The connectors client keys brand icons by the assistant connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors/src/connectors-client.tsx::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "The connectors client keys brand icons by the assistant connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/llm/src/index.ts::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The LLM package loads the OpenAI connector module by its unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/src/extension-skill-resolver.ts::automation-authoring-skill (@cinatra-ai/automation-authoring-skill)",
+      "reason": "The extension skill resolver lists skill packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/src/extension-skill-resolver.ts::blog-content-skill (@cinatra-ai/blog-content-skill)",
+      "reason": "The extension skill resolver lists skill packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/src/extension-skill-resolver.ts::chat-assistant-core-skill (@cinatra-ai/chat-assistant-core-skill)",
+      "reason": "The extension skill resolver lists skill packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/src/extension-skill-resolver.ts::company-research-skill (@cinatra-ai/company-research-skill)",
+      "reason": "The extension skill resolver lists skill packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/src/extension-skill-resolver.ts::extension-authoring-skill (@cinatra-ai/extension-authoring-skill)",
+      "reason": "The extension skill resolver lists skill packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/app/setup-status/route.ts::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "The setup-status route loads connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/app/setup-status/route.ts::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The setup-status route loads connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/llm-bridge/route.ts::media-transcript-agent (@cinatra-ai/media-transcript-agent)",
+      "reason": "The LLM bridge falls back to the transcript agent's unscoped package name as the agent label and id. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/llm-bridge/route.ts::media-transcript-agent (@cinatra-ai/media-transcript-agent) (occurrence 2)",
+      "reason": "The LLM bridge falls back to the transcript agent's unscoped package name as the agent label and id. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/llm-bridge/route.ts::media-transcript-agent (@cinatra-ai/media-transcript-agent) (occurrence 3)",
+      "reason": "The LLM bridge falls back to the transcript agent's unscoped package name as the agent label and id. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/api/llm-bridge/route.ts::media-transcript-agent (@cinatra-ai/media-transcript-agent) (occurrence 4)",
+      "reason": "The LLM bridge falls back to the transcript agent's unscoped package name as the agent label and id. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/campaigns/actions.ts::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
+      "reason": "The campaign actions name connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/campaigns/actions.ts::twenty-connector (@cinatra-ai/twenty-connector)",
+      "reason": "The campaign actions name connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/campaigns/actions.ts::twenty-connector (@cinatra-ai/twenty-connector) (occurrence 2)",
+      "reason": "The campaign actions name connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/apps/openai-skills/page.tsx::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The OpenAI skills page resolves the connector setup link by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/development/tunnel-tab.tsx::tailscale-connector (@cinatra-ai/tailscale-connector)",
+      "reason": "The tunnel tab names the tunnel connector by its unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/[apiSlug]/page.tsx::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The LLM API page resolves connector setup links by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/[apiSlug]/page.tsx::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The LLM API page resolves connector setup links by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::anthropic-connector (@cinatra-ai/anthropic-connector)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::anthropic-connector (@cinatra-ai/anthropic-connector) (occurrence 2)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::gemini-connector (@cinatra-ai/gemini-connector)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/llm/apis-page.tsx::openai-connector (@cinatra-ai/openai-connector) (occurrence 2)",
+      "reason": "The LLM APIs page loads and links connector modules by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/page.tsx::drupal-assistant-connector (@cinatra-ai/drupal-assistant-connector)",
+      "reason": "The configuration page links the assistant connectors' setup routes by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/configuration/page.tsx::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "The configuration page links the assistant connectors' setup routes by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/connectors/[vendor]/[slug]/[subroute]/page.tsx::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "The connector subroute page branches on the assistant connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/connectors/drupal/page.tsx::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The legacy Drupal connector page redirects by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/connectors/resend/page.tsx::resend-connector (@cinatra-ai/resend-connector)",
+      "reason": "The legacy Resend connector page redirects by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/connectors/wordpress/page.tsx::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The legacy WordPress connector page redirects by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/design-fixtures/conformance/seed-data.ts::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The conformance seed data names connector packages by their unscoped names as seeded basenames. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/design-fixtures/conformance/seed-data.ts::plane-connector (@cinatra-ai/plane-connector)",
+      "reason": "The conformance seed data names connector packages by their unscoped names as seeded basenames. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::google-oauth-connector (@cinatra-ai/google-oauth-connector)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/app/plugins-registry.tsx::youtube-connector (@cinatra-ai/youtube-connector) (occurrence 2)",
+      "reason": "The plugins registry redirects to connector setup pages by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::a2a-server-connector (@cinatra-ai/a2a-server-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::anthropic-connector (@cinatra-ai/anthropic-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::apify-connector (@cinatra-ai/apify-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::gemini-connector (@cinatra-ai/gemini-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::gmail-connector (@cinatra-ai/gmail-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::google-calendar-connector (@cinatra-ai/google-calendar-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::google-oauth-connector (@cinatra-ai/google-oauth-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::linkedin-oauth-connector (@cinatra-ai/linkedin-oauth-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::mcp-client-connector (@cinatra-ai/mcp-client-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::plane-connector (@cinatra-ai/plane-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::tailscale-connector (@cinatra-ai/tailscale-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::twenty-connector (@cinatra-ai/twenty-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/components/connector-brand-icons.tsx::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "The connector brand icon map keys icons by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/appointment-schedule-add.server.ts::google-appointment-schedules-connector (@cinatra-ai/google-appointment-schedules-connector)",
+      "reason": "The appointment schedule action names the schedules connector by its unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connect-provisioning.ts::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "Connect provisioning names the CMS MCP connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connect-provisioning.ts::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "Connect provisioning names the CMS MCP connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connection-use-gate.ts::mcp-server-connector (@cinatra-ai/mcp-server-connector)",
+      "reason": "The connection-use gate names the MCP server connector by its unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-client-providers.ts::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The connector client providers name connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-client-providers.ts::github-connector (@cinatra-ai/github-connector)",
+      "reason": "The connector client providers name connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-client-providers.ts::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "The connector client providers name connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-client-providers.ts::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The connector client providers name connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-client-providers.ts::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "The connector client providers name connectors by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-instance-write-authority.ts::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "The connector instance write authority maps CMS kinds to connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-instance-write-authority.ts::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "The connector instance write authority maps CMS kinds to connector packages by their unscoped names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::a2a-server-connector (@cinatra-ai/a2a-server-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::anthropic-connector (@cinatra-ai/anthropic-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::anthropic-connector (@cinatra-ai/anthropic-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::apify-connector (@cinatra-ai/apify-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::apify-connector (@cinatra-ai/apify-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::apollo-connector (@cinatra-ai/apollo-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::apollo-connector (@cinatra-ai/apollo-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::drupal-mcp-connector (@cinatra-ai/drupal-mcp-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::gemini-connector (@cinatra-ai/gemini-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::gemini-connector (@cinatra-ai/gemini-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::gmail-connector (@cinatra-ai/gmail-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::google-appointment-schedules-connector (@cinatra-ai/google-appointment-schedules-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::google-appointment-schedules-connector (@cinatra-ai/google-appointment-schedules-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::google-calendar-connector (@cinatra-ai/google-calendar-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::google-oauth-connector (@cinatra-ai/google-oauth-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::linkedin-connector (@cinatra-ai/linkedin-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::mcp-client-connector (@cinatra-ai/mcp-client-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::openai-connector (@cinatra-ai/openai-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::openai-connector (@cinatra-ai/openai-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::plane-connector (@cinatra-ai/plane-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::plane-connector (@cinatra-ai/plane-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::tailscale-connector (@cinatra-ai/tailscale-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::tailscale-connector (@cinatra-ai/tailscale-connector) (occurrence 2)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::twenty-connector (@cinatra-ai/twenty-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::wordpress-assistant-connector (@cinatra-ai/wordpress-assistant-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/connector-readiness.server.ts::youtube-connector (@cinatra-ai/youtube-connector)",
+      "reason": "Connector readiness keys its probes by the connectors' unscoped package names. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/register-blog-providers.ts::blog-connector (@cinatra-ai/blog-connector)",
+      "reason": "The blog provider registration names its capability after the blog connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "src/lib/register-google-oauth-provider.ts::google-oauth-connector (@cinatra-ai/google-oauth-connector)",
+      "reason": "The Google OAuth provider registration looks up its descriptor by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-step-kind-in-core",
