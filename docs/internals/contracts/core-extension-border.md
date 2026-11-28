@@ -54,10 +54,12 @@ silenced by unpinning the pack it names.
 A host port member that takes a FREE NAME together with an UNTYPED PAYLOAD, the shape
 `run(name: string, input: unknown)`, is a generic tunnel to any core behaviour. The rule
 reads the type checker's resolved types, never how a type is written. A call signature has
-the shape when one ordinary parameter is plain `string` (an optional `string | undefined`, `string & {}`
-and a type parameter constrained to `string` count; a union of string literals does not) and
-another ordinary parameter is `any` or `unknown` (a union holding `unknown`, and an unconstrained type
-parameter, count). Every overload is its own signature.
+the shape when one ordinary parameter is a free name and another ordinary parameter is untyped.
+A free name is plain `string` (an optional `string | undefined`, `string & {}` and a type parameter
+constrained to `string` count; a union of string literals does not) or an untyped parameter, which
+is wider. Untyped is `any` or `unknown` (a union holding `unknown`, an unconstrained type parameter
+and an implicit `any` count). So `run(a: unknown, b: unknown)` is reported, and a member with one
+untyped parameter and no other free or untyped parameter, such as `emit(event: unknown)`, passes. Every overload is its own signature.
 
 A finding is keyed `<context property>.<member>` (a member of an object member adds `.<sub>`):
 the grant-visible port name the product itself uses (`HOST_PORT_NAMES`, `requestedHostPorts`),

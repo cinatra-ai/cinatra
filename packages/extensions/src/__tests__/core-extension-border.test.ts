@@ -79,7 +79,7 @@ type GateModule = {
   GENERATED_PATHS: Set<string>;
   keyOf: (finding: Finding) => string;
   violationsOf: (findings: Finding[], keys: Set<string>) => Finding[];
-  scanRepository: (input: { repoRoot: string; baselinePath?: string }) => {
+  scanRepository: (input: { repoRoot: string; baselinePath?: string; ports?: boolean }) => {
     findings: Finding[];
     violations: Finding[];
     stale: string[];
@@ -1259,6 +1259,14 @@ describe("core/extension border — unbounded-port-member", () => {
 
   it("the issue's fixture: run(name: string, input: unknown) is reported; a literal-union name passes", () => {
     expect(jobs(RUN)).toEqual(["jobs.run"]);
+    expect(jobs('run(name: "a" | "b", input: unknown): void')).toEqual([]);
+  });
+
+  it("an untyped name counts as a free name; one untyped parameter alone and a literal-union name pass", () => {
+    expect(jobs("run(name, input): void")).toEqual(["jobs.run"]);
+    expect(jobs("run(name: any, input: unknown): void")).toEqual(["jobs.run"]);
+    expect(jobs("run(a: unknown, b: unknown): void")).toEqual(["jobs.run"]);
+    expect(jobs("emit(event: unknown): void")).toEqual([]);
     expect(jobs('run(name: "a" | "b", input: unknown): void')).toEqual([]);
   });
 

@@ -748,7 +748,7 @@ function productCompilerOptions(repoRoot) {
 }
 
 /** `unbounded-port-member` (cinatra#4872): a host port member that takes a FREE NAME (a parameter of
- *  the plain `string` type) together with an UNTYPED PAYLOAD (another parameter of type `any` or
+ *  the plain `string` type, or an untyped one) together with an UNTYPED PAYLOAD (another parameter of type `any` or
  *  `unknown`), the shape `run(name: string, input: unknown)`. Decided on the checker's resolved
  *  types, never on how a type is written. Only the ordinary parameters of a signature are read: a
  *  rest parameter (`...args`) is never evaluated, so a free name or an untyped payload passed through
@@ -799,11 +799,11 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
     }
     return t.isUnion() && t.types.some((c) => untyped(c, seen));
   };
-  // One call signature: a free name and, at another ordinary parameter, an untyped payload. A rest
-  // parameter is not read.
+  // One call signature: a free name (a free string, or an untyped parameter, which is wider) and, at
+  // another ordinary parameter, an untyped payload. A rest parameter is not read.
   const hasShape = (sig) => {
     const types = sig.getParameters().filter((p) => !isRest(p)).map(typeOf);
-    return types.some((t, i) => freeString(t) && types.some((u, j) => i !== j && untyped(u)));
+    return types.some((t, i) => (freeString(t) || untyped(t)) && types.some((u, j) => i !== j && untyped(u)));
   };
 
   // The anchor: the entry type through the module's exports, then its `register`, then the context.
