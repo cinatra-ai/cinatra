@@ -5,9 +5,10 @@
 // Usage: node scripts/ci-validate-agents.mjs
 // Exit 0: all files valid. Exit 1: one or more files failed validation.
 //
-// Canonical layout is agents/cinatra/<slug>-agent/cinatra/oas.json.
-// The pre-200 cinatra/agent.json filename is probed as a transitional fallback
-// so this validator keeps working during migration.
+// Canonical layout is agents/cinatra/<slug>-agent/cinatra/oas.json, the only
+// definition file the product reads (#4920). An agent that ships only the old
+// cinatra/agent.json fails with a message naming the file to move.
+// Limit: only a folder whose package.json declares cinatra.kind "agent" is checked.
 
 import { readdir, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -110,24 +111,28 @@ function validateAgentJson(content, filePath) {
   return errors;
 }
 
+const OLD_LAYOUT_MESSAGE =
+  "move cinatra/agent.json to cinatra/oas.json: the product reads only cinatra/oas.json and does not load cinatra/agent.json";
+
 /**
  * Decide how ci-validate-agents should treat a `kind:"agent"` package, given
  * which definition files exist. Pure + exported for unit testing. Fail-closed:
- * a config.json assistant SKIP requires no oas.json AND no agent.json AND a
+ * a config.json assistant SKIP requires no oas.json AND no old agent.json AND a
  * VALID assistant declaration (the SAME pinned mirror — hasAssistantBlock +
  * validateAssistantConfig — that the manifest generator's
  * validateAgentAssistantDeclaration reuses, so the two never drift).
  *
  * @param {{ hasOas: boolean, hasLegacy: boolean, config: unknown, packageName: string }} input
  *   `config` is the parsed cinatra/config.json object, or null when absent.
- * @returns {{ verdict: "oas" | "legacy" | "assistant" | "assistant-invalid" | "missing", errors?: string[] }}
- *   oas/legacy → validate that definition file; assistant → config.json-declared
+ * @returns {{ verdict: "oas" | "old-layout" | "assistant" | "assistant-invalid" | "missing", errors?: string[] }}
+ *   oas → validate cinatra/oas.json; old-layout → only the old cinatra/agent.json
+ *   (`hasLegacy`), which the product does not load, FAIL; assistant → config.json-declared
  *   assistant, defer/skip; assistant-invalid → malformed assistant block, FAIL;
  *   missing → no definition at all, FAIL.
  */
 export function classifyAgentDefinition({ hasOas, hasLegacy, config, packageName }) {
   if (hasOas) return { verdict: "oas" };
-  if (hasLegacy) return { verdict: "legacy" };
+  if (hasLegacy) return { verdict: "old-layout", errors: [OLD_LAYOUT_MESSAGE] };
   if (config && hasAssistantBlock(config)) {
     const errors = validateAssistantConfig(config, packageName);
     return errors.length > 0
@@ -179,8 +184,8 @@ async function main() {
       skippedNonAgents++;
       continue;
     }
-    // Prefer extensions/cinatra-ai/<slug>/cinatra/oas.json; fall
-    // back to cinatra/agent.json (pre-200 transitional filename).
+    // extensions/cinatra-ai/<slug>/cinatra/oas.json is the definition; the old
+    // cinatra/agent.json is only probed to fail it with the file to move.
     const oasPath = join(agentsDir, entry.name, "cinatra", "oas.json");
     const legacyPath = join(agentsDir, entry.name, "cinatra", "agent.json");
     const configPath = join(agentsDir, entry.name, "cinatra", "config.json");
@@ -189,8 +194,8 @@ async function main() {
 
     // Third agent form (epic #1873 W6/W7): an ASSISTANT-kind agent declares via
     // cinatra/config.json's `assistant` block instead of a compiled-plan
-    // oas.json / legacy agent.json. Read config.json ONLY when there is no
-    // oas.json / agent.json to validate; malformed JSON is an honest FAIL (not a
+    // oas.json. Read config.json ONLY when there is no oas.json and no old
+    // agent.json; malformed JSON is an honest FAIL (not a
     // silent skip). `config` stays null otherwise.
     let config = null;
     if (!hasOas && !hasLegacy && existsSync(configPath)) {
@@ -208,7 +213,7 @@ async function main() {
       // config.json-declared assistant — its declaration is owned + fully
       // validated by the manifest generator's validateAgentAssistantDeclaration
       // (a fail-closed BLOCKING build step) + the assistant-declaration gate.
-      // This legacy OAS/agent validator defers to them.
+      // This OAS validator defers to them.
       console.log(`SKIP ${configPath} (config.json-declared assistant — validated by the assistant-declaration gate)`);
       skippedAssistantDecl++;
       continue;
@@ -221,18 +226,23 @@ async function main() {
       failCount++;
       continue;
     }
-    if (classification.verdict === "missing") {
-      // No oas.json, no agent.json, no assistant declaration → genuinely broken.
-      console.error(`FAIL ${oasPath}: oas.json (or agent.json fallback) not found or unreadable`);
+    if (classification.verdict === "old-layout") {
+      console.error(`FAIL ${legacyPath}: ${classification.errors.join("; ")}`);
       failCount++;
       continue;
     }
-    const agentJsonPath = hasOas ? oasPath : legacyPath;
+    if (classification.verdict === "missing") {
+      // No oas.json, no old agent.json, no assistant declaration → genuinely broken.
+      console.error(`FAIL ${oasPath}: cinatra/oas.json not found`);
+      failCount++;
+      continue;
+    }
+    const agentJsonPath = oasPath;
     let raw;
     try {
       raw = await readFile(agentJsonPath, "utf8");
     } catch {
-      console.error(`FAIL ${agentJsonPath}: oas.json (or agent.json fallback) not found or unreadable`);
+      console.error(`FAIL ${agentJsonPath}: cinatra/oas.json is unreadable`);
       failCount++;
       continue;
     }

@@ -44,18 +44,27 @@ export const EXTENSION_TOOL = "extension_tool";
 
 /**
  * THE AGENT RULE. A pinned pack is an agent when its manifest says kind
- * `agent`, OR when its pinned tree holds what the product's discovery looks
- * for at a pack root `extensions/<scope>/<name>`: `cinatra/oas.json`, which it
- * reads, or the old `cinatra/agent.json`, which it reports and does not load
- * (`DEFINITION_PLACES` in packages/agents/src/agent-source-dirs.ts, used by
- * `collectDefinitions` in src/lib/git-native-agent-ingest.ts; the seed of
- * scripts/extensions/build-required-oas-seed.mjs tests `cinatra/oas.json`, a
- * subset). A tree entry at, or below, such a path matches (discovery's
- * `existsSync` is true for a file, a link or a folder).
+ * `agent`, OR when its pinned tree holds `cinatra/oas.json` at the pack root
+ * `extensions/<scope>/<name>`, the one definition file the product's discovery
+ * reads (`DEFINITION_PLACES` in packages/agents/src/agent-source-dirs.ts, used
+ * by `collectDefinitions` in src/lib/git-native-agent-ingest.ts; the seed of
+ * scripts/extensions/build-required-oas-seed.mjs tests the same path). A tree
+ * entry at, or below, such a path matches (discovery's `existsSync` is true
+ * for a file, a link or a folder). The other `DEFINITION_PLACES`, the old
+ * `cinatra/agent.json` and `agent.json` (`OLD_DEFINITION_PATHS`), are reported
+ * by the product and not loaded (#4920): a pack that holds one and no
+ * `cinatra/oas.json` fails this gate with the file to move, so it is never
+ * skipped in silence; a pack of kind `agent` stays an agent whatever it holds.
  */
-export const AGENT_DEFINITION_PATHS = Object.freeze(["cinatra/agent.json", "cinatra/oas.json"]);
+export const AGENT_DEFINITION_PATHS = Object.freeze(["cinatra/oas.json"]);
+export const OLD_DEFINITION_PATHS = Object.freeze(["cinatra/agent.json", "agent.json"]);
+const holds = (entries, p) => entries.some((e) => e.rel === p || e.rel.startsWith(`${p}/`));
 export function isAgentPack(kind, entries) {
-  return kind === "agent" || entries.some((e) => AGENT_DEFINITION_PATHS.some((p) => e.rel === p || e.rel.startsWith(`${p}/`)));
+  return kind === "agent" || AGENT_DEFINITION_PATHS.some((p) => holds(entries, p));
+}
+/** The old definition files of a pack that holds no `cinatra/oas.json` (empty otherwise). */
+export function oldDefinitionFiles(entries) {
+  return AGENT_DEFINITION_PATHS.some((p) => holds(entries, p)) ? [] : OLD_DEFINITION_PATHS.filter((p) => holds(entries, p));
 }
 
 /**
@@ -312,6 +321,7 @@ function readPinnedJson(dir, sha, entry, label) {
 export function scan(root) {
   if (!existsSync(join(root, "extensions"))) throw new ScannerError("no extensions/ tree: run `node scripts/ci/sync-dev-extensions.mjs --pinned` first");
   const findings = Object.fromEntries(CLASSES.map((c) => [c, Object.create(null)]));
+  const oldLayout = [];
   const packs = pinnedPacks(root);
   for (const { name, sha } of packs) {
     const { dir, rel } = packCheckout(root, name, sha);
@@ -328,12 +338,14 @@ export function scan(root) {
       if (steps.length) findings.extensionToolSteps[`${name} :: ${e.rel}`] = { count: steps.length, items: steps };
       if (unreadable.length) findings.unreadableSteps[`${name} :: ${e.rel}`] = { count: unreadable.length, items: unreadable };
     }
+    const old = oldDefinitionFiles(entries);
+    if (old.length) oldLayout.push(`${name}: move ${old.join(" and ")} to cinatra/oas.json`);
     if (isAgentPack(kind, entries)) {
       const files = nonContentFiles(entries);
       if (files.length) findings.nonContentFiles[name] = { count: files.length, items: files };
     }
   }
-  return { findings, packCount: packs.length };
+  return { findings, packCount: packs.length, oldLayout };
 }
 
 /** The base guard; a resolving base holding neither the list nor this script is the introducing change. */
@@ -351,13 +363,15 @@ const totals = (f) => CLASSES.map((c) => `${total(f[c])} ${c} in ${Object.keys(f
 const NOTE = "Agent extension code gate (cinatra#4885): per key, the recorded items (a multiset); the head's items must be contained in them, " +
   "a gone item is stale (shrink with --write-baseline); `count` is information. See scripts/audit/extension-coupling-gates.md.";
 
+const OLD_LAYOUT_NOTE = "a pinned pack holds an old definition file and no cinatra/oas.json; the product reports it and does not load it:";
+
 export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), env = process.env, log = console.log, err = console.error } = {}) {
   const stop = (code, ...lines) => (lines.forEach((l) => err(l)), code);
   const floorPath = join(repoRoot, FLOOR_FILE);
   const present = existsSync(floorPath);
-  let findings, packCount, list;
+  let findings, packCount, oldLayout, list;
   try {
-    ({ findings, packCount } = scan(repoRoot));
+    ({ findings, packCount, oldLayout } = scan(repoRoot));
     list = present ? attempt(() => parseList(readFileSync(floorPath, "utf8")), fail(`${FLOOR_FILE} is not a readable list`)) : null;
   } catch (e) {
     return stop(2, `[${GATE}] scanner error: ${e?.message ?? e}`);
@@ -371,8 +385,10 @@ export function main(argv = process.argv.slice(2), { repoRoot = process.cwd(), e
         for (const i of findings[cls][k].items) log(`    ${i}`);
       }
     }
+    if (oldLayout.length) log([`\n${OLD_LAYOUT_NOTE}`, ...oldLayout.map((l) => `  ${l}`)].join("\n"));
     return 0;
   }
+  if (oldLayout.length) return stop(1, `[${GATE}] FAIL — ${OLD_LAYOUT_NOTE}`, ...oldLayout.map((l) => `  ${l}`));
   const seed = argv.includes("--seed");
   if (seed || argv.includes("--write-baseline")) {
     if (seed && present) return stop(1, `[${GATE}] REFUSING --seed — ${FLOOR_FILE} exists; lower it with --write-baseline.`);
