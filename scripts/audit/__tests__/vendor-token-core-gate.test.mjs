@@ -828,3 +828,173 @@ describe("sdk-name-with-extension-word — the real tree (cinatra#4875)", () => 
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Stage 2 (cinatra#4875): the subpath names of the SDK `exports` maps, the KEYS
+// of the map, recorded in the baseline's `sdkSubpaths`.
+// ---------------------------------------------------------------------------
+
+const SUBPATH_REASON = "A fixture subpath recorded with a reason for the test of this stage.";
+const subpathFloor = (sdkSubpaths) => ({ occurrences: {}, sdkNames: {}, sdkSubpaths });
+const subpathTree = ({ exportsMap, sdkSubpaths = {}, baseline, borderWords }) =>
+  makeSdkTree({
+    exportsMap,
+    files: { "src/index.ts": `export const neutral = 1;\n` },
+    baseline: baseline ?? subpathFloor(sdkSubpaths),
+    ...(borderWords ? { borderWords } : {}),
+  });
+const writeSubpathFloor = (root, doc) => writeFileSync(join(root, "scripts/audit/vendor-token-core-gate.baseline.json"), JSON.stringify(doc));
+
+describe("sdk-name-with-extension-word stage 2 — the subpath names of the exports map are read (cinatra#4875)", () => {
+  it("each key is split into segments and words; a word or a run written together within a segment is found; '.' and neutral keys are not", () => {
+    const scan = gateFn("scanSdkSubpathNames");
+    const root = subpathTree({
+      exportsMap: {
+        ".": "./src/index.ts",
+        "./zorb-contract": "./src/index.ts",
+        "./lib/quill_helpers": "./src/index.ts",
+        "./widgets/zorbNet": "./src/index.ts",
+        "./a2b-panel": "./src/index.ts",
+        "./neutral-panel": "./src/index.ts",
+        "./zorba-dance": "./src/index.ts",
+        "./zorb/net": "./src/index.ts",
+      },
+    });
+    expect(scan(root, ["zorb", "quill", "zorbnet", "a2b"], { packages: [FIXTURE_SDK] })).toEqual({
+      "@example-org/sdk-a :: ./a2b-panel": ["a2b"],
+      "@example-org/sdk-a :: ./lib/quill_helpers": ["quill"],
+      "@example-org/sdk-a :: ./widgets/zorbNet": ["zorb", "zorbnet"],
+      "@example-org/sdk-a :: ./zorb-contract": ["zorb"],
+      "@example-org/sdk-a :: ./zorb/net": ["zorb"],
+    });
+  });
+
+  it("a new subpath named with a pack word fails the gate without an edit to the gate code", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const root = subpathTree({ exportsMap: { ".": "./src/index.ts", "./quill-contract": "./src/index.ts" } });
+    const r = check(root, { env: {}, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("sdk-name-with-extension-word");
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ./quill-contract (quill)");
+  });
+
+  it("a recorded subpath with a reason passes; a recorded pair no longer found is stale; an entry without a reason fails", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const exportsMap = { ".": "./src/index.ts", "./zorb-contract": "./src/index.ts" };
+    const ok = subpathTree({ exportsMap, sdkSubpaths: { "@example-org/sdk-a :: ./zorb-contract :: zorb": SUBPATH_REASON } });
+    const good = check(ok, { env: {}, packages: [FIXTURE_SDK] });
+    expect(good.lines).toEqual([]);
+    expect(good.ok).toBe(true);
+
+    const stale = subpathTree({
+      exportsMap,
+      sdkSubpaths: { "@example-org/sdk-a :: ./zorb-contract :: zorb": SUBPATH_REASON, "@example-org/sdk-a :: ./quill-gone :: quill": SUBPATH_REASON },
+    });
+    const s = check(stale, { env: {}, packages: [FIXTURE_SDK] });
+    expect(s.ok).toBe(false);
+    expect(s.lines.join("\n")).toContain('stale "sdkSubpaths"');
+    expect(s.lines.join("\n")).toContain("- @example-org/sdk-a :: ./quill-gone :: quill");
+
+    const bare = subpathTree({ exportsMap, sdkSubpaths: { "@example-org/sdk-a :: ./zorb-contract :: zorb": "" } });
+    const b = check(bare, { env: {}, packages: [FIXTURE_SDK] });
+    expect(b.ok).toBe(false);
+    expect(b.lines.join("\n")).toContain("! @example-org/sdk-a :: ./zorb-contract :: zorb");
+  });
+
+  it("a recorded subpath that gains a newly declared word fails for that word only", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const root = subpathTree({
+      exportsMap: { ".": "./src/index.ts", "./zorb-quill": "./src/index.ts" },
+      sdkSubpaths: { "@example-org/sdk-a :: ./zorb-quill :: zorb": SUBPATH_REASON },
+    });
+    const r = check(root, { env: {}, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ./zorb-quill (quill)");
+    expect(r.lines.join("\n")).not.toContain("stale");
+  });
+});
+
+describe("sdk-name-with-extension-word stage 2 — fails closed (cinatra#4875)", () => {
+  for (const [title, exportsMap] of [
+    ["a string exports field", "./src/index.ts"],
+    ["an array exports field", ["./src/index.ts"]],
+    ["no exports field", undefined],
+  ]) {
+    it(`${title} is a scanner error naming the package`, () => {
+      const scan = gateFn("scanSdkSubpathNames");
+      const root = subpathTree({ exportsMap });
+      expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow("@example-org/sdk-a: the exports field is not an object");
+    });
+  }
+
+  it("an unreadable manifest is a scanner error", () => {
+    const scan = gateFn("scanSdkSubpathNames");
+    const root = subpathTree({ exportsMap: { ".": "./src/index.ts" } });
+    writeFileSync(join(root, FIXTURE_SDK, "package.json"), "{ not json");
+    expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(`${FIXTURE_SDK}/package.json is unreadable`);
+  });
+});
+
+describe("sdk-name-with-extension-word stage 2 — the record only shrinks against the base (cinatra#4875)", () => {
+  const committed = (exportsMap, baseline) => {
+    const root = subpathTree({ exportsMap, baseline });
+    git(root, "init", "-q", "-b", "main");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "base");
+    return root;
+  };
+  const withZorb = { ".": "./src/index.ts", "./zorb-contract": "./src/index.ts" };
+
+  it("a new subpath added to the record in the same change is refused against the base", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const root = committed({ ".": "./src/index.ts" }, subpathFloor({}));
+    writeFileSync(join(root, FIXTURE_SDK, "package.json"), JSON.stringify({ name: "@example-org/sdk-a", exports: withZorb }));
+    writeSubpathFloor(root, subpathFloor({ "@example-org/sdk-a :: ./zorb-contract :: zorb": SUBPATH_REASON }));
+    const r = check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain("+ @example-org/sdk-a :: ./zorb-contract :: zorb");
+  });
+
+  it("the section is never removed: a head without the sdkSubpaths property fails", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const root = committed({ ".": "./src/index.ts" }, subpathFloor({}));
+    writeSubpathFloor(root, { occurrences: {}, sdkNames: {} });
+    const r = check(root, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(r.ok).toBe(false);
+    expect(r.lines.join("\n")).toContain('the "sdkSubpaths" section is removed');
+  });
+
+  it("a base without the sdkSubpaths property is the one-time seed; a base with an empty one is no seed", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const recorded = subpathFloor({ "@example-org/sdk-a :: ./zorb-contract :: zorb": SUBPATH_REASON });
+    const seed = committed(withZorb, { occurrences: {}, sdkNames: {} });
+    writeSubpathFloor(seed, recorded);
+    const s = check(seed, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(s.lines).toEqual([]);
+    expect(s.ok).toBe(true);
+
+    const noSeed = committed(withZorb, subpathFloor({}));
+    writeSubpathFloor(noSeed, recorded);
+    const n = check(noSeed, { env: { VENDOR_TOKEN_BASE: "HEAD" }, packages: [FIXTURE_SDK] });
+    expect(n.ok).toBe(false);
+    expect(n.lines.join("\n")).toContain("+ @example-org/sdk-a :: ./zorb-contract :: zorb");
+  });
+
+  it("sdkNames and sdkSubpaths share one list logic: the same section reader takes a section name", () => {
+    const read = gateFn("readSectionFloor");
+    expect(read({ sdkSubpaths: { a: "b" } }, "sdkSubpaths")).toEqual({ a: "b" });
+    expect(() => read({ sdkNames: {} }, "sdkSubpaths")).toThrow('the "sdkSubpaths" section is removed');
+  });
+});
+
+describe("sdk-name-with-extension-word stage 2 — the real tree (cinatra#4875)", () => {
+  it("passes on the real SDK with the record committed, and the record holds the family contract subpaths", () => {
+    const check = gateFn("checkSdkSubpaths");
+    const result = check(REPO_ROOT_4875, { env: {} });
+    expect(result.lines).toEqual([]);
+    expect(result.ok).toBe(true);
+    for (const subpath of ["./blog-contract", "./social-contract", "./email-contract"]) {
+      expect(Object.keys(result.found)).toContain(`@cinatra-ai/sdk-extensions :: ${subpath}`);
+    }
+  });
+});

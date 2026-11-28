@@ -160,5 +160,11 @@
     "@cinatra-ai/sdk-extensions/social-contract :: SocialMediaConnectorStatusResult :: social": "A family contract named for its connector family; where family contracts live is decided in cinatra#4850.",
     "@cinatra-ai/sdk-extensions/social-contract :: SocialMediaPost :: social": "A family contract named for its connector family; where family contracts live is decided in cinatra#4850.",
     "@cinatra-ai/sdk-extensions/social-contract :: SocialMediaPublishReceipt :: social": "A family contract named for its connector family; where family contracts live is decided in cinatra#4850."
+  },
+  "sdkSubpathsNote": "The SDK subpath names a pack can import that carry a border word (class sdk-name-with-extension-word, stage 2, cinatra#4875): one entry per package, exports key and matched word (\"<package> :: <subpath> :: <word>\"), each with its reason. Edited by hand; a subpath with a word not recorded for it fails, a recorded word no longer matched is stale and fails, and the record only shrinks against VENDOR_TOKEN_BASE.",
+  "sdkSubpaths": {
+    "@cinatra-ai/sdk-extensions :: ./blog-contract :: blog": "A family contract subpath named for its connector family; where family contracts live is decided in cinatra#4850.",
+    "@cinatra-ai/sdk-extensions :: ./email-contract :: email": "A family contract subpath named for its connector family; where family contracts live is decided in cinatra#4850.",
+    "@cinatra-ai/sdk-extensions :: ./social-contract :: social": "A family contract subpath named for its connector family; where family contracts live is decided in cinatra#4850."
   }
 }
