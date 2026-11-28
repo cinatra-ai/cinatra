@@ -181,4 +181,12 @@ describe("assistant-declaration-gate — end-to-end", () => {
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/package\.json#files/);
   });
+
+  it("FAILS RED when an assistant config also holds a non-null access block (assistant/executor exclusion)", () => {
+    const res = runGateOnAgent(JSON.stringify(file(VALID_BLOCK, { access: { scope: { default: "user" } } })), { files: ["cinatra"] });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/both an assistant block and an access block/);
+    const ok = runGateOnAgent(JSON.stringify(file(VALID_BLOCK, { access: null })), { files: ["cinatra"] });
+    expect(ok.status).toBe(0);
+  });
 });

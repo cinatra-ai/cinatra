@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -395,10 +395,195 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
       "cinatra/oas.json": JSON.stringify({ ok: true }),
       "agent.json": JSON.stringify({ formatVersion: 1 }),
     });
+    // The title is kept from main, but the root agent.json is no longer a
+    // "materialized" file: since #4920 nothing writes or reads it. Here it is not
+    // even published ("files" names only src and cinatra), and beside a published
+    // cinatra/oas.json it is not a definition, so no finding names it.
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
-    expect(result.conform).toBe(false);
-    expect(result.blocking.some((f) => f.rule === "manifest.agent-json-format-version")).toBe(true);
+    const all = [...result.blocking, ...result.known, ...result.advisory];
+    expect(all.filter((f) => f.file === "agent.json" || /^manifest\.agent-/.test(f.rule))).toEqual([]);
     rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  // cinatra#4920: an agent package has one definition file, cinatra/oas.json, or
+  // it is a config-only assistant (cinatra/config.json with an `assistant` block).
+  const agentFixture = (files, pkgFiles = ["cinatra"]) =>
+    writeFixture({
+      "package.json": JSON.stringify({
+        name: "@example-org/fixture-agent",
+        version: "0.0.1",
+        license: "Apache-2.0",
+        files: pkgFiles,
+        cinatra: { kind: "agent", apiVersion: "cinatra.ai/v1", dependencies: [] },
+      }),
+      "README.md": "# Fixture Agent\n",
+      ...files,
+    });
+  const VALID_ASSISTANT_CONFIG = {
+    formatVersion: 1,
+    assistant: {
+      abiVersion: 1,
+      displayName: "Fixture",
+      preferredTag: "fixture",
+      persona: "You are a fixture assistant.",
+      skillBundle: ["chat-assistant-core"],
+      launch: { kind: "local" },
+      delivery: { kind: "host-runtime" },
+    },
+  };
+  const gateOver = (pkgDir) => {
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    rmSync(pkgDir, { recursive: true, force: true });
+    return result;
+  };
+  const agentFindings = (result) =>
+    [...result.blocking, ...result.known, ...result.advisory].filter((f) => /^manifest\.agent-/.test(f.rule));
+
+  it("checks cinatra/oas.json even when a root agent.json stands beside it (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/oas.json": "{ not json", "agent.json": JSON.stringify({ formatVersion: 2 }) }),
+    );
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-oas-invalid-json"]);
+  });
+
+  it("fails a package that holds only an old-layout definition file and names the file to move (#4920)", () => {
+    // The old file is published: cinatra/ ships, and "files" names the root agent.json.
+    for (const old of ["cinatra/agent.json", "agent.json"]) {
+      const result = gateOver(agentFixture({ [old]: JSON.stringify({ formatVersion: 2 }) }, ["cinatra", "agent.json"]));
+      expect(result.conform).toBe(false);
+      expect(agentFindings(result)).toEqual([
+        {
+          rule: "manifest.agent-missing-oas",
+          file: "cinatra/oas.json",
+          detail: `move ${old} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old}.`,
+        },
+      ]);
+    }
+  });
+
+  it("passes a valid config-only assistant that publishes cinatra/config.json, fully clean (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify(VALID_ASSISTANT_CONFIG) }));
+    expect({ blocking: result.blocking, known: result.known, advisory: result.advisory, conform: result.conform }).toEqual({
+      blocking: [],
+      known: [],
+      advisory: [],
+      conform: true,
+    });
+  });
+
+  it("fails an assistant block the product's schema rejects (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify({ formatVersion: 1, assistant: {} }) }));
+    expect(result.conform).toBe(false);
+    const found = agentFindings(result);
+    expect(found.map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
+    expect(found[0].detail).toContain("assistant.abiVersion");
+  });
+
+  it("fails a config-only assistant whose files allow list omits cinatra (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/config.json": JSON.stringify(VALID_ASSISTANT_CONFIG) }, ["README.md"]),
+    );
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-unpublished"]);
+  });
+
+  it("fails an agent package whose cinatra/config.json does not parse and has no cinatra/oas.json (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": "{ not json" }));
+    expect(result.conform).toBe(false);
+    const found = agentFindings(result);
+    expect(found.map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
+    expect(found[0].detail).toContain("not valid JSON");
+  });
+
+  const ACCESS = { scope: { default: "user" } };
+
+  it("fails an assistant config that also holds an access block, naming the exclusion (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify({ ...VALID_ASSISTANT_CONFIG, access: ACCESS }) }));
+    expect(result.conform).toBe(false);
+    const found = agentFindings(result);
+    expect(found.map((f) => f.rule)).toEqual(["manifest.agent-assistant-executor-exclusive"]);
+    expect(found[0].detail).toContain("both an assistant block and an access block");
+  });
+
+  it("keeps an assistant config clean when its access block is null or absent (#4920)", () => {
+    for (const config of [{ ...VALID_ASSISTANT_CONFIG, access: null }, VALID_ASSISTANT_CONFIG]) {
+      const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify(config) }));
+      expect({ blocking: result.blocking, known: result.known, advisory: result.advisory }).toEqual({
+        blocking: [],
+        known: [],
+        advisory: [],
+      });
+    }
+  });
+
+  it("checks the assistant declaration of an agent that also ships cinatra/oas.json (#4920)", () => {
+    const withOas = (config) =>
+      agentFindings(gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": config })));
+    expect(withOas(JSON.stringify({ formatVersion: 1, assistant: {} })).map((f) => f.rule)).toEqual([
+      "manifest.agent-assistant-config-invalid",
+    ]);
+    expect(withOas("{ not json").map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
+    expect(withOas(JSON.stringify({ ...VALID_ASSISTANT_CONFIG, access: ACCESS })).map((f) => f.rule)).toEqual([
+      "manifest.agent-assistant-executor-exclusive",
+    ]);
+    expect(withOas(JSON.stringify(VALID_ASSISTANT_CONFIG))).toEqual([]);
+    expect(withOas(JSON.stringify({ formatVersion: 1, access: ACCESS }))).toEqual([]);
+  });
+
+  // The check judges the PUBLISHED files (npm's packlist), as the product installs them.
+  const cleanOf = (result) => ({ blocking: result.blocking, known: result.known, advisory: result.advisory, conform: result.conform });
+  const CLEAN = { blocking: [], known: [], advisory: [], conform: true };
+
+  it("passes a valid assistant beside a root agent.json that is not published (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/config.json": JSON.stringify(VALID_ASSISTANT_CONFIG), "agent.json": JSON.stringify({ formatVersion: 2 }) }),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("fails a valid cinatra/oas.json that is not published (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }) }, ["src"]));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-oas-unpublished"]);
+    expect(agentFindings(result)[0].detail).toContain("cinatra/oas.json exists but is not published");
+  });
+
+  it("fails a published old-layout file without a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/agent.json": JSON.stringify({ formatVersion: 2 }) }));
+    expect(agentFindings(result).map((f) => f.detail)).toEqual([
+      "move cinatra/agent.json to cinatra/oas.json: the product reads only cinatra/oas.json and does not load cinatra/agent.json.",
+    ]);
+  });
+
+  it("ignores an unpublished old-layout file beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "agent.json": JSON.stringify({ formatVersion: 2 }) }),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("passes a published, valid cinatra/oas.json (#4920)", () => {
+    expect(cleanOf(gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }) })))).toEqual(CLEAN);
+  });
+
+  it("does not read an unpublished cinatra/config.json that does not parse beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": "{ not json" }, ["cinatra/oas.json"]),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("reports only the unpublished finding for an unpublished, invalid assistant block (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/config.json": JSON.stringify({ formatVersion: 1, assistant: {} }) }, ["README.md"]));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-unpublished"]);
+  });
+
+  it("fails a published cinatra/config.json that does not parse, also beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "cinatra/config.json": "{ not json" }));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-assistant-config-invalid"]);
   });
 });
 
@@ -1852,6 +2037,52 @@ function sdkRootFrom(transform = (files) => files, workflowText = REUSABLE_WORKF
 
 const HOST_MODULE = clientBundle.HOST_DESIGN_PRIMITIVES_MODULE;
 const importOf = (spec) => `import { Button } from "${spec}";\nexport const B = Button;\n`;
+
+describe("cinatra#4920 — the checker loads from the reusable workflow's sparse checkout", () => {
+  it("every relative import reachable from conformance-gate.mjs is in the sparse-checkout list", () => {
+    const listed = new Set(sparseCheckoutList(REUSABLE_WORKFLOW_TEXT));
+    const seen = new Set();
+    const missing = [];
+    const walk = (rel) => {
+      if (seen.has(rel)) return;
+      seen.add(rel);
+      if (!listed.has(rel)) missing.push(rel);
+      const text = readFileSync(join(REPO_ROOT, rel), "utf8");
+      for (const m of text.matchAll(/^(?:import|export)\s[^;]*?from\s+"(\.{1,2}\/[^"]+)"|^import\s+"(\.{1,2}\/[^"]+)"/gm)) {
+        walk(join(dirname(rel), m[1] ?? m[2]));
+      }
+    };
+    walk("scripts/extensions/conformance-gate.mjs");
+    expect(seen.has("scripts/audit/connector-access-config-gate.mjs")).toBe(true);
+    expect(missing).toEqual([]);
+  });
+
+  it("runs from a directory that holds only the sparse-checkout files", () => {
+    // realpath: the script runs main() only when argv[1] equals its own resolved URL.
+    const sdkRoot = realpathSync(sdkRootFrom());
+    const pkgDir = writeFixture({
+      "package.json": JSON.stringify({
+        name: "@example-org/fixture-assistant",
+        version: "0.0.1",
+        license: "Apache-2.0",
+        files: ["cinatra"],
+        cinatra: { kind: "agent", apiVersion: "cinatra.ai/v1", dependencies: [] },
+      }),
+      "README.md": "# Fixture Assistant\n",
+      "cinatra/config.json": JSON.stringify({ formatVersion: 1, assistant: {} }),
+    });
+    const run = spawnSync(
+      process.execPath,
+      [join(sdkRoot, "scripts", "extensions", "conformance-gate.mjs"), "--package", pkgDir, "--sdk-root", sdkRoot, "--json"],
+      { encoding: "utf8", cwd: sdkRoot },
+    );
+    rmSync(sdkRoot, { recursive: true, force: true });
+    rmSync(pkgDir, { recursive: true, force: true });
+    expect(run.stderr).not.toMatch(/ERR_MODULE_NOT_FOUND|Cannot find module/);
+    expect(run.status).toBe(1);
+    expect(JSON.parse(run.stdout).blocking.map((f) => f.rule)).toContain("manifest.agent-assistant-config-invalid");
+  });
+});
 
 describe("cinatra#3867 — the import rule admits exactly the host-served primitives module", () => {
   it("derives the module from the SDK's own declaration, from the reusable workflow's files alone", () => {

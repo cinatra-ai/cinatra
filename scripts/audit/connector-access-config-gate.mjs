@@ -178,6 +178,28 @@ export function hasAssistantBlock(parsed) {
   );
 }
 
+/** The assistant/executor exclusion: the message both gates report. */
+export const ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE =
+  "declares both an assistant block and an access block (connector-executor content); " +
+  "the product refuses to install that package (an assistant has no executor of its own): " +
+  "ship it as an assistant or as a connector, not both";
+
+/**
+ * MIRROR of the host's executor signal (`hasConnectorExecutor` in
+ * `src/lib/assistant-declaration-host.ts`): does this parsed config.json carry a
+ * non-null `access` block? With an assistant block beside it, the product
+ * refuses the install (`assertAssistantInstallConstraints`).
+ */
+export function hasConnectorExecutorBlock(parsed) {
+  return (
+    typeof parsed === "object" &&
+    parsed !== null &&
+    "access" in parsed &&
+    parsed.access !== undefined &&
+    parsed.access !== null
+  );
+}
+
 /**
  * Validate a parsed cinatra/config.json's assistant DOMAIN for `packageName`.
  * Returns an array of error strings (empty = ok — i.e. `{ ok:true }` from
@@ -399,6 +421,9 @@ function main() {
     }
     for (const e of validateAssistantConfig(parsed, name)) {
       findings.push(`${rel}: cinatra/config.json assistant block — ${e}`);
+    }
+    if (hasConnectorExecutorBlock(parsed)) {
+      findings.push(`${rel}: cinatra/config.json ${ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE}`);
     }
   }
 
