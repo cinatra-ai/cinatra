@@ -890,11 +890,6 @@
     },
     {
       "rule": "pack-slug-in-core",
-      "key": "src/lib/dashboards/dashboard-artifact-surface.ts::dashboard-artifact (@cinatra-ai/dashboard-artifact)",
-      "reason": "The dashboard artifact surface names the dashboard artifact pack's type id, whose pack part is the pack's unscoped name; the type-id rule records the same string. It stood in core when this rule landed (cinatra#4531)."
-    },
-    {
-      "rule": "pack-slug-in-core",
       "key": "src/lib/register-blog-providers.ts::blog-connector (@cinatra-ai/blog-connector)",
       "reason": "The blog provider registration names its capability after the blog connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
     },
