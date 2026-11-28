@@ -16,7 +16,7 @@
  * Over the pinned extensions (both locks plus `cinatra.devExtensions`) it reads
  * each pack from its PINNED COMMIT (the lock's `resolvedSha`) in its git
  * checkout at `extensions/<scope>/<name>`, never from the working tree or the
- * index, and records, per key, the items of seven classes that may only go
+ * index, and records, per key, the items of eight classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
  * by `isContent`, not under a `.git` folder, `isSkippedDir`,
@@ -29,7 +29,9 @@
  * `cinatra.fieldRenderers` entries that carry a `component`, see
  * `rendererComponentItems`) and `hitlDeclarations` (cinatra#4532: per skill,
  * workflow or connector pack that is not an agent, its `cinatra.fieldRenderers`
- * entries, see `hitlDeclarationItems`).
+ * entries, see `hitlDeclarationItems`) and `jsxFiles` (cinatra#4532: per agent,
+ * skill or workflow pack, the `.tsx` and `.jsx` files it ships, see
+ * `jsxFileItems`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
  *
  * Usage: node scripts/audit/agent-extension-code-gate.mjs [--report | --write-baseline | --seed]
@@ -40,15 +42,16 @@ import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "./lib/floor-base-guard.mjs";
+import { isInScope } from "../extensions/conformance-gate.mjs";
 
 const GATE = "agent-extension-code";
 export const FLOOR_FILE = "scripts/audit/agent-extension-code-gate.baseline.json";
 export const GATE_FILE = "scripts/audit/agent-extension-code-gate.mjs";
 export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
-export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations"];
+export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations", "jsxFiles"];
 /** Classes added after the list was seeded: a list without such a class holds none of its items, and a base list without it seeds it (`listGrowth`). */
-export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents", "hitlDeclarations"]);
+export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents", "hitlDeclarations", "jsxFiles"]);
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
@@ -186,6 +189,43 @@ export function isHitlFreePack(kind, entries) {
 }
 export function hitlDeclarationItems(packageJson, label = "package.json") {
   return fieldRendererEntries(packageJson, label).map(({ item }) => item).sort();
+}
+
+/**
+ * THE SCREEN-FILE RULE (cinatra#4532). An agent, a skill or a workflow pack
+ * (`isRolePack`) ships no `.tsx` or `.jsx` file: it has no screen of its own.
+ * The pack is read at its pinned commit, from the tree `packFiles` lists (a
+ * link too). A file counts by its name (`JSX_FILE_RE`, the case of the
+ * extension aside), unless `isTestFile` leaves it out: the same base-name
+ * predicate as for class 1, so no folder name decides.
+ *
+ * "SHIPS" is the manifest `files` list read by `isInScope` of
+ * scripts/extensions/conformance-gate.mjs, the reading that gate uses for the
+ * published scope (its packlist fallback, the declared logo and the declared
+ * renderer entries). A pack that has no usable list (absent, `null` or empty)
+ * is read by all its tracked files, as npm packs every file it does not ignore:
+ * the safe direction. `npm pack --dry-run`, the gate's first choice, needs a
+ * materialised tree and this check reads git objects only. The list is read
+ * ONLY when a file would count, and then it fails closed: a value that is not a
+ * list of strings, or an entry that is not a plain relative path (a pattern,
+ * `./src`, `/src`), is a scanner error that names the pack, because
+ * `isInScope` matches plain paths and cannot place such an entry. Stated limit:
+ * npm also packs the files `main` and `bin` name, whatever `files` says; they
+ * are not read.
+ */
+export const JSX_FILE_RE = /\.(?:tsx|jsx)$/i;
+const PLAIN_FILES_ENTRY_RE = /^!?(?!\.{0,2}(?:\/|$)|\/)[^*?[\]{}()!\\]+$/;
+function shippedBy(files, label) {
+  if (files === undefined || files === null || (Array.isArray(files) && files.length === 0)) return () => true;
+  if (!Array.isArray(files) || files.some((e) => typeof e !== "string")) throw new ScannerError(`${label}: files is not a list of paths`);
+  const odd = files.find((e) => !PLAIN_FILES_ENTRY_RE.test(e));
+  if (odd !== undefined) throw new ScannerError(`${label}: files entry ${JSON.stringify(odd)} is not a plain relative path; the check cannot tell what it ships`);
+  return (rel) => isInScope(rel, files);
+}
+export function jsxFileItems(entries, packageJson, label = "package.json") {
+  const screens = entries.map((e) => e.rel).filter((rel) => JSX_FILE_RE.test(rel) && !isTestFile(rel));
+  if (screens.length === 0) return [];
+  return screens.filter(shippedBy(packageJson?.files, label)).sort();
 }
 
 /**
@@ -476,6 +516,8 @@ export function scan(root) {
       if (ui.length) findings.uiDependencies[name] = { count: ui.length, items: ui };
       const renderers = rendererComponentItems(pkg, declaredBy);
       if (renderers.length) findings.rendererComponents[name] = { count: renderers.length, items: renderers };
+      const screens = jsxFileItems(entries, pkg, declaredBy);
+      if (screens.length) findings.jsxFiles[name] = { count: screens.length, items: screens };
     }
     // Read for every pinned pack, so a shape the product does not read fails closed in any kind; recorded for a pack that is no agent or artifact.
     const hitl = hitlDeclarationItems(pkg, declaredBy);
@@ -503,6 +545,7 @@ const RULE_TEXT = {
   uiDependencies: "an agent, skill or workflow extension depends on no UI package",
   rendererComponents: "an agent, skill or workflow extension declares no field renderer component",
   hitlDeclarations: "a skill, workflow or connector extension declares no HITL field renderer",
+  jsxFiles: "an agent, skill or workflow extension ships no .tsx or .jsx file",
 };
 
 const OLD_LAYOUT_NOTE = "a pinned pack holds an old definition file and no cinatra/oas.json; the product reports it and does not load it:";
