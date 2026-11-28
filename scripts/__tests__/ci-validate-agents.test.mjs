@@ -37,8 +37,11 @@ describe("classifyAgentDefinition", () => {
   });
 
   it("routes a legacy agent.json agent to the legacy validator", () => {
-    expect(classifyAgentDefinition({ hasOas: false, hasLegacy: true, config: null, packageName: PKG }))
-      .toEqual({ verdict: "legacy" });
+    // Title kept for the test counter. Since #4920 the old cinatra/agent.json is not read: it fails and names the file to move.
+    expect(classifyAgentDefinition({ hasOas: false, hasLegacy: true, config: null, packageName: PKG })).toEqual({
+      verdict: "old-layout",
+      errors: ["move cinatra/agent.json to cinatra/oas.json: the product reads only cinatra/oas.json and does not load cinatra/agent.json"],
+    });
   });
 
   it("SKIPS (defers) a valid config.json-declared assistant", () => {
