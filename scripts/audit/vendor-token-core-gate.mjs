@@ -74,16 +74,41 @@
 // credential-broker MECHANISM) and the LLM-provider names are words no pack
 // declares as a vendor word.
 //
+// THE SDK'S EXPORTED NAMES (cinatra#4875, class `sdk-name-with-extension-word`).
+// `packages/sdk-extensions/` is excluded from the path scan above, so a port
+// contract named for a family or a vendor passed every gate. This class reads
+// the names a pack can import from the SDK packages a pack may depend on (the
+// two the conformance gate admits, SDK_PACKAGE_DIRS) on the same fact a pack
+// sees: every entry of each package's `exports` map (subpath patterns expanded
+// over the package's files, every condition's target), resolved by the
+// TypeScript program and type checker (`getExportsOfModule`, so `export *`,
+// renamed re-exports and type-only exports count; a namespace's exports are
+// read as `ns.Name`). A name is split into words (camelCase, PascalCase, acronym
+// runs, digits, `_` and `-`) and is a finding when one word, or a run of
+// consecutive words written together, equals a border word of either list
+// (whole words, case-insensitive). Members of an exported type, class, enum or
+// const object are not read (the port rule of cinatra#4872 reads port members).
+// An entry that does not resolve, or an `export ... from` / exported name that
+// does not resolve, is a scanner error (exit 2). Today's findings are recorded,
+// one per entry specifier and name, each with a reason, in the baseline's
+// `sdkNames`; a new name fails, a recorded name no longer found fails (stale),
+// and the record may only shrink against VENDOR_TOKEN_BASE through the shared
+// floor base guard (lib/floor-base-guard.mjs). The word-born admission holds
+// here too: a new record is admitted when the SDK packages are unchanged at
+// the base (a pin advance brought the word, the SDK did not change).
+//
 // Usage:
 //   node scripts/audit/vendor-token-core-gate.mjs                  # --check (default)
 //   node scripts/audit/vendor-token-core-gate.mjs --write-baseline # ratchet the floor down
 //   VENDOR_TOKEN_BASE=<ref> node ...   # also fail if the committed baseline GREW vs <ref>
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join, dirname } from "node:path";
+import { createRequire } from "node:module";
+import { join, dirname, resolve, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
+import { compareFloorWithBase, isPermitReason, newKeys } from "./lib/floor-base-guard.mjs";
 import { PERMANENT_EXEMPT_FILES } from "./lib/extension-reference-classification.mjs";
 import {
   BorderWordsError,
@@ -300,8 +325,329 @@ export function diffShrunk(baseline, current) {
   return shrunk.sort();
 }
 
+// ---------------------------------------------------------------------------
+// The SDK's exported names (cinatra#4875) — see THE SDK'S EXPORTED NAMES above.
+// ---------------------------------------------------------------------------
+
+export const SDK_NAME_CLASS = "sdk-name-with-extension-word";
+
+/** The SDK packages a pack may import (scripts/extensions/conformance-gate.mjs, rule `imports`). */
+export const SDK_PACKAGE_DIRS = Object.freeze(["packages/sdk-extensions", "packages/sdk-ui"]);
+
+const BASELINE_REL = "scripts/audit/vendor-token-core-gate.baseline.json";
+const SDK_CODE_TARGET_RE = /\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
+
+/** An SDK entry or export that cannot be read: a scanner error (exit 2), never a pass. */
+export class SdkNamesError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "SdkNamesError";
+  }
+}
+
+function loadTypeScript() {
+  try {
+    return createRequire(import.meta.url)("typescript");
+  } catch {
+    throw new SdkNamesError("the TypeScript compiler is not installed (run pnpm install first)");
+  }
+}
+
+/**
+ * The lower-case words of an exported name: split on `_`, `-` and every other
+ * non-alphanumeric, on camelCase, between an acronym run and the next word
+ * (`CRMConnector` -> crm, connector) and between letters and digits.
+ */
+export function nameTokens(name) {
+  return String(name)
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/([A-Za-z])([0-9])/g, "$1 $2")
+    .replace(/([0-9])([A-Za-z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * The border words a name carries: a word matches one token, or a run of
+ * consecutive tokens written together (a word with digits, or one written as
+ * two words in the name). Whole words only: a word is never found inside a
+ * longer token. Sorted.
+ */
+export function nameWordHits(name, words) {
+  const set = words instanceof Set ? words : new Set(words);
+  const tokens = nameTokens(name);
+  const hits = new Set();
+  for (let i = 0; i < tokens.length; i += 1) {
+    let run = "";
+    for (let j = i; j < tokens.length; j += 1) {
+      run += tokens[j];
+      if (set.has(run)) hits.add(run);
+    }
+  }
+  return [...hits].sort();
+}
+
+function listPackageFiles(dir) {
+  const out = [];
+  const walk = (d) => {
+    for (const ent of readdirSync(d, { withFileTypes: true })) {
+      if (ent.name === "node_modules" || ent.name.startsWith(".")) continue;
+      const abs = join(d, ent.name);
+      if (ent.isDirectory()) walk(abs);
+      else if (ent.isFile()) out.push(abs);
+    }
+  };
+  walk(dir);
+  return out;
+}
+
+function targetLeaves(value, where) {
+  if (value === null) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap((v) => targetLeaves(v, where));
+  if (typeof value === "object") return Object.values(value).flatMap((v) => targetLeaves(v, where));
+  throw new SdkNamesError(`${where}: the target ${JSON.stringify(value)} is not a path or a conditions object`);
+}
+
+/**
+ * The entry points of one SDK package: `[{ specifier, files }]`, one per
+ * `exports` entry (a subpath pattern `./x/*` is expanded over the package's
+ * files that match its targets; an entry or pattern whose target is `null`
+ * excludes those subpaths). `files` are the absolute code targets of every
+ * condition. Throws SdkNamesError for an unreadable manifest, a package with
+ * no `exports` map, or an entry whose target file does not exist.
+ */
+export function sdkEntryPoints(repoRoot, pkgDir) {
+  const abs = join(repoRoot, pkgDir);
+  let pkg;
+  try {
+    pkg = JSON.parse(readFileSync(join(abs, "package.json"), "utf8"));
+  } catch {
+    throw new SdkNamesError(`${pkgDir}/package.json is unreadable`);
+  }
+  if (typeof pkg.name !== "string" || !pkg.name) throw new SdkNamesError(`${pkgDir}/package.json names no package`);
+  let map = pkg.exports;
+  if (typeof map === "string" || Array.isArray(map)) map = { ".": map };
+  if (!map || typeof map !== "object" || !Object.keys(map).every((k) => k === "." || k.startsWith("./"))) {
+    throw new SdkNamesError(`${pkg.name}: package.json has no subpath "exports" map (a pack imports through it)`);
+  }
+  const spec = (sub) => (sub === "." ? pkg.name : `${pkg.name}/${sub.slice(2)}`);
+  const entries = new Map();
+  const excluded = [];
+  let files;
+  for (const [key, value] of Object.entries(map)) {
+    const where = `${pkg.name} exports "${key}"`;
+    const leaves = targetLeaves(value, where);
+    if (!key.includes("*")) {
+      if (value === null) {
+        excluded.push((s) => s === key);
+        continue;
+      }
+      const code = leaves.filter((t) => SDK_CODE_TARGET_RE.test(t)).map((t) => resolve(abs, t));
+      for (const f of code) if (!existsSync(f)) throw new SdkNamesError(`${where}: the target ${relative(repoRoot, f)} does not exist`);
+      if (code.length) entries.set(key, { specifier: spec(key), files: code });
+      continue;
+    }
+    const [kPre, kPost] = key.split("*");
+    if (value === null) {
+      excluded.push((s) => s.startsWith(kPre) && s.endsWith(kPost) && s.length >= kPre.length + kPost.length);
+      continue;
+    }
+    files ??= listPackageFiles(abs).map((f) => "./" + relative(abs, f).split(sep).join("/"));
+    for (const target of leaves) {
+      const [tPre, tPost] = target.split("*");
+      for (const f of files) {
+        if (!SDK_CODE_TARGET_RE.test(f)) continue;
+        if (!(f.startsWith(tPre) && f.endsWith(tPost) && f.length > tPre.length + tPost.length)) continue;
+        const sub = kPre + f.slice(tPre.length, f.length - tPost.length) + kPost;
+        const e = entries.get(sub) ?? { specifier: spec(sub), files: [] };
+        e.files.push(resolve(abs, f));
+        entries.set(sub, e);
+      }
+    }
+  }
+  return [...entries]
+    .filter(([sub]) => !excluded.some((x) => x(sub)))
+    .map(([, e]) => ({ specifier: e.specifier, files: [...new Set(e.files)] }));
+}
+
+const symbolDeclName = (sym) => {
+  const decl = sym?.declarations?.[0];
+  return decl?.name && typeof decl.name.text === "string" ? decl.name.text : undefined;
+};
+
+/**
+ * The SDK's exported names that carry a border word:
+ * `{ "<entry specifier> :: <name>": [words] }` (a namespace's exports as
+ * `ns.Name`; a default export by its declared name, keyed `default`).
+ * Throws SdkNamesError when an entry, an `export ... from` module or an
+ * exported name does not resolve.
+ */
+export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages = SDK_PACKAGE_DIRS } = {}) {
+  const ts = loadTypeScript();
+  const wordSet = new Set(words);
+  const found = {};
+  for (const pkgDir of packages) {
+    const entries = sdkEntryPoints(repoRoot, pkgDir);
+    const program = ts.createProgram(
+      entries.flatMap((e) => e.files),
+      {
+        allowJs: true,
+        noEmit: true,
+        skipLibCheck: true,
+        types: [],
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        target: ts.ScriptTarget.ES2022,
+        jsx: ts.JsxEmit.Preserve,
+        resolveJsonModule: true,
+      },
+    );
+    const checker = program.getTypeChecker();
+    const resolveAlias = (sym) => (sym.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym);
+    for (const entry of entries) {
+      // Every `export ... from` the entry reaches must resolve: a missing
+      // module drops its names from getExportsOfModule without a word.
+      const seenFiles = new Set();
+      const queue = entry.files.map((f) => program.getSourceFile(f));
+      while (queue.length) {
+        const sf = queue.shift();
+        if (!sf) throw new SdkNamesError(`${entry.specifier}: an entry file could not be read by the TypeScript program`);
+        if (seenFiles.has(sf.fileName)) continue;
+        seenFiles.add(sf.fileName);
+        for (const stmt of sf.statements) {
+          if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier) continue;
+          const mod = checker.getSymbolAtLocation(stmt.moduleSpecifier);
+          const text = stmt.moduleSpecifier.text;
+          if (!mod) {
+            throw new SdkNamesError(
+              `${entry.specifier}: \`export ... from "${text}"\` in ${relative(repoRoot, sf.fileName)} does not resolve`,
+            );
+          }
+          const next = mod.declarations?.find((d) => ts.isSourceFile(d));
+          if (next && !next.isDeclarationFile && !next.fileName.includes("/node_modules/")) queue.push(next);
+        }
+      }
+      const seenModules = new Set();
+      const visit = (moduleSym, prefix) => {
+        if (seenModules.has(moduleSym)) return;
+        seenModules.add(moduleSym);
+        for (const sym of checker.getExportsOfModule(moduleSym)) {
+          const target = resolveAlias(sym);
+          if (!target?.declarations?.length) {
+            throw new SdkNamesError(`${entry.specifier}: the exported name "${prefix}${sym.name}" does not resolve`);
+          }
+          const exported = `${prefix}${sym.name}`;
+          const read = sym.name === "default" ? symbolDeclName(target) ?? symbolDeclName(sym) ?? "" : sym.name;
+          const hits = nameWordHits(read, wordSet);
+          if (hits.length) found[`${entry.specifier} :: ${exported}`] = hits;
+          if (target.flags & ts.SymbolFlags.Module) visit(target, `${exported}.`);
+        }
+      };
+      for (const file of entry.files) {
+        const sf = program.getSourceFile(file);
+        const moduleSym = sf && checker.getSymbolAtLocation(sf);
+        if (moduleSym) visit(moduleSym, "");
+        // A file with no import or export is no module and exports nothing.
+      }
+    }
+  }
+  return sortKeys(found);
+}
+
+/** The `sdkNames` record of a baseline document (`{}` when absent); throws when malformed. */
+export function readSdkNamesFloor(doc) {
+  const floor = doc?.sdkNames ?? {};
+  if (floor === null || typeof floor !== "object" || Array.isArray(floor)) throw new Error('"sdkNames" is not an object');
+  return floor;
+}
+
+/** Are the SDK packages unchanged (tracked and untracked files) between the worktree and `ref`? */
+export function sdkUnchangedAtRef(repoRoot, ref, packages = SDK_PACKAGE_DIRS) {
+  try {
+    execFileSync("git", ["diff", "--quiet", ref, "--", ...packages], { cwd: repoRoot, stdio: "ignore" });
+    const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "--", ...packages], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    return untracked.trim() === "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The class `sdk-name-with-extension-word` against the committed record and
+ * the base. Returns `{ ok, lines, found }`; `lines` are failures when not ok.
+ * Throws SdkNamesError / BorderWordsError on a scanner error.
+ */
+export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, packages = SDK_PACKAGE_DIRS } = {}) {
+  const all = words ?? (() => {
+    const loaded = loadBorderWords(repoRoot).words;
+    return [...loaded.vendor, ...loaded.domain];
+  })();
+  const found = scanSdkExportNames(repoRoot, all, { packages });
+  let floor;
+  try {
+    floor = readSdkNamesFloor(JSON.parse(readFileSync(join(repoRoot, BASELINE_REL), "utf8")));
+  } catch (err) {
+    return { ok: false, found, lines: [`[vendor-token-core-gate] FAIL — ${BASELINE_REL} has no readable "sdkNames" record (${err?.message ?? err}).`] };
+  }
+  const lines = [];
+  const added = Object.keys(found).filter((k) => !Object.prototype.hasOwnProperty.call(floor, k));
+  if (added.length) {
+    lines.push(
+      `[vendor-token-core-gate] FAIL — ${added.length} ${SDK_NAME_CLASS}: an SDK export a pack can import is named with a word an extension declares ` +
+        `(name the contract for what it does, or move it into the extension that owns the word; cinatra#4875):`,
+      ...added.map((k) => `  + ${k} (${found[k].join(", ")})`),
+    );
+  }
+  const stale = Object.keys(floor).filter((k) => !Object.prototype.hasOwnProperty.call(found, k));
+  if (stale.length) {
+    lines.push(
+      `[vendor-token-core-gate] FAIL — ${stale.length} stale "sdkNames" entr${stale.length === 1 ? "y" : "ies"} in ${BASELINE_REL} (the name is gone or carries no border word; remove the entry):`,
+      ...stale.map((k) => `  - ${k}`),
+    );
+  }
+  const unreasoned = Object.keys(floor).filter((k) => !isPermitReason(floor[k]));
+  if (unreasoned.length) {
+    lines.push(
+      `[vendor-token-core-gate] FAIL — "sdkNames" entr${unreasoned.length === 1 ? "y" : "ies"} without a reason (a sentence of six words or more):`,
+      ...unreasoned.map((k) => `  ! ${k}`),
+    );
+  }
+  let baseRef;
+  const guard = compareFloorWithBase({
+    gate: "vendor-token-core-gate",
+    envVar: "VENDOR_TOKEN_BASE",
+    floorPath: BASELINE_REL,
+    headFloor: floor,
+    repoRoot,
+    env,
+    parse: (text, at) => {
+      baseRef = at.ref;
+      const doc = JSON.parse(text);
+      // The base before cinatra#4875 holds no record: the one-time seed.
+      return doc?.sdkNames === undefined ? null : readSdkNamesFloor(doc);
+    },
+    grown: (base, head) => {
+      if (base === null) return [];
+      const fresh = newKeys(Object.keys(base), Object.keys(head));
+      if (fresh.length && sdkUnchangedAtRef(repoRoot, baseRef, packages)) return [];
+      return fresh;
+    },
+  });
+  if (!guard.ok) lines.push(...guard.lines);
+  return { ok: lines.length === 0, found, lines, guardLines: guard.ok ? guard.lines : [] };
+}
+
 function writeBaselineFile(occurrences) {
   const total = Object.values(occurrences).reduce((a, b) => a + b, 0);
+  // The `sdkNames` record (cinatra#4875) carries a reason per entry and is
+  // edited by hand; the floor writer keeps it as committed.
+  const committed = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELINE_PATH, "utf8")) : {};
   writeFileSync(
     BASELINE_PATH,
     JSON.stringify(
@@ -315,6 +661,8 @@ function writeBaselineFile(occurrences) {
           "`node scripts/audit/vendor-token-core-gate.mjs --write-baseline` (it refuses growth); " +
           "the floor ratchets down as the epic waves evict each cluster into its owning extension.",
         occurrences: sortKeys(occurrences),
+        ...(committed.sdkNamesNote !== undefined ? { sdkNamesNote: committed.sdkNamesNote } : {}),
+        ...(committed.sdkNames !== undefined ? { sdkNames: committed.sdkNames } : {}),
       },
       null,
       2,
@@ -484,6 +832,24 @@ function main() {
     stale.forEach((e) => console.error("  - " + e));
     process.exit(1);
   }
+
+  // The SDK's exported names (cinatra#4875): both word lists.
+  let sdk;
+  try {
+    sdk = checkSdkNames(REPO_ROOT, { words: [...words.words.vendor, ...words.words.domain] });
+  } catch (err) {
+    const why = err instanceof SdkNamesError ? err.message : err?.stack ?? String(err);
+    console.error(`[vendor-token-core-gate] scanner error (${SDK_NAME_CLASS}): ${why}`);
+    process.exit(2);
+  }
+  if (!sdk.ok) {
+    sdk.lines.forEach((l) => console.error(l));
+    process.exit(1);
+  }
+  sdk.guardLines.forEach((l) => console.log(l));
+  console.log(
+    `[vendor-token-core-gate] OK — ${Object.keys(sdk.found).length} recorded ${SDK_NAME_CLASS} name(s) in ${SDK_PACKAGE_DIRS.join(", ")}; 0 new.`,
+  );
 
   console.log(
     `[vendor-token-core-gate] OK — ${totalOcc} tolerated vendor-token occurrence(s) across ${totalFiles} file(s); 0 new; ` +

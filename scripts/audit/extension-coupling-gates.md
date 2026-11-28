@@ -322,6 +322,54 @@ As the epic waves (#974–#977, #979) evict each cluster into its owning
 extension, the floor ratchets toward the sanctioned-surface set; the baseline
 file is the authoritative current count.
 
+### The SDK's exported names (cinatra#4875)
+
+The path scan above excludes `packages/sdk-extensions/`, so a port contract
+named for a connector family or a vendor (`CrmConnector`, `BlogConnector`,
+`CrmPointerWriterProvider`) passed every gate. The same gate, in the same step
+of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
+
+- **What it reads.** The names a pack can import from the SDK packages the
+  conformance gate lets a pack depend on (`@cinatra-ai/sdk-extensions` and
+  `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map, every
+  condition's target (`types` and `default` alike), a subpath pattern
+  (`./x/*`) expanded over the package's files that match its target, and a
+  `null` target excluding its subpaths. The TypeScript program and type
+  checker resolve each entry (`getExportsOfModule`), so `export *`, a renamed
+  re-export (`export { a as B }`), a type-only export and an arbitrary string
+  export name count; a default export is read by its declared name; the
+  exports of a namespace (`export * as ns`, `export namespace`) are read as
+  `ns.Name`. Members of an exported interface, class, enum or const object are
+  not read: the port rule of cinatra#4872
+  (`scripts/ci/core-extension-border-gate.mjs`) reads port members.
+- **How a name matches.** The name is split into words on `_`, `-`, camelCase,
+  acronym runs (`CRMConnector` gives `crm`, `connector`) and digits. It is a
+  finding when one word, or a run of consecutive words written together
+  (`WordPress` gives `wordpress`), equals a border word of either list
+  (vendor or domain), case-insensitively. A border word inside a longer word
+  is not found (whole words only).
+- **The words.** Both lists of `scripts/audit/lib/border-words.mjs`; the gate
+  names no pack and no word.
+- **Fail closed.** An entry whose target does not exist, an `export ... from`
+  whose module does not resolve and an exported name that does not resolve are
+  scanner errors (exit 2) that name the entry.
+- **The record.** Each finding is an entry of `sdkNames` in
+  `vendor-token-core-gate.baseline.json`, one per entry specifier and name
+  (`@cinatra-ai/sdk-extensions/blog-contract :: BlogConnector`), each with a
+  reason (a sentence of six words or more); the record is edited by hand and
+  the floor writer keeps it. A new name fails, a recorded name no longer found
+  fails as stale, and an entry without a reason fails. The record only shrinks
+  against `VENDOR_TOKEN_BASE` through the shared floor base guard (below); the
+  base before cinatra#4875 holds no record, which is the one-time seed. The
+  word-born admission holds here too: a new entry is admitted when the SDK
+  packages are unchanged at the base (a pin advance brought the word, the SDK
+  did not change). If cinatra#4850 decides that a family contract stays in the
+  SDK, its entries stay with that reason.
+- **Limits.** A word hidden by an abbreviation or a deliberate misspelling, or
+  written into a longer word without a case or separator boundary, is not
+  found; names reachable only as members of an exported value or type are not
+  read.
+
 ## Border words — declared by the extensions (cinatra#4848)
 
 The vendor gate and class 2 of the application border gate find a crossing by
@@ -957,6 +1005,7 @@ for its floor:
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
 | `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | an item the base does not hold in any class (as a multiset), or a class removed | `AGENT_EXTENSION_CODE_BASE` |
+| `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` only) | `sdkNames` in `vendor-token-core-gate.baseline.json` | a new (entry specifier, name) entry while the SDK packages changed against the base; a base without `sdkNames` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
 | `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
