@@ -273,33 +273,35 @@ export function packTypeNamespaces(packs, workspacePackages = new Set()) {
   return ns;
 }
 
-/** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
- *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
- *  hand-listed. Only a leaf that ends in a canonical kind suffix (KIND_SUFFIX_RE) is read, so a
- *  one-word or generic leaf cannot make an ordinary word a finding; a leaf that a workspace package of this repository or a dependency name also carries is
- *  not read either, because there it names that package, not the pack. */
 /** The canonical package suffixes of the extension kinds, as the naming rule accepts them
  *  (packages/extensions/src/__tests__/naming-conformance.test.ts, isAllowedDirShapeForKind):
  *  `-agent` or `-assistant`, `-connector`, `-artifact` or `-artifacts`, `-skill`, `-workflow`. */
 const KIND_SUFFIX_RE = /-(agent|assistant|connector|artifacts?|skill|workflow)$/;
 
+/** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
+ *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
+ *  hand-listed. Only a leaf that ends in a canonical kind suffix (KIND_SUFFIX_RE) is read, so a
+ *  one-word or generic leaf cannot make an ordinary word a finding. A leaf is not read either when
+ *  it is the leaf (the part after the last `/`) of a workspace package of this repository or of a
+ *  dependency name that is not itself a pack: there it names that package, not the pack. */
 export function packLeafNames(packs, { workspacePackages = new Set(), dependencyNames = new Set() } = {}) {
-  const leafOf = (p) => String(p).replace(/^@[^/]+\//, "");
-  const owned = new Set([...workspacePackages].map(leafOf));
+  const leafOf = (p) => String(p).slice(String(p).lastIndexOf("/") + 1);
+  const owned = new Set([...workspacePackages, ...[...dependencyNames].filter((n) => !packs.has(n))].map(leafOf));
   const leaves = new Map();
   for (const p of packs) {
     const leaf = leafOf(p);
-    if (!KIND_SUFFIX_RE.test(leaf) || owned.has(leaf) || dependencyNames.has(leaf)) continue;
+    if (!KIND_SUFFIX_RE.test(leaf) || owned.has(leaf)) continue;
     leaves.set(leaf, [...(leaves.get(leaf) ?? []), String(p)].sort());
   }
   return leaves;
 }
 
-/** One pattern for every leaf: a leaf counts where the character before it and the character
- *  after it are each a quote (`"`, `'`, a backtick) or `/`. No string is parsed. */
+/** One pattern for every leaf: a leaf counts where the character before it is a quote (`"`, `'`,
+ *  a backtick) or `/`, and the character after it is a quote, `/`, `?` or `#` (a URL path segment
+ *  ends there) or an escaped quote. No string is parsed. */
 function leafPattern(leaves) {
   const names = [...leaves.keys()].sort((a, b) => b.length - a.length).map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return names.length ? new RegExp(`(?<=["'\`/])(?:${names.join("|")})(?=["'\`/])`, "g") : null;
+  return names.length ? new RegExp(`(?<=["'\`/])(?:${names.join("|")})(?=["'\`/?#]|\\\\["'\`])`, "g") : null;
 }
 
 /** A repeated crossing is a SEPARATE crossing. The second and later occurrence
@@ -383,6 +385,13 @@ export function scanTextForCrossings({ file, text, packs, workspacePackages, dep
   for (const m of pattern ? masked.matchAll(pattern) : []) {
     // The segment before the leaf starts with `@` (an npm scope is at most 214 characters).
     if (masked[m.index - 1] === "/" && /(?:^|["'`/\s])@[^"'`/\s]*$/.test(masked.slice(Math.max(0, m.index - 216), m.index - 1))) continue;
+    // A comment the masker keeps (one inside a template's `${...}`): on the leaf's own line, the
+    // leaf is inside a `/* ... */`, or after a `//` that follows a `${` with no `}` between them.
+    const before = masked.slice(masked.lastIndexOf("\n", m.index) + 1, m.index);
+    if (before.lastIndexOf("/*") > before.lastIndexOf("*/")) continue;
+    const slashes = before.lastIndexOf("//");
+    const opened = before.lastIndexOf("${", slashes);
+    if (slashes >= 0 && opened >= 0 && !before.slice(opened, slashes).includes("}")) continue;
     const owners = leaves.get(m[0]);
     push(
       "pack-slug-in-core",

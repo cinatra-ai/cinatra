@@ -53,11 +53,13 @@ silenced by unpinning the pack it names.
 ### `pack-slug-in-core` (cinatra#4531)
 
 A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connector` is
-`openai-connector`. The rule reports a leaf in core product code whose character before and
-character after are each a quote (`"`, `'`, a backtick) or `/`: the literal `"<leaf>"` and
-the path segment `"/agents/cinatra-ai/<leaf>/new"`. No string is parsed, so a regular
-expression beside the literal cannot hide it; a leaf quoted inside a longer string (an
-example in a description) is reported as well. The vocabulary is the
+`openai-connector`. The rule reports a leaf in core product code whose character before is a
+quote (`"`, `'`, a backtick) or `/`, and whose character after is a quote, `/`, `?`, `#` or an
+escaped quote: the literal `"<leaf>"` (also as a quoted object key or a JSX attribute), the
+path segment `"/agents/cinatra-ai/<leaf>/new"` and `"/skills/<leaf>?tab=details"`. No string
+is parsed, so a regular expression beside the literal cannot hide it; a leaf quoted inside a
+longer string (an example in a description), a leaf in a regular expression `/<leaf>/` and an
+import of a core file or folder named after a leaf are reported as well. The vocabulary is the
 leaves of the pack universe above (the two committed locks, plus a pack the ledger names);
 the check names no pack itself. A finding's detail is the leaf with its package,
 `openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
@@ -68,13 +70,21 @@ suffix: the canonical package suffixes the naming rule accepts
 (`packages/extensions/src/__tests__/naming-conformance.test.ts`): `-agent`, `-assistant`,
 `-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`. Every pack in the locks carries one today, so the suffix rule drops no pack now; it
 keeps a future one-word pack (`@cinatra-ai/chart`) from turning a generic word into a
-finding. A leaf that a workspace package of this repository or a dependency name in the
-repository's manifests also carries is not read: there it names that package, not the pack.
+finding. A leaf that is also the leaf (the part after the last `/`) of a workspace package of
+this repository, or of a dependency name in its manifests that is not itself a pack, is not
+read: there it names that package, not the pack.
 Only a whole segment counts, so `"<leaf>-v2"` or `"my-<leaf>"` is not read, and a leaf
 right after an `@scope/` is a package name, which the package-name rule and the
 coupling checks own. The role-suffix stem (`blog-content` of `blog-content-skill`) and a tool
 or table name under a pack's stem are not this rule's business. A leaf assembled on purpose
 from pieces (concatenation, a `${...}` part, a computed name) is not found by this check.
+
+A comment inside a template's `${...}` is not masked, so on the leaf's own line the rule skips a
+leaf inside `/* ... */`, or after a `//` that follows a `${` with no `}` between them.
+Stated limits: an exotic form on one line can hide a leaf this way (a `/*` glob earlier on
+the line, a URL with `//` inside a `${...}` before the leaf); a leaf followed by another
+character (`<leaf>.json`, `<leaf>:x`, an anchored regular expression `/^<leaf>$/`) is not
+read; JSON files are not scanned.
 
 ### `unbounded-port-member` (cinatra#4872)
 
@@ -121,8 +131,9 @@ restated as a host constant — is indistinguishable from any other constant and
 caught; review carries that case. A name assembled at run time rather than written —
 `"ext_" + "cinatra_ai_" + suffix`, or a package name built by concatenation — is not a
 written name and is not caught; the rules read literals. A comment written inside a
-template expression is kept rather than masked, which can only ever report a crossing
-that is not one, never hide one. The line-count ratchet on a pack-shaped core module
+template expression is kept rather than masked; the text rules other than `pack-slug-in-core`
+can therefore report a crossing in such a comment that is not one, never hide one, and
+`pack-slug-in-core` skips such a comment on the leaf's own line (see its section). The line-count ratchet on a pack-shaped core module
 is a size ratchet, not a content one: a module may be edited inside its recorded size,
 and the text rules still run over every file inside it. A tree missing either committed
 lock is refused rather than scanned, because an empty pack universe would turn the type

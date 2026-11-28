@@ -1508,6 +1508,33 @@ describe("core/extension border — pack-slug-in-core", () => {
     }
   });
 
+  it("a terminal path segment before a query or a fragment is found, also before an escaped quote", () => {
+    const text = [
+      'const a = "/skills/tide-planner-agent?tab=details";',
+      'const b = "/x/quill-ledger-connector#setup";',
+      'const c = "say \\"glyph-artifacts\\" here";',
+      'const d = "tide-planner-agent:manage";',
+    ].join("\n");
+    expect(slugs(text)).toEqual([`1 ${TIDE}`, `2 ${QUILL}`, "3 glyph-artifacts (@example-org/glyph-artifacts)"]);
+  });
+
+  it("a scoped dependency shields its leaf; a dependency on the pack itself does not", () => {
+    const text = 'const a = "tide-planner-agent";\nconst b = "glyph-artifacts";\n';
+    expect(slugs(text, { dependencyNames: new Set(["@other-org/tide-planner-agent", "@example-org/glyph-artifacts"]) })).toEqual([
+      "2 glyph-artifacts (@example-org/glyph-artifacts)",
+    ]);
+  });
+
+  it("a leaf in a comment inside a template expression is not read; the same leaf used in the template is", () => {
+    const text = [
+      'const a = `${value /* "tide-planner-agent" */}`;',
+      "const b = `${value // see /tide-planner-agent/",
+      "}`;",
+      "const c = `/agents/${vendor}/tide-planner-agent/new`;",
+    ].join("\n");
+    expect(slugs(text)).toEqual([`4 ${TIDE}`]);
+  });
+
   describe("the ledger of this rule", () => {
     const KEY = `src/lib/example-module.ts::${QUILL}`;
     const e = (key: string) => ({ rule: RULE, key, reason: "a standing leaf recorded in a fixture ledger" });
