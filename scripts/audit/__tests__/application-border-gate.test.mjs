@@ -20,7 +20,6 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
-  DOMAIN_TOKENS,
   SANCTIONED_MODULES,
   SECTIONS,
   UNASSIGNED_OWNER,
@@ -43,6 +42,12 @@ import {
   loadClaimedTypeVocabulary,
 } from "../lib/claimed-type-vocabulary.mjs";
 import { discoverExtensionDirs } from "../extension-produces-deps-gate.mjs";
+import { loadBorderWords } from "../lib/border-words.mjs";
+
+// The fixture's domain words. The real gate reads them from the pinned packs'
+// declarations and the bridge (lib/border-words.mjs, tested in
+// border-words.test.mjs); a fixture names its own.
+const FIXTURE_DOMAIN_WORDS = ["cms", "email"];
 
 const REPO_ROOT = join(import.meta.dirname, "..", "..", "..");
 const BASELINE_PATH = join(import.meta.dirname, "..", "application-border-gate.baseline.json");
@@ -84,7 +89,7 @@ function codeFiles(files) {
 
 function scanFixture(files, options = {}) {
   const root = makeTree(files);
-  return scanApplicationBorder(root, { files: codeFiles(files), ...options });
+  return scanApplicationBorder(root, { files: codeFiles(files), domainWords: FIXTURE_DOMAIN_WORDS, ...options });
 }
 
 describe("T-A1 class 1 — a claimed object type id spelled in application code", () => {
@@ -173,23 +178,23 @@ describe("T-A2 class 2 — a module named for one domain (acceptance case one, t
   });
 
   it("a camelCase file is split into whole sub-tokens (cmsPublishedWords is a hit)", () => {
-    expect(domainTokenHits("src/lib/cmsPublishedWords.ts").get("cms")).toBe(1);
+    expect(domainTokenHits("src/lib/cmsPublishedWords.ts", FIXTURE_DOMAIN_WORDS).get("cms")).toBe(1);
   });
 
   it("a word that only contains a token is not a hit (emailer-core is not email)", () => {
-    expect(domainTokenHits("src/lib/emailer-core.ts").size).toBe(0);
+    expect(domainTokenHits("src/lib/emailer-core.ts", FIXTURE_DOMAIN_WORDS).size).toBe(0);
   });
 
   it("a package reads its directory name and the segments after its src", () => {
-    const hits = domainTokenHits("packages/trigger-email-send/src/mcp/handlers.ts");
+    const hits = domainTokenHits("packages/trigger-email-send/src/mcp/handlers.ts", FIXTURE_DOMAIN_WORDS);
     expect(hits.get("email")).toBe(1);
-    expect(domainTokenHits("packages/agents/src/lib/tools.ts").size).toBe(0);
+    expect(domainTokenHits("packages/agents/src/lib/tools.ts", FIXTURE_DOMAIN_WORDS).size).toBe(0);
   });
 
-  it("the frozen token set holds no vendor word (one path segment is counted by one gate)", () => {
-    for (const vendor of ["wordpress", "wp", "drupal", "linkedin", "github", "youtube", "resend", "google", "twenty", "apollo"]) {
-      expect(DOMAIN_TOKENS).not.toContain(vendor);
-    }
+  it("the live domain words hold no vendor word (one path segment is counted by one gate)", () => {
+    const { words } = loadBorderWords(REPO_ROOT);
+    expect(words.domain.length).toBeGreaterThan(0);
+    expect(words.domain.filter((w) => words.vendor.includes(w))).toEqual([]);
   });
 });
 
@@ -280,10 +285,9 @@ describe("T-A4 the floor mechanics", () => {
       names: { "b.ts :: name :: cms": { count: 1, owner: "x" } },
       ceilings: { "b.ts": { count: 2, owner: "x" } },
     };
-    // unchanged file: the new type key and its ceiling are admitted; a name key never is
-    expect(baseGrowth(base, committed, { isUnchangedAtBase: (f) => f === "b.ts" })).toEqual([
-      "names: b.ts :: name :: cms (0 -> 1)",
-    ]);
+    // unchanged file: the new type key, the new name key (a pack newly declaring
+    // a domain word, cinatra#4848) and their ceiling are admitted
+    expect(baseGrowth(base, committed, { isUnchangedAtBase: (f) => f === "b.ts" })).toEqual([]);
     // changed file: nothing is admitted
     expect(baseGrowth(base, committed, { isUnchangedAtBase: () => false })).toEqual([
       "ceilings: b.ts (0 -> 2)",

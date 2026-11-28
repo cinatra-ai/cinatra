@@ -368,6 +368,10 @@ export type {
 // the barrel would grow every barrel-importing route's first-party graph.
 export type { ConsumedPrimitive } from "./consumes";
 
+// `cinatra.borderWords` (cinatra#4848). Only the TYPE is re-exported from the
+// barrel, as for `consumes`; the validator lives in `./border-words`.
+export type { BorderWordsDeclaration } from "./border-words";
+
 export type PluginPropertyValue = string | number | boolean | null;
 
 export type CampaignPluginTypeSeed = {
