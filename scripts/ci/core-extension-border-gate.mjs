@@ -757,12 +757,14 @@ function productCompilerOptions(repoRoot) {
  *  context). Every property of the context is walked on its own, and so is every member of its
  *  type, and every member of such a member that is an object (two levels down). A finding is keyed `<context property>.<member>`, the grant name the product itself uses;
  *  nothing is deduplicated except two findings with the same file and key. A type the checker cannot
- *  resolve, a variadic context or a missing anchor fails closed. */
+ *  resolve, a variadic context, a missing contract file or a missing anchor fails closed. */
 export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, contractFile = PORT_CONTRACT.file } = {}) {
   const realRoot = realpathSync(repoRoot);
   const contractPath = join(realRoot, contractFile);
-  if (!existsSync(contractPath) && !existsSync(dirname(dirname(contractPath)))) return []; // a tree without the SDK package has no ports
-  const program = ts.createProgram({ rootNames: existsSync(contractPath) ? [contractPath] : [], options: productCompilerOptions(realRoot) });
+  if (!existsSync(contractPath)) {
+    throw new Error(`[core-extension-border] the registration contract file ${contractFile} is missing — the port rule fails closed rather than reading no port`);
+  }
+  const program = ts.createProgram({ rootNames: [contractPath], options: productCompilerOptions(realRoot) });
   const checker = program.getTypeChecker();
   const F = ts.TypeFlags;
   const rel = (f) => relative(realRoot, f).split(sep).join("/");
@@ -823,10 +825,8 @@ export function unboundedPortMemberFindings({ repoRoot = DEFAULT_REPO_ROOT, cont
   });
   if (contexts.some((c) => !c || c.flags & (F.Any | F.Unknown))) throw fail(`has an untyped ${PORT_CONTRACT.member} context`);
 
-  // Members: own (not from the TypeScript lib or node_modules) and callable by an extension (not private or protected).
-  const isOwn = (prop) =>
-    (prop.declarations ?? []).length === 0 ||
-    prop.declarations.some((d) => !program.isSourceFileDefaultLibrary(d.getSourceFile()) && !d.getSourceFile().fileName.split("/").includes("node_modules"));
+  // Members: not declared in the TypeScript library (a dependency's types are read) and callable by an extension (not private or protected).
+  const isOwn = (prop) => (prop.declarations ?? []).length === 0 || prop.declarations.some((d) => !program.isSourceFileDefaultLibrary(d.getSourceFile()));
   const isHidden = (prop) =>
     (prop.declarations ?? []).length > 0 &&
     prop.declarations.every((d) => (ts.getCombinedModifierFlags(d) & (ts.ModifierFlags.Private | ts.ModifierFlags.Protected)) !== 0 || (d.name && ts.isPrivateIdentifier(d.name)));
@@ -1235,7 +1235,7 @@ export function violationsOf(findings, baselineKeys) {
 
 /** Every crossing in the tree, the ones outside the baseline, and the baseline
  *  entries whose crossing is gone. */
-export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DEFAULT_BASELINE } = {}) {
+export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DEFAULT_BASELINE, ports = true } = {}) {
   const baseline = readBaseline(baselinePath);
   const { packs, workspacePackages } = loadPackUniverse(repoRoot, baseline.entries);
   const findings = [];
@@ -1272,7 +1272,8 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     );
   }
 
-  findings.push(...unboundedPortMemberFindings({ repoRoot }));
+  // `ports: false` is only for a fixture tree of another rule that has no SDK package; the real run never sets it.
+  if (ports) findings.push(...unboundedPortMemberFindings({ repoRoot }));
   findings.push(...trackedExtensionFileFindings(repoRoot));
   findings.push(...packShapedDomainFindings({ repoRoot, entries: baseline.entries }));
 

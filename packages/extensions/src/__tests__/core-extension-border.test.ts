@@ -890,9 +890,9 @@ describe("core/extension border — pack-step-kind-in-core", () => {
       mkdirSync(path.join(root, "packages", "agents", "src"), { recursive: true });
       const baselinePath = path.join(root, "ledger.json");
       writeFileSync(baselinePath, JSON.stringify(withRules(ALL(), [kindEntry()])));
-      expect(() => gate.scanRepository({ repoRoot: root, baselinePath })).toThrow(/no step-screen kind table/);
+      expect(() => gate.scanRepository({ repoRoot: root, baselinePath, ports: false })).toThrow(/no step-screen kind table/);
       writeFileSync(path.join(root, TABLE_FILE), table(["list-picker", "acme-invoice-approval"]));
-      const r = gate.scanRepository({ repoRoot: root, baselinePath });
+      const r = gate.scanRepository({ repoRoot: root, baselinePath, ports: false });
       expect(r.stale).toEqual([`pack-step-kind-in-core::${KIND_KEY}`]);
       expect(gate.staleVerdict(r.stale).ok).toBe(false);
       expect(r.violations.map((f) => f.detail)).toEqual(["acme-invoice-approval (@cinatra-ai/acme-invoice-agent)"]);
@@ -976,7 +976,6 @@ describe("core/extension border — a kind table is declared in the frozen shape
   const scan = (text: string) =>
     gate.scanStepScreenKindTables({ file: FILE, text, packs: STEP_PACKS }).findings.map((f) => [f.detail, f.line]);
 
-  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
   it("a table that is not const or not typed Readonly is a finding", () => {
     expect(scan('const RENDERER_KIND_TABLE: Record<string, Entry> = { "list-picker": 1 };\n')).toEqual([
       ["kind table shape: RENDERER_KIND_TABLE (not typed `Readonly<...>`)", 1],
@@ -989,14 +988,12 @@ describe("core/extension border — a kind table is declared in the frozen shape
     ]);
   });
 
-  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
   it("a const table typed Readonly passes the shape, and its entries are still judged", () => {
     expect(scan('const RENDERER_KIND_TABLE: Readonly<Record<string, Entry>> = {\n  "list-picker": 1,\n  "zephyr-sender": 2,\n};\n')).toEqual([
       ["zephyr-sender (@cinatra-ai/zephyr-connector)", 3],
     ]);
   });
 
-  // red-first-expect: TypeError: gate.scanStepScreenKindTables is not a function
   it("the real kind table passes the shape", () => {
     const file = "packages/agents/src/register-default-renderers.ts";
     const text = readFileSync(path.join(REPO_ROOT, file), "utf8");
@@ -1097,7 +1094,7 @@ describe("core/extension border — pack-step-kind-in-core reads the syntax tree
       const baselinePath = path.join(root, "ledger.json");
       const entries = [{ rule: "pack-step-kind-in-core", key: LEDGER_KEY, reason: "fixture" }];
       writeFileSync(baselinePath, JSON.stringify({ rules: [...gate.KNOWN_RULES], entries }));
-      return { repoRoot: root, baselinePath };
+      return { repoRoot: root, baselinePath, ports: false };
     };
 
     it("keeps the kind's row live after the pack is unpinned, and stale once the kind is gone", () => {
@@ -1241,7 +1238,10 @@ describe("core/extension border — unbounded-port-member", () => {
   function found(files: Record<string, string>): Finding[] | string {
     const dir = mkdtempSync(path.join(tmpdir(), "border-port-"));
     try {
-      for (const [name, text] of Object.entries({ "tsconfig.json": TSCONFIG, "register.ts": REGISTER, ...files })) writeFileSync(path.join(dir, name), text);
+      for (const [name, text] of Object.entries({ "tsconfig.json": TSCONFIG, "register.ts": REGISTER, ...files })) {
+        mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+        writeFileSync(path.join(dir, name), text);
+      }
       return (gate as unknown as Ports).unboundedPortMemberFindings?.({ repoRoot: dir, contractFile: "register.ts" }) ?? "not a function";
     } catch (e) {
       return `threw: ${(e as Error).message}`;
@@ -1322,6 +1322,29 @@ describe("core/extension border — unbounded-port-member", () => {
     expect(keys({ ...ctx(`interface JobsPort { ${RUN} }\n`, "{ jobs: JobsPort }"), "register.ts": register })).toEqual([
       "threw: [core-extension-border] the registration contract ExtensionServerEntry.register(…) is variadic: the registration context is variadic; the border check cannot read it in register.ts — the rule fails closed rather than reading no port",
     ]);
+  });
+
+  it("a member of a dependency's interface is read", () => {
+    const dep = {
+      "node_modules/@example-org/jobs-port/package.json": JSON.stringify({ name: "@example-org/jobs-port", version: "1.0.0", types: "index.d.ts" }),
+      "node_modules/@example-org/jobs-port/index.d.ts": `export interface DependencyJobsPort { ${RUN} }\n`,
+    };
+    expect(keys({ ...dep, ...ctx('import type { DependencyJobsPort } from "@example-org/jobs-port";\n', "{ jobs: DependencyJobsPort }") })).toEqual(["jobs.run"]);
+  });
+
+  it("a tree without the contract file fails closed and names the expected file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "border-port-gone-"));
+    let r: string;
+    try {
+      writeFileSync(path.join(dir, "tsconfig.json"), TSCONFIG);
+      const run = (gate as unknown as Ports).unboundedPortMemberFindings;
+      r = run ? (() => { try { return JSON.stringify(run({ repoRoot: dir })); } catch (e) { return `threw: ${(e as Error).message}`; } })() : "not a function";
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(r).toBe(
+      "threw: [core-extension-border] the registration contract file packages/sdk-extensions/src/register.ts is missing — the port rule fails closed rather than reading no port",
+    );
   });
 
   it("an unresolved type and a missing anchor fail closed with a plain line", () => {
