@@ -1404,3 +1404,233 @@ describe("core/extension border — unbounded-port-member", () => {
     }, 60_000);
   });
 });
+
+// cinatra#4531: `pack-slug-in-core`. A string literal token in core whose WHOLE value is a locked
+// pack's leaf (the name without its scope) names that pack. The file is read with the TypeScript
+// parser; only a leaf with a canonical kind suffix is read. Every case compares the whole list of
+// details; a missing function or a throw shows as a line of the list, so on a tree without the rule
+// a case fails by assertion.
+describe("core/extension border — pack-slug-in-core", () => {
+  const RULE = "pack-slug-in-core";
+  type Leaves = { scanPackLeafLiterals?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
+  const LEAF_PACKS = new Set([
+    "@example-org/quill-ledger-connector",
+    "@example-org/tide-planner-agent",
+    "@example-org/sample-assistant",
+    "@example-org/report",
+  ]);
+  const leaves = (text: string, file = "src/lib/x.tsx"): string[] => {
+    const run = (gate as unknown as Leaves).scanPackLeafLiterals;
+    if (!run) return ["not a function"];
+    try {
+      return run({ file, text, packs: LEAF_PACKS }).filter((f) => f.rule === RULE).map((f) => `${f.line} ${f.detail}`);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    }
+  };
+  const QUILL = "quill-ledger-connector (@example-org/quill-ledger-connector)";
+
+  it("reports a literal whose whole value is a leaf, in each quote form", () => {
+    expect(leaves('const a = "quill-ledger-connector";\nconst b = \'quill-ledger-connector\';\nconst c = `quill-ledger-connector`;\n')).toEqual([
+      `1 ${QUILL}`,
+      `2 ${QUILL} (occurrence 2)`,
+      `3 ${QUILL} (occurrence 3)`,
+    ]);
+  });
+
+  it("does not read a comment, a regular expression or a template part glued to a substitution; a scoped name is read", () => {
+    const text = [
+      '// "quill-ledger-connector"',
+      '/* "quill-ledger-connector" */',
+      "const a = `${value /*",
+      '  "quill-ledger-connector"',
+      "*/}`;",
+      "const b = /quill-ledger-connector/;",
+      'const c = "/connectors/x/quill-ledger-connector/setup";',
+      'const d = "?q=quill-ledger-connector";',
+      "const e = `quill-ledger-connector${suffix}`;",
+      'const f = "@example-org/quill-ledger-connector";',
+      'const g = "quill-ledger-connector";',
+    ].join("\n");
+    // A path (line 7), a query value (line 8) and the leaf of a scoped name (line 10) are parts and are read.
+    expect(leaves(text)).toEqual([`7 ${QUILL}`, `8 ${QUILL} (occurrence 2)`, `10 ${QUILL} (occurrence 3)`, `11 ${QUILL} (occurrence 4)`]);
+  });
+
+  it("reports a JSX attribute value equal to a leaf", () => {
+    expect(leaves('export const C = () => <Card slug="tide-planner-agent" />;\n')).toEqual([
+      "1 tide-planner-agent (@example-org/tide-planner-agent)",
+    ]);
+  });
+
+  it("reports JSX text whose trimmed whole text is a leaf, and no leaf inside a sentence", () => {
+    const text = [
+      "export const C = () => (",
+      "  <div>",
+      "    <code>tide-planner-agent</code>",
+      "    <p>install tide-planner-agent now</p>",
+      "    <span>",
+      "      quill-ledger-connector",
+      "    </span>",
+      "  </div>",
+      ");",
+    ].join("\n");
+    expect(leaves(text)).toEqual(["3 tide-planner-agent (@example-org/tide-planner-agent)", `6 ${QUILL}`]);
+  });
+
+  it("reports a whole-value string in every place the tree holds one", () => {
+    const text = [
+      'const a = { "quill-ledger-connector": 1 };',
+      'const b = { ["quill-ledger-connector"]: 1 };',
+      'import x from "quill-ledger-connector";',
+      'enum E { A = "quill-ledger-connector" }',
+      'type T = "quill-ledger-connector";',
+      "type U = `quill-ledger-connector`;",
+      'export const C = () => <Card slug={"quill-ledger-connector"} />;',
+    ].join("\n");
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
+  });
+
+  it("reports a JSON string value or key that is a leaf; a JSON file that does not parse fails closed", () => {
+    type Json = { scanPackLeafJson?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
+    const run = (text: string) => {
+      const fn = (gate as unknown as Json).scanPackLeafJson;
+      if (!fn) return ["not a function"];
+      try {
+        return fn({ file: "src/lib/defaults.json", text, packs: LEAF_PACKS }).map((f) => f.detail);
+      } catch (e) {
+        return [`threw: ${(e as Error).message}`];
+      }
+    };
+    expect(run('{ "default": "quill-ledger-connector", "tide-planner-agent": { "x": ["report", "install quill-ledger-connector"] } }')).toEqual([
+      QUILL,
+      "tide-planner-agent (@example-org/tide-planner-agent)",
+    ]);
+    expect(run('{ "a": 1, }')).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/defaults\.json/)]);
+  });
+
+  it("reports a leaf that is one part of a path or a query, also in the literal spans of a template", () => {
+    const text = [
+      'const a = "/connectors/example-org/quill-ledger-connector/setup";',
+      'const b = "quill-ledger-connector/index";',
+      'const c = "./quill-ledger-connector";',
+      'const d = "?q=quill-ledger-connector";',
+      'const e = "a=quill-ledger-connector&b=1";',
+      'const f = "#quill-ledger-connector";',
+      "const g = `/x/${a}/quill-ledger-connector`;",
+      "const h = `${base}/quill-ledger-connector/y`;",
+      "const i = `/a/${x}/quill-ledger-connector/${y}/b`;",
+      'const j = "/x/@example-org/tide-planner-agent";',
+    ].join("\n");
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]);
+  });
+
+  it("does not read a leaf joined to other characters or glued to a substitution; a leaf after a scope part is read", () => {
+    const text = [
+      "const a = `quill-ledger-connector-${n}`;",
+      "const b = `/x/quill-ledger-connector${q}`;",
+      "const c = `${p}quill-ledger-connector/y`;",
+      'const d = "quill-ledger-connector.json";',
+      'const e = "quill-ledger-connector:x";',
+      'const f = "quill-ledger-connector-v2";',
+      'const g = "use quill-ledger-connector now";',
+      'const h = "@example-org/quill-ledger-connector";',
+      'const i = "@example-org/quill-ledger-connector/sub";',
+      'const j = "/x/tide-planner-agent";',
+    ].join("\n");
+    expect(leaves(text)).toEqual([`8 ${QUILL}`, `9 ${QUILL} (occurrence 2)`, "10 tide-planner-agent (@example-org/tide-planner-agent)"]);
+  });
+
+  it("reports a leaf that is one part of a JSON path value or a scoped key or name", () => {
+    const run = (gate as unknown as { scanPackLeafJson?: (i: { file: string; text: string; packs: Set<string> }) => Finding[] }).scanPackLeafJson;
+    const json = (text: string) => (run ? run({ file: "packages/core-x/package.json", text, packs: LEAF_PACKS }).map((f) => f.detail) : ["not a function"]);
+    expect(json('{ "href": "/connectors/x/tide-planner-agent/setup", "@example-org/quill-ledger-connector": 1 }')).toEqual([
+      "tide-planner-agent (@example-org/tide-planner-agent)",
+      QUILL,
+    ]);
+    expect(json('{ "name": "@example-org/core-x", "dependencies": { "@example-org/quill-ledger-connector": "workspace:*" } }')).toEqual([QUILL]);
+    expect(json('{ "name": "@example-org/tide-planner-agent" }')).toEqual(["tide-planner-agent (@example-org/tide-planner-agent)"]);
+  });
+
+  it("a test helper or stub under a tests folder is out of the scan", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-tests-tree-"));
+    try {
+      for (const f of ["packages/x/tests/__stubs__/server-only.ts", "packages/x/tests/setup.ts", "packages/x/src/a.ts", "src/app/x/test/route.ts"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), 'export const A = "quill-ledger-connector";\n');
+      }
+      const files = ["packages", "src"].flatMap((r) => gate.walkProductFiles(path.join(root, r), [], root)).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files.sort()).toEqual(["packages/x/src/a.ts", "src/app/x/test/route.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads JSON files in the product tree except tsconfig files, tests and fixtures", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-json-tree-"));
+    try {
+      for (const f of ["src/lib/defaults.json", "src/lib/a.ts", "src/tsconfig.json", "src/lib/x.fixture.json", "src/lib/__tests__/t.json", "src/app/design-fixtures/seed.json"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), "{}\n");
+      }
+      const accept = (gate as unknown as { isProductJsonFile?: (n: string) => boolean }).isProductJsonFile;
+      const walkJson = gate.walkProductFiles as unknown as (d: string, a: string[], r: string, accept?: (n: string) => boolean) => string[];
+      const files = walkJson(path.join(root, "src"), [], root, accept).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files).toEqual(["src/lib/defaults.json"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the assistant suffix of an agent package, and no leaf without a kind suffix", () => {
+    expect(leaves('const a = "report";\nconst b = "sample-assistant";\n')).toEqual(["2 sample-assistant (@example-org/sample-assistant)"]);
+  });
+
+  it("a file the parser cannot read fails closed with its name", () => {
+    expect(leaves('const a = "quill-ledger-connector";\nconst = ;\n', "src/lib/broken.ts")).toEqual([
+      expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/broken\.ts/),
+    ]);
+  });
+
+  it("a file under the design fixture tree is out of the scan, like every fixture", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-fixture-tree-"));
+    try {
+      for (const f of ["src/app/design-fixtures/conformance/seed-data.ts", "src/lib/a.ts"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), 'export const A = "quill-ledger-connector";\n');
+      }
+      const files = gate.walkProductFiles(path.join(root, "src"), [], root).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files).toEqual(["src/lib/a.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  describe("the ledger of this rule", () => {
+    const KEY = `src/lib/example-module.ts::${QUILL}`;
+    const e = (key: string) => ({ rule: RULE, key, reason: "a standing leaf recorded in a fixture ledger" });
+    const growth = (base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({
+        base: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: base } },
+        head: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: head } },
+      });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+    it("the base guard refuses a new entry of the rule and lets a shrink pass", () => {
+      const grew = growth([e(KEY)], [e(KEY), e(`${KEY} (occurrence 2)`)]);
+      expect(grew.ok).toBe(false);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY} (occurrence 2)`]);
+      expect(growth([e(KEY), e(`${KEY} (occurrence 2)`)], [e(KEY)]).ok).toBe(true);
+    });
+    it("the real tree: every finding of the rule is recorded, and nothing else is", () => {
+      const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+      const found = r.findings.filter((f) => f.rule === RULE).map((f) => `${f.file}::${f.detail}`).sort();
+      expect(found.length).toBeGreaterThan(0);
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(found);
+    }, 60_000);
+  });
+});

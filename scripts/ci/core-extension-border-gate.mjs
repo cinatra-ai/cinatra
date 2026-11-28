@@ -99,6 +99,8 @@ export const SKIP_DIRS = new Set([
   "build",
   "coverage",
   "__tests__",
+  "tests",
+  "__stubs__",
   "__mocks__",
   "__fixtures__",
   "__snapshots__",
@@ -109,9 +111,15 @@ export const SKIP_DIRS = new Set([
  *  crossing. */
 export const HOST_RESERVED_PACKAGE = "@cinatra-ai/host";
 
-/** The materializer-owned generated maps — crossing (2). Skipped by exact path
- *  so no other directory can shelter under the name. */
-export const GENERATED_PATHS = new Set(["src/lib/generated"]);
+/** The materializer-owned generated maps — crossing (2) — and the generated inventories that
+ *  record source files by path, extension files included, written by their own build scripts
+ *  (scripts/build-authz-inventory.mjs, scripts/build-write-surface-inventory.mjs; cinatra#4531).
+ *  Skipped by exact path so no other directory can shelter under the name. */
+export const GENERATED_PATHS = new Set(["src/lib/generated", "src/lib/authz/__generated__", "src/lib/object-history/__generated__"]);
+
+/** The design fixture tree (cinatra#4531): the routes and seeded kits the design conformance
+ *  suite renders. They are fixtures, out of the scan like every fixture, skipped by exact path. */
+export const FIXTURE_PATHS = new Set(["src/app/design-fixtures"]);
 
 export function isProductFile(name) {
   if (/\.(test|spec)\./.test(name)) return false;
@@ -122,19 +130,27 @@ export function isProductFile(name) {
   return dot >= 0 && SOURCE_EXTENSIONS.has(name.slice(dot));
 }
 
-/** Walk one directory for product source files (absolute paths). */
-export function walkProductFiles(dir, acc = [], repoRoot = null) {
+/** A JSON file the leaf rule reads (cinatra#4531), named like a product file: not a test or a
+ *  fixture, and not a `tsconfig*.json` (a compiler config, which may hold comments). */
+export function isProductJsonFile(name) {
+  if (!name.endsWith(".json") || /^tsconfig.*\.json$/.test(name)) return false;
+  return !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
+}
+
+/** Walk one directory for product source files (absolute paths); `accept` picks the file names. */
+export function walkProductFiles(dir, acc = [], repoRoot = null, accept = isProductFile) {
   if (!existsSync(dir)) return acc;
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (repoRoot && GENERATED_PATHS.has(relative(repoRoot, full).split(sep).join("/"))) continue;
-      walkProductFiles(full, acc, repoRoot);
+      const relDir = repoRoot ? relative(repoRoot, full).split(sep).join("/") : null;
+      if (relDir && (GENERATED_PATHS.has(relDir) || FIXTURE_PATHS.has(relDir))) continue;
+      walkProductFiles(full, acc, repoRoot, accept);
       continue;
     }
     if (!entry.isFile()) continue;
-    if (!isProductFile(entry.name)) continue;
+    if (!accept(entry.name)) continue;
     acc.push(full);
   }
   return acc;
@@ -704,6 +720,118 @@ export function scanStepScreenKindTables({ file, text, packs }) {
   return { findings, tables: declarations.length };
 }
 
+/** The canonical package suffixes of the extension kinds, as the naming rule accepts them
+ *  (packages/extensions/src/__tests__/naming-conformance.test.ts, isAllowedDirShapeForKind):
+ *  `-agent` or `-assistant`, `-connector`, `-artifact` or `-artifacts`, `-skill`, `-workflow`. */
+const KIND_SUFFIX_RE = /-(agent|assistant|connector|artifacts?|skill|workflow)$/;
+
+/** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
+ *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
+ *  hand-listed. Only a leaf that ends in a canonical kind suffix is read, so a one-word or
+ *  generic leaf cannot make an ordinary word a finding. */
+export function packLeafNames(packs) {
+  const leaves = new Map();
+  for (const p of packs) {
+    const leaf = String(p).replace(/^@[^/]+\//, "");
+    if (!KIND_SUFFIX_RE.test(leaf)) continue;
+    leaves.set(leaf, [...(leaves.get(leaf) ?? []), String(p)].sort());
+  }
+  return leaves;
+}
+
+/** The leaves among the parts of one token value (cinatra#4531): the value split on the characters
+ *  that separate the parts of a path or URL (`/ ? # = &`); the leaf of a scoped name
+ *  (`@scope/<leaf>`) is a part too. `gluedStart` / `gluedEnd`: the first /
+ *  last part touches a template substitution, so it is not a whole part and is not read. */
+const PATH_PART_SEPARATORS = /[/?#=&]/;
+export function leafParts(value, leaves, { gluedStart = false, gluedEnd = false } = {}) {
+  const parts = value.split(PATH_PART_SEPARATORS);
+  const out = [];
+  parts.forEach((part, i) => {
+    if ((gluedStart && i === 0) || (gluedEnd && i === parts.length - 1)) return;
+    if (leaves.has(part)) out.push(part);
+  });
+  return out;
+}
+
+/** `pack-slug-in-core` (cinatra#4531): a string literal token whose WHOLE value is a pack's leaf.
+ *  The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is one)
+ *  or a `NoSubstitutionTemplateLiteral` whose text equals a leaf, or a `JsxText` whose text,
+ *  trimmed, equals a leaf. Comments, regular expressions
+ *  and escapes are the parser's business. A file the parser cannot read fails closed. */
+export function scanPackLeafLiterals({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
+  const broken = (sf.parseDiagnostics ?? [])[0];
+  if (broken) {
+    throw new Error(
+      `[core-extension-border] ${file} does not parse (${compact(ts.flattenDiagnosticMessageText(broken.messageText, " "))}) — ` +
+        "the leaf rule fails closed rather than skipping the file",
+    );
+  }
+  const out = [];
+  const counts = new Map();
+  walk(sf, (n) => {
+    let found = [];
+    if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) found = leafParts(n.text, leaves);
+    else if (ts.isJsxText(n)) found = leafParts(n.text.trim(), leaves);
+    else if (ts.isTemplateHead(n)) found = leafParts(n.text, leaves, { gluedEnd: true });
+    else if (ts.isTemplateMiddle(n)) found = leafParts(n.text, leaves, { gluedStart: true, gluedEnd: true });
+    else if (ts.isTemplateTail(n)) found = leafParts(n.text, leaves, { gluedStart: true });
+    for (const leaf of found) {
+      const owners = leaves.get(leaf);
+      out.push(
+        finding(
+          "pack-slug-in-core",
+          file,
+          sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
+          occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${owners.join(", ")})`),
+          `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+        ),
+      );
+    }
+  });
+  return out;
+}
+
+/** `pack-slug-in-core` in a JSON file of the product tree (cinatra#4531): every string value and
+ *  every object key equal to a pack's leaf. A JSON file that does not parse fails closed. */
+export function scanPackLeafJson({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  let doc;
+  try {
+    doc = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`[core-extension-border] ${file} does not parse as JSON (${compact(String(e?.message ?? e))}) — the leaf rule fails closed rather than skipping the file`);
+  }
+  const out = [];
+  const counts = new Map();
+  const report = (leaf) =>
+    out.push(
+      finding(
+        "pack-slug-in-core",
+        file,
+        1,
+        occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
+        `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+      ),
+    );
+  const visit = (v) => {
+    if (typeof v === "string") {
+      leafParts(v, leaves).forEach(report);
+    } else if (Array.isArray(v)) {
+      v.forEach(visit);
+    } else if (v && typeof v === "object") {
+      for (const [k, x] of Object.entries(v)) {
+        leafParts(k, leaves).forEach(report);
+        visit(x);
+      }
+    }
+  };
+  visit(doc);
+  return out;
+}
+
 const KIND_KEY_RE = /^(.*?)::(.+?) \((@[^()]+)\)(?: \(occurrence (\d+)\))?$/;
 
 /** A kind finding keeps the detail its ledger entry recorded while every
@@ -1042,6 +1170,7 @@ export const KNOWN_RULES = new Set([
   "pack-shaped-core-domain",
   "pack-step-kind-in-core",
   "unbounded-port-member",
+  "pack-slug-in-core",
 ]);
 
 /** The ledger's `rules` list (cinatra#4852): the rules it ratchets. When it
@@ -1247,9 +1376,14 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
       const text = readFileSync(abs, "utf8");
       findings.push(...scanTextForCrossings({ file, text, packs, workspacePackages }));
       findings.push(...scanScopedToolAdmissions({ file, text, packs }));
+      findings.push(...scanPackLeafLiterals({ file, text, packs }));
       const kinds = scanStepScreenKindTables({ file, text, packs });
       findings.push(...kinds.findings);
       kindTables += kinds.tables;
+    }
+    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductJsonFile)) {
+      const file = relative(repoRoot, abs).split(sep).join("/");
+      findings.push(...scanPackLeafJson({ file, text: readFileSync(abs, "utf8"), packs }));
     }
   }
   keepRecordedKindDetails(findings, baseline.entries);
