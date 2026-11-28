@@ -1349,3 +1349,294 @@ describe("self-rendering-extensions border gate — (f) no review control in a d
     }
   });
 });
+
+// cinatra#3968: the application supplies the Sharing tab; a connector or
+// artifact package never draws it. A package source file that imports the
+// SDK's sharing panels fails (g); its recorded list starts empty, may only
+// shrink, and is compared with the base like the copies floor.
+describe("self-rendering-extensions border gate — (g) no import of the SDK's sharing panels (cinatra#3968)", () => {
+  const PANELS = "@cinatra-ai/sdk-ui/connector-sharing-panels";
+  const SHARING_HEADER = "(g) SHARING PANELS IMPORTED";
+  const writeFloor = (tree, doc) => writeFileSync(tree.baselinePath, JSON.stringify({ note: "synthetic test baseline", copies: {}, ...doc }, null, 2) + "\n");
+  const findingLines = (stderr) => stderr.split("\n").filter((l) => l.includes(" imports the SDK's sharing panels"));
+
+  const FORMS = {
+    "src/static.tsx": `import { ConnectorSharingPanels } from "${PANELS}";\nexport const A = ConnectorSharingPanels;\n`,
+    "src/single-quote.ts": `import * as panels from '${PANELS}';\nexport { panels };\n`,
+    "src/type-only.ts": `import type { ConnectorSharingPanelsProps } from "${PANELS}";\nexport type P = ConnectorSharingPanelsProps;\n`,
+    "src/side-effect.ts": `import "${PANELS}";\n`,
+    "src/re-export.ts": `export { ConnectorSharingPanels } from "${PANELS}";\n`,
+    "src/star.ts": `export * from "${PANELS}";\n`,
+    "src/dynamic.tsx": "export const load = () => import(`" + PANELS + "`);\n",
+    "lib/required.cjs": `const panels = require('${PANELS}');\nmodule.exports = panels;\n`,
+    "src/import-equals.ts": `import panels = require("${PANELS}");\nexport = panels;\n`,
+    "src/type-query.ts": `export type M = typeof import("${PANELS}");\n`,
+  };
+
+  for (const kind of ["connector", "artifact"]) {
+    it(`${kind}: every import form of the sharing panels FAILS, naming the package and the file`, () => {
+      const dir = `example-org-sample-${kind}`;
+      const tree = makeTree([{ dir, kind, files: { "src/index.ts": 'import { z } from "@example-org/schema";\nexport { z };\n', ...FORMS } }], {});
+      const { status, stderr } = runGate(tree);
+      expect(status).toBe(1);
+      expect(stderr).toContain(SHARING_HEADER);
+      expect(findingLines(stderr).sort()).toEqual(
+        Object.keys(FORMS)
+          .map((rel) => `  ! ${dir} :: ${rel} imports the SDK's sharing panels (${PANELS})`)
+          .sort(),
+      );
+    });
+  }
+
+  it("a comment, a string, a computed specifier or another SDK module is not an import; only the real import is found", () => {
+    const dir = "example-org-quiet-connector";
+    const tree = makeTree(
+      [
+        {
+          dir,
+          kind: "connector",
+          files: {
+            "src/commented.tsx": `// import { ConnectorSharingPanels } from "${PANELS}";\n/* require("${PANELS}") */\nexport const x = 1;\n`,
+            "src/strings.ts": `export const s = "${PANELS}";\nexport const t = \`import a from "${PANELS}"\`;\nexport const doc = 'export * from "${PANELS}"';\n`,
+            "src/computed.ts": `const base = "@cinatra-ai/sdk-ui";\nexport const load = () => import(\`\${base}/connector-sharing-panels\`);\n`,
+            "src/other-modules.tsx": 'import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";\nimport { cn } from "@cinatra-ai/sdk-ui/lib/utils";\nexport { ConnectorSetupPage, cn };\n',
+            "src/real.tsx": `import { ConnectorSharingPanels } from "${PANELS}";\nexport default ConnectorSharingPanels;\n`,
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr)).toEqual([`  ! ${dir} :: src/real.tsx imports the SDK's sharing panels (${PANELS})`]);
+  });
+
+  it("the package's own tests are not read; a source file beside them is", () => {
+    const dir = "example-org-tested-artifact";
+    const imp = `import { ConnectorSharingPanels } from "${PANELS}";\nexport { ConnectorSharingPanels };\n`;
+    const tree = makeTree(
+      [
+        {
+          dir,
+          kind: "artifact",
+          files: {
+            "src/__tests__/panels.test.tsx": imp,
+            "tests/sharing.ts": imp,
+            "test/helper.mjs": `export const p = await import("${PANELS}");\n`,
+            "src/view.spec.tsx": imp,
+            "src/views/detail.tsx": imp,
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr)).toEqual([`  ! ${dir} :: src/views/detail.tsx imports the SDK's sharing panels (${PANELS})`]);
+  });
+
+  it("a source file that does not parse is REFUSED by name; a test file that does not parse is not read", () => {
+    const dir = "example-org-broken-connector";
+    const tree = makeTree(
+      [
+        {
+          dir,
+          kind: "connector",
+          files: {
+            "src/broken.tsx": "export const A = () => <div>{;\nimport {\n",
+            "src/__tests__/broken.test.ts": "import {\n",
+            "src/index.ts": "export const x = 1;\n",
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain(`[self-rendering-border] REFUSED: ${dir}/src/broken.tsx: does not parse (`);
+    expect(stderr).not.toContain("broken.test.ts");
+  });
+
+  it("a recorded import passes; a recorded import that is gone FAILS as stale (shrink-only)", () => {
+    const dir = "example-org-recorded-connector";
+    const recorded = makeTree([{ dir, kind: "connector", files: { "src/share.tsx": `import { ConnectorSharingPanels } from "${PANELS}";\nexport { ConnectorSharingPanels };\n` } }], {});
+    writeFloor(recorded, { sharingPanelImports: [`${dir} :: src/share.tsx`] });
+    const pass = runGate(recorded);
+    expect(pass.stderr).toBe("");
+    expect(pass.status).toBe(0);
+
+    const gone = makeTree([{ dir, kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }], {});
+    writeFloor(gone, { sharingPanelImports: [`${dir} :: src/share.tsx`] });
+    const stale = runGate(gone);
+    expect(stale.status).toBe(1);
+    expect(stale.stderr).toContain(`  - ${dir} :: src/share.tsx`);
+  });
+
+  it("--write-baseline refuses to record a new import and leaves the floor byte-identical", () => {
+    const dir = "example-org-growing-connector";
+    const tree = makeTree([{ dir, kind: "connector", files: { "src/share.tsx": `import "${PANELS}";\n` } }], {});
+    writeFloor(tree, { sharingPanelImports: [] });
+    const before = readFileSync(tree.baselinePath, "utf8");
+    const { status, stderr } = runGate(tree, ["--write-baseline"]);
+    expect(status).toBe(1);
+    expect(stderr).toContain(`+ sharingPanelImports: ${dir} :: src/share.tsx`);
+    expect(readFileSync(tree.baselinePath, "utf8")).toBe(before);
+  });
+
+  it("a recorded list of a bad shape is REFUSED, never read as empty", () => {
+    for (const bad of ["example :: src/a.tsx", {}, null, [1]]) {
+      const tree = makeTree([{ dir: "example-org-shape-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } }], {});
+      writeFloor(tree, { sharingPanelImports: bad });
+      const { status, stderr } = runGate(tree);
+      expect(status, JSON.stringify(bad)).toBe(1);
+      expect(stderr).toContain('"sharingPanelImports" is not an array of strings');
+    }
+  });
+
+  it("the committed recorded list is present and empty", () => {
+    const committed = JSON.parse(readFileSync(join(REPO_ROOT, FLOOR_FILE), "utf8"));
+    expect(committed.sharingPanelImports).toEqual([]);
+  });
+
+  it.skipIf(!realFs.existsSync(join(REPO_ROOT, "extensions", "cinatra-ai")))(
+    "the synced extension tree has no sharing-panel import and nothing unread",
+    () => {
+      const census = gate.scanBorder();
+      expect(census.refusals).toEqual([]);
+      expect(census.sharingPanelImports).toEqual([]);
+    },
+  );
+
+  describe("the recorded list is compared with the base", () => {
+    const fixtures = [];
+    afterEach(() => {
+      while (fixtures.length) fixtures.pop().cleanup();
+    });
+    const repo = (base, head) => {
+      const f = makeFloorRepo({ base: { [FLOOR_FILE]: base }, head: { [FLOOR_FILE]: head } });
+      fixtures.push(f);
+      return f.root;
+    };
+
+    it("a new recorded import FAILS against a base that has no list yet and against an empty one", () => {
+      const head = { note: "fixture", copies: {}, sharingPanelImports: ["demo :: src/share.tsx"] };
+      for (const base of [{ note: "fixture", copies: {} }, { note: "fixture", copies: {}, sharingPanelImports: [] }]) {
+        const r = checkFloorAgainstBase({ repoRoot: repo(base, head), env: PULL_REQUEST_RUN });
+        expect(r.ok, JSON.stringify(base)).toBe(false);
+        expect(r.growth).toEqual(["sharingPanelImports: demo :: src/share.tsx"]);
+      }
+    });
+
+    it("a shrunk recorded list PASSES; a base list of a bad shape fails closed", () => {
+      const shrunk = repo(
+        { note: "fixture", copies: {}, sharingPanelImports: ["demo :: src/a.tsx", "demo :: src/b.tsx"] },
+        { note: "fixture", copies: {}, sharingPanelImports: ["demo :: src/a.tsx"] },
+      );
+      expect(checkFloorAgainstBase({ repoRoot: shrunk, env: PULL_REQUEST_RUN })).toMatchObject({ ok: true, status: "held" });
+      const bad = repo({ note: "fixture", copies: {}, sharingPanelImports: "x" }, { note: "fixture", copies: {}, sharingPanelImports: [] });
+      const r = checkFloorAgainstBase({ repoRoot: bad, env: PULL_REQUEST_RUN });
+      expect(r.ok).toBe(false);
+      expect(r.lines[0]).toContain('"sharingPanelImports" is not an array of strings');
+    });
+  });
+});
+
+// cinatra#3968: rule (g) reads every pinned package of every known kind; the
+// other rules keep their connector-and-artifact scope.
+describe("self-rendering-extensions border gate — (g) reads every kind of extension package (cinatra#3968)", () => {
+  const PANELS = "@cinatra-ai/sdk-ui/connector-sharing-panels";
+  const line = (dir, rel) => `  ! ${dir} :: ${rel} imports the SDK's sharing panels (${PANELS})`;
+  const findingLines = (stderr) => stderr.split("\n").filter((l) => l.includes(" imports the SDK's sharing panels"));
+  const IMPORT = `import { ConnectorSharingPanels } from "${PANELS}";\nexport { ConnectorSharingPanels };\n`;
+
+  it("a skill, an agent and a workflow pack that import the sharing panels are found", () => {
+    const tree = makeTree(
+      [
+        { dir: "example-org-sample-skill", kind: "skill", files: { "scripts/panel.tsx": IMPORT, "tests/panel.test.ts": IMPORT } },
+        { dir: "example-org-sample-agent", kind: "agent", files: { "src/view.tsx": `export const load = () => import("${PANELS}");\n` } },
+        { dir: "example-org-sample-workflow", kind: "workflow", files: { "lib/step.cjs": `module.exports = require("${PANELS}");\n` } },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr).sort()).toEqual(
+      [
+        line("example-org-sample-agent", "src/view.tsx"),
+        line("example-org-sample-skill", "scripts/panel.tsx"),
+        line("example-org-sample-workflow", "lib/step.cjs"),
+      ].sort(),
+    );
+  });
+
+  it("a skill pack's source that does not parse is REFUSED by name", () => {
+    const tree = makeTree([{ dir: "example-org-broken-skill", kind: "skill", files: { "scripts/run.mjs": "export const = ;\n" } }], {});
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(stderr).toContain("[self-rendering-border] REFUSED: example-org-broken-skill/scripts/run.mjs: does not parse (");
+  });
+
+  it("a skill pack is still not judged by the other rules: its primitive copy, host reach and review words stay unreported", () => {
+    const tree = makeTree(
+      [
+        {
+          dir: "example-org-quiet-skill",
+          kind: "skill",
+          files: {
+            "src/components/ui/button.tsx": BUTTON_COPY,
+            "src/reach.tsx": 'import { Button } from "@/components/ui/button";\nexport const label = "Regenerate";\nexport default Button;\n',
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stdout, stderr } = runGate(tree);
+    expect(stderr).toBe("");
+    expect(status).toBe(0);
+    expect(stdout).toContain("0 baselined primitive copy/copies across 0 package(s) of 0 self-rendering package(s) read");
+    const census = gate.scanBorder({ extRoot: tree.extRoot });
+    expect(census.packages).toEqual([]);
+    expect(census.copies).toEqual({});
+    expect(census.coupling).toEqual([]);
+    expect(census.reviewControls).toEqual([]);
+  });
+
+  it("a relative path to the SDK's panel source, through the workspace or node_modules, is found", () => {
+    const dir = "example-org-relative-connector";
+    const tree = makeTree(
+      [
+        {
+          dir,
+          kind: "connector",
+          files: {
+            "src/workspace.tsx": 'import { ConnectorSharingPanels } from "../../../../packages/sdk-ui/src/connector-sharing-panels";\nexport { ConnectorSharingPanels };\n',
+            "src/hoisted.tsx": 'export * from "../../../../node_modules/@cinatra-ai/sdk-ui/src/connector-sharing-panels.tsx";\n',
+            "src/local.tsx": 'export * from "../node_modules/@cinatra-ai/sdk-ui/src/connector-sharing-panels";\n',
+            "src/own.tsx": 'export * from "./sdk-ui/src/connector-sharing-panels";\n',
+            "src/sibling.tsx": 'export * from "../../../../packages/sdk-ui/src/connector-setup-page";\n',
+          },
+        },
+      ],
+      {},
+    );
+    const { status, stderr } = runGate(tree);
+    expect(status).toBe(1);
+    expect(findingLines(stderr).sort()).toEqual(
+      ["src/hoisted.tsx", "src/local.tsx", "src/workspace.tsx"].map((rel) => line(dir, rel)).sort(),
+    );
+  });
+
+  it("the OK line says which rules read which kinds and how much rule (g) read", () => {
+    const tree = makeTree(
+      [
+        { dir: "example-org-ok-connector", kind: "connector", files: { "src/index.ts": "export const x = 1;\n" } },
+        { dir: "example-org-ok-skill", kind: "skill", files: { "scripts/a.mjs": "export const a = 1;\n", "scripts/b.ts": "export const b = 2;\n" } },
+      ],
+      {},
+    );
+    const { status, stdout } = runGate(tree);
+    expect(status).toBe(0);
+    expect(stdout).toContain("rules (a)-(f) read 1 connector/artifact package(s)");
+    expect(stdout).toContain("rule (g) read 2 package(s) of every kind, 3 source file(s)");
+  });
+});
