@@ -952,8 +952,13 @@ export async function getPublishedExtensionSummary(
   let resolvedVersion: string | undefined;
   if (input.packageVersion) {
     if (!versions[input.packageVersion]) {
-      throw new Error(
-        `getPublishedExtensionSummary: version ${input.packageVersion} of ${input.packageName} not found in the registry`,
+      // `ETARGET` is npm's own code for "no such version", so a caller can
+      // tell a missing version from a transport failure (cinatra#4920).
+      throw Object.assign(
+        new Error(
+          `getPublishedExtensionSummary: version ${input.packageVersion} of ${input.packageName} not found in the registry`,
+        ),
+        { code: "ETARGET" },
       );
     }
     resolvedVersion = input.packageVersion;
