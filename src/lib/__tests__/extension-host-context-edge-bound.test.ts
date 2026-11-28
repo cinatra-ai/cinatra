@@ -20,6 +20,10 @@ import {
 import { getExtensionCtxIdentity } from "@/lib/extension-ctx-dependent-identity";
 import { _resetExtensionMcpForTests } from "@/lib/extension-mcp-registry";
 
+// red-first-expect: instead of rejecting
+// (Before the fix the undeclared call resolves; vitest's `rejects` then fails
+// with "promise resolved ... instead of rejecting", a plain Error, not an
+// AssertionError, so the marker names that text.)
 // cinatra#1392 S8 — the host ctx's two edge-bound consume seams:
 //   1. `ctx.mcp.callPrimitive` runs inside the extension-ctx identity ALS frame
 //      (the CALLING record's identity, not the outer run's);

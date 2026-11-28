@@ -9,6 +9,10 @@ import {
 } from "@/lib/extension-version-keyed-serving";
 import { _resetExtensionMcpForTests } from "@/lib/extension-mcp-registry";
 
+// red-first-expect: instead of rejecting
+// (Before the fix the undeclared call resolves; vitest's `rejects` then fails
+// with "promise resolved ... instead of rejecting", a plain Error, not an
+// AssertionError, so the marker names that text.)
 // cinatra#4894 — `ctx.mcp.callPrimitive` refuses a host primitive the calling
 // pack does not declare in `cinatra.consumes`. The fixture packs below are
 // made up; the generated compiled-in map is replaced with a fixture map, and the
