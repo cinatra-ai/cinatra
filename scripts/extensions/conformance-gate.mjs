@@ -48,7 +48,6 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loadLiveRules,
-  AGENT_JSON_FORMAT_VERSION,
   CTX_NON_PORT_KEYS,
   NODE_FS_ALLOWLIST,
   PROCESS_ENV_ALLOWLIST,
@@ -1488,61 +1487,26 @@ function checkWebhooksDeclaration(pkg) {
   return findings;
 }
 
+// The definition of an agent extension is cinatra/oas.json, the only file the
+// product reads (#4920). An old cinatra/agent.json or root agent.json is not
+// read: without cinatra/oas.json the finding names the file to move.
+// Limit: only a package whose cinatra.kind is "agent" is checked here.
+const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
 function checkAgentManifest(pkgDir) {
-  const findings = [];
-  const materializedAgentJson = join(pkgDir, "agent.json");
-  if (existsSync(materializedAgentJson)) {
-    // Materialized mode (core CI over extensions/cinatra-ai/<slug>): the
-    // build pipeline has written the root agent.json payload — assert its
-    // format version.
-    try {
-      const parsed = JSON.parse(readFileSync(materializedAgentJson, "utf8"));
-      if (parsed.formatVersion !== AGENT_JSON_FORMAT_VERSION) {
-        findings.push({
-          rule: "manifest.agent-json-format-version",
-          file: "agent.json",
-          detail: `materialized root agent.json must declare formatVersion:${AGENT_JSON_FORMAT_VERSION} (got ${JSON.stringify(parsed.formatVersion)}).`,
-        });
-      }
-    } catch (err) {
-      findings.push({
-        rule: "manifest.agent-json-invalid",
-        file: "agent.json",
-        detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-      });
-    }
-    return findings;
-  }
-  // Pre-materialization mode (a standalone agent-extension repo's own CI):
-  // there is no root agent.json yet — that's HOST build output, not authored
-  // source. The authored proxy is cinatra/oas.json; require it to exist and
-  // parse, and note the formatVersion:2 check is host-materialization-time
-  // only.
   const oasPath = join(pkgDir, "cinatra", "oas.json");
   if (!existsSync(oasPath)) {
-    findings.push({
-      rule: "manifest.agent-missing-oas",
-      file: "cinatra/oas.json",
-      detail: "agent extensions must ship cinatra/oas.json (the source the host materializes into the root agent.json formatVersion:2 payload at build time).",
-    });
-    return findings;
+    const old = OLD_AGENT_DEFINITIONS.filter((rel) => existsSync(join(pkgDir, rel)));
+    const detail = old.length
+      ? `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`
+      : "agent extensions must ship cinatra/oas.json, the agent's one definition file.";
+    return [{ rule: "manifest.agent-missing-oas", file: "cinatra/oas.json", detail }];
   }
   try {
     JSON.parse(readFileSync(oasPath, "utf8"));
+    return [];
   } catch (err) {
-    findings.push({
-      rule: "manifest.agent-oas-invalid-json",
-      file: "cinatra/oas.json",
-      detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    });
+    return [{ rule: "manifest.agent-oas-invalid-json", file: "cinatra/oas.json", detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}` }];
   }
-  findings.push({
-    rule: "manifest.agent-json-format-version-deferred",
-    file: "agent.json",
-    severity: "info",
-    detail: "no materialized root agent.json in this checkout (pre-materialization mode) — the formatVersion:2 check runs at core CI time over the materialized tree instead.",
-  });
-  return findings;
 }
 
 // ---------------------------------------------------------------------------

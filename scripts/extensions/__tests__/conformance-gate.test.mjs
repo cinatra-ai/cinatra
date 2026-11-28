@@ -395,9 +395,35 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
       "cinatra/oas.json": JSON.stringify({ ok: true }),
       "agent.json": JSON.stringify({ formatVersion: 1 }),
     });
+    // Title kept for the test counter. Since #4920 nothing materializes or reads a root agent.json:
+    // beside cinatra/oas.json it is not a definition, so no finding names it.
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    const all = [...result.blocking, ...result.known, ...result.advisory];
+    expect(all.filter((f) => f.file === "agent.json" || /^manifest\.agent-/.test(f.rule))).toEqual([]);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("fails an agent extension that ships only the old cinatra/agent.json and names the file to move (#4920)", () => {
+    const pkgDir = writeFixture({
+      "package.json": JSON.stringify({
+        name: "@example-org/fixture-agent",
+        version: "0.0.1",
+        license: "Apache-2.0",
+        files: ["cinatra"],
+        cinatra: { kind: "agent", apiVersion: "cinatra.ai/v1", dependencies: [] },
+      }),
+      "README.md": "# Fixture Agent\n",
+      "cinatra/agent.json": JSON.stringify({ formatVersion: 2 }),
+    });
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     expect(result.conform).toBe(false);
-    expect(result.blocking.some((f) => f.rule === "manifest.agent-json-format-version")).toBe(true);
+    expect(result.blocking.filter((f) => /^manifest\.agent-/.test(f.rule))).toEqual([
+      {
+        rule: "manifest.agent-missing-oas",
+        file: "cinatra/oas.json",
+        detail: "move cinatra/agent.json to cinatra/oas.json: the product reads only cinatra/oas.json and does not load cinatra/agent.json.",
+      },
+    ]);
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });
