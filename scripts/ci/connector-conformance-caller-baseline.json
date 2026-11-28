@@ -1,0 +1,12 @@
+{
+  "note": "Connector conformance caller (cinatra#3828, scripts/ci/extension-suite-gate.mjs): the pinned connector packs that have no job calling the conformance workflow at their pinned commit. The list only shrinks: a pack that is not here and lacks the job fails the gate, and a pack here that now has the job is reported as stale (delete its row). A change that adds a row is refused against the base branch.",
+  "connectors": [
+    "cinatra-ai/anthropic-connector",
+    "cinatra-ai/apify-connector",
+    "cinatra-ai/blog-connector",
+    "cinatra-ai/google-appointment-schedules-connector",
+    "cinatra-ai/mcp-server-connector",
+    "cinatra-ai/media-feeds-connector",
+    "cinatra-ai/social-media-connector"
+  ]
+}

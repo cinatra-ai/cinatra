@@ -85,13 +85,49 @@
 // extension-conformance-gate.yml's own zero-packages guard. A vacuous pass
 // here would recreate the hole silently.
 //
+// A SIXTH RULE, SEPARATE FROM THE FIVE: THE CONNECTOR CONFORMANCE CALLER
+// (cinatra#3828, leg 4 of the border between the application and its extensions).
+// A pinned pack of kind `connector` has, in a workflow file under
+// `.github/workflows/` AT ITS PINNED COMMIT, a job that uses the reusable
+// conformance workflow of this repository,
+// `cinatra-ai/cinatra/.github/workflows/extension-conformance-gate-reusable.yml@<ref>`,
+// where `<ref>` is a full 40-character commit and the job's `with.ref` (the
+// input that workflow declares, `on.workflow_call.inputs.ref`) is that same
+// commit; and the workflow runs on `pull_request` and on `push` to the default
+// branch (`main`). What it reads, exactly:
+//   - the pack's `package.json` `cinatra.kind` (a pack is a connector when it is "connector");
+//   - the regular files `.github/workflows/*.yml` and `*.yaml` (top level of that folder only) of
+//     the pack's own repository AT THE PINNED COMMIT, read from the git objects, not the working
+//     tree, and parsed with the `yaml` package (never matched as text);
+//   - in each file: `on:` as a string, a list or a map (event names, and for `pull_request` and
+//     `push` the `branches` and `branches-ignore` filters, and for `push` a `tags`-only filter),
+//     and each job's `uses:` and `with:`;
+//   - a branch filter is read by `matchesBranchFilter` of scripts/ci/merge-readiness.mjs (`*`,
+//     `**`, a leading `**/` that may match no directory, `?`, `+`, `[...]` with letters, digits
+//     and ranges `0-9`, `a-z`, `A-Z`, `\`, and `!` in `branches`); a class holding any other
+//     character, a pattern GitHub refuses, an empty entry, or a `!` entry in `branches-ignore`
+//     counts as not covering the branch.
+// FAIL CLOSED: a pinned connector whose pinned commit is unknown, whose workflow files cannot be
+// listed or read, or whose files do not parse as a workflow mapping, is a SCANNER ERROR naming the
+// pack: it never passes, and the recorded list below never excuses it.
+// RECORDED LIST: the connectors that lack such a job today are named in
+// scripts/ci/connector-conformance-caller-baseline.json, compared with its copy on the base
+// branch (scripts/audit/lib/floor-base-guard.mjs): a finding that is not on the list fails, a
+// listed pack that now has the job is reported as stale (a notice: the dev-lock bump that
+// advances a pin must not be blocked by a bookkeeping edit), and the list only shrinks.
+// STATED LIMITS (the next stages, not findings of this rule): other extension kinds (agent,
+// skill, artifact, workflow); whether the pinned commit of the reusable workflow is recent;
+// whether the caller's job is a required check in the pack's repository; a job-level `if:`,
+// `needs`, matrix or `types:`/`paths` filter that stops the job in some runs.
+//
 // USAGE
 //   node scripts/ci/extension-suite-gate.mjs            # discover + run + judge
 //   node scripts/ci/extension-suite-gate.mjs --list     # manifest only, runs nothing
 //   EXTENSION_SUITE_JOBS=4                              # parallel suites (default 4)
 //
 // `--list` is a HUMAN-ONLY inspection mode: it runs no suite and exits 0, which
-// is correct for a manifest and would be a bypass in CI. The workflow invokes
+// is correct for a manifest and would be a bypass in CI. It prints the verdict
+// of the connector caller rule as information, and still exits 0. The workflow invokes
 // this script with NO arguments (build-image.yml, `Extension suites — discovery
 // gate`), so the CI path can only be the judging one. Kept as a flag rather
 // than a second entrypoint because that is the shape the rest of scripts/ci
@@ -102,6 +138,9 @@ import path from "node:path";
 import process from "node:process";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
+import { compareFloorWithBase, newKeys, readFileAtBase } from "../audit/lib/floor-base-guard.mjs";
+import { matchesBranchFilter } from "./merge-readiness.mjs";
 
 // ---------------------------------------------------------------------------
 // CARVE-OUT LEDGER
@@ -1004,6 +1043,340 @@ export function renderManifest({ packages, results, carveOuts = CARVE_OUTS }) {
 }
 
 // ---------------------------------------------------------------------------
+// The connector conformance caller (cinatra#3828, leg 4). What it reads, and
+// what it fails closed on, is in the header of this file.
+// ---------------------------------------------------------------------------
+
+/** The reusable workflow of this repository that a connector's job uses: `owner/repo/path`, the part before `@`. */
+export const CONFORMANCE_REUSABLE = "cinatra-ai/cinatra/.github/workflows/extension-conformance-gate-reusable.yml";
+
+/** The input of that workflow that names the commit of the checker: `on.workflow_call.inputs.ref` of the workflow file. */
+export const CONFORMANCE_INPUT = "ref";
+
+/** The default branch of every connector repository. */
+export const CONNECTOR_DEFAULT_BRANCH = "main";
+
+/** The recorded list of the connectors that lack the caller, repo-relative, as the base guard reads it at the base. */
+export const CONNECTOR_CALLER_LIST_FILE = "scripts/ci/connector-conformance-caller-baseline.json";
+
+/** The variable a workflow can name the base reference in; the base guard falls back to GITHUB_BASE_REF. */
+export const CONNECTOR_CALLER_BASE_VAR = "EXTENSION_SUITE_GATE_BASE";
+
+/** This script, repo-relative: its copy on the base tells whether the base holds this rule already. */
+export const GATE_FILE = "scripts/ci/extension-suite-gate.mjs";
+
+const GATE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const WORKFLOW_DIR = ".github/workflows";
+const WORKFLOW_FILE_RE = /^\.github\/workflows\/[^/]+\.ya?ml$/;
+const FULL_COMMIT_RE = /^[0-9a-f]{40}$/i;
+
+const isMap = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const firstLine = (e) => String(e?.message ?? e).split(/\r?\n/)[0].slice(0, 160);
+
+/**
+ * Does one event of `on:` run for a ref of the branch `branch`? `config` is the
+ * value under the event's name: null (or absent) names no filter. For `push`
+ * the branch is the one pushed to; for `pull_request` it is the base branch.
+ * A `push` that carries only a `tags` filter runs for no branch. The filter
+ * list is read by `matchesBranchFilter` of merge-readiness.mjs, the one reading of
+ * GitHub's filter syntax in this repository (`*`, `**`, a leading `**` and slash that
+ * may match no directory, `?`, `+`, `[...]`, `\`, and `!` in `branches`). Not covered: a pattern
+ * GitHub refuses (that function throws), an empty entry, a `!` entry in
+ * `branches-ignore`, both filters at once, a list that is not strings, or a config
+ * that is not a map.
+ */
+export function eventRunsOnBranch(event, config, branch = CONNECTOR_DEFAULT_BRANCH) {
+  if (config === null || config === undefined) return true;
+  if (!isMap(config)) return false;
+  const has = (k) => Object.prototype.hasOwnProperty.call(config, k);
+  const only = has("branches");
+  const ignore = has("branches-ignore");
+  if (only && ignore) return false;
+  if (!only && !ignore) return !(event === "push" && (has("tags") || has("tags-ignore")));
+  const raw = config[only ? "branches" : "branches-ignore"];
+  const list = typeof raw === "string" ? [raw] : Array.isArray(raw) && raw.every((x) => typeof x === "string") ? raw : null;
+  if (list === null || list.some((p) => p === "" || (ignore && p.startsWith("!")))) return false;
+  // matchesBranchFilter throws for a pattern outside the documented syntax. GitHub documents a
+  // class as matching "one alphanumeric character listed in the brackets or included in ranges"
+  // (ranges only a-z, A-Z, 0-9), so a class with any other character (for example `[m_]ain`) is
+  // outside it and counts as not covering the branch.
+  try {
+    const matched = matchesBranchFilter(list, branch);
+    return only ? matched : !matched;
+  } catch {
+    return false;
+  }
+}
+
+/** `on:` in the three forms GitHub accepts (a string, a list, a map) as a Map of event name to config; null when it is none of them. */
+export function eventsOf(on) {
+  if (typeof on === "string") return new Map([[on, null]]);
+  if (Array.isArray(on)) return on.every((e) => typeof e === "string") ? new Map(on.map((e) => [e, null])) : null;
+  if (isMap(on)) return new Map(Object.entries(on));
+  return null;
+}
+
+/** Does the workflow's `on:` run on pull requests and on pushes to the default branch? */
+export function runsOnPullRequestsAndDefaultPushes(on) {
+  const events = eventsOf(on);
+  if (events === null) return false;
+  return ["pull_request", "push"].every((e) => events.has(e) && eventRunsOnBranch(e, events.get(e)));
+}
+
+/**
+ * Is this job a call of the conformance workflow of this repository at a full
+ * commit, with the input `ref` equal to that commit? The owner and repository
+ * are compared without case (GitHub does); the path of the file is exact.
+ */
+export function callsConformanceGate(job) {
+  if (!isMap(job) || typeof job.uses !== "string") return false;
+  const at = job.uses.lastIndexOf("@");
+  if (at < 0) return false;
+  const target = job.uses.slice(0, at);
+  const ref = job.uses.slice(at + 1);
+  const [owner, repo, ...file] = target.split("/");
+  const [wantOwner, wantRepo, ...wantFile] = CONFORMANCE_REUSABLE.split("/");
+  if (`${owner}/${repo}`.toLowerCase() !== `${wantOwner}/${wantRepo}` || file.join("/") !== wantFile.join("/")) return false;
+  if (!FULL_COMMIT_RE.test(ref)) return false;
+  const given = isMap(job.with) ? job.with[CONFORMANCE_INPUT] : undefined;
+  return typeof given === "string" && given.toLowerCase() === ref.toLowerCase();
+}
+
+/** The id of the job of a parsed workflow that is the caller (see the header), in a workflow that runs when it must; null when none. */
+export function conformanceCallerJob(doc) {
+  if (!isMap(doc) || !isMap(doc.jobs) || !runsOnPullRequestsAndDefaultPushes(doc.on)) return null;
+  return Object.keys(doc.jobs).find((id) => callsConformanceGate(doc.jobs[id])) ?? null;
+}
+
+// One git call in a pack's own repository. It throws on a non-zero exit, a
+// timeout or an output over the buffer, which every caller turns into an
+// unreadable pack.
+const gitStrict = (dir, args) =>
+  execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 8 * 1024 * 1024, timeout: 30_000 });
+
+const saidBy = (e) =>
+  String(e?.stderr ?? "")
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .pop()
+    ?.slice(0, 200) ?? firstLine(e);
+
+/**
+ * The workflow files of a pack AT ITS PINNED COMMIT, from the git objects of the
+ * pack's own repository: the regular files `*.yml` and `*.yaml` directly in
+ * `.github/workflows/` (a symbolic link, a submodule and a file in a deeper
+ * folder are not read). `{ ok: true, files: [{ path, text }] }`, empty when the
+ * pin has no such folder; `{ ok: false, reason }` when the pin is unknown or git
+ * cannot list or read it. `run(dir, args)` is the git call, injectable for tests.
+ */
+export function readWorkflowFilesAtPin({ pkgDir, sha, run = gitStrict }) {
+  if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+    return { ok: false, reason: "the checkout's own repository identity could not be established, so its pinned commit is unknown" };
+  }
+  const at = sha.slice(0, 12);
+  let entries;
+  try {
+    entries = run(pkgDir, ["ls-tree", "-z", sha, "--", `${WORKFLOW_DIR}/`]).split("\0").filter(Boolean);
+  } catch (e) {
+    return { ok: false, reason: `its workflow folder cannot be listed at ${at} (${saidBy(e)})` };
+  }
+  const files = [];
+  for (const entry of entries) {
+    const m = /^(\d+) (\w+) ([0-9a-f]{40,64})\t(.+)$/s.exec(entry);
+    if (!m) return { ok: false, reason: `a line of the listing of its workflow folder at ${at} is not read (${JSON.stringify(entry.slice(0, 80))})` };
+    const [, mode, type, oid, file] = m;
+    if (type !== "blob" || (mode !== "100644" && mode !== "100755") || !WORKFLOW_FILE_RE.test(file)) continue;
+    try {
+      files.push({ path: file, text: run(pkgDir, ["cat-file", "blob", oid]) });
+    } catch (e) {
+      return { ok: false, reason: `${file} cannot be read at ${at} (${saidBy(e)})` };
+    }
+  }
+  return { ok: true, files: files.sort((a, b) => (a.path < b.path ? -1 : 1)) };
+}
+
+/**
+ * The rule over the fleet. Each connector (`kind === "connector"`) carries
+ * `workflowsAtPin`, the result of readWorkflowFilesAtPin. Returns
+ * `missing: [{ id, sha }]`, the connectors that have no caller job, and
+ * `unreadable: [{ id, sha, reason }]`, the connectors whose workflows could not
+ * be read or parsed: a file that does not parse as YAML, or whose top level is
+ * not a mapping, makes the pack unreadable even when another file holds a
+ * caller. Both sorted by id. Other kinds are not read.
+ */
+export function scanConnectorCallers(packages) {
+  const missing = [];
+  const unreadable = [];
+  for (const p of packages) {
+    if (p.kind !== "connector") continue;
+    const sha = p.sha ?? null;
+    const read = p.workflowsAtPin;
+    if (!read || read.ok !== true) {
+      unreadable.push({ id: p.id, sha, reason: read?.reason ?? "its workflow files were not read" });
+      continue;
+    }
+    let broken = null;
+    let found = false;
+    for (const f of read.files) {
+      let doc;
+      try {
+        doc = parseYaml(f.text, { logLevel: "error" });
+      } catch (e) {
+        broken = `${f.path} does not parse as YAML (${firstLine(e)})`;
+        break;
+      }
+      if (!isMap(doc)) {
+        broken = `${f.path} is not a workflow: its top level is not a mapping`;
+        break;
+      }
+      if (conformanceCallerJob(doc) !== null) found = true;
+    }
+    if (broken !== null) unreadable.push({ id: p.id, sha, reason: broken });
+    else if (!found) missing.push({ id: p.id, sha });
+  }
+  const byId = (a, b) => (a.id < b.id ? -1 : 1);
+  return { missing: missing.sort(byId), unreadable: unreadable.sort(byId) };
+}
+
+/**
+ * The verdict of the rule against the recorded list (the ids of the connectors
+ * that lack the caller today). A connector without the caller that is not
+ * recorded is a finding. An unreadable connector is always a finding, recorded
+ * or not. A recorded id whose connector now has the caller, or is no longer a
+ * pinned connector, is a stale NOTICE: it grants nothing, and failing on it
+ * would block the dev-lock bump that advances the pin.
+ */
+export function judgeConnectorCallers({ packages, recorded = [] }) {
+  const { missing, unreadable } = scanConnectorCallers(packages);
+  const known = new Set(recorded);
+  const findings = [];
+  const notices = [];
+  for (const u of unreadable) {
+    findings.push({
+      kind: "connector-caller-unreadable",
+      slug: u.id,
+      message:
+        `${u.id}: the workflows of this connector at its pinned commit cannot be read: ${u.reason}. ` +
+        `The rule cannot be judged, an unreadable pack never passes, and the recorded list does not excuse it.`,
+    });
+  }
+  for (const m of missing) {
+    if (known.has(m.id)) continue;
+    findings.push({
+      kind: "connector-caller-missing",
+      slug: m.id,
+      message:
+        `${m.id}: a connector at its pinned commit ${String(m.sha).slice(0, 12)} has no job that calls the conformance workflow. ` +
+        `A workflow under .github/workflows/ needs a job that uses ${CONFORMANCE_REUSABLE}@<full 40-character commit> ` +
+        `with ${CONFORMANCE_INPUT}: <the same commit>, and runs on pull_request and on push to ${CONNECTOR_DEFAULT_BRANCH} ` +
+        `(cinatra#3828). Advance the pin to a commit of the connector that has it. ` +
+        `${CONNECTOR_CALLER_LIST_FILE} records the connectors that lack it today and only shrinks.`,
+    });
+  }
+  const stillMissing = new Set(missing.map((m) => m.id));
+  const unread = new Set(unreadable.map((u) => u.id));
+  for (const id of recorded) {
+    if (stillMissing.has(id) || unread.has(id)) continue;
+    notices.push({
+      kind: "stale-connector-caller-entry",
+      slug: id,
+      message: `"${id}" is recorded in ${CONNECTOR_CALLER_LIST_FILE} as a connector without the conformance caller, but it has the job at its pin, or it is no longer a pinned connector. Delete its row.`,
+    });
+  }
+  return { findings, notices, missing, unreadable };
+}
+
+/** The recorded list's text as its ids; throws when it is not the list. The form: `{ "note": "...", "connectors": ["<scope>/<directory>", ...] }`. */
+export function parseConnectorCallerList(text) {
+  const doc = JSON.parse(text);
+  if (!isMap(doc) || !Array.isArray(doc.connectors)) throw new Error('it has no "connectors" list');
+  const seen = new Set();
+  for (const id of doc.connectors) {
+    if (typeof id !== "string" || id === "") throw new Error("a row is not a non-empty string");
+    if (seen.has(id)) throw new Error(`"${id}" is listed twice`);
+    seen.add(id);
+  }
+  return [...doc.connectors];
+}
+
+/**
+ * The recorded list in the checkout, compared with its copy on the base branch
+ * (floor-base-guard): a new row fails. Returns `{ ok, lines, recorded }`; an
+ * absent or unreadable list in the checkout fails (an absent list is not an
+ * empty one). A base that holds neither the list nor this rule is the
+ * introducing change, and the list is its seed.
+ */
+export function checkConnectorCallerList({ repoRoot, env = process.env }) {
+  let headList;
+  try {
+    headList = parseConnectorCallerList(fs.readFileSync(path.join(repoRoot, CONNECTOR_CALLER_LIST_FILE), "utf8"));
+  } catch (e) {
+    return {
+      ok: false,
+      recorded: [],
+      lines: [`[extension-suite-gate] FAIL — the recorded list ${CONNECTOR_CALLER_LIST_FILE} is missing or not readable (${firstLine(e)}); an absent list is not an empty one.`],
+    };
+  }
+  const result = compareFloorWithBase({
+    gate: "extension-suite-gate",
+    envVar: CONNECTOR_CALLER_BASE_VAR,
+    floorPath: CONNECTOR_CALLER_LIST_FILE,
+    headFloor: headList,
+    parse: parseConnectorCallerList,
+    grown: (base, head) => newKeys(base, head),
+    repoRoot,
+    env,
+  });
+  if (result.status === "unreadable" && result.ref) {
+    const list = readFileAtBase(repoRoot, result.ref, CONNECTOR_CALLER_LIST_FILE);
+    const self = readFileAtBase(repoRoot, result.ref, GATE_FILE);
+    if (!list.ok && /is not on the base/.test(list.reason) && self.ok && !self.text.includes("CONNECTOR_CALLER_LIST_FILE")) {
+      return {
+        ok: true,
+        status: "introducing",
+        recorded: headList,
+        lines: [`[extension-suite-gate] floor base guard: the base "${result.ref}" holds neither ${CONNECTOR_CALLER_LIST_FILE} nor this rule — the introducing change; its list is the seed.`],
+      };
+    }
+  }
+  return { ok: result.ok, status: result.status, recorded: headList, lines: result.lines };
+}
+
+/**
+ * The rule as the gate runs it: the recorded list and its base comparison, the
+ * workflows of each connector at its pin, the verdict. A fleet with no
+ * connector has nothing to judge and reads nothing. `packRoot` holds `dir` of
+ * each package; `gateRoot` is the checkout of this script (the list and its base).
+ */
+export function checkConnectorCallers({ packages, packRoot, gateRoot = GATE_ROOT, env = process.env, read = readWorkflowFilesAtPin }) {
+  const connectors = packages.filter((p) => p.kind === "connector");
+  if (connectors.length === 0) return { findings: [], notices: [], lines: [], connectors: 0, recorded: [], missing: [], unreadable: [] };
+  const list = checkConnectorCallerList({ repoRoot: gateRoot, env });
+  const withWorkflows = packages.map((p) =>
+    p.kind === "connector" ? { ...p, workflowsAtPin: read({ pkgDir: path.join(packRoot, p.dir), sha: p.sha }) } : p,
+  );
+  const verdict = judgeConnectorCallers({ packages: withWorkflows, recorded: list.recorded });
+  const findings = [...verdict.findings];
+  if (!list.ok) {
+    findings.unshift({
+      kind: "connector-caller-list",
+      slug: CONNECTOR_CALLER_LIST_FILE,
+      message: list.lines.map((l) => l.trim()).join(" "),
+    });
+  }
+  return {
+    findings,
+    notices: verdict.notices,
+    lines: list.lines,
+    connectors: connectors.length,
+    recorded: list.recorded,
+    missing: verdict.missing,
+    unreadable: verdict.unreadable,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // IO + CLI
 // ---------------------------------------------------------------------------
 
@@ -1092,8 +1465,8 @@ function discover(repoRoot) {
       } catch {
         ciWorkflow = "";
       }
-      packages.push(
-        classifyPackage({
+      packages.push({
+        ...classifyPackage({
           slug: d.name,
           id: `${scope.name}/${d.name}`,
           sha,
@@ -1111,7 +1484,9 @@ function discover(repoRoot) {
           },
           ciWorkflow,
         }),
-      );
+        // The pack's own declaration of its kind (`cinatra.kind`), for the connector caller rule.
+        kind: typeof pkgJson?.cinatra?.kind === "string" ? pkgJson.cinatra.kind : null,
+      });
     }
   }
   return packages.sort((a, b) => a.slug.localeCompare(b.slug));
@@ -1648,6 +2023,18 @@ export function fenceWorkflowCommands(text) {
   return String(text).replace(/^(\s*)::/gm, "$1\u2063::");
 }
 
+function printConnectorCallers(c) {
+  if (c.connectors === 0) return;
+  const recorded = new Set(c.recorded);
+  console.log(
+    `\n[extension-suite-gate] CONNECTOR CONFORMANCE CALLERS (cinatra#3828): ${c.connectors} pinned connector(s), ` +
+      `${c.missing.length} without the caller job at their pin, ${c.unreadable.length} unreadable, ${c.recorded.length} recorded.`,
+  );
+  for (const l of c.lines) console.log(l);
+  for (const m of c.missing) console.log(`  - ${m.id} @ ${String(m.sha).slice(0, 12)} — no caller job (${recorded.has(m.id) ? "recorded" : "NOT RECORDED"})`);
+  for (const u of c.unreadable) console.log(`  - ${u.id} — UNREADABLE: ${u.reason}`);
+}
+
 async function main() {
   const startedAt = Date.now();
   const repoRoot = process.cwd();
@@ -1664,6 +2051,10 @@ async function main() {
       `(${nodeRun.length} of them node:test suites run here because their own CI skips them), ` +
       `${packages.filter((p) => p.runner === "none").length} with no test files.`,
   );
+
+  // The connector caller rule reads git objects and one list file, never runs a
+  // suite, so it is judged here, before the suites, and reported with them.
+  const callers = checkConnectorCallers({ packages, packRoot: repoRoot });
 
   let results = new Map();
   if (!listOnly) {
@@ -1702,9 +2093,13 @@ async function main() {
     for (const { carveOut, why } of stale) console.log(`  - ${carveOut.id}: ${why}`);
   }
 
+  printConnectorCallers(callers);
+
   if (listOnly) return;
 
   const { findings, notices } = judge({ packages, results });
+  findings.push(...callers.findings);
+  notices.push(...callers.notices);
   const totalTests = [...results.values()].reduce((n, r) => n + (r.numTotalTests ?? 0), 0);
   const totalSecs = [...results.values()].reduce((n, r) => n + r.durationMs, 0) / 1000;
   console.log(
