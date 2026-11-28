@@ -2257,7 +2257,7 @@ describe("callsConformanceGate — a job that uses the reusable workflow at a fu
     const call = need("callsConformanceGate");
     const file = REUSABLE.split("/").slice(2).join("/");
     expect(call(job(`example-org/cinatra/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
-    expect(call(job(`cinatra-ai/example-repo/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    expect(call(job(`example-org/example-repo/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`cinatra-ai/cinatra/.github/workflows/merge-readiness-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`cinatra-ai/cinatra/.github/workflows/Extension-Conformance-Gate-Reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`./.github/workflows/extension-conformance-gate-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
