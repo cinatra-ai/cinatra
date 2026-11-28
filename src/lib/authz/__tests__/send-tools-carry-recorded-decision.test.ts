@@ -185,8 +185,11 @@ describe("outward-effect tools on an agent run's frame", () => {
   });
 
   describe("every tool of the outward-effect set is named in the boundary module", () => {
+    // An outward-effect tool is an MCP primitive: only rows on the mcp road count (cinatra#4895).
     const inventoryNames = new Set(
-      (inventory as { primitives: Array<{ primitiveName: string }> }).primitives.map((p) => p.primitiveName),
+      (inventory as { primitives: Array<{ primitiveName: string; road?: string }> }).primitives
+        .filter((p) => p.road === "mcp")
+        .map((p) => p.primitiveName),
     );
 
     it("holds exactly the listed members", () => {
@@ -195,7 +198,6 @@ describe("outward-effect tools on an agent run's frame", () => {
 
     it("holds the campaign send tools, though the core package that defined them is gone (cinatra#4856)", () => {
       const removedPackage = fileURLToPath(new URL("../../../../packages/trigger-email-send/", import.meta.url));
-      // red-first-expect: expected true to be false
       expect(existsSync(`${removedPackage}package.json`)).toBe(false);
       expect(existsSync(`${removedPackage}src/mcp/metadata.ts`)).toBe(false);
       for (const name of TRIGGER_EMAIL_SEND_MEMBERS) expect(boundary.OUTWARD_EFFECT_TOOL_NAMES.has(name)).toBe(true);

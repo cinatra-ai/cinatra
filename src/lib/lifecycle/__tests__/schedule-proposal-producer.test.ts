@@ -133,8 +133,9 @@ describe("the tool NAME is discoverable, classified, and pinned", () => {
     // `server.registerTool("<name>"`. Registering through a CONSTANT makes a
     // tool invisible to it, so this assertion is what stops a well-meaning
     // refactor from silently dropping this primitive out of the authz record.
-    const entry = (inventory as { primitives: { primitiveName: string; file: string }[] })
-      .primitives.find((p) => p.primitiveName === SCHEDULE_PROPOSAL_TOOL_NAME);
+    // Only the mcp road: a passthrough row names an allow list, no registerTool site (cinatra#4895).
+    const entry = (inventory as { primitives: { primitiveName: string; file: string; road?: string }[] })
+      .primitives.find((p) => p.road === "mcp" && p.primitiveName === SCHEDULE_PROPOSAL_TOOL_NAME);
     expect(entry).toBeDefined();
     expect(entry!.file).toBe("src/lib/lifecycle/schedule-proposal-mcp.ts");
     expect(PRIMITIVE_CLASSIFICATIONS[SCHEDULE_PROPOSAL_TOOL_NAME]).toEqual({

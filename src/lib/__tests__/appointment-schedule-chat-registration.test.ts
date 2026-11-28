@@ -49,9 +49,10 @@ function read(rel: string): string {
 describe("appointment_schedule_add — registered on the pass the chat catalog is built from", () => {
   it("appears in the generated authz inventory, which is derived from real registerTool sites", () => {
     const inventory = JSON.parse(read("src/lib/authz/__generated__/inventory.json")) as {
-      primitives?: { primitiveName: string }[];
+      primitives?: { primitiveName: string; road?: string }[];
     };
-    const names = (inventory.primitives ?? []).map((p) => p.primitiveName);
+    // A registerTool site is an mcp row; a passthrough row is not one (cinatra#4895).
+    const names = (inventory.primitives ?? []).filter((p) => p.road === "mcp").map((p) => p.primitiveName);
     // Vacuity guard: an empty or reshaped inventory must fail loudly rather
     // than let the membership assertion below pass over nothing.
     expect(names.length).toBeGreaterThan(100);
