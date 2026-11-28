@@ -58,7 +58,10 @@ A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connect
 product tree (`.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs`) with the TypeScript parser and
 takes the text of every string token: a `StringLiteral` in any quote (a JSX attribute value such
 as `slug="openai-connector"` is one), a template literal without a substitution, and JSX text
-trimmed. A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) is not read. Each text is split on the
+trimmed. A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) is not read, and neither is a fixture
+or test helper module that stands in a product folder, by the names these modules have in the tree:
+`fixtures.<ext>`, `conformance-fixtures.<ext>` and `testing.<ext>` (`dev-fixtures.ts`, the SDK's
+fixture contract, is read). Each text is split on the
 characters that separate the parts of a package reference as the product writes and parses it,
 and each part is trimmed: `/ ? # = &` of a path or URL; `@` before a version range
 (`@cinatra-ai/openai-connector@^0.1.0`, parsed by `packages/extensions/src/required-in-prod.ts`);

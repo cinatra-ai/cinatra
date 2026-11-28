@@ -1576,6 +1576,46 @@ describe("core/extension border — pack-slug-in-core", () => {
     }
   });
 
+  it("reports a leaf that is one part of a path or a query in a real template literal without a substitution", () => {
+    const text = [
+      "const a = `/connectors/example-org/quill-ledger-connector/setup`;",
+      "const b = `?q=quill-ledger-connector`;",
+      "const c = `@example-org/quill-ledger-connector@^1.2.0`;",
+      "const d = `quill-ledger-connector.json`;",
+    ].join("\n");
+    expect(leaves(text)).toEqual([`1 ${QUILL}`, `2 ${QUILL} (occurrence 2)`, `3 ${QUILL} (occurrence 3)`]);
+  });
+
+  it("a stub under a __stubs__ folder that is not under a tests folder is out of the scan of this rule", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-stubs-tree-"));
+    try {
+      for (const f of ["packages/x/src/__stubs__/server-only.ts", "packages/x/src/a.ts"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), 'export const A = "quill-ledger-connector";\n');
+      }
+      const found = gate
+        .walkProductFiles(path.join(root, "packages"), [], root)
+        .map((f) => path.relative(root, f).split(path.sep).join("/"))
+        .sort()
+        .flatMap((file) => leaves(readFileSync(path.join(root, file), "utf8"), file).map((l) => `${file} ${l}`));
+      expect(found).toEqual([`packages/x/src/a.ts 1 ${QUILL}`]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not read a fixture module or a test helper module in a product folder; the SDK fixture contract is read", () => {
+    const text = 'export const A = "quill-ledger-connector";\n';
+    const files = [
+      "packages/chat/src/renderable-views/fixtures.ts",
+      "packages/agent-ui-protocol/src/conformance-fixtures.ts",
+      "packages/org-write-kernel/src/testing.ts",
+      "packages/sdk-extensions/src/dev-fixtures.ts",
+      "src/lib/x.ts",
+    ];
+    expect(files.map((f) => leaves(text, f).join("|"))).toEqual(["", "", "", `1 ${QUILL}`, `1 ${QUILL}`]);
+  });
+
   describe("the ledger of this rule", () => {
     const KEY = `src/lib/example-module.ts::${QUILL}`;
     const e = (key: string) => ({ rule: RULE, key, reason: "a standing leaf recorded in a fixture ledger" });

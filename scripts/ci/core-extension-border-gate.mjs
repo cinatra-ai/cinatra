@@ -750,11 +750,18 @@ export function leafParts(value, leaves) {
  *  leaf. The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is
  *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. A template with a substitution
  *  is not read in this stage. Comments, regular expressions and escapes are the parser's business.
- *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) is not read. A file the parser cannot read
- *  fails closed. */
+ *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) and a fixture or test helper module
+ *  (LEAF_RULE_FIXTURE_MODULE_RE) are not read. A file the parser cannot read fails closed. */
 export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
+/** The fixture and test helper modules that stand in product folders (cinatra#4531): fixtures are
+ *  outside the scan (docs/internals/contracts/core-extension-border.md), and these modules are named
+ *  so in the tree: `fixtures.<ext>` (packages/chat/src/renderable-views/fixtures.ts),
+ *  `conformance-fixtures.<ext>` (packages/agent-ui-protocol/src/conformance-fixtures.ts) and the
+ *  test fakes `testing.<ext>` (packages/org-write-kernel/src/testing.ts, exported as "./testing").
+ *  This rule does not read them. `dev-fixtures.ts` is the SDK's fixture contract and is read. */
+export const LEAF_RULE_FIXTURE_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
 export function scanPackLeafLiterals({ file, text, packs }) {
-  if (DECLARATION_FILE_RE.test(file)) return [];
+  if (DECLARATION_FILE_RE.test(file) || LEAF_RULE_FIXTURE_MODULE_RE.test(file)) return [];
   const leaves = packLeafNames(packs);
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, /*setParentNodes*/ false, scriptKindOf(file));
   const broken = (sf.parseDiagnostics ?? [])[0];
