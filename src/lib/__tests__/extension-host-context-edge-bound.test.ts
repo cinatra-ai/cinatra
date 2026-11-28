@@ -20,6 +20,10 @@ import {
 import { getExtensionCtxIdentity } from "@/lib/extension-ctx-dependent-identity";
 import { _resetExtensionMcpForTests } from "@/lib/extension-mcp-registry";
 
+// red-first-expect: instead of rejecting
+// (Before the fix the undeclared call resolves; vitest's `rejects` then fails
+// with "promise resolved ... instead of rejecting", a plain Error, not an
+// AssertionError, so the marker names that text.)
 // cinatra#1392 S8 — the host ctx's two edge-bound consume seams:
 //   1. `ctx.mcp.callPrimitive` runs inside the extension-ctx identity ALS frame
 //      (the CALLING record's identity, not the outer run's);
@@ -38,6 +42,14 @@ vi.mock("@/lib/extension-self-mcp", () => ({
     seenIdentities.push(getExtensionCtxIdentity());
     return { called: name };
   }),
+}));
+// cinatra#4894: a pack calls only the primitives it declares in cinatra.consumes;
+// the caller fixture declares the one it calls here.
+vi.mock("@/lib/generated/extensions.server", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  GENERATED_EXTENSION_CONSUMES_DECLARATIONS: {
+    "@x/caller": { consumes: [{ primitive: "objects_list", requirement: "required" }] },
+  },
 }));
 vi.mock("@/lib/extension-host-actor", () => ({
   resolveExtensionActorContext: vi.fn(async () => null),
@@ -99,6 +111,12 @@ describe("ctx.mcp.callPrimitive — the extension-ctx identity frame (S8)", () =
     const ctx = createExtensionHostContext(CALLER, ["mcp"]);
     await ctx.mcp.callPrimitive("objects_list", {});
     expect(seenIdentities).toEqual([{ packageName: CALLER, installId: null, version: null, isDefault: true }]);
+  });
+
+  it("a primitive the caller does not declare is refused before the invoker runs in the frame (cinatra#4894)", async () => {
+    const ctx = createExtensionHostContext(CALLER, ["mcp"], {}, { version: "1.0.0", isDefault: true });
+    await expect(ctx.mcp.callPrimitive("objects_delete", {})).rejects.toThrow(/not declared/);
+    expect(seenIdentities).toEqual([]);
   });
 });
 

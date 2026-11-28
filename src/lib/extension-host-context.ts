@@ -41,6 +41,7 @@ import { HOST_PORT_TIER } from "@cinatra-ai/sdk-extensions";
 // (settings/secrets) reverse lookup maps the port factories below consume.
 import { validateEnvOverrides, splitEnvOverridesByPort } from "@cinatra-ai/sdk-extensions";
 import { getAppRuntimeMode } from "@/lib/runtime-mode";
+import { assertPrimitiveDeclared, type ConsumesDeclaration } from "@/lib/extension-declared-consumes";
 import { registerExtensionMcpTool } from "@/lib/extension-mcp-registry";
 import { deleteConnectorConfig, readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
 import { devFixtureProvenanceKey } from "@/lib/extension-fixture-provenance";
@@ -411,6 +412,14 @@ export type ExtensionRecordIdentityInput = {
    * ctx registers carries it beside its handler.
    */
   loadedIdentity?: LoadedExtensionIdentity | null;
+  /**
+   * cinatra#4894: the record's raw `cinatra.consumes` declaration, handed over
+   * by a loader that read the pack's own manifest (the runtime package store).
+   * `ctx.mcp.callPrimitive` refuses every primitive this declaration does not
+   * name. `null` = the loader could not read it (every call is refused); omit
+   * it for a compiled-in pack, whose declaration comes from the generated map.
+   */
+  consumesDeclaration?: ConsumesDeclaration | null;
 };
 
 function effectiveIdentity(identity: ExtensionRecordIdentityInput | undefined): {
@@ -745,6 +754,9 @@ function makeCallPrimitive(
 ): ExtensionHostContext["mcp"]["callPrimitive"] {
   const ctxIdentity = { packageName, ...effectiveIdentity(identity) };
   return async (primitiveName, input) => {
+    // cinatra#4894: a pack may call only the host primitives it declares in
+    // `cinatra.consumes`. Checked on the run-time name, before anything runs.
+    await assertPrimitiveDeclared(packageName, primitiveName, identity?.consumesDeclaration);
     const [{ callHostPrimitive }, actor] = await Promise.all([
       import("@/lib/extension-self-mcp"),
       resolveExtensionActorContext(),
