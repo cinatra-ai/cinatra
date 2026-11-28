@@ -16,7 +16,7 @@
  * Over the pinned extensions (both locks plus `cinatra.devExtensions`) it reads
  * each pack from its PINNED COMMIT (the lock's `resolvedSha`) in its git
  * checkout at `extensions/<scope>/<name>`, never from the working tree or the
- * index, and records, per key, the items of seven classes that may only go
+ * index, and records, per key, the items of eight classes that may only go
  * down (the head's items must be contained in the recorded ones, as a multiset):
  * `nonContentFiles` (agent packs, by `isAgentPack`: files that are not content
  * by `isContent`, not under a `.git` folder, `isSkippedDir`,
@@ -29,7 +29,9 @@
  * `cinatra.fieldRenderers` entries that carry a `component`, see
  * `rendererComponentItems`) and `hitlDeclarations` (cinatra#4532: per skill,
  * workflow or connector pack that is not an agent, its `cinatra.fieldRenderers`
- * entries, see `hitlDeclarationItems`).
+ * entries, see `hitlDeclarationItems`) and `jsxFiles` (cinatra#4532: per agent,
+ * skill or workflow pack, the `.tsx` and `.jsx` files it tracks, see
+ * `jsxFileItems`).
  * Rules and the list: scripts/audit/extension-coupling-gates.md.
  *
  * Usage: node scripts/audit/agent-extension-code-gate.mjs [--report | --write-baseline | --seed]
@@ -46,9 +48,9 @@ export const FLOOR_FILE = "scripts/audit/agent-extension-code-gate.baseline.json
 export const GATE_FILE = "scripts/audit/agent-extension-code-gate.mjs";
 export const FLOOR_BASE_VAR = "AGENT_EXTENSION_CODE_BASE";
 export const LOCK_FILES = ["cinatra-dev-extensions.lock.json", "cinatra-required-extensions.lock.json"];
-export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations"];
+export const CLASSES = ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies", "rendererComponents", "hitlDeclarations", "jsxFiles"];
 /** Classes added after the list was seeded: a list without such a class holds none of its items, and a base list without it seeds it (`listGrowth`). */
-export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents", "hitlDeclarations"]);
+export const LATER_CLASSES = new Set(["uiDependencies", "rendererComponents", "hitlDeclarations", "jsxFiles"]);
 export const EXTENSION_TOOL = "extension_tool";
 
 /**
@@ -186,6 +188,24 @@ export function isHitlFreePack(kind, entries) {
 }
 export function hitlDeclarationItems(packageJson, label = "package.json") {
   return fieldRendererEntries(packageJson, label).map(({ item }) => item).sort();
+}
+
+/**
+ * THE SCREEN-FILE RULE (cinatra#4532). An agent, a skill or a workflow pack
+ * (`isRolePack`) tracks no `.tsx` or `.jsx` file at its pinned commit: it has
+ * no screen of its own. The pack is read from the tree `packFiles` lists (a link
+ * too). A file counts by its name (`JSX_FILE_RE`, the case of the extension
+ * aside), unless `isTestFile` leaves it out: the same base-name predicate as
+ * for class 1, so no folder name decides.
+ *
+ * The rule reads what a pack TRACKS, not what it publishes: the manifest
+ * `files` list, `.npmignore` and npm's built-in exclusions are not read. A
+ * tracked file that is not published is counted too (stated limit); it is
+ * recorded like any other and leaves the list when the pack removes or moves it.
+ */
+export const JSX_FILE_RE = /\.(?:tsx|jsx)$/i;
+export function jsxFileItems(entries) {
+  return entries.map((e) => e.rel).filter((rel) => JSX_FILE_RE.test(rel) && !isTestFile(rel)).sort();
 }
 
 /**
@@ -476,6 +496,8 @@ export function scan(root) {
       if (ui.length) findings.uiDependencies[name] = { count: ui.length, items: ui };
       const renderers = rendererComponentItems(pkg, declaredBy);
       if (renderers.length) findings.rendererComponents[name] = { count: renderers.length, items: renderers };
+      const screens = jsxFileItems(entries);
+      if (screens.length) findings.jsxFiles[name] = { count: screens.length, items: screens };
     }
     // Read for every pinned pack, so a shape the product does not read fails closed in any kind; recorded for a pack that is no agent or artifact.
     const hitl = hitlDeclarationItems(pkg, declaredBy);
@@ -503,6 +525,7 @@ const RULE_TEXT = {
   uiDependencies: "an agent, skill or workflow extension depends on no UI package",
   rendererComponents: "an agent, skill or workflow extension declares no field renderer component",
   hitlDeclarations: "a skill, workflow or connector extension declares no HITL field renderer",
+  jsxFiles: "an agent, skill or workflow extension tracks no .tsx or .jsx file",
 };
 
 const OLD_LAYOUT_NOTE = "a pinned pack holds an old definition file and no cinatra/oas.json; the product reports it and does not load it:";

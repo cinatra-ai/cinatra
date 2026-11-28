@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`) and `cinatra.fieldRenderers` entries that carry a `component` (`rendererComponents`); in a skill, workflow or connector pack that is no agent, any `cinatra.fieldRenderers` entry (`hitlDeclarations`), all cinatra#4532 | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`) and `cinatra.fieldRenderers` entries that carry a `component` (`rendererComponents`); in a skill, workflow or connector pack that is no agent, any `cinatra.fieldRenderers` entry (`hitlDeclarations`); in an agent, skill or workflow pack, the `.tsx` and `.jsx` files it tracks (`jsxFiles`), all cinatra#4532 | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -945,7 +945,7 @@ connector, artifact or skill pack that adds a flow is judged as an agent; its
 program files are recorded like an agent's (the list records them; the
 connector's code is not judged here).
 
-**The seven classes**, each a set of items that may only shrink:
+**The eight classes**, each a set of items that may only shrink:
 
 1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree,
    EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
@@ -1060,6 +1060,34 @@ connector's code is not judged here).
    kind is not judged for its entries. On the day it landed (pins of main at 9d2bd5f29): 0 items; the
    class is recorded empty, so any entry that appears fails. A list may omit
    the class as it may omit class 5 (`LATER_CLASSES`).
+8. `jsxFiles` (per pack, cinatra#4532) — an agent, a skill or a workflow
+   tracks no `.tsx` or `.jsx` file at its pinned commit: it has no screen of
+   its own. It is judged for the same packs as class 5. Read, in the file list
+   of the pinned commit (`git ls-tree`, a link too): a path that ends in `.tsx`
+   or `.jsx` (any case) and is not a test file by the base-name rule of class 1
+   (`isTestFile`: a `*.test.<ext>` or `*.spec.<ext>` name; no folder name
+   decides, so a helper under `tests/` counts). Items: the path inside the
+   pack. A pack whose file list cannot be read is a scanner error, as for every
+   class. **The class reads what a pack tracks, not what it publishes.** The
+   manifest `files` list, `.npmignore` and npm's built-in exclusions are not
+   read; the rule never places a file against npm's packlist. Reading that
+   packlist from git objects is a general problem that the conformance gate
+   solves for a materialised tree (`npm pack --dry-run`), and this check does
+   not take it on. On the day it landed (pins of main at bea855b35): 6 items
+   in 2 agent packs, 3 in `blog-linkedin-publish-agent` (two of them primitive
+   copies under `src/components/ui/`) and 3 in `list-curator-agent` (two
+   renderers and `tests/doubles/design-primitives.tsx`, a double that
+   `isTestFile` does not leave out because it decides by base name only); no
+   skill pack tracks one and no workflow pack is pinned. **Overlap:** class 1
+   reads every non-test file of an agent, a `.tsx` included, so a screen of an
+   agent is an item of class 1 and of this class, and each class is recorded
+   and shrunk on its own; this class adds the skill and workflow packs, which
+   class 1 does not read. Stated limits: a tracked file that is not published
+   (kept out by `files` or `.npmignore`) is counted too; it is recorded like
+   any other and leaves the list when the pack removes or moves it. A screen
+   written in a `.ts` or `.js` file (a renderer built with `createElement`) and
+   a screen that no file name shows are not seen. A list may omit the class as it may
+   omit class 5 (`LATER_CLASSES`).
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:
@@ -1075,7 +1103,7 @@ it. `count` is the number of items, kept as information (a list whose
 `count` differs from its items is malformed). That writer refuses a missing
 or malformed list and any item the list does not hold; `--seed` writes the
 first list only when none exists. A class added after the list was seeded
-(`LATER_CLASSES`: `uiDependencies`, `rendererComponents`, `hitlDeclarations`) may be absent from a list, which then
+(`LATER_CLASSES`: `uiDependencies`, `rendererComponents`, `hitlDeclarations`, `jsxFiles`) may be absent from a list, which then
 holds none of its items; a base list that does not carry such a class seeds
 it once, in the change that adds the class, and a head list that drops it
 after it reached the base fails as a removed class. The list is compared with its copy on the

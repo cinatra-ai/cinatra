@@ -410,5 +410,23 @@
       ]
     }
   },
-  "hitlDeclarations": {}
+  "hitlDeclarations": {},
+  "jsxFiles": {
+    "@cinatra-ai/blog-linkedin-publish-agent": {
+      "count": 3,
+      "items": [
+        "src/components/ui/label.tsx",
+        "src/components/ui/textarea.tsx",
+        "src/renderers/draft-review.tsx"
+      ]
+    },
+    "@cinatra-ai/list-curator-agent": {
+      "count": 3,
+      "items": [
+        "src/list-curator-final-list-renderer.tsx",
+        "src/list-curator-scrape-schema-renderer.tsx",
+        "tests/doubles/design-primitives.tsx"
+      ]
+    }
+  }
 }
