@@ -102,9 +102,11 @@
 //   - in each file: `on:` as a string, a list or a map (event names, and for `pull_request` and
 //     `push` the `branches` and `branches-ignore` filters, and for `push` a `tags`-only filter),
 //     and each job's `uses:` and `with:`;
-//   - a branch filter is read by `matchesBranchFilter` of scripts/ci/merge-readiness.mjs, the one
-//     reading of GitHub's filter syntax in this repository; a pattern GitHub refuses, an empty
-//     entry or a `!` entry in `branches-ignore` counts as not covering the branch.
+//   - a branch filter is read by `matchesBranchFilter` of scripts/ci/merge-readiness.mjs (`*`,
+//     `**`, a leading `**/` that may match no directory, `?`, `+`, `[...]` with letters, digits
+//     and ranges `0-9`, `a-z`, `A-Z`, `\`, and `!` in `branches`); a class holding any other
+//     character, a pattern GitHub refuses, an empty entry, or a `!` entry in `branches-ignore`
+//     counts as not covering the branch.
 // FAIL CLOSED: a pinned connector whose pinned commit is unknown, whose workflow files cannot be
 // listed or read, or whose files do not parse as a workflow mapping, is a SCANNER ERROR naming the
 // pack: it never passes, and the recorded list below never excuses it.
@@ -1094,6 +1096,10 @@ export function eventRunsOnBranch(event, config, branch = CONNECTOR_DEFAULT_BRAN
   const raw = config[only ? "branches" : "branches-ignore"];
   const list = typeof raw === "string" ? [raw] : Array.isArray(raw) && raw.every((x) => typeof x === "string") ? raw : null;
   if (list === null || list.some((p) => p === "" || (ignore && p.startsWith("!")))) return false;
+  // matchesBranchFilter throws for a pattern outside the documented syntax. GitHub documents a
+  // class as matching "one alphanumeric character listed in the brackets or included in ranges"
+  // (ranges only a-z, A-Z, 0-9), so a class with any other character (for example `[m_]ain`) is
+  // outside it and counts as not covering the branch.
   try {
     const matched = matchesBranchFilter(list, branch);
     return only ? matched : !matched;

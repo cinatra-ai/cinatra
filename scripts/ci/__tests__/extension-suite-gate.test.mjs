@@ -2257,7 +2257,11 @@ describe("callsConformanceGate — a job that uses the reusable workflow at a fu
     const call = need("callsConformanceGate");
     const file = REUSABLE.split("/").slice(2).join("/");
     expect(call(job(`example-org/cinatra/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
-    expect(call(job(`example-org/example-repo/${file}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
+    // Same owner as the rule's own constant, another repository: built at run time from that constant.
+    const otherRepo = gate.CONFORMANCE_REUSABLE.replace(/^([^/]+)\/[^/]+\//, "$1/example-repo/");
+    expect(otherRepo.split("/")[0]).toBe(gate.CONFORMANCE_REUSABLE.split("/")[0]);
+    expect(otherRepo.split("/")[1]).toBe("example-repo");
+    expect(call(job(`${otherRepo}@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`cinatra-ai/cinatra/.github/workflows/merge-readiness-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`cinatra-ai/cinatra/.github/workflows/Extension-Conformance-Gate-Reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
     expect(call(job(`./.github/workflows/extension-conformance-gate-reusable.yml@${SHA_A}`, { ref: SHA_A }))).toBe(false);
@@ -2372,6 +2376,12 @@ describe("runsOnPullRequestsAndDefaultPushes — `on:` as a string, a list or a 
     expect(runs({ pull_request: null, push: { branches: ["!main", "**"] } })).toBe(true);
     expect(runs({ pull_request: null, push: { "branches-ignore": ["ma+in"] } })).toBe(false);
     expect(runs({ pull_request: null, push: { "branches-ignore": ["[m]ain"] } })).toBe(false);
+  });
+
+  it("a class with a character that is not alphanumeric is outside the documented syntax and does not cover main", () => {
+    expect(runs({ pull_request: null, push: { branches: ["[m_]ain"] } })).toBe(false);
+    expect(runs({ pull_request: { branches: ["[m_]ain"] }, push: null })).toBe(false);
+    expect(runs({ pull_request: null, push: { branches: ["[m]ain"] } })).toBe(true);
   });
 
   it("a pattern GitHub refuses, a negation or an empty entry in `branches-ignore` count as not covering main", () => {
