@@ -102,9 +102,13 @@
 // acronym runs, digits, `_` and `-`) and is a finding when one word, or a run
 // of consecutive words written together, equals a border word of either list
 // (whole words, case-insensitive). An `export ... from` or an exported name
-// that does not resolve is a scanner error. Today's findings are recorded, one
-// per entry specifier and name, each with a reason, in the baseline's
-// `sdkNames`; a new name fails, a recorded name no longer found fails (stale),
+// that does not resolve is a scanner error; a default export of an expression
+// that is no declared name (a call, a literal, an object, an arrow function, a
+// class expression) has no name and contributes none. Today's findings are
+// recorded, one per entry specifier, name and matched word
+// (`<specifier> :: <name> :: <word>`), each with a reason, in the baseline's
+// `sdkNames`; a name with a word not recorded for it fails (a new name, or a
+// recorded name that gains a word), a recorded word no longer matched fails (stale),
 // and the record only shrinks against VENDOR_TOKEN_BASE through the shared
 // floor base guard (lib/floor-base-guard.mjs). The section is never removed: a
 // head baseline without the `sdkNames` property fails, also when it would be
@@ -536,7 +540,8 @@ const symbolDeclName = (sym) => {
  * The SDK's top-level exported names that carry a border word:
  * `{ "<entry specifier> :: <name>": [words] }` (a namespace export by its own
  * name, its members not read; a default export by its declared name, keyed
- * `default`; an ambient module a non-module target declares is keyed by its
+ * `default`, and none for a default export of an expression that is no
+ * declared name; an ambient module a non-module target declares is keyed by its
  * module name). The program uses the root tsconfig.json's compiler options.
  * Throws SdkNamesError when the tsconfig, an entry, an `export ... from` module or an
  * exported name does not resolve.
@@ -584,6 +589,12 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
       // read: a namespace export by its own name, never its members.
       const readModule = (moduleSym, specifier) => {
         for (const sym of checker.getExportsOfModule(moduleSym)) {
+          // `export default <expression>` whose expression is not a declared
+          // name (a call, a literal, an object, an arrow function, a class
+          // expression) has no name: decided from the syntax, it contributes
+          // nothing. A default export of an identifier, a named function or a
+          // named class, and every named export or re-export, are resolved below.
+          if (sym.name === "default" && sym.declarations?.some((d) => ts.isExportAssignment(d) && !ts.isEntityNameExpression(d.expression))) continue;
           const target = resolveAlias(sym);
           if (!target?.declarations?.length) {
             throw new SdkNamesError(`${specifier}: the exported name "${sym.name}" does not resolve`);
@@ -645,18 +656,24 @@ export function checkSdkNames(repoRoot = REPO_ROOT, { words, env = process.env, 
     return { ok: false, found, lines: [`[vendor-token-core-gate] FAIL — ${BASELINE_REL}: ${err?.message ?? err}.`] };
   }
   const lines = [];
-  const added = Object.keys(found).filter((k) => !Object.prototype.hasOwnProperty.call(floor, k));
+  // An entry binds a name to ONE word it was recorded for: the key is
+  // `<entry specifier> :: <name> :: <word>`. A recorded name that carries a
+  // word not recorded for it fails; a recorded word it no longer carries is stale.
+  const foundPairs = new Set(Object.entries(found).flatMap(([k, ws]) => ws.map((w) => `${k} :: ${w}`)));
+  const added = Object.keys(found)
+    .map((k) => [k, found[k].filter((w) => !hasOwn(floor, `${k} :: ${w}`))])
+    .filter(([, ws]) => ws.length);
   if (added.length) {
     lines.push(
       `[vendor-token-core-gate] FAIL — ${added.length} ${SDK_NAME_CLASS}: an SDK export a pack can import is named with a word an extension declares ` +
         `(name the contract for what it does, or move it into the extension that owns the word; cinatra#4875):`,
-      ...added.map((k) => `  + ${k} (${found[k].join(", ")})`),
+      ...added.map(([k, ws]) => `  + ${k} (${ws.join(", ")})`),
     );
   }
-  const stale = Object.keys(floor).filter((k) => !Object.prototype.hasOwnProperty.call(found, k));
+  const stale = Object.keys(floor).filter((k) => !foundPairs.has(k));
   if (stale.length) {
     lines.push(
-      `[vendor-token-core-gate] FAIL — ${stale.length} stale "sdkNames" entr${stale.length === 1 ? "y" : "ies"} in ${BASELINE_REL} (the name is gone or carries no border word; remove the entry):`,
+      `[vendor-token-core-gate] FAIL — ${stale.length} stale "sdkNames" entr${stale.length === 1 ? "y" : "ies"} in ${BASELINE_REL} (the name is gone or no longer carries that border word; remove the entry):`,
       ...stale.map((k) => `  - ${k}`),
     );
   }

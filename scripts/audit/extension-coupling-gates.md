@@ -353,8 +353,11 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   (`paths` and module resolution included; its root files are the SDK entry
   files only): named exports, re-exports under their exported name, the names
   `export *` brings, a namespace export (`export * as ns`, `export namespace`)
-  by its own name only, a default export by its declared name, and type-only
-  exports. A declaration file that is no module is read through the ambient
+  by its own name only, a default export by its declared name (an identifier,
+  a named function or a named class; a default export of an expression that is
+  no declared name, such as a call, a literal, an object, an arrow function or
+  an anonymous class, has no name and contributes none, decided from the syntax
+  of the export), and type-only exports. A declaration file that is no module is read through the ambient
   modules it declares (`declare module "x" { ... }`), each under its module
   name. Members of an exported namespace, interface, class, enum or const
   object are not read: the port rule of cinatra#4872
@@ -373,15 +376,18 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   `export ... from` whose module does not resolve and an exported name that
   does not resolve are scanner errors (exit 2) that name the entry.
 - **The record.** Each finding is an entry of `sdkNames` in
-  `vendor-token-core-gate.baseline.json`, one per entry specifier and name
-  (`@cinatra-ai/sdk-extensions/blog-contract :: BlogConnector`), each with a
-  reason (a sentence of six words or more); the record is edited by hand and
-  the floor writer keeps it. A new name fails, a recorded name no longer found
-  fails as stale, and an entry without a reason fails. The record only shrinks
+  `vendor-token-core-gate.baseline.json`, one per entry specifier, name and
+  matched word (`@cinatra-ai/sdk-extensions/blog-contract :: BlogConnector :: blog`),
+  each with a reason (a sentence of six words or more); the record is edited
+  by hand and the floor writer keeps it. A name with a word not recorded for
+  it fails (a new name, or a recorded name that gains a newly declared word),
+  a recorded word the name no longer carries fails as stale (the entry is
+  removed), and an entry without a reason fails. The record only shrinks
   against `VENDOR_TOKEN_BASE` through the shared floor base guard (below): an
   entry the base's record does not hold fails, whatever changed or did not
-  change (the word-born admission of the path scan does not apply to this
-  record). The section is never removed, as `agent-extension-code-gate.mjs`
+  change, so a head entry may not hold a word the base's entry for that name
+  does not hold (the word-born admission of the path scan does not apply to
+  this record). The section is never removed, as `agent-extension-code-gate.mjs`
   fails a removed class: a head baseline without the `sdkNames` property
   fails ("the section is removed"), also when the section would be empty; an
   empty section is written as `{}` and stays. The one-time seed applies only
@@ -397,9 +403,9 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
   written into a longer word without a case or separator boundary, is not
   found; names reachable only as members of an exported namespace, value or
   type are not read, and the subpath names of the `exports` map are not
-  matched. When an extension newly declares a word that an existing SDK name
-  carries, the record cannot grow: that pin advance fails until the SDK name
-  is renamed or the owner decides.
+  matched. When an extension newly declares a word that an SDK name carries,
+  also a name already recorded for another word, the record cannot grow: that
+  pin advance fails until the SDK name is renamed or the owner decides.
 
 ## Border words — declared by the extensions (cinatra#4848)
 
@@ -1073,7 +1079,7 @@ for its floor:
 | `skill-packaging-gate.mjs` | `embeddedSkills` in `config/skill-packaging-legacy-exceptions.json` | a new name in the list of embedded skills | `SKILL_PACKAGING_BASE` |
 | `extension-rendering-gate.mjs` | `extension-rendering-gate.baseline.json` | a new extension in the floor | `EXTENSION_RENDERING_GATE_BASE` |
 | `agent-extension-code-gate.mjs` | `agent-extension-code-gate.baseline.json` | an item the base does not hold in any class (as a multiset), or a class removed | `AGENT_EXTENSION_CODE_BASE` |
-| `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` only) | `sdkNames` in `vendor-token-core-gate.baseline.json` | a new (entry specifier, name) entry, whatever changed, or the `sdkNames` section removed; only a base without `sdkNames` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
+| `vendor-token-core-gate.mjs` (`sdk-name-with-extension-word` only) | `sdkNames` in `vendor-token-core-gate.baseline.json` | a new (entry specifier, name, word) entry, whatever changed, or the `sdkNames` section removed; only a base without `sdkNames` is the one-time seed | `VENDOR_TOKEN_BASE` (set by the workflow) |
 | `extension-produces-deps-gate.mjs` (tool-owner class only) | `extension-produces-deps-gate.baseline.json` | a new (consumer, tool) entry in a class the base holds; a class absent from the base is the one-time seed | `EXTENSION_PRODUCES_DEPS_BASE` (set by the workflow) |
 
 The rules the helper holds for every gate:
