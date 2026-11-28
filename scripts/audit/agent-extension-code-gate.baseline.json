@@ -409,5 +409,6 @@
         "fieldRenderers: @cinatra-ai/list-curator-agent:scrape-schema-review"
       ]
     }
-  }
+  },
+  "hitlDeclarations": {}
 }
