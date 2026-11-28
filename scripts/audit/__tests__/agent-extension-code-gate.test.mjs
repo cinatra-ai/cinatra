@@ -260,7 +260,7 @@ test("a malformed list is refused; parsed maps carry no prototype", () => {
   assert.throws(() => parseList(JSON.stringify({ ...recorded(), toolDeclarations: { [READ]: { count: 2, items: ["read"] } } })), /not \{ count, items \}/);
   const parsed = parseList(JSON.stringify({ ...recorded(), toolDeclarations: { __proto__: { count: 1, items: ["a"] }, constructor: { count: 1, items: ["b"] } } }));
   assert.equal(Object.getPrototypeOf(parsed.toolDeclarations), null);
-  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps"]);
+  assert.deepEqual(CLASSES, ["nonContentFiles", "toolDeclarations", "extensionToolSteps", "unreadableSteps", "uiDependencies"]);
 });
 
 test("the agent rule mirrors the product's discovery: the paths its two readers test, at a pack root", () => {
@@ -538,5 +538,118 @@ test("live base guard: seeds once, an added item fails (a same-count substitutio
     const reseed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: noList });
     assert.equal(reseed.status, 1, reseed.out);
     assert.match(reseed.out, /cannot be compared with the base/);
+  });
+});
+
+// The role rule (cinatra#4532): an agent, skill or workflow pack declares no
+// dependency on a UI package. Read through the module namespace so this file
+// still loads where the gate has no such export.
+const gate = await import(GATE_SCRIPT);
+const BUNDLE_SOURCE = fileURLToPath(new URL("../../../packages/sdk-extensions/src/artifact-client-bundle.ts", import.meta.url));
+const INVENTORY_SOURCE = fileURLToPath(new URL("../../extensions/inventory.mjs", import.meta.url));
+
+const rolePacks = () => ({
+  ...packs(),
+  "pick-skill": { packageJson: { name: "@example-org/pick-skill", cinatra: { kind: "skill" }, peerDependencies: { react: "^19.0.0" } }, files: { "SKILL.md": "# pick\n" } },
+  "post-workflow": { packageJson: { name: "@example-org/post-workflow", cinatra: { kind: "workflow" }, dependencies: { "ui-kit": "npm:@cinatra-ai/sdk-ui@^1.0.0" } } },
+  "note-artifact": { packageJson: { name: "@example-org/note-artifact", cinatra: { kind: "artifact" }, peerDependencies: { react: "^19.0.0", "@cinatra-ai/sdk-ui": "^1.0.0" } } },
+});
+const SKILL = "@example-org/pick-skill";
+const WORKFLOW = "@example-org/post-workflow";
+const roleRecorded = () => ({
+  ...recorded(),
+  uiDependencies: {
+    [SKILL]: { count: 1, items: ["peerDependencies: react"] },
+    [WORKFLOW]: { count: 1, items: ["dependencies: ui-kit -> @cinatra-ai/sdk-ui"] },
+  },
+});
+
+test("the role rule: a UI package is a key of dependencies, peerDependencies or optionalDependencies, or an npm: alias target there; devDependencies and look-alikes are not; a field that is not an object is refused", () => {
+  assert.equal(typeof gate.uiDependencyItems, "function", "the gate has no uiDependencyItems");
+  assert.deepEqual([...gate.UI_PACKAGES], ["react", "react-dom", "@cinatra-ai/sdk-ui", "@cinatra-ai/design-primitives"]);
+  assert.ok(readFileSync(BUNDLE_SOURCE, "utf8").includes('export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";'), "the host-served primitives module changed its name: update UI_PACKAGES");
+  const inventory = readFileSync(INVENTORY_SOURCE, "utf8");
+  assert.ok(inventory.includes("...(pkg?.dependencies ?? {}),\n    ...(pkg?.peerDependencies ?? {}),\n    ...(pkg?.optionalDependencies ?? {}),"), "inventory.mjs changed the fields it reads as dependencies: update DEPENDENCY_FIELDS");
+  assert.deepEqual(
+    gate.uiDependencyItems({
+      dependencies: { "react-dom": "^19.0.0", "ui-kit": "npm:@cinatra-ai/design-primitives@1.2.3", "@types/react": "^19.0.0", "react-markdown": "^9.0.0" },
+      peerDependencies: { react: "*", "@cinatra-ai/sdk-ui": "^1.0.0", "my-react": "npm:react" },
+      optionalDependencies: { "@cinatra-ai/sdk-extensions": "^1.0.0", "other-ui": "npm:@cinatra-ai/sdk-ui-extra@1" },
+      devDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" },
+    }),
+    [
+      "dependencies: react-dom",
+      "dependencies: ui-kit -> @cinatra-ai/design-primitives",
+      "peerDependencies: @cinatra-ai/sdk-ui",
+      "peerDependencies: my-react -> react",
+      "peerDependencies: react",
+    ],
+  );
+  assert.deepEqual(gate.uiDependencyItems({ dependencies: null, devDependencies: { react: "1" } }), []);
+  assert.throws(() => gate.uiDependencyItems({ peerDependencies: ["react"] }), /peerDependencies is not an object/);
+  assert.throws(() => gate.uiDependencyItems({ dependencies: "react" }), /dependencies is not an object/);
+  assert.equal(gate.isRolePack("skill", []), true);
+  assert.equal(gate.isRolePack("workflow", []), true);
+  assert.equal(gate.isRolePack("agent", []), true);
+  assert.equal(gate.isRolePack("connector", plain("cinatra/oas.json")), true);
+  assert.equal(gate.isRolePack("connector", plain("src/index.ts")), false);
+  assert.equal(gate.isRolePack("artifact", []), false);
+});
+
+test("live: a UI dependency of a skill or workflow pack fails until it is recorded; an artifact's and a devDependency are not counted; an unreadable dependency field is a scanner error", () => {
+  const p = rolePacks();
+  p["read-agent"].packageJson.devDependencies = { react: "^19.0.0" };
+  withRoot({ packs: p, list: recorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\[uiDependencies\] items the list does not hold \(an agent, skill or workflow extension depends on no UI package\):\n  \+ @example-org\/pick-skill: peerDependencies: react\n  \+ @example-org\/post-workflow: dependencies: ui-kit -> @cinatra-ai\/sdk-ui\n/);
+    assert.doesNotMatch(res.out, /note-artifact|read-agent: (?:dev|peer)Dependencies/);
+    assert.match(runGate(root, ["--report"]).out, /2 uiDependencies in 2 key\(s\)/);
+  });
+  withRoot({ packs: rolePacks(), list: roleRecorded() }, (root) => {
+    const ok = runGate(root);
+    assert.equal(ok.status, 0, ok.out);
+    const pack = packDir(root, "read-agent");
+    const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+    writeJson(join(pack, "package.json"), { ...pkg, peerDependencies: { "react-dom": "^19.0.0" } });
+    repin(root, "read-agent", READ);
+    const grew = runGate(root);
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /\+ @example-org\/read-agent: peerDependencies: react-dom/);
+  });
+  const q = rolePacks();
+  q["pick-skill"].packageJson.peerDependencies = ["react"];
+  withRoot({ packs: q, list: roleRecorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 2, res.out);
+    assert.match(res.out, /pick-skill\/package\.json at the pinned commit [0-9a-f]{40}: peerDependencies is not an object/);
+  });
+});
+
+test("live base guard: a base list without the uiDependencies class seeds it once; then a UI dependency the base does not hold fails, and a removed class fails", () => {
+  withRoot({ packs: rolePacks(), list: recorded() }, (root) => {
+    writeFile(join(root, "scripts", "audit", "agent-extension-code-gate.mjs"), "// the gate\n");
+    git(root, "init", "-q");
+    const before = commitAll(root, "base with a list of four classes");
+    writeJson(join(root, LIST_REL), roleRecorded());
+    const seed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: before });
+    assert.equal(seed.status, 0, seed.out);
+    const seeded = commitAll(root, "seed the class");
+
+    const pack = packDir(root, "pick-skill");
+    const pkg = JSON.parse(readFileSync(join(pack, "package.json"), "utf8"));
+    writeJson(join(pack, "package.json"), { ...pkg, peerDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" } });
+    repin(root, "pick-skill", SKILL);
+    writeJson(join(root, LIST_REL), { ...roleRecorded(), uiDependencies: { ...roleRecorded().uiDependencies, [SKILL]: { count: 2, items: ["peerDependencies: react", "peerDependencies: react-dom"] } } });
+    const grew = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(grew.status, 1, grew.out);
+    assert.match(grew.out, /GREW against the base[\s\S]*\[uiDependencies\] @example-org\/pick-skill: peerDependencies: react-dom \(the base does not hold it\)/);
+
+    writeJson(join(pack, "package.json"), pkg);
+    repin(root, "pick-skill", SKILL);
+    writeJson(join(root, LIST_REL), recorded());
+    const removed = runGate(root, [], { AGENT_EXTENSION_CODE_BASE: seeded });
+    assert.equal(removed.status, 1, removed.out);
+    assert.match(removed.out, /\[uiDependencies\] the class is removed/);
   });
 });

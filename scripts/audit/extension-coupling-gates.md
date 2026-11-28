@@ -37,7 +37,7 @@ EXPLICITLY bounded that way wherever an identity reading would over-claim.
 | `application-border-gate.mjs` | application code (`src/` + `packages/*/src`) written for one artifact type, agent or connector — a claimed object type id spelled in it (class 1), a module named for one domain (class 2), growth of a listed module (class 3) | `file :: type :: id` / `file :: name :: token` counts, and a per-module ceiling | `application-border-gate.baseline.json` — **shrink-only floor**, every entry naming its owner (cinatra#3821; see the dedicated section below) |
 | `connector-artifact-road-gate.mjs` | a road from a module that faces connectors (the connector handler, a capability the application publishes) to a module that creates an artifact (class 6) | `capability id :: creating module` roads, plus the declaration of every published capability | `connector-artifact-road-gate.baseline.json` — **shrink-only floor**, every road naming the item that removes it (cinatra#3821; see the dedicated section below) |
 | `extension-rendering-gate.mjs` | an artifact extension that claims a pinnable artifact-writable type and is not drawn — neither by its own display (a `<package>::detail` entry in the generated display map) nor by a required content-type display that serves every form its manifest declares | claiming extensions | `extension-rendering-gate.baseline.json` — **PINNED EMPTY**, BLOCKING mode since cinatra#3092 (cinatra#3871; see the dedicated section below) |
-| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json` or `cinatra/agent.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
+| `agent-extension-code-gate.mjs` | in a pack the product treats as an agent (kind `agent`, or a pinned tree with `cinatra/oas.json` or `cinatra/agent.json`), files that are not content (class `nonContentFiles`); in any pinned pack, `cinatra.tools` declarations (`toolDeclarations`), flow steps calling the core tool `extension_tool` (`extensionToolSteps`) and ApiNode steps whose data cannot be read (`unreadableSteps`); in an agent, skill or workflow pack, declared dependencies on a UI package (`uiDependencies`, cinatra#4532) | the recorded items per `package` (per `package :: cinatra/<file>.json` for the steps) | `agent-extension-code-gate.baseline.json` — **shrink-only items** (cinatra#4885; see the dedicated section below) |
 
 `discovery-dispatcher-bypass-ban.mjs` guards the runtime-discovery dispatcher
 (its documented `SANCTIONED_READERS` allowlist is "sanctioned, never counted" —
@@ -780,7 +780,7 @@ connector, artifact or skill pack that adds a flow is judged as an agent; its
 program files are recorded like an agent's (the list records them; the
 connector's code is not judged here).
 
-**The four classes**, each a set of items that may only shrink:
+**The five classes**, each a set of items that may only shrink:
 
 1. `nonContentFiles` (per pack) — every entry of the pinned commit's tree,
    EXCEPT content by this closed rule (the constant `CONTENT`): a file whose
@@ -826,6 +826,29 @@ connector's code is not judged here).
    does not parse as JSON (fully or partly templated, such as
    `"{{ payload }}"`), or whose `tool` is not a plain string or holds `{{`.
    Recorded, not failed outright; the count only goes down.
+5. `uiDependencies` (per pack, cinatra#4532) — an agent, a skill or a
+   workflow has no screen of its own: core draws an agent's HITL step with its
+   generic gate from the `cinatra.fieldRenderers` declaration. So such a pack
+   declares no dependency on `react`, `react-dom`, `@cinatra-ai/sdk-ui` or
+   `@cinatra-ai/design-primitives` (the constant `UI_PACKAGES`). The class
+   applies to a pack the agent rule above judges an agent, and to a pack whose
+   manifest kind (`cinatra.kind`, as the product reads it) is `skill` or
+   `workflow` (the legacy kind the product's record still carries). A
+   dependency is a key of the fields the product reads as a package's runtime
+   dependencies, `dependencies`, `peerDependencies` and `optionalDependencies`
+   (`sdkOnlyManifestDeps` and `hostServedManifestDeps` in
+   `scripts/extensions/inventory.mjs`; a test fails when those fields change),
+   or the target of an `npm:` alias value there. The manifest is read at the
+   pinned commit, as the packed `package.json` the product sees.
+   `devDependencies` are not counted: they are not installed with the package
+   and do not reach the product. An absent or `null` field declares nothing;
+   any other value that is not an object is a scanner error. Items:
+   `<field>: <name>`, or `<field>: <key> -> <name>` for an alias. Stated
+   limit: a UI package reached under another name than its own or an `npm:`
+   alias (a git URL, a tarball, a fork with another name) is not counted.
+   On the day it landed (pins of main at c2662f78b): 7 items in 4 agent packs,
+   all `peerDependencies`; no skill pack declares one, and no workflow pack is
+   pinned.
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:
@@ -840,7 +863,11 @@ step. A recorded item that is gone fails as stale until
 it. `count` is the number of items, kept as information (a list whose
 `count` differs from its items is malformed). That writer refuses a missing
 or malformed list and any item the list does not hold; `--seed` writes the
-first list only when none exists. The list is compared with its copy on the
+first list only when none exists. A class added after the list was seeded
+(`LATER_CLASSES`: `uiDependencies`) may be absent from a list, which then
+holds none of its items; a base list that does not carry such a class seeds
+it once, in the change that adds the class, and a head list that drops it
+after it reached the base fails as a removed class. The list is compared with its copy on the
 base branch through the shared floor base guard by the same items: an item
 the base does not hold, or a removed class, fails. The change that introduces
 the gate has a base holding neither the list nor the script; that one case
