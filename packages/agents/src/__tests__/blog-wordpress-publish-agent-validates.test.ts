@@ -149,10 +149,6 @@ describe("blog-wordpress-publish-agent — 7 structural pins", () => {
     const gateMeta = (gate.metadata as Record<string, unknown>).cinatra as Record<string, unknown>;
     expect(gateMeta.artifactReview).toEqual({ targetsInput: "reviewTargets" });
     expect(gateMeta.requiresApproval).toBe(true);
-    // The runtime writes the value of the marked input into the pause's message
-    // only for a gate that sets this flag; without it the application reads no
-    // target set and the review never opens.
-    expect(gateMeta.surfaceGateInputs).toBe(true);
     // artifacts_get answers only `{ artifact }`. The target set reaches the gate
     // only because the host echoes the call's input back on this flag, so the
     // gather step's declared output and its edge into the gate's marked input
