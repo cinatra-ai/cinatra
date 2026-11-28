@@ -18,7 +18,9 @@ fix it, each one anchored in a contract this repository already carries.
 
 `scripts/ci/core-extension-border-gate.mjs` scans the product code under `src/` and
 `packages/` and reports each crossing with its file, its line and the rule it breaks.
-Tests, mocks, fixtures, generated maps and type declarations are outside the scan: a
+Tests (also test helpers and stubs under `tests/` and `__stubs__/`), mocks, fixtures (the
+`src/app/design-fixtures` tree included), generated maps and inventories, and type declarations
+are outside the scan: a
 pack name in a fixture is the fixture doing its job, and a pack name in a generated
 map is the materializer crossing. Comments are masked before every scan, so a comment
 that names a pack to explain a gap states knowledge without encoding it. The
@@ -48,6 +50,48 @@ stem as well as the package name, and a restatement in core is not invisible mer
 because the namespace is spelled shorter than the package. And a pack the ledger already
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
+
+### `pack-slug-in-core` (cinatra#4531)
+
+A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connector` is
+`openai-connector`. Stage 1 of the rule reads the TypeScript and JavaScript source files of the
+product tree (`.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs`) with the TypeScript parser and
+takes the text of every string token: a `StringLiteral` in any quote (a JSX attribute value such
+as `slug="openai-connector"` is one), a template literal without a substitution, and JSX text
+trimmed. A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) is not read, and neither is a fixture
+or test helper module that stands in a product folder, by the names these modules have in the tree:
+`fixtures.<ext>`, `conformance-fixtures.<ext>` and `testing.<ext>` (`dev-fixtures.ts`, the SDK's
+fixture contract, is read). Each text is split on the
+characters that separate the parts of a package reference as the product writes and parses it,
+and each part is trimmed: `/ ? # = &` of a path or URL; `@` before a version range
+(`@cinatra-ai/openai-connector@^0.1.0`, parsed by `packages/extensions/src/required-in-prod.ts`);
+`:` before the type of a type id (`@cinatra-ai/<pack>:<type>`, parsed by
+`packages/objects/src/claims.ts`); and `,` in a list of package names (parsed by
+`src/lib/extension-auto-update.ts`). Whitespace is not a separator. Every part equal to a leaf is a
+finding: the whole value `"openai-connector"`, `"/connectors/cinatra-ai/openai-connector/setup"`,
+`"?q=openai-connector"`, `"openai-connector/index"`, and the leaf of a scoped name,
+`"@cinatra-ai/openai-connector"` or `"@cinatra-ai/openai-connector/register"`, in a string or an
+import specifier. One string can so be a finding of two rules, each recorded in its own ledger
+entry: a scoped pack name is also a `pack-package-name-branch` finding, and a type id whose
+namespace is the full package name is also a `pack-type-id-in-core` finding. Comments, regular
+expressions and escapes are the parser's: a comment and a regular expression literal are not
+string tokens and are not read. A file that does not parse fails the check with its name. The
+vocabulary is the leaves of the pack universe above (the two committed locks, plus a pack the
+ledger names); the check names no pack itself. A finding's detail is the leaf with its package,
+`openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
+occurrence, as in the other text rules.
+
+So that an ordinary word is never a finding, only a leaf that ends in a canonical kind suffix
+is read, the suffixes the naming rule accepts
+(`packages/extensions/src/__tests__/naming-conformance.test.ts`): `-agent`, `-assistant`,
+`-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`.
+
+Not read in this stage (next stages, tracked in the issue): stylesheets, YAML, JSON, Markdown and
+other run-time text files; a template with a substitution; JSX element and attribute names; root
+configuration files; regular expression literals; a leaf inside a sentence or joined to other
+characters (`"use <leaf> now"`, `"<leaf>-v2"`, `"<leaf>.json"`). Not part of this rule yet: the
+role-suffix stem (`blog-content` of `blog-content-skill`) and a tool or table name under a pack's
+stem.
 
 ### `unbounded-port-member` (cinatra#4872)
 
