@@ -23,7 +23,10 @@
 // does not bind here — the blog host surfaces target the full-universe
 // deployment, documented as a named limitation of this stage.
 
-import { GENERATED_AGENT_ROLE_BINDINGS } from "@/lib/generated/agent-bindings";
+import {
+  GENERATED_AGENT_ROLE_BINDINGS,
+  GENERATED_ROLE_ARTIFACT_TYPES,
+} from "@/lib/generated/agent-bindings";
 
 /** Optional-surface roles host code resolves. Literal role names are
  * HOST-NEUTRAL vocabulary (a role is not a package name). */
@@ -31,13 +34,24 @@ export type OptionalExtensionRole =
   | "artifact-blog-post-body"
   | "artifact-blog-idea-summary"
   | "artifact-blog-image"
-  | "blog-operator-dashboard";
+  | "blog-operator-dashboard"
+  // The artifact type that twins a core dashboard record (cinatra#4849).
+  | "artifact-dashboard-twin";
 
 /** Resolve a role's single claimant package, or undefined when no present
  * extension claims it (a NORMAL state in reduced universes). */
 export function resolveExtensionRole(role: OptionalExtensionRole): string | undefined {
   const pkg = GENERATED_AGENT_ROLE_BINDINGS[role];
   return typeof pkg === "string" && pkg.length > 0 ? pkg : undefined;
+}
+
+/** The object type a role's claimant owns (cinatra#4849), or undefined when no
+ * present extension claims the role or its claimant owns no single type. */
+export function resolveExtensionRoleArtifactType(
+  role: OptionalExtensionRole,
+): string | undefined {
+  const type = GENERATED_ROLE_ARTIFACT_TYPES[role];
+  return typeof type === "string" && type.length > 0 ? type : undefined;
 }
 
 /** Resolve a role's single claimant package, fail-loud with a descriptive,

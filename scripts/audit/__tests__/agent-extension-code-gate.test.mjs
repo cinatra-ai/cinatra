@@ -272,11 +272,13 @@ test("the agent rule mirrors the product's discovery: the paths its two readers 
   const seed = readFileSync(SEED_SOURCE, "utf8");
   assert.ok(seed.includes('const cinatraDir = path.join(slugDir, "cinatra");'), "build-required-oas-seed.mjs changed its cinatra/ folder: update AGENT_DEFINITION_PATHS");
   assert.ok(seed.includes('const oasPath = path.join(cinatraDir, "oas.json");\n      if (!existsSync(oasPath)) continue;'), "build-required-oas-seed.mjs changed its condition: update AGENT_DEFINITION_PATHS");
-  assert.deepEqual([...AGENT_DEFINITION_PATHS], ["cinatra/agent.json", "cinatra/oas.json"]);
+  // Since #4920 the product reads only cinatra/oas.json; an old definition file is reported, not loaded (the gate fails it, see below).
+  assert.deepEqual([...AGENT_DEFINITION_PATHS], ["cinatra/oas.json"]);
   assert.equal(isAgentPack("agent", []), true);
+  assert.equal(isAgentPack("agent", plain("cinatra/agent.json")), true);
   assert.equal(isAgentPack("connector", plain("src/index.ts", "cinatra/tools.json")), false);
   assert.equal(isAgentPack("connector", plain("cinatra/oas.json")), true);
-  assert.equal(isAgentPack("artifact", plain("cinatra/agent.json")), true);
+  assert.equal(isAgentPack("artifact", plain("cinatra/agent.json")), false);
   assert.equal(isAgentPack("skill", plain("cinatra/oas.json/x")), true);
   assert.equal(isAgentPack("connector", plain("x/cinatra/oas.json", "oas.json", "agent.json")), false);
 });
@@ -290,10 +292,23 @@ test("live: --report records each class; a pack of any kind that ships a flow th
   withRoot({ packs: p }, (root) => {
     const res = runGate(root, ["--report"]);
     assert.equal(res.status, 0, res.out);
-    assert.match(res.out, /4 pinned extension\(s\) scanned; 4 nonContentFiles in 3 key\(s\), 2 toolDeclarations in 2 key\(s\), 2 extensionToolSteps in 2 key\(s\), 0 unreadableSteps/);
+    assert.match(res.out, /4 pinned extension\(s\) scanned; 3 nonContentFiles in 2 key\(s\), 2 toolDeclarations in 2 key\(s\), 2 extensionToolSteps in 2 key\(s\), 0 unreadableSteps/);
     assert.match(res.out, /@example-org\/mail-connector: 1\n    src\/index\.ts\n/);
-    assert.match(res.out, /@example-org\/old-connector: 1\n    lib\/x\.mjs\n/);
-    assert.doesNotMatch(res.out, /plain-connector: 1|SKILL\.md/);
+    // #4920: a pack with only the old cinatra/agent.json is no agent; the report names the file to move.
+    assert.match(res.out, /old definition file[^\n]*\n  @example-org\/old-connector: move cinatra\/agent\.json to cinatra\/oas\.json\n/);
+    assert.doesNotMatch(res.out, /old-connector: 1|plain-connector: 1|SKILL\.md/);
+  });
+});
+
+test("live: a pinned pack that holds an old definition file and no cinatra/oas.json fails and names the file to move (#4920)", () => {
+  const p = packs();
+  p["old-agent"] = { packageJson: { name: "@example-org/old-agent", cinatra: { kind: "agent" } }, files: { "cinatra/agent.json": "{}", "agent.json": "{}" } };
+  withRoot({ packs: p, list: recorded() }, (root) => {
+    const res = runGate(root);
+    assert.equal(res.status, 1, res.out);
+    assert.match(res.out, /\n  @example-org\/old-agent: move cinatra\/agent\.json and agent\.json to cinatra\/oas\.json\n/);
+    assert.doesNotMatch(res.out, /OK —/);
+    assert.equal(runGate(root, ["--write-baseline"]).status, 1);
   });
 });
 
