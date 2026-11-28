@@ -21,27 +21,55 @@ const SERVER_REGISTER = ["server", "registerTool"].join(".");
 
 const REFUSE = ["    return { error: 'not admitted', status: 403 };"];
 
-/** A route whose allow list is `list`, admission guard `guard` and refusal block `refuse`. */
-const route = (list: string[], guard: string, head: string[] = [], refuse: string[] = REFUSE) =>
+type RouteShape = {
+  /** Lines in the handler body before the guard. */
+  beforeGuard?: string[];
+  /** Wraps the guard's lines (to nest it). */
+  wrapGuard?: (lines: string[]) => string[];
+  /** Module-level lines after the handler. */
+  tail?: string[];
+  /** The tool-name declaration. */
+  toolDecl?: string;
+};
+
+/**
+ * A route shaped like the real one: an exported POST that returns the result
+ * of a same-file handler from a `try` without `catch`; the handler reads the
+ * tool name, tests it, guards it with the allow list, then dispatches it.
+ */
+const route = (list: string[], guard: string, head: string[] = [], refuse: string[] = REFUSE, shape: RouteShape = {}) =>
   [
     ...head,
     "const ALLOWED_TOOLS = new Set([",
     ...list,
     "]);",
     'const SUPPORTED_SHAPES = new Set(["plain"]);',
-    "export function handle(body: { tool?: unknown; result_shape?: string }) {",
-    '  const requestedTool = typeof body.tool === "string" ? body.tool : "";',
+    "const handlers: Record<string, unknown> = {};",
+    "export async function POST(req: Request) {",
+    "  const releases: string[] = [];",
+    "  try {",
+    "    return await handle(await req.json());",
+    "  } finally {",
+    "    releases.length = 0;",
+    "  }",
+    "}",
+    "async function handle(body: { tool?: unknown; result_shape?: string }) {",
+    shape.toolDecl ?? '  const requestedTool = typeof body.tool === "string" ? body.tool : "";',
+    "  if (!requestedTool) {",
+    "    return { error: 'tool is required', status: 400 };",
+    "  }",
     '  const shape = body.result_shape ?? "plain";',
     "  if (!SUPPORTED_SHAPES.has(shape)) {",
     "    return { error: 'unsupported shape', status: 403 };",
     "  }",
-    `  if (${guard}) {`,
-    ...refuse,
-    "  }",
-    "  return { status: 200 };",
+    ...(shape.beforeGuard ?? []),
+    ...(shape.wrapGuard ?? ((l: string[]) => l))([`  if (${guard}) {`, ...refuse, "  }"]),
+    "  return { status: 200, handler: handlers[requestedTool] };",
     "}",
+    ...(shape.tail ?? []),
     "",
   ].join("\n");
+const GUARD = "!ALLOWED_TOOLS.has(requestedTool)";
 
 const FILES: Record<string, string> = {
   "src/lib/fixture-mcp.ts": [
@@ -104,9 +132,45 @@ const TREES: Record<string, Record<string, string>> = {
     ]),
   },
   throws: {
-    [ROUTE]: route(OK_LIST, "!ALLOWED_TOOLS.has(requestedTool)", [], [
-      "    throw Object.assign(new Error('not admitted'), { status: 403 });",
-    ]),
+    [ROUTE]: route(OK_LIST, GUARD, [], ["    throw Object.assign(new Error('not admitted'), { status: 403 });"]),
+  },
+  addCall: { [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, { tail: ['ALLOWED_TOOLS.add("fixture_late");'] }) },
+  passedToFn: {
+    [ROUTE]: route(OK_LIST, GUARD, ["function extend(s: Set<string>) { return s; }"], REFUSE, {
+      tail: ["extend(ALLOWED_TOOLS);"],
+    }),
+  },
+  guardInHelper: {
+    [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, {
+      wrapGuard: (l) => ["  const check = () => {", ...l, "  };", "  check();"],
+    }),
+  },
+  guardInTry: {
+    [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, { wrapGuard: (l) => ["  try {", ...l, "  } catch {", "  }"] }),
+  },
+  useBefore: {
+    [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, { beforeGuard: ["  const early = handlers[requestedTool];"] }),
+  },
+  secondHandler: {
+    [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, { tail: ["export async function GET() { return handlers.x; }"] }),
+  },
+  letTool: {
+    [ROUTE]: route(OK_LIST, GUARD, [], REFUSE, {
+      toolDecl: '  let requestedTool = typeof body.tool === "string" ? body.tool : "";',
+    }),
+  },
+  frozen: { [ROUTE]: route(OK_LIST, GUARD).replace(/const ALLOWED_TOOLS = new Set\(\[([^\]]*)\]\);/, "const ALLOWED_TOOLS = Object.freeze(new Set([$1]));") },
+  fromArray: {
+    [ROUTE]: route(OK_LIST, GUARD, ['const NAMES = ["fixture_ok"] as const;']).replace(
+      /const ALLOWED_TOOLS = new Set\(\[[^\]]*\]\);/,
+      "const ALLOWED_TOOLS = new Set(NAMES);",
+    ),
+  },
+  typed: {
+    [ROUTE]: route(OK_LIST, GUARD).replace(
+      /const ALLOWED_TOOLS = new Set\(\[([^\]]*)\]\);/,
+      "const ALLOWED_TOOLS: ReadonlySet<string> = new Set<string>([$1] as const);",
+    ),
   },
 };
 
@@ -200,11 +264,27 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(builderFailure(trees.otherForm)).toContain("the allow-list guard was not found");
   });
 
-  it("requires the allow-list guard to stop the request", () => {
+  it("requires the allow-list guard to stop the request with a return", () => {
     expect(builderFailure(trees.noReturn)).toContain("the allow-list guard does not stop the request");
     expect(builderFailure(trees.equalsFalse)).toBe("");
-    expect(builderFailure(trees.throws)).toBe("");
-    expect(rowsAt(trees.throws).map((r) => r.primitiveName)).toEqual(["fixture_ok"]);
+    // A `throw` was accepted before; a wrapper can catch it, so it no longer is.
+    expect(builderFailure(trees.throws)).toContain("the allow-list guard does not stop the request");
+  });
+
+  it("refuses an allow list it cannot prove constant, naming the use", () => {
+    expect(builderFailure(trees.addCall)).toContain('ALLOWED_TOOLS.add("fixture_late")');
+    expect(builderFailure(trees.passedToFn)).toContain("extend(ALLOWED_TOOLS)");
+    expect(builderFailure(trees.frozen)).toContain("is not a `new Set([...])`");
+    expect(builderFailure(trees.fromArray)).toContain("is not a `new Set([...])`");
+    expect(builderFailure(trees.typed)).toBe("");
+  });
+
+  it("requires the guard directly in the request handler, before any dispatch", () => {
+    expect(builderFailure(trees.guardInHelper)).toContain("the allow-list guard was not found");
+    expect(builderFailure(trees.guardInTry)).toContain("the allow-list guard was not found");
+    expect(builderFailure(trees.letTool)).toContain("the allow-list guard was not found");
+    expect(builderFailure(trees.secondHandler)).toContain("expected exactly one exported request handler");
+    expect(builderFailure(trees.useBefore)).toContain("the tool name is used before the allow-list guard");
   });
 
   it("--check passes on the tree it just wrote", () => {

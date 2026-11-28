@@ -12,11 +12,14 @@
  *     or a `*TOOL_META*` block key.
  *   - "passthrough": a name the deterministic passthrough route admits that no
  *     MCP road registers. The route's allow list is the set the route checks as
- *     `if (!LIST.has(tool))` (or `LIST.has(tool) === false`), where `tool` is
- *     the const read from the request's `tool` field and the guarded block
- *     answers status 403 and ends with `return` of that answer or a `throw`;
- *     no such guard, two, or one that does not stop the request FAILS the
- *     builder. The list is
+ *     `if (!LIST.has(tool))` (or `LIST.has(tool) === false`) as a statement
+ *     directly in the body of the route's one exported request handler (or of
+ *     the same-file function it returns the result of), where `tool` is the
+ *     const read there from the request's `tool` field, the guarded block ends
+ *     with `return` of the 403 answer, and `tool` is only tested before it. No
+ *     such guard, two, a guard that does not return, or an earlier use of the
+ *     tool name FAILS the builder. Every reference to the list's sets in the
+ *     modules read must leave them constant, or the builder FAILS. The list is
  *     read with the TypeScript parser: string literals in any quote form,
  *     templates without substitution, module-level consts with a literal value,
  *     and spread sets followed to their module-level declaration in the same
@@ -27,7 +30,8 @@
  * `register(ctx)` through `ctx.mcp.registerTool` has no row unless the pack's
  * metadata block lists it.
  * Stated limit: indirection deeper than MAX_SET_DEPTH hops (re-export chains,
- * sets built by code) is refused, not followed.
+ * sets built by code) is refused, not followed; a mutation of an exported set
+ * from a module the builder does not read is not followed.
  * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
  * that pack, any other path is core.
  *
@@ -231,56 +235,145 @@ function negatedCall(c) {
   return null;
 }
 
+const HTTP_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
+
+/** @param {ts.Node} n */
+function isExported(n) {
+  return !!ts.getModifiers?.(n)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+}
+
+/** @param {ts.SourceFile} sf @param {string} name */
+function functionNamed(sf, name) {
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name?.text === name && st.body) return st;
+  }
+  return null;
+}
+
 /**
- * The allow list: the receiver of the negated `.has(tool)` whose block answers
- * status 403, where `tool` is the const the route reads from the request's
- * `tool` field. Other `.has` guards are not the allow list.
+ * The function whose body holds the route's admission: the one exported HTTP
+ * method handler, or the same-file function it delegates to by
+ * `return [await] F(...)`, directly or as the only statement of a `try` that
+ * has no `catch`.
+ * @param {ts.SourceFile} sf
+ */
+function requestHandler(sf) {
+  const exported = sf.statements.filter(
+    (st) => ts.isFunctionDeclaration(st) && st.name && HTTP_METHODS.has(st.name.text) && isExported(st),
+  );
+  const exportedConsts = sf.statements.filter(
+    (st) =>
+      ts.isVariableStatement(st) &&
+      isExported(st) &&
+      st.declarationList.declarations.some((d) => ts.isIdentifier(d.name) && HTTP_METHODS.has(d.name.text)),
+  );
+  if (exported.length + exportedConsts.length !== 1 || exported.length !== 1) {
+    fail(`${sf.fileName}: expected exactly one exported request handler function, found ${exported.length + exportedConsts.length}`);
+  }
+  const handler = /** @type {ts.FunctionDeclaration} */ (exported[0]);
+  for (const st of handler.body.statements) {
+    const ret =
+      ts.isReturnStatement(st)
+        ? st
+        : ts.isTryStatement(st) && !st.catchClause && st.tryBlock.statements.length === 1 && ts.isReturnStatement(st.tryBlock.statements[0])
+          ? st.tryBlock.statements[0]
+          : null;
+    if (!ret || !ret.expression) continue;
+    let e = unwrap(ret.expression);
+    if (ts.isAwaitExpression(e)) e = unwrap(e.expression);
+    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
+      const target = functionNamed(sf, e.expression.text);
+      if (target) return target;
+    }
+  }
+  return handler;
+}
+
+/**
+ * The allow list: the receiver of the negated `.has(tool)` that is a statement
+ * directly in the request handler's body (not inside a `try`, loop, callback
+ * or condition) and ends with `return` of the 403 answer, where `tool` is the
+ * one const declared directly in that body from the request's `tool` field.
+ * Every use of `tool` before the guard may only test it (`!tool`, a
+ * comparison, `typeof`).
  * @param {ts.SourceFile} sf
  */
 function allowListName(sf) {
-  const toolVars = new Set();
-  const guards = [];
-  const visit = (n) => {
-    if (
-      ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
-      n.initializer &&
-      contains(n.initializer, (x) => ts.isPropertyAccessExpression(x) && x.name.text === "tool")
-    ) {
-      toolVars.add(n.name.text);
-    }
-    if (ts.isIfStatement(n)) {
-      const call = negatedCall(unwrap(n.expression));
+  const body = requestHandler(sf).body;
+  const toolVars = [];
+  for (const st of body.statements) {
+    if (!ts.isVariableStatement(st) || !(st.declarationList.flags & ts.NodeFlags.Const)) continue;
+    for (const d of st.declarationList.declarations) {
       if (
-        call &&
-        ts.isCallExpression(call) &&
-        ts.isPropertyAccessExpression(call.expression) &&
-        call.expression.name.text === "has" &&
-        ts.isIdentifier(call.expression.expression) &&
-        call.arguments.length === 1 &&
-        ts.isIdentifier(call.arguments[0]) &&
-        contains(n.thenStatement, is403)
+        ts.isIdentifier(d.name) &&
+        d.initializer &&
+        contains(d.initializer, (x) => ts.isPropertyAccessExpression(x) && x.name.text === "tool")
       ) {
-        guards.push({ list: call.expression.expression.text, arg: call.arguments[0].text, stops: stopsRequest(n.thenStatement) });
+        toolVars.push(d.name.text);
       }
+    }
+  }
+  const notFound = (why) =>
+    fail(
+      `${sf.fileName}: the allow-list guard was not found: expected one \`if (!LIST.has(tool))\` answering 403, ` +
+        `directly in the request handler's body, for the requested tool (${why})`,
+    );
+  if (toolVars.length !== 1) notFound(`tool variables: ${toolVars.join(", ") || "none"}`);
+  const tool = toolVars[0];
+  const guards = body.statements.filter((st) => {
+    if (!ts.isIfStatement(st)) return false;
+    const call = negatedCall(unwrap(st.expression));
+    return (
+      !!call &&
+      ts.isCallExpression(call) &&
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.name.text === "has" &&
+      ts.isIdentifier(call.expression.expression) &&
+      call.arguments.length === 1 &&
+      ts.isIdentifier(call.arguments[0]) &&
+      call.arguments[0].text === tool &&
+      contains(st.thenStatement, is403)
+    );
+  });
+  if (guards.length !== 1) notFound(`found ${guards.length}`);
+  const guard = /** @type {ts.IfStatement} */ (guards[0]);
+  if (!returns403(guard.thenStatement)) {
+    fail(`${sf.fileName}: the allow-list guard does not stop the request: its block must end with \`return\` of the 403 answer`);
+  }
+  // Before the guard, the tool name may only be tested.
+  const guardStart = guard.getStart(sf);
+  const visit = (n) => {
+    if (n.getStart(sf) >= guardStart) return;
+    if (ts.isIdentifier(n) && n.text === tool && n.getEnd() <= guardStart && !isTest(n)) {
+      fail(
+        `${sf.fileName}:${lineOf(sf, n)}: the tool name is used before the allow-list guard ` +
+          `(\`${n.parent.getText(sf).slice(0, 80)}\`)`,
+      );
     }
     ts.forEachChild(n, visit);
   };
-  visit(sf);
-  const admission = guards.filter((g) => toolVars.has(g.arg));
-  if (admission.length !== 1) {
-    fail(
-      `${sf.fileName}: the allow-list guard was not found: expected one \`if (!LIST.has(tool))\` answering 403 ` +
-        `for the requested tool (tool variables: ${[...toolVars].join(", ") || "none"}), found ${admission.length}`,
+  body.statements.forEach(visit);
+  return /** @type {ts.Identifier} */ (/** @type {ts.CallExpression} */ (negatedCall(unwrap(guard.expression))).expression.expression).text;
+}
+
+/** A use of the tool name that only tests it, or its own declaration. @param {ts.Identifier} n */
+function isTest(n) {
+  const p = n.parent;
+  // A property name (`body.tool`, `{ tool: x }`) is not a use of the variable.
+  if ((ts.isPropertyAccessExpression(p) || ts.isPropertyAssignment(p)) && p.name === n) return true;
+  if (ts.isVariableDeclaration(p) && p.name === n) return true;
+  if (ts.isPrefixUnaryExpression(p) && p.operator === ts.SyntaxKind.ExclamationToken) return true;
+  if (ts.isTypeOfExpression(p)) return true;
+  if (ts.isBinaryExpression(p)) {
+    const k = p.operatorToken.kind;
+    return (
+      k === ts.SyntaxKind.EqualsEqualsEqualsToken ||
+      k === ts.SyntaxKind.ExclamationEqualsEqualsToken ||
+      k === ts.SyntaxKind.EqualsEqualsToken ||
+      k === ts.SyntaxKind.ExclamationEqualsToken
     );
   }
-  if (!admission[0].stops) {
-    fail(
-      `${sf.fileName}: the allow-list guard does not stop the request: its block must end with ` +
-        "`return` of the 403 answer or with `throw`",
-    );
-  }
-  return admission[0].list;
+  return false;
 }
 
 /** @param {ts.Node} x */
@@ -296,14 +389,53 @@ function is403(x) {
 
 /**
  * Whether a guard's block ends the handler: its final statement is `return` of
- * an expression carrying status 403, or a `throw`.
+ * an expression carrying status 403. A `throw` is not accepted: a wrapper can
+ * catch it.
  * @param {ts.Statement} then
  */
-function stopsRequest(then) {
+function returns403(then) {
   const last = ts.isBlock(then) ? then.statements[then.statements.length - 1] : then;
-  if (!last) return false;
-  if (ts.isThrowStatement(last)) return true;
-  return ts.isReturnStatement(last) && !!last.expression && contains(last.expression, is403);
+  return !!last && ts.isReturnStatement(last) && !!last.expression && contains(last.expression, is403);
+}
+
+/**
+ * Every reference to a set binding of the allow list must leave the set as it
+ * was declared: its declaration, an import or export of it, a spread, a
+ * `for…of`, `Array.from(X)`, `X.size`, or a call of `.has`, `.forEach`,
+ * `.values`, `.keys`, `.entries`. Any other use (`.add`, `.delete`, `.clear`,
+ * passing the set to a function, assigning it to another name) FAILS the
+ * builder.
+ * @param {Map<string, Set<string>>} tracked module -> local names of the list's sets
+ */
+function assertSetsConstant(tracked) {
+  const READS = new Set(["has", "forEach", "values", "keys", "entries"]);
+  for (const [rel, names] of tracked) {
+    const sf = parseRel(rel);
+    const visit = (n) => {
+      if (ts.isIdentifier(n) && names.has(n.text)) {
+        const p = n.parent;
+        const ok =
+          (ts.isVariableDeclaration(p) && p.name === n) ||
+          ts.isImportSpecifier(p) ||
+          ts.isExportSpecifier(p) ||
+          ts.isTypeQueryNode(p) ||
+          (ts.isPropertyAccessExpression(p) && p.name === n) ||
+          ts.isSpreadElement(p) ||
+          (ts.isForOfStatement(p) && p.expression === n) ||
+          (ts.isPropertyAccessExpression(p) &&
+            p.expression === n &&
+            ((p.name.text === "size" && !(ts.isBinaryExpression(p.parent) && p.parent.left === p)) ||
+              (READS.has(p.name.text) && ts.isCallExpression(p.parent) && p.parent.expression === p))) ||
+          (ts.isCallExpression(p) && p.getChildAt(0).getText(sf) === "Array.from" && p.arguments[0] === n);
+        if (!ok) {
+          const shown = ts.isPropertyAccessExpression(p) && ts.isCallExpression(p.parent) ? p.parent : p;
+          fail(`${rel}:${lineOf(sf, n)}: the allow-list set ${n.text} is not used as a constant (\`${shown.getText(sf).slice(0, 80)}\`)`);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
 }
 
 /** @param {string} fromRel @param {string} spec */
@@ -334,9 +466,11 @@ function resolveModule(fromRel, spec) {
  * only name module-level bindings or imports. A list declared inside a
  * function is not found and FAILS the builder.
  * @param {string} rel @param {string} name @param {number} depth
+ * @param {Map<string, Set<string>>} [track] when given, records each module and local name passed
  * @returns {{ rel: string, sf: ts.SourceFile, decl: ts.VariableDeclaration }}
  */
-function resolveConst(rel, name, depth) {
+function resolveConst(rel, name, depth, track) {
+  if (track) (track.get(rel) ?? track.set(rel, new Set()).get(rel)).add(name);
   if (depth > MAX_SET_DEPTH) fail(`${rel}: ${name} is more than ${MAX_SET_DEPTH} hops from the allow list`);
   const sf = parseRel(rel);
   for (const st of sf.statements) {
@@ -354,7 +488,7 @@ function resolveConst(rel, name, depth) {
       if (el.name.text !== name) continue;
       const target = resolveModule(rel, /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text);
       if (!target) fail(`${rel}: cannot resolve the import of ${name}`);
-      return resolveConst(target, (el.propertyName ?? el.name).text, depth + 1);
+      return resolveConst(target, (el.propertyName ?? el.name).text, depth + 1, track);
     }
   }
   return fail(`${rel}: no module-level const declaration or import of ${name}`);
@@ -364,10 +498,11 @@ function resolveConst(rel, name, depth) {
  * The names in a `new Set([...])` declaration: literals in any quote form,
  * constants with a literal value, spread sets read the same way.
  * @param {string} rel @param {string} name @param {number} depth
+ * @param {Map<string, Set<string>>} track records every module and local name of the sets read
  * @returns {Array<{primitiveName:string,file:string,line:number}>}
  */
-function namesOfSet(rel, name, depth) {
-  const { rel: at, sf, decl } = resolveConst(rel, name, depth);
+function namesOfSet(rel, name, depth, track) {
+  const { rel: at, sf, decl } = resolveConst(rel, name, depth, track);
   const init = decl.initializer ? unwrap(decl.initializer) : undefined;
   const list = init && ts.isNewExpression(init) && init.arguments?.length === 1 ? unwrap(init.arguments[0]) : undefined;
   if (!list || !ts.isArrayLiteralExpression(list)) fail(`${at}: ${name} is not a \`new Set([...])\` of literals`);
@@ -376,7 +511,7 @@ function namesOfSet(rel, name, depth) {
     if (ts.isStringLiteral(el) || ts.isNoSubstitutionTemplateLiteral(el)) {
       out.push({ primitiveName: el.text, file: at, line: lineOf(sf, el) });
     } else if (ts.isSpreadElement(el) && ts.isIdentifier(el.expression)) {
-      out.push(...namesOfSet(at, el.expression.text, depth + 1));
+      out.push(...namesOfSet(at, el.expression.text, depth + 1, track));
     } else if (ts.isIdentifier(el)) {
       const c = resolveConst(at, el.text, depth + 1);
       const v = c.decl.initializer ? unwrap(c.decl.initializer) : undefined;
@@ -392,7 +527,10 @@ function namesOfSet(rel, name, depth) {
 }
 
 function scanPassthrough() {
-  return namesOfSet(PASSTHROUGH_ROUTE, allowListName(parseRel(PASSTHROUGH_ROUTE)), 0);
+  const track = new Map();
+  const names = namesOfSet(PASSTHROUGH_ROUTE, allowListName(parseRel(PASSTHROUGH_ROUTE)), 0, track);
+  assertSetsConstant(track);
+  return names;
 }
 
 function emit() {
