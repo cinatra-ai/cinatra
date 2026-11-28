@@ -1645,3 +1645,187 @@ describe("core/extension border — pack-slug-in-core", () => {
     }, 60_000);
   });
 });
+
+// cinatra#4873, stage 1: `single-package-declaration-reader`. A module of core value-imports a
+// per-primitive declaration array (an export whose name ends `PrimitiveMetadata`) of a workspace
+// package from outside that package. The package of a specifier is decided from facts: a relative
+// path, a tsconfig path alias, or a workspace package name. Every case compares the whole list of
+// details; a missing function or a throw shows as a line of the list, so on a tree without the rule
+// a case fails by assertion.
+describe("core/extension border — single-package-declaration-reader", () => {
+  const RULE = "single-package-declaration-reader";
+  type Readers = {
+    scanSinglePackageDeclarationReaders?: (input: {
+      file: string;
+      text: string;
+      workspaceDirs: Map<string, string>;
+      aliases: { pattern: string; target: string }[];
+    }) => Finding[];
+  };
+  const DIRS = new Map([
+    ["@example-org/quill-primitives", "packages/quill-primitives"],
+    ["@example-org/tide-runtime", "packages/tide-runtime"],
+  ]);
+  const ALIASES = [
+    { pattern: "@/*", target: "src/*" },
+    { pattern: "@example-org/quill-primitives/declarations", target: "packages/quill-primitives/src/declarations.ts" },
+  ];
+  const readers = (text: string, file = "src/lib/reader.ts"): string[] => {
+    const run = (gate as unknown as Readers).scanSinglePackageDeclarationReaders;
+    if (!run) return ["not a function"];
+    try {
+      return run({ file, text, workspaceDirs: DIRS, aliases: ALIASES })
+        .filter((f) => f.rule === RULE)
+        .map((f) => `${f.line} ${f.detail}`);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    }
+  };
+  const QUILL = "quillPrimitiveMetadata (@example-org/quill-primitives)";
+
+  it("reports a value import of another workspace package's array from src/, also renamed", () => {
+    const text = [
+      'import { quillPrimitiveMetadata } from "@example-org/quill-primitives";',
+      'import { quillPrimitiveMetadata as declared } from "@example-org/quill-primitives/sub";',
+      'import { tidePrimitiveMetadata, runTide } from "@example-org/tide-runtime";',
+    ].join("\n");
+    expect(readers(text)).toEqual([`1 ${QUILL}`, `2 ${QUILL} (occurrence 2)`, "3 tidePrimitiveMetadata (@example-org/tide-runtime)"]);
+  });
+
+  it("reports the same import from a module of another core package", () => {
+    expect(readers('import { quillPrimitiveMetadata } from "@example-org/quill-primitives";\n', "packages/tide-runtime/src/reader.ts")).toEqual([`1 ${QUILL}`]);
+  });
+
+  it("does not report a type-only import, neither `import type` nor an inline `type` specifier", () => {
+    const text = [
+      'import type { quillPrimitiveMetadata } from "@example-org/quill-primitives";',
+      'import { type QuillPrimitiveMetadata, type quillPrimitiveMetadata as q } from "@example-org/quill-primitives";',
+      'import { type QuillPrimitiveMetadata as Q, quillPrimitiveMetadata } from "@example-org/quill-primitives";',
+    ].join("\n");
+    expect(readers(text)).toEqual([`3 ${QUILL}`]);
+  });
+
+  it("allows an import inside the declaring package: relative or by the package's own name", () => {
+    const file = "packages/quill-primitives/src/registry/register.ts";
+    const text = [
+      'import { quillPrimitiveMetadata } from "../declarations";',
+      'import { quillPrimitiveMetadata as again } from "./local";',
+      'import { quillPrimitiveMetadata as self } from "@example-org/quill-primitives";',
+      'import { quillPrimitiveMetadata as aliased } from "@example-org/quill-primitives/declarations";',
+    ].join("\n");
+    expect(readers(text, file)).toEqual([]);
+  });
+
+  it("a relative path that leaves the package names the package it reaches", () => {
+    const text = 'import { quillPrimitiveMetadata } from "../../../quill-primitives/src/declarations";\n';
+    expect(readers(text, "packages/tide-runtime/src/x/reader.ts")).toEqual([`1 ${QUILL}`]);
+  });
+
+  it("resolves a path alias: inside src/ it is allowed, from a package it names src/, and an alias into a package names that package", () => {
+    const text = 'import { appPrimitiveMetadata } from "@/lib/declarations";\n';
+    expect(readers(text, "src/lib/reader.ts")).toEqual([]);
+    expect(readers(text, "packages/tide-runtime/src/reader.ts")).toEqual(["1 appPrimitiveMetadata (src/)"]);
+    expect(readers('import { quillPrimitiveMetadata } from "@example-org/quill-primitives/declarations";\n')).toEqual([`1 ${QUILL}`]);
+  });
+
+  it("a bare specifier that is no workspace package is another package", () => {
+    expect(readers('import { remotePrimitiveMetadata } from "@other-scope/remote/deep";\n')).toEqual([
+      "1 remotePrimitiveMetadata (@other-scope/remote)",
+    ]);
+  });
+
+  it("reads only an imported name that ends with PrimitiveMetadata, whatever the local name", () => {
+    const text = [
+      'import { quillPrimitiveMetadataList, quillMetadata } from "@example-org/quill-primitives";',
+      'import { quillPrimitiveMetadata as list } from "@example-org/quill-primitives";',
+      'import { list as quillPrimitiveMetadata } from "@example-org/quill-primitives";',
+    ].join("\n");
+    expect(readers(text)).toEqual([`2 ${QUILL}`]);
+  });
+
+  it("stage 1 does not read a re-export, a namespace or default import, a dynamic import or a require", () => {
+    const text = [
+      'export { quillPrimitiveMetadata } from "@example-org/quill-primitives";',
+      'import * as quill from "@example-org/quill-primitives";',
+      'import quillPrimitiveMetadata from "@example-org/quill-primitives";',
+      'const m = await import("@example-org/quill-primitives");',
+      'const r = require("@example-org/quill-primitives").quillPrimitiveMetadata;',
+      "export const all = [quill.quillPrimitiveMetadata, m, r];",
+    ].join("\n");
+    expect(readers(text, "src/lib/reader.mts")).toEqual([]);
+  });
+
+  it("does not read a declaration file, and reads a TSX and a JS module", () => {
+    const text = 'import { quillPrimitiveMetadata } from "@example-org/quill-primitives";\n';
+    expect(["src/lib/x.d.ts", "src/lib/x.d.mts", "src/app/x.tsx", "src/lib/x.mjs"].map((f) => readers(text, f).join("|"))).toEqual(["", "", `1 ${QUILL}`, `1 ${QUILL}`]);
+  });
+
+  it("a file the parser cannot read fails closed with its name", () => {
+    expect(readers('import { quillPrimitiveMetadata } from "@example-org/quill-primitives";\nconst = ;\n', "src/lib/broken.ts")).toEqual([
+      expect.stringMatching(/^threw: \[core-extension-border\] .*src\/lib\/broken\.ts/),
+    ]);
+  });
+
+  describe("the ledger of this rule", () => {
+    const KEY = `src/lib/reader.ts::${QUILL}`;
+    const e = (key: string) => ({ rule: RULE, key, reason: "a standing declaration reader recorded in a fixture ledger" });
+    const growth = (base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({
+        base: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: base } },
+        head: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: head } },
+      });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+
+    it("the base guard refuses a new entry of the rule and lets a shrink pass", () => {
+      expect(gate.KNOWN_RULES.has(RULE)).toBe(true);
+      const grew = growth([e(KEY)], [e(KEY), e(`${KEY} (occurrence 2)`)]);
+      expect(grew.ok).toBe(false);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY} (occurrence 2)`]);
+      expect(growth([e(KEY), e(`${KEY} (occurrence 2)`)], [e(KEY)]).ok).toBe(true);
+    });
+
+    it("a fixture tree: the reader in src/ is a violation, the registering module is not, and an entry whose import is gone is stale", () => {
+      const root = mkdtempSync(path.join(tmpdir(), "declaration-reader-"));
+      const put = (f: string, text: string) => {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), text);
+      };
+      try {
+        spawnSync("git", ["init", "-q"], { cwd: root });
+        const lock = JSON.stringify({ packages: [{ packageName: "@example-org/sample-agent" }] });
+        put("cinatra-required-extensions.lock.json", lock);
+        put("cinatra-dev-extensions.lock.json", lock);
+        put(
+          "packages/agents/src/synthetic-kind-table.ts",
+          'const RENDERER_KIND_TABLE: Readonly<Record<string, { renderer: string }>> = {\n  "list-picker": { renderer: "x" },\n};\n',
+        );
+        put("packages/quill-primitives/package.json", JSON.stringify({ name: "@example-org/quill-primitives" }));
+        put("packages/quill-primitives/src/declarations.ts", "export const quillPrimitiveMetadata = [] as const;\n");
+        put("packages/quill-primitives/src/register.ts", 'import { quillPrimitiveMetadata } from "./declarations";\nexport const n = quillPrimitiveMetadata.length;\n');
+        put("src/lib/reader.ts", 'import { quillPrimitiveMetadata } from "@example-org/quill-primitives";\nexport const n = quillPrimitiveMetadata.length;\n');
+        const baselinePath = path.join(root, "ledger.json");
+        const STALE = `src/lib/gone.ts::${QUILL}`;
+        writeFileSync(baselinePath, JSON.stringify({ rules: [...gate.KNOWN_RULES], entries: [e(STALE)] }));
+        const r = gate.scanRepository({ repoRoot: root, baselinePath, ports: false });
+        expect(r.violations.filter((f) => f.rule === RULE).map((f) => `${f.file}:${f.line} ${f.detail}`)).toEqual([`src/lib/reader.ts:1 ${QUILL}`]);
+        expect(r.stale).toEqual([`${RULE}::${STALE}`]);
+        expect(gate.staleVerdict(r.stale).ok).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("the real tree: every finding of the rule is recorded, and nothing else is", () => {
+      const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+      const found = r.findings.filter((f) => f.rule === RULE).map((f) => `${f.file}::${f.detail}`).sort();
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(found);
+      expect(doc.rules).toContain(RULE);
+    }, 60_000);
+  });
+});
