@@ -564,7 +564,7 @@ const roleRecorded = () => ({
   },
 });
 
-test("the role rule: a UI package is a key of dependencies, peerDependencies or optionalDependencies, or an npm: alias target there; devDependencies and look-alikes are not; a field that is not an object is refused", () => {
+test("the role rule: a UI package is a key of dependencies, peerDependencies, optionalDependencies or devDependencies, an npm: or workspace: alias target there, or a bundled dependency name; look-alikes, overrides and resolutions are not; a field that is not an object is refused", () => {
   assert.equal(typeof gate.uiDependencyItems, "function", "the gate has no uiDependencyItems");
   assert.deepEqual([...gate.UI_PACKAGES], ["react", "react-dom", "@cinatra-ai/sdk-ui", "@cinatra-ai/design-primitives"]);
   assert.ok(readFileSync(BUNDLE_SOURCE, "utf8").includes('export const HOST_DESIGN_PRIMITIVES_MODULE = "@cinatra-ai/design-primitives";'), "the host-served primitives module changed its name: update UI_PACKAGES");
@@ -575,17 +575,28 @@ test("the role rule: a UI package is a key of dependencies, peerDependencies or 
       dependencies: { "react-dom": "^19.0.0", "ui-kit": "npm:@cinatra-ai/design-primitives@1.2.3", "@types/react": "^19.0.0", "react-markdown": "^9.0.0" },
       peerDependencies: { react: "*", "@cinatra-ai/sdk-ui": "^1.0.0", "my-react": "npm:react" },
       optionalDependencies: { "@cinatra-ai/sdk-extensions": "^1.0.0", "other-ui": "npm:@cinatra-ai/sdk-ui-extra@1" },
-      devDependencies: { react: "^19.0.0", "react-dom": "^19.0.0" },
+      devDependencies: { react: "^19.0.0", "dev-ui": "workspace:@cinatra-ai/sdk-ui@*", "local-ui": "file:../ui", "@cinatra-ai/sdk-extensions": "workspace:*" },
+      bundleDependencies: ["react-dom", "lodash"],
+      bundledDependencies: ["@cinatra-ai/design-primitives"],
+      overrides: { react: "19.0.0" },
+      resolutions: { "react-dom": "19.0.0" },
     }),
     [
+      "bundleDependencies: react-dom",
+      "bundledDependencies: @cinatra-ai/design-primitives",
       "dependencies: react-dom",
       "dependencies: ui-kit -> @cinatra-ai/design-primitives",
+      "devDependencies: dev-ui -> @cinatra-ai/sdk-ui",
+      "devDependencies: react",
       "peerDependencies: @cinatra-ai/sdk-ui",
       "peerDependencies: my-react -> react",
       "peerDependencies: react",
     ],
   );
-  assert.deepEqual(gate.uiDependencyItems({ dependencies: null, devDependencies: { react: "1" } }), []);
+  assert.deepEqual(gate.uiDependencyItems({ dependencies: null, devDependencies: { "@types/react": "1" }, bundleDependencies: true }), []);
+  assert.throws(() => gate.uiDependencyItems({ devDependencies: ["react"] }), /devDependencies is not an object/);
+  assert.throws(() => gate.uiDependencyItems({ bundleDependencies: "react" }), /bundleDependencies is not a list of names/);
+  assert.throws(() => gate.uiDependencyItems({ bundledDependencies: [7] }), /bundledDependencies is not a list of names/);
   assert.throws(() => gate.uiDependencyItems({ peerDependencies: ["react"] }), /peerDependencies is not an object/);
   assert.throws(() => gate.uiDependencyItems({ dependencies: "react" }), /dependencies is not an object/);
   assert.equal(gate.isRolePack("skill", []), true);
@@ -596,15 +607,15 @@ test("the role rule: a UI package is a key of dependencies, peerDependencies or 
   assert.equal(gate.isRolePack("artifact", []), false);
 });
 
-test("live: a UI dependency of a skill or workflow pack fails until it is recorded; an artifact's and a devDependency are not counted; an unreadable dependency field is a scanner error", () => {
+test("live: a UI dependency of a skill or workflow pack fails until it is recorded, a devDependency too; an artifact's is not counted; an unreadable dependency field is a scanner error", () => {
   const p = rolePacks();
   p["read-agent"].packageJson.devDependencies = { react: "^19.0.0" };
   withRoot({ packs: p, list: recorded() }, (root) => {
     const res = runGate(root);
     assert.equal(res.status, 1, res.out);
-    assert.match(res.out, /\[uiDependencies\] items the list does not hold \(an agent, skill or workflow extension depends on no UI package\):\n  \+ @example-org\/pick-skill: peerDependencies: react\n  \+ @example-org\/post-workflow: dependencies: ui-kit -> @cinatra-ai\/sdk-ui\n/);
-    assert.doesNotMatch(res.out, /note-artifact|read-agent: (?:dev|peer)Dependencies/);
-    assert.match(runGate(root, ["--report"]).out, /2 uiDependencies in 2 key\(s\)/);
+    assert.match(res.out, /\[uiDependencies\] items the list does not hold \(an agent, skill or workflow extension depends on no UI package\):\n  \+ @example-org\/pick-skill: peerDependencies: react\n  \+ @example-org\/post-workflow: dependencies: ui-kit -> @cinatra-ai\/sdk-ui\n  \+ @example-org\/read-agent: devDependencies: react\n/);
+    assert.doesNotMatch(res.out, /note-artifact/);
+    assert.match(runGate(root, ["--report"]).out, /3 uiDependencies in 3 key\(s\)/);
   });
   withRoot({ packs: rolePacks(), list: roleRecorded() }, (root) => {
     const ok = runGate(root);

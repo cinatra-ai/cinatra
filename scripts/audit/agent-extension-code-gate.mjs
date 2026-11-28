@@ -68,24 +68,32 @@ export function isAgentPack(kind, entries) {
  * declaration. Such a pack declares no dependency on a UI package. The pack is
  * judged by its manifest kind (`cinatra.kind`, the value the product reads)
  * `skill` or `workflow` (the legacy kind the product's record still carries),
- * or by the agent rule above. A dependency is a key of the fields the product
- * reads as a package's runtime dependencies (`dependencies`,
- * `peerDependencies`, `optionalDependencies`: `sdkOnlyManifestDeps` and
- * `hostServedManifestDeps` in scripts/extensions/inventory.mjs), or the target
- * of an `npm:` alias value there. `devDependencies` are left out: they are
- * not installed with the package and do not reach the product.
+ * or by the agent rule above. The rule is about the DECLARATION: a bundler can
+ * inline any declared package into what is published (build-server-entry.mjs
+ * inlines react reached from a TypeScript `cinatra.serverEntry`, whichever
+ * field declares it), so a development-only declaration counts too. A
+ * dependency is a key of `dependencies`, `peerDependencies`,
+ * `optionalDependencies` (the fields `sdkOnlyManifestDeps` and
+ * `hostServedManifestDeps` in scripts/extensions/inventory.mjs read) or
+ * `devDependencies`; the target of an `npm:<name>` or `workspace:<name>@`
+ * alias value there; or a name in `bundledDependencies` / `bundleDependencies`.
+ * `overrides` and `resolutions` declare no dependency of the package (they
+ * only pin versions of what something else declares) and are not read; a
+ * `file:`, `link:` or URL value names no package and is a stated limit.
  */
 export const ROLE_KINDS = Object.freeze(["skill", "workflow"]);
 export const UI_PACKAGES = Object.freeze(["react", "react-dom", "@cinatra-ai/sdk-ui", "@cinatra-ai/design-primitives"]);
-export const DEPENDENCY_FIELDS = Object.freeze(["dependencies", "peerDependencies", "optionalDependencies"]);
+export const DEPENDENCY_FIELDS = Object.freeze(["dependencies", "peerDependencies", "optionalDependencies", "devDependencies"]);
+export const BUNDLE_FIELDS = Object.freeze(["bundledDependencies", "bundleDependencies"]);
 export function isRolePack(kind, entries) {
   return ROLE_KINDS.includes(kind) || isAgentPack(kind, entries);
 }
 
 /**
  * The UI dependencies a manifest declares, as sorted `<field>: <name>` items
- * (`<field>: <key> -> <name>` for an `npm:` alias). An absent or `null` field
- * declares nothing; any other value that is not an object is a scanner error.
+ * (`<field>: <key> -> <name>` for an alias). An absent or `null` field
+ * declares nothing; a dependency field that is not an object, or a bundle
+ * field that is neither a boolean nor a list of names, is a scanner error.
  */
 export function uiDependencyItems(packageJson, label = "package.json") {
   const items = [];
@@ -94,10 +102,17 @@ export function uiDependencyItems(packageJson, label = "package.json") {
     if (deps === undefined || deps === null) continue;
     if (!isPlainObject(deps)) throw new ScannerError(`${label}: ${field} is not an object`);
     for (const [key, spec] of Object.entries(deps)) {
-      const alias = typeof spec === "string" ? NPM_ALIAS_RE.exec(spec.trim())?.[1] : undefined;
+      const m = typeof spec === "string" ? ALIAS_RE.exec(spec.trim()) : null;
+      const alias = m ? (m[1] ?? m[2]) : undefined;
       if (UI_PACKAGES.includes(key)) items.push(`${field}: ${key}`);
       else if (alias && UI_PACKAGES.includes(alias)) items.push(`${field}: ${key} -> ${alias}`);
     }
+  }
+  for (const field of BUNDLE_FIELDS) {
+    const names = packageJson?.[field];
+    if (names === undefined || names === null || typeof names === "boolean") continue;
+    if (!Array.isArray(names) || names.some((n) => typeof n !== "string")) throw new ScannerError(`${label}: ${field} is not a list of names`);
+    for (const n of names) if (UI_PACKAGES.includes(n)) items.push(`${field}: ${n}`);
   }
   return items.sort();
 }
@@ -118,7 +133,8 @@ const SHA_RE = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const BLOB_MODES = new Set(["100644", "100755"]);
 const FLOW_RE = /^cinatra\/[^/]+\.json$/;
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]*$/;
-const NPM_ALIAS_RE = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@.*)?$/;
+// `npm:<name>[@<range>]` or `workspace:<name>@<range>` (a plain `workspace:*` or `workspace:^1` names no other package).
+const ALIAS_RE = /^(?:npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@.*)?|workspace:((?:@[^/@\s]+\/)?[a-z0-9][^/@\s]*)@.*)$/;
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 

@@ -373,15 +373,18 @@
   "unreadableSteps": {},
   "uiDependencies": {
     "@cinatra-ai/blog-linkedin-publish-agent": {
-      "count": 2,
+      "count": 3,
       "items": [
+        "devDependencies: react",
         "peerDependencies: @cinatra-ai/sdk-ui",
         "peerDependencies: react"
       ]
     },
     "@cinatra-ai/blog-pipeline-agent": {
-      "count": 1,
+      "count": 3,
       "items": [
+        "devDependencies: react",
+        "devDependencies: react-dom",
         "peerDependencies: react"
       ]
     },

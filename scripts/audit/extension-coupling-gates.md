@@ -833,22 +833,32 @@ connector's code is not judged here).
    `@cinatra-ai/design-primitives` (the constant `UI_PACKAGES`). The class
    applies to a pack the agent rule above judges an agent, and to a pack whose
    manifest kind (`cinatra.kind`, as the product reads it) is `skill` or
-   `workflow` (the legacy kind the product's record still carries). A
-   dependency is a key of the fields the product reads as a package's runtime
-   dependencies, `dependencies`, `peerDependencies` and `optionalDependencies`
-   (`sdkOnlyManifestDeps` and `hostServedManifestDeps` in
-   `scripts/extensions/inventory.mjs`; a test fails when those fields change),
-   or the target of an `npm:` alias value there. The manifest is read at the
-   pinned commit, as the packed `package.json` the product sees.
-   `devDependencies` are not counted: they are not installed with the package
-   and do not reach the product. An absent or `null` field declares nothing;
-   any other value that is not an object is a scanner error. Items:
-   `<field>: <name>`, or `<field>: <key> -> <name>` for an alias. Stated
-   limit: a UI package reached under another name than its own or an `npm:`
-   alias (a git URL, a tarball, a fork with another name) is not counted.
-   On the day it landed (pins of main at c2662f78b): 7 items in 4 agent packs,
-   all `peerDependencies`; no skill pack declares one, and no workflow pack is
-   pinned.
+   `workflow` (the legacy kind the product's record still carries). The rule
+   is about the DECLARATION, not about where a package ends up: a bundler can
+   inline any declared package into what is published
+   (`scripts/extensions/build-server-entry.mjs` inlines react reached from a
+   TypeScript `cinatra.serverEntry`, and the run time imports that packed
+   entry), so a development-only declaration counts too; such a pack has no
+   good reason to declare a UI package even for its tests. Read, in the
+   manifest at the pinned commit (the packed `package.json`): a key of
+   `dependencies`, `peerDependencies`, `optionalDependencies` (the fields
+   `sdkOnlyManifestDeps` and `hostServedManifestDeps` in
+   `scripts/extensions/inventory.mjs` read; a test fails when they change) and
+   `devDependencies`; the target of an `npm:<name>` or `workspace:<name>@`
+   alias value in any of those four; a name in `bundledDependencies` or
+   `bundleDependencies` (`true` bundles the declared dependencies, already
+   read). Not read: `overrides` and `resolutions`, which pin versions of what
+   something else declares and declare no dependency of the package. An
+   absent or `null` field declares nothing; a dependency field that is not an
+   object, or a bundle field that is neither a boolean nor a list of names, is
+   a scanner error. Items: `<field>: <name>`, or `<field>: <key> -> <name>`
+   for an alias. Stated limit: a UI package reached under another name than
+   its own or an alias above (a `file:` or `link:` path, a git URL, a
+   tarball, a fork with another name) is not counted; the manifest does not
+   say which package such a value holds.
+   On the day it landed (pins of main at c2662f78b): 10 items in 4 agent
+   packs, 7 `peerDependencies` and 3 `devDependencies`; no skill pack
+   declares one, and no workflow pack is pinned.
 
 **The recorded list** (`agent-extension-code-gate.baseline.json`) holds per
 class `key -> { count, items }`. The ITEMS are compared, as a multiset:
