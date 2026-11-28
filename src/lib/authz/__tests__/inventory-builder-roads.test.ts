@@ -3,8 +3,9 @@
  * only the MCP registrations. Run on fixture trees through `--root`: the route's
  * allow list is read with the TypeScript parser (any quote form, templates,
  * constants exported or not, spread sets in other files), an entry it cannot
- * resolve fails the builder, and a pack's `register(ctx)` tool is left to the
- * run time.
+ * resolve fails the builder; the allow list is the set guarding the requested
+ * tool name, not any other `.has` guard; a pack's `ctx.mcp.registerTool` tool
+ * is a row on the "pack" road.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -50,35 +51,75 @@ const FILES: Record<string, string> = {
     "  LOCAL_TOOL,",
     "  ...FIXTURE_SCOPED_TOOLS,",
     "]);",
-    "export function handle(tool: string) {",
-    "  if (!ALLOWED_TOOLS.has(tool)) return 403;",
-    "  return 200;",
+    'const SUPPORTED_SHAPES = new Set(["plain"]);',
+    "export function handle(body: { tool?: unknown; result_shape?: string }) {",
+    '  const tool = typeof body.tool === "string" ? body.tool : "";',
+    '  const shape = body.result_shape ?? "plain";',
+    "  if (!SUPPORTED_SHAPES.has(shape)) {",
+    "    return { error: 'unsupported shape', status: 403 };",
+    "  }",
+    "  if (!ALLOWED_TOOLS.has(tool)) {",
+    "    return { error: 'not admitted', status: 403 };",
+    "  }",
+    "  return { status: 200 };",
     "}",
     "",
   ].join("\n"),
   "extensions/example-org/demo-connector/src/register.ts": [
+    "const PONG_NAME = 'demo_connector_pong';",
     "export function register(ctx: { mcp: { registerTool: (t: unknown) => void } }) {",
     "  ctx.mcp.registerTool({",
     '    description: "a pack tool",',
     '    name: "demo_connector_ping",',
     "  });",
+    "  ctx.mcp.registerTool({ handler: async () => ({}), name: PONG_NAME });",
+    "}",
+    "",
+  ].join("\n"),
+  "extensions/example-org/demo-connector/src/mcp/module.ts": [
+    "export function createModule(server: { registerTool: (...a: unknown[]) => void }) {",
+    `  ${SERVER_REGISTER}("demo_connector_ping", {}, async () => ({}));`,
     "}",
     "",
   ].join("\n"),
 };
 
-const BAD_ROUTE = [
-  "function buildName() { return 'fixture_built'; }",
-  "const ALLOWED_TOOLS = new Set([",
-  '  "fixture_ok",',
-  "  buildName(),",
-  "]);",
-  "export function handle(tool: string) {",
-  "  if (!ALLOWED_TOOLS.has(tool)) return 403;",
-  "  return 200;",
+const routeWith = (guard: string) =>
+  [
+    "function buildName() { return 'fixture_built'; }",
+    "const ALLOWED_TOOLS = new Set([",
+    '  "fixture_ok",',
+    "  buildName(),",
+    "]);",
+    "const OTHER = new Set(['x']);",
+    "export function handle(body: { tool?: unknown }) {",
+    '  const tool = typeof body.tool === "string" ? body.tool : "";',
+    guard,
+    "  return { status: 200 };",
+    "}",
+    "",
+  ].join("\n");
+
+const BAD_ROUTE = routeWith("  if (!ALLOWED_TOOLS.has(tool)) { return { status: 403 }; }");
+const UNGUARDED_ROUTE = routeWith("  if (!OTHER.has(tool.slice(1))) { return { status: 403 }; }");
+const BAD_PACK = [
+  "export function register(ctx: { mcp: { registerTool: (t: unknown) => void } }) {",
+  "  ctx.mcp.registerTool({ name: makeName(), handler: async () => ({}) });",
   "}",
+  "function makeName() { return 'x'; }",
   "",
 ].join("\n");
+const GOOD_ROUTE_ONLY = routeWith("  if (!ALLOWED_TOOLS.has(tool)) { return { status: 403 }; }").replace("  buildName(),\n", "");
+
+/** Runs the builder on `dir` and returns its stderr when it fails, "" when it succeeds. */
+function builderFailure(dir: string): string {
+  try {
+    execFileSync(process.execPath, [BUILDER, "--root", dir], { stdio: "pipe", cwd: dir });
+    return "";
+  } catch (err) {
+    return String((err as { stderr?: Buffer }).stderr ?? "");
+  }
+}
 
 type Row = { primitiveName: string; file: string; line: number; road?: string };
 
@@ -94,25 +135,31 @@ function writeTree(files: Record<string, string>): string {
 
 let root = "";
 let badRoot = "";
+let unguardedRoot = "";
+let badPackRoot = "";
 let rows: Row[] = [];
+let buildFailure = "";
 let outPath = "";
 
 beforeAll(() => {
   root = writeTree(FILES);
   badRoot = writeTree({ [ROUTE]: BAD_ROUTE });
+  unguardedRoot = writeTree({ [ROUTE]: UNGUARDED_ROUTE });
+  badPackRoot = writeTree({ [ROUTE]: GOOD_ROUTE_ONLY, "extensions/example-org/bad-pack/src/register.ts": BAD_PACK });
   outPath = join(root, "src/lib/authz/__generated__/inventory.json");
-  execFileSync(process.execPath, [BUILDER, "--root", root], { stdio: "pipe", cwd: root });
+  buildFailure = builderFailure(root);
   rows = existsSync(outPath) ? (JSON.parse(readFileSync(outPath, "utf8")).primitives as Row[]) : [];
 });
 
 afterAll(() => {
-  for (const dir of [root, badRoot]) if (dir) rmSync(dir, { recursive: true, force: true });
+  for (const dir of [root, badRoot, unguardedRoot, badPackRoot]) if (dir) rmSync(dir, { recursive: true, force: true });
 });
 
 const rowsOf = (n: string) => rows.filter((r) => r.primitiveName === n).map(({ file, road }) => ({ file, road }));
 
 describe("authz inventory builder roads (cinatra#4895)", () => {
   it("writes the inventory of the --root tree", () => {
+    expect(buildFailure).toBe("");
     expect(existsSync(outPath)).toBe(true);
   });
 
@@ -132,19 +179,35 @@ describe("authz inventory builder roads (cinatra#4895)", () => {
     expect(rowsOf("fixture_mcp_tool")).toEqual([{ file: "src/lib/fixture-mcp.ts", road: "mcp" }]);
   });
 
-  it("leaves a pack's register(ctx) tool to the run time", () => {
-    expect(rowsOf("demo_connector_ping")).toEqual([]);
+  it("lists a pack's ctx.mcp.registerTool tools on the pack road, beside its mcp row in another file", () => {
+    expect(rowsOf("demo_connector_ping")).toEqual([
+      { file: "extensions/example-org/demo-connector/src/mcp/module.ts", road: "mcp" },
+      { file: "extensions/example-org/demo-connector/src/register.ts", road: "pack" },
+    ]);
+    expect(rowsOf("demo_connector_pong")).toEqual([
+      { file: "extensions/example-org/demo-connector/src/register.ts", road: "pack" },
+    ]);
+  });
+
+  it("finds the allow list by the tool name it guards, beside an unrelated .has guard", () => {
+    expect(rowsOf("fixture_single_quoted").length).toBe(1);
+    expect(rowsOf("plain")).toEqual([]);
   });
 
   it("fails the builder on an allow-list entry it cannot resolve, naming it", () => {
-    let failure = "";
-    try {
-      execFileSync(process.execPath, [BUILDER, "--root", badRoot], { stdio: "pipe", cwd: badRoot });
-    } catch (err) {
-      failure = String((err as { stderr?: Buffer }).stderr ?? "");
-    }
+    const failure = builderFailure(badRoot);
     expect(failure).toContain("buildName()");
     expect(failure).toContain(ROUTE);
+  });
+
+  it("fails closed on a route with no admission guard for the requested tool", () => {
+    expect(builderFailure(unguardedRoot)).toContain("expected one allow-list guard");
+  });
+
+  it("fails the builder on a pack registration whose name it cannot resolve, naming it", () => {
+    const failure = builderFailure(badPackRoot);
+    expect(failure).toContain("makeName()");
+    expect(failure).toContain("extensions/example-org/bad-pack/src/register.ts");
   });
 
   it("--check passes on the tree it just wrote", () => {

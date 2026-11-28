@@ -37,12 +37,14 @@ type InventoryFile = {
 };
 
 // cinatra#4895: a passthrough row is classified in its own map, which the MCP
-// boundary never reads; every other row in the MCP map.
+// boundary never reads; an mcp row in the MCP map; a pack row needs no static
+// classification (the MCP boundary classifies a pack's tool at run time).
 type RowClassification = { resourceType: string; action: string; status: string };
 const PASSTHROUGH_CLASSIFICATIONS = ((augmentModule as Record<string, unknown>).PASSTHROUGH_TOOL_CLASSIFICATIONS ??
   {}) as Record<string, RowClassification>;
 
 function classificationOfRow(p: { primitiveName: string; road?: string }): unknown {
+  if (p.road === "pack") return "classified at run time";
   return p.road === "passthrough"
     ? PASSTHROUGH_CLASSIFICATIONS[p.primitiveName]
     : PRIMITIVE_CLASSIFICATIONS[p.primitiveName];
@@ -92,7 +94,7 @@ describe("authz invariant coverage", () => {
   it("every inventory row records its road, and a passthrough classification names a passthrough row", () => {
     const inv = loadInventory();
     const roadless = inv.primitives
-      .filter((p) => p.road !== "mcp" && p.road !== "passthrough")
+      .filter((p) => p.road !== "mcp" && p.road !== "passthrough" && p.road !== "pack")
       .map((p) => `${p.primitiveName} (${p.file})`);
     expect(roadless).toEqual([]);
     const passthroughRows = new Set(
@@ -106,19 +108,22 @@ describe("authz invariant coverage", () => {
     expect(notAtRoute).toEqual([]);
   });
 
-  it("no inventory row comes from a pack's register(ctx) registration (classified at run time)", () => {
-    // A `register(ctx)` tool takes the object form `ctx.mcp.registerTool({ … })`;
-    // the MCP boundary classifies it at run time (mcp-boundary.ts), so it is no
-    // inventory row and needs no static classification.
+  it("a pack row lies in a pack, and every other row is not a pack registration", () => {
+    // A pack row is a `ctx.mcp.registerTool({ … })` call in a pack's files; it
+    // carries its owner and no static classification. An mcp or passthrough row
+    // never sits on such a call.
     const inv = loadInventory();
-    const fromRegisterCtx = inv.primitives
+    const packOutside = inv.primitives
+      .filter((p) => p.road === "pack" && !/^extensions\/[^/]+\/[^/]+\//.test(p.file))
+      .map((p) => `${p.primitiveName} (${p.file})`);
+    expect(packOutside).toEqual([]);
+    const misfiled = inv.primitives
       .filter((p) => {
-        const lines = readFileSync(resolve(REPO_ROOT, p.file), "utf8").split("\n");
-        const near = lines.slice(Math.max(0, p.line - 6), p.line).join("\n");
-        return /\.mcp\s*\.\s*registerTool\s*\(\s*\{/.test(near);
+        const line = readFileSync(resolve(REPO_ROOT, p.file), "utf8").split("\n")[p.line - 1] ?? "";
+        return (p.road === "pack") !== /\.mcp\s*\.\s*registerTool\s*\(/.test(line);
       })
-      .map((p) => `${p.primitiveName} (${p.file}:${p.line})`);
-    expect(fromRegisterCtx).toEqual([]);
+      .map((p) => `${p.primitiveName} (${p.file}:${p.line}, road ${p.road})`);
+    expect(misfiled).toEqual([]);
   });
 
   it("every CarveOut targets a real primitive (no stale entries)", () => {

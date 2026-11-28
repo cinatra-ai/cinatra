@@ -10,16 +10,26 @@
  * Each row records its road (cinatra#4895):
  *   - "mcp": a tool on the MCP server — a literal `server.registerTool(name`
  *     or a `*TOOL_META*` block key.
+ *   - "pack": a tool a pack registers through its host port,
+ *     `ctx.mcp.registerTool({ name, … })` (HostMcpPort in
+ *     packages/sdk-extensions/src/host-context.ts), read with the TypeScript
+ *     parser from the pack's files under `extensions/`. The name is the object's
+ *     `name` property: a literal in any quote form or a const with a literal
+ *     value; anything else FAILS the builder. A pack row needs no static
+ *     classification: the MCP boundary classifies a pack's tool at run time.
+ *     It is a row so the tool has an owner.
  *   - "passthrough": a name the deterministic passthrough route admits that no
- *     MCP road registers. The route's allow list (the set it checks with
- *     `if (!LIST.has(tool))` in src/app/api/agents/passthrough/route.ts) is read
+ *     MCP road registers. The route's allow list is the set the route checks as
+ *     `if (!LIST.has(tool))`, where `tool` is the const read from the request's
+ *     `tool` field and the guarded block answers status 403. It is read
  *     with the TypeScript parser: string literals in any quote form, constants
  *     with a literal value, and spread sets followed to their declaration in the
  *     same file or an imported module. An entry the parser cannot resolve to a
  *     literal FAILS the builder. A name the route admits that IS an MCP tool is
  *     dispatched to that tool's handler and keeps its mcp row.
- * A pack's `register(ctx)` tools are classified at run time by the MCP boundary
- * and are not inventory rows unless their metadata block lists them.
+ * A name with rows on two roads keeps both only when their files differ (a pack
+ * that lists a tool in its metadata block and also registers it); the owner is
+ * the same pack either way.
  * Stated limit: indirection deeper than MAX_SET_DEPTH hops (re-export chains,
  * sets built by code) is refused, not followed.
  * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
@@ -81,6 +91,7 @@ function* walk(dir) {
 /** @returns {Array<{primitiveName:string,file:string,line:number}>} */
 function scan() {
   const records = [];
+  const packRecords = [];
   for (const root of ROOTS) {
     const abs = join(ROOT, root);
     let exists = true;
@@ -97,6 +108,7 @@ function scan() {
       } catch {
         continue;
       }
+      if (root === "extensions" && body.includes("registerTool")) packRecords.push(...scanPackRegistrations(relative(ROOT, file)));
       REGISTER_RE.lastIndex = 0;
       let m;
       while ((m = REGISTER_RE.exec(body)) !== null) {
@@ -145,6 +157,10 @@ function scan() {
   }
   const mcpNames = new Set(records.map((r) => r.primitiveName));
   for (const r of dedupe.values()) r.road = "mcp";
+  for (const r of packRecords) {
+    const key = `${r.primitiveName}::${r.file}`;
+    if (!dedupe.has(key)) dedupe.set(key, { ...r, road: "pack" });
+  }
   for (const r of scanPassthrough()) {
     if (mcpNames.has(r.primitiveName)) continue;
     const key = `${r.primitiveName}::${r.file}`;
@@ -189,31 +205,70 @@ function unwrap(e) {
   return e;
 }
 
-/** The allow list: the one set the route checks as `if (!LIST.has(…))`. @param {ts.SourceFile} sf */
-function allowListName(sf) {
-  const names = new Set();
+/** @param {ts.Node} node @param {(n: ts.Node) => boolean} test */
+function contains(node, test) {
+  let found = false;
   const visit = (n) => {
+    if (found) return;
+    if (test(n)) found = true;
+    else ts.forEachChild(n, visit);
+  };
+  visit(node);
+  return found;
+}
+
+/**
+ * The allow list: the receiver of the negated `.has(tool)` whose block answers
+ * status 403, where `tool` is the const the route reads from the request's
+ * `tool` field. Other `.has` guards are not the allow list.
+ * @param {ts.SourceFile} sf
+ */
+function allowListName(sf) {
+  const toolVars = new Set();
+  const guards = [];
+  const visit = (n) => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.initializer &&
+      contains(n.initializer, (x) => ts.isPropertyAccessExpression(x) && x.name.text === "tool")
+    ) {
+      toolVars.add(n.name.text);
+    }
     if (ts.isIfStatement(n)) {
       const c = unwrap(n.expression);
-      if (ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken) {
-        const call = unwrap(c.operand);
-        if (
-          ts.isCallExpression(call) &&
-          ts.isPropertyAccessExpression(call.expression) &&
-          call.expression.name.text === "has" &&
-          ts.isIdentifier(call.expression.expression)
-        ) {
-          names.add(call.expression.expression.text);
-        }
+      const call = ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken ? unwrap(c.operand) : null;
+      if (
+        call &&
+        ts.isCallExpression(call) &&
+        ts.isPropertyAccessExpression(call.expression) &&
+        call.expression.name.text === "has" &&
+        ts.isIdentifier(call.expression.expression) &&
+        call.arguments.length === 1 &&
+        ts.isIdentifier(call.arguments[0]) &&
+        contains(
+          n.thenStatement,
+          (x) =>
+            ts.isPropertyAssignment(x) &&
+            x.name.getText(sf) === "status" &&
+            ts.isNumericLiteral(x.initializer) &&
+            x.initializer.text === "403",
+        )
+      ) {
+        guards.push({ list: call.expression.expression.text, arg: call.arguments[0].text });
       }
     }
     ts.forEachChild(n, visit);
   };
   visit(sf);
-  if (names.size !== 1) {
-    fail(`${sf.fileName}: expected one allow-list check \`if (!LIST.has(tool))\`, found ${names.size} (${[...names].join(", ")})`);
+  const admission = guards.filter((g) => toolVars.has(g.arg));
+  if (admission.length !== 1) {
+    fail(
+      `${sf.fileName}: expected one allow-list guard \`if (!LIST.has(tool))\` answering 403 for the requested tool ` +
+        `(tool variables: ${[...toolVars].join(", ") || "none"}), found ${admission.length}`,
+    );
   }
-  return [...names][0];
+  return admission[0].list;
 }
 
 /** @param {string} fromRel @param {string} spec */
@@ -288,6 +343,55 @@ function namesOfSet(rel, name, depth) {
       fail(`${at}: allow-list entry \`${el.getText(sf)}\` in ${name} is not a literal, a literal const or a spread set`);
     }
   }
+  return out;
+}
+
+/** @param {string} rel @param {ts.SourceFile} sf @param {ts.Expression} expr @param {string} what */
+function literalOf(rel, sf, expr, what) {
+  const e = unwrap(expr);
+  if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+  if (ts.isIdentifier(e)) {
+    const c = resolveConst(rel, e.text, 1);
+    const v = c.decl.initializer ? unwrap(c.decl.initializer) : undefined;
+    if (v && (ts.isStringLiteral(v) || ts.isNoSubstitutionTemplateLiteral(v))) return v.text;
+  }
+  return fail(`${rel}:${lineOf(sf, expr)}: ${what} \`${expr.getText(sf)}\` is not a literal or a const with a literal value`);
+}
+
+/**
+ * A pack's `<ctx>.mcp.registerTool({ name, … })` calls in one file.
+ * @param {string} rel
+ * @returns {Array<{primitiveName:string,file:string,line:number}>}
+ */
+function scanPackRegistrations(rel) {
+  const sf = parseRel(rel);
+  const out = [];
+  const visit = (n) => {
+    if (
+      ts.isCallExpression(n) &&
+      ts.isPropertyAccessExpression(n.expression) &&
+      n.expression.name.text === "registerTool" &&
+      ts.isPropertyAccessExpression(n.expression.expression) &&
+      n.expression.expression.name.text === "mcp"
+    ) {
+      let arg = n.arguments[0] ? unwrap(n.arguments[0]) : undefined;
+      if (arg && ts.isIdentifier(arg)) {
+        const c = resolveConst(rel, arg.text, 1);
+        arg = c.decl.initializer ? unwrap(c.decl.initializer) : undefined;
+      }
+      const prop =
+        arg && ts.isObjectLiteralExpression(arg)
+          ? arg.properties.find((p) => p.name && p.name.getText(sf).replace(/^["'`]|["'`]$/g, "") === "name")
+          : undefined;
+      let primitiveName;
+      if (prop && ts.isPropertyAssignment(prop)) primitiveName = literalOf(rel, sf, prop.initializer, "tool name");
+      else if (prop && ts.isShorthandPropertyAssignment(prop)) primitiveName = literalOf(rel, sf, prop.name, "tool name");
+      else fail(`${rel}:${lineOf(sf, n)}: pack tool registration \`${n.getText(sf).slice(0, 120)}\` has no readable \`name\``);
+      out.push({ primitiveName, file: rel, line: lineOf(sf, n) });
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
   return out;
 }
 
