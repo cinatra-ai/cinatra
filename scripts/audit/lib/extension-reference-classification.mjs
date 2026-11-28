@@ -79,9 +79,8 @@ export const PERMANENT_EXEMPT_FILES = new Set(GENERATED_MANIFEST_FILES);
 //   - the gate reports allowlisted occurrences SEPARATELY from counted ones,
 //     so they are always distinguishable from baseline coupling.
 //
-// Shape: Map<contractId, justification>. Holds exactly ONE owner-ruled entry
-// (the dashboard object-type contract id; see below) — the mechanism shipped
-// ahead of its first entry and this is that first entry. NOTE
+// Shape: Map<contractId, justification>. Holds NO entry (see below); the
+// mechanism stays for the next owner ruling that names one. NOTE
 // (the zero-tolerance flip (#36)): the residual frozen-floor coupling (the nango facade deferral per
 // the #35 ruling, the host's eager connector import surface) is NOT
 // allowlisted here — none of it is a data-contract ID. It stays COUNTED in
@@ -100,30 +99,18 @@ export const PERMANENT_EXEMPT_FILES = new Set(GENERATED_MANIFEST_FILES);
 // an entry is minted ONLY when an owner ruling names a frozen contract id that
 // embeds a real extension name.
 //
-// ENTRY 1 — "@cinatra-ai/dashboard-artifact:dashboard" (the DASHBOARD_OBJECT_TYPE
-// constant in src/lib/dashboards/dashboard-artifact-twin-writer.ts). Owner
-// ruling 2026-07-22 (groganz) — option A (allowlist the id) — recorded on
-// PR https://github.com/cinatra-ai/cinatra/pull/1971 (#1894 B1b twin writer).
-// Owner rationale, verbatim: "dashboards are the only artifact that depend on
-// them being rendered by core. We might later take the rendering out of core,
-// but not now." The id is the FROZEN persisted object-type key for the
-// host-owned dashboard twin — a stable serialization/compatibility contract,
-// not runtime selection of the extension (the shape check confirms it embeds
-// the package name only behind the non-specifier `:` boundary; the stale check
-// keeps it honest — it is removed the moment the constant stops occurring).
+// EMPTY since cinatra#4849. Its one entry was the dashboard twin's persisted
+// object-type key, allowlisted by owner ruling 2026-07-22 (groganz, PR #1971,
+// option A) because core spelled it as a constant. Owner rationale, verbatim:
+// "dashboards are the only artifact that depend on them being rendered by
+// core. We might later take the rendering out of core, but not now." Core
+// still renders dashboards and every stored row keeps that same key; core now
+// reads the key from the dashboard pack's declaration (the
+// `artifact-dashboard-twin` role, through the generated bindings) instead of
+// spelling it, so the entry went stale and was removed, as the stale check
+// requires.
 // ---------------------------------------------------------------------------
-export const DATA_CONTRACT_ID_ALLOWLIST = new Map([
-  [
-    "@cinatra-ai/dashboard-artifact:dashboard",
-    // Owner ruling (2026-07-22, groganz), PR #1971: frozen
-    // persisted object-type contract id (DASHBOARD_OBJECT_TYPE) for the
-    // host-owned dashboard twin — a stable serialization key, NOT runtime
-    // selection of the extension. Rationale (verbatim): "dashboards are the
-    // only artifact that depend on them being rendered by core. We might later
-    // take the rendering out of core, but not now."
-    "Owner ruling (2026-07-22, groganz), PR #1971: frozen persisted object-type contract id (DASHBOARD_OBJECT_TYPE) for the host-owned dashboard twin — a stable serialization key, not runtime selection of the extension. Rationale (verbatim): dashboards are the only artifact that depend on them being rendered by core. We might later take the rendering out of core, but not now.",
-  ],
-]);
+export const DATA_CONTRACT_ID_ALLOWLIST = new Map();
 
 // ---------------------------------------------------------------------------
 // Mechanical reference sites (repo-relative path -> rationale).

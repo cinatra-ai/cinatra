@@ -689,9 +689,13 @@ describe("dual-loader PARITY: runtime record + activation == static (the loader-
     const pkgJsonText = await readFile(path.join(runtimeRec.storeDir, "package.json"), "utf8");
     const reNormalized = recordFromManifest(runtimeRec.storeDir, pkgJsonText, runtimeRec.declaredDigest);
     // The V2 record is the sdk record + the path-derived `kind` (cinatra#791).
+    // cinatra#4894 adds the host-side `consumesDeclaration` (the manifest's raw
+    // `cinatra.consumes`, handed to the host context), not an sdk record field.
     const sdkShapedRec: Record<string, unknown> = { ...runtimeRec };
     delete sdkShapedRec.kind;
+    delete sdkShapedRec.consumesDeclaration;
     expect(reNormalized).toEqual(sdkShapedRec);
+    expect(runtimeRec.consumesDeclaration).toEqual({});
     expect(runtimeRec.serverEntry).toBe("./register.mjs");
     expect(runtimeRec.requestedHostPorts).toEqual([]);
     expect(runtimeRec.sdkAbiRange).toBe("^2");

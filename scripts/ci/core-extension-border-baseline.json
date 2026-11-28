@@ -184,11 +184,6 @@
     },
     {
       "rule": "pack-type-id-in-core",
-      "key": "src/lib/dashboards/dashboard-artifact-surface.ts::@cinatra-ai/dashboard-artifact:dashboard",
-      "reason": "The dashboard artifact type is self-registered by its pack and restated here so the library and detail paths can resolve a declared type without importing the server-only twin writer; a unit test pins the two constants equal."
-    },
-    {
-      "rule": "pack-type-id-in-core",
       "key": "src/lib/email-correlation-queries.ts::@cinatra-ai/email:body",
       "reason": "standing debt: correlation queries name pack-declared type ids to join stored objects in the host."
     },

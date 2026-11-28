@@ -167,3 +167,25 @@ describe("§VIII — Phase-2 single-gate + liveness selection (cinatra#1898)", (
     expect(picked.size).toBe(0);
   });
 });
+
+describe("§VIII — the dashboard type comes from the role claimant (cinatra#4849)", () => {
+  it("answers false for every row and does not throw at import when no pack claims the role", async () => {
+    const stored = DASHBOARD_ARTIFACT_OBJECT_TYPE;
+    expect(typeof stored).toBe("string");
+    vi.resetModules();
+    vi.doMock("@/lib/generated/agent-bindings", async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
+      GENERATED_ROLE_ARTIFACT_TYPES: {},
+    }));
+    try {
+      const bare = await import("@/lib/dashboards/dashboard-artifact-surface");
+      expect(bare.DASHBOARD_ARTIFACT_OBJECT_TYPE).toBe("");
+      expect(bare.isDashboardArtifactType(stored)).toBe(false);
+      expect(bare.isDashboardArtifactType(null)).toBe(false);
+      expect(bare.isDashboardArtifactType("")).toBe(false);
+    } finally {
+      vi.doUnmock("@/lib/generated/agent-bindings");
+      vi.resetModules();
+    }
+  });
+});
