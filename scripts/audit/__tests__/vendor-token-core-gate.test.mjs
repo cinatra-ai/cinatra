@@ -384,6 +384,7 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
         "@example-org/sdk-a :: ZORB_KIND",
         "@example-org/sdk-a :: zorbSpace",
         "@example-org/sdk-a :: zorbSpace.QuillInside",
+        "@example-org/sdk-a :: zorbSpace.neutralInside",
         "@example-org/sdk-a :: QuillRenamed",
         "@example-org/sdk-a :: ZorbOnlyType",
         "@example-org/sdk-a :: default",
@@ -395,16 +396,65 @@ describe("sdk-name-with-extension-word — what a pack can import is read (cinat
     );
   });
 
-  it("a subpath pattern is expanded over the package's files; a null target excludes its subpaths", () => {
+  it("an exports map with a subpath pattern fails closed (precedence is not read); the real SDK packages hold none", () => {
     const scan = gateFn("scanSdkExportNames");
     const root = makeSdkTree({
-      exportsMap: { "./parts/*": "./src/parts/*.ts", "./parts/hidden": null },
+      exportsMap: { "./public": "./src/public.ts", "./*": "./src/*.ts" },
+      files: { "src/public.ts": `export const ZorbPublic = 1;\n` },
+    });
+    expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
+      "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
+    );
+    for (const dir of ["packages/sdk-extensions", "packages/sdk-ui"]) {
+      expect(() => gateFn("sdkEntryPoints")(REPO_ROOT_4875, dir)).not.toThrow();
+    }
+  });
+
+  it("an exports map with a null target fails closed, also inside a conditions object", () => {
+    const scan = gateFn("scanSdkExportNames");
+    for (const exportsMap of [
+      { ".": "./src/index.ts", "./hidden": null },
+      { ".": { types: "./src/index.ts", browser: null } },
+    ]) {
+      const root = makeSdkTree({ exportsMap, files: { "src/index.ts": `export const ZorbIndex = 1;\n` } });
+      expect(() => scan(root, ["zorb"], { packages: [FIXTURE_SDK] })).toThrow(
+        "the exports map of @example-org/sdk-a uses a pattern or a null target, which this rule does not read yet",
+      );
+    }
+  });
+
+  it("a namespace-qualified name is matched whole: a word across the namespace boundary is found, once per word", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
       files: {
-        "src/parts/alpha.ts": `export const ZorbAlpha = 1;\n`,
-        "src/parts/hidden.ts": `export const ZorbHidden = 1;\n`,
+        "src/index.ts": [
+          `export namespace Project { export const ManagementClient = 1; }`,
+          `export * as project from "./mgmt";`,
+          `export namespace ZorbNs { export const ZorbThing = 1; }`,
+        ].join("\n"),
+        "src/mgmt.ts": `export const ManagementApi = 1;\n`,
       },
     });
-    expect(Object.keys(scan(root, ["zorb"], { packages: [FIXTURE_SDK] }))).toEqual(["@example-org/sdk-a/parts/alpha :: ZorbAlpha"]);
+    const found = scan(root, ["projectmanagement", "zorb"], { packages: [FIXTURE_SDK] });
+    expect(found["@example-org/sdk-a :: Project.ManagementClient"]).toEqual(["projectmanagement"]);
+    expect(found["@example-org/sdk-a :: project.ManagementApi"]).toEqual(["projectmanagement"]);
+    expect(found["@example-org/sdk-a :: ZorbNs.ZorbThing"]).toEqual(["zorb"]);
+  });
+
+  it("a module reached by two namespaces is read under each namespace", () => {
+    const scan = gateFn("scanSdkExportNames");
+    const root = makeSdkTree({
+      exportsMap: { ".": "./src/index.ts" },
+      files: {
+        "src/index.ts": `export * as alpha from "./shared";\nexport * as zorbBeta from "./shared";\n`,
+        "src/shared.ts": `export const plain = 1;\n`,
+      },
+    });
+    expect(Object.keys(scan(root, ["zorb"], { packages: [FIXTURE_SDK] }))).toEqual([
+      "@example-org/sdk-a :: zorbBeta",
+      "@example-org/sdk-a :: zorbBeta.plain",
+    ]);
   });
 });
 

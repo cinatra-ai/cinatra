@@ -79,12 +79,14 @@
 // contract named for a family or a vendor passed every gate. This class reads
 // the names a pack can import from the SDK packages a pack may depend on (the
 // two the conformance gate admits, SDK_PACKAGE_DIRS) on the same fact a pack
-// sees: every entry of each package's `exports` map (subpath patterns expanded
-// over the package's files, every condition's target), resolved by the
+// sees: every entry of each package's `exports` map (every condition's target;
+// a map with a subpath pattern or a `null` target fails closed, as precedence
+// between overlapping keys is not resolved here), resolved by the
 // TypeScript program and type checker (`getExportsOfModule`, so `export *`,
 // renamed re-exports and type-only exports count; a namespace's exports are
-// read as `ns.Name`). A name is split into words (camelCase, PascalCase, acronym
-// runs, digits, `_` and `-`) and is a finding when one word, or a run of
+// read as `ns.Name` and matched whole, namespace path included). A name is
+// split into words (camelCase, PascalCase, acronym runs, digits, `_`, `-` and
+// `.`) and is a finding when one word, or a run of
 // consecutive words written together, equals a border word of either list
 // (whole words, case-insensitive). Members of an exported type, class, enum or
 // const object are not read (the port rule of cinatra#4872 reads port members).
@@ -102,10 +104,10 @@
 //   node scripts/audit/vendor-token-core-gate.mjs --write-baseline # ratchet the floor down
 //   VENDOR_TOKEN_BASE=<ref> node ...   # also fail if the committed baseline GREW vs <ref>
 
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { join, dirname, resolve, relative, sep } from "node:path";
+import { join, dirname, resolve, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { stripComments } from "./lib/strip-comments.mjs";
 import { compareFloorWithBase, isPermitReason, newKeys } from "./lib/floor-base-guard.mjs";
@@ -389,35 +391,24 @@ export function nameWordHits(name, words) {
   return [...hits].sort();
 }
 
-function listPackageFiles(dir) {
-  const out = [];
-  const walk = (d) => {
-    for (const ent of readdirSync(d, { withFileTypes: true })) {
-      if (ent.name === "node_modules" || ent.name.startsWith(".")) continue;
-      const abs = join(d, ent.name);
-      if (ent.isDirectory()) walk(abs);
-      else if (ent.isFile()) out.push(abs);
-    }
-  };
-  walk(dir);
-  return out;
-}
-
 function targetLeaves(value, where) {
-  if (value === null) return [];
   if (typeof value === "string") return [value];
   if (Array.isArray(value)) return value.flatMap((v) => targetLeaves(v, where));
-  if (typeof value === "object") return Object.values(value).flatMap((v) => targetLeaves(v, where));
+  if (value && typeof value === "object") return Object.values(value).flatMap((v) => targetLeaves(v, where));
   throw new SdkNamesError(`${where}: the target ${JSON.stringify(value)} is not a path or a conditions object`);
 }
 
+const holdsNull = (value) =>
+  value === null || (typeof value === "object" && Object.values(value).some((v) => holdsNull(v)));
+
 /**
  * The entry points of one SDK package: `[{ specifier, files }]`, one per
- * `exports` entry (a subpath pattern `./x/*` is expanded over the package's
- * files that match its targets; an entry or pattern whose target is `null`
- * excludes those subpaths). `files` are the absolute code targets of every
- * condition. Throws SdkNamesError for an unreadable manifest, a package with
- * no `exports` map, or an entry whose target file does not exist.
+ * `exports` entry; `files` are the absolute code targets of every condition.
+ * A subpath pattern (`*` in a key) or a `null` target is not read: export-map
+ * precedence between overlapping keys is not resolved here, so such a map
+ * fails closed. Throws SdkNamesError for an unreadable manifest, a package
+ * with no `exports` map, a pattern or `null` target, or an entry whose target
+ * file does not exist.
  */
 export function sdkEntryPoints(repoRoot, pkgDir) {
   const abs = join(repoRoot, pkgDir);
@@ -433,44 +424,22 @@ export function sdkEntryPoints(repoRoot, pkgDir) {
   if (!map || typeof map !== "object" || !Object.keys(map).every((k) => k === "." || k.startsWith("./"))) {
     throw new SdkNamesError(`${pkg.name}: package.json has no subpath "exports" map (a pack imports through it)`);
   }
+  if (Object.entries(map).some(([key, value]) => key.includes("*") || holdsNull(value))) {
+    throw new SdkNamesError(
+      `the exports map of ${pkg.name} uses a pattern or a null target, which this rule does not read yet`,
+    );
+  }
   const spec = (sub) => (sub === "." ? pkg.name : `${pkg.name}/${sub.slice(2)}`);
-  const entries = new Map();
-  const excluded = [];
-  let files;
+  const entries = [];
   for (const [key, value] of Object.entries(map)) {
     const where = `${pkg.name} exports "${key}"`;
-    const leaves = targetLeaves(value, where);
-    if (!key.includes("*")) {
-      if (value === null) {
-        excluded.push((s) => s === key);
-        continue;
-      }
-      const code = leaves.filter((t) => SDK_CODE_TARGET_RE.test(t)).map((t) => resolve(abs, t));
-      for (const f of code) if (!existsSync(f)) throw new SdkNamesError(`${where}: the target ${relative(repoRoot, f)} does not exist`);
-      if (code.length) entries.set(key, { specifier: spec(key), files: code });
-      continue;
-    }
-    const [kPre, kPost] = key.split("*");
-    if (value === null) {
-      excluded.push((s) => s.startsWith(kPre) && s.endsWith(kPost) && s.length >= kPre.length + kPost.length);
-      continue;
-    }
-    files ??= listPackageFiles(abs).map((f) => "./" + relative(abs, f).split(sep).join("/"));
-    for (const target of leaves) {
-      const [tPre, tPost] = target.split("*");
-      for (const f of files) {
-        if (!SDK_CODE_TARGET_RE.test(f)) continue;
-        if (!(f.startsWith(tPre) && f.endsWith(tPost) && f.length > tPre.length + tPost.length)) continue;
-        const sub = kPre + f.slice(tPre.length, f.length - tPost.length) + kPost;
-        const e = entries.get(sub) ?? { specifier: spec(sub), files: [] };
-        e.files.push(resolve(abs, f));
-        entries.set(sub, e);
-      }
-    }
+    const code = targetLeaves(value, where)
+      .filter((t) => SDK_CODE_TARGET_RE.test(t))
+      .map((t) => resolve(abs, t));
+    for (const f of code) if (!existsSync(f)) throw new SdkNamesError(`${where}: the target ${relative(repoRoot, f)} does not exist`);
+    if (code.length) entries.push({ specifier: spec(key), files: [...new Set(code)] });
   }
-  return [...entries]
-    .filter(([sub]) => !excluded.some((x) => x(sub)))
-    .map(([, e]) => ({ specifier: e.specifier, files: [...new Set(e.files)] }));
+  return entries;
 }
 
 const symbolDeclName = (sym) => {
@@ -530,26 +499,32 @@ export function scanSdkExportNames(repoRoot = REPO_ROOT, words = [], { packages 
           if (next && !next.isDeclarationFile && !next.fileName.includes("/node_modules/")) queue.push(next);
         }
       }
-      const seenModules = new Set();
-      const visit = (moduleSym, prefix) => {
-        if (seenModules.has(moduleSym)) return;
-        seenModules.add(moduleSym);
+      // A name is matched WHOLE: the namespace path a pack writes (`ns.`)
+      // followed by the exported name, so a word written across the
+      // namespace boundary is found. The exported name is what a pack
+      // imports (a renamed re-export is read by its new name, a string
+      // export name as written); a default export is read by its declared
+      // name. A module reached by two namespaces is read under each; only a
+      // module already on the current path (a cycle) is not read again.
+      const visit = (moduleSym, prefix, readPrefix, onPath) => {
+        if (onPath.has(moduleSym)) return;
+        const path = new Set(onPath).add(moduleSym);
         for (const sym of checker.getExportsOfModule(moduleSym)) {
           const target = resolveAlias(sym);
           if (!target?.declarations?.length) {
             throw new SdkNamesError(`${entry.specifier}: the exported name "${prefix}${sym.name}" does not resolve`);
           }
           const exported = `${prefix}${sym.name}`;
-          const read = sym.name === "default" ? symbolDeclName(target) ?? symbolDeclName(sym) ?? "" : sym.name;
-          const hits = nameWordHits(read, wordSet);
+          const leaf = sym.name === "default" ? symbolDeclName(target) ?? symbolDeclName(sym) ?? "" : sym.name;
+          const hits = nameWordHits(`${readPrefix}${leaf}`, wordSet);
           if (hits.length) found[`${entry.specifier} :: ${exported}`] = hits;
-          if (target.flags & ts.SymbolFlags.Module) visit(target, `${exported}.`);
+          if (target.flags & ts.SymbolFlags.Module) visit(target, `${exported}.`, `${readPrefix}${leaf}.`, path);
         }
       };
       for (const file of entry.files) {
         const sf = program.getSourceFile(file);
         const moduleSym = sf && checker.getSymbolAtLocation(sf);
-        if (moduleSym) visit(moduleSym, "");
+        if (moduleSym) visit(moduleSym, "", "", new Set());
         // A file with no import or export is no module and exports nothing.
       }
     }

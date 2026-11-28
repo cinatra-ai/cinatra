@@ -331,19 +331,26 @@ of `perpetual-core`, reports such a name as `sdk-name-with-extension-word`.
 
 - **What it reads.** The names a pack can import from the SDK packages the
   conformance gate lets a pack depend on (`@cinatra-ai/sdk-extensions` and
-  `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map, every
-  condition's target (`types` and `default` alike), a subpath pattern
-  (`./x/*`) expanded over the package's files that match its target, and a
-  `null` target excluding its subpaths. The TypeScript program and type
+  `@cinatra-ai/sdk-ui`): every entry of each package's `exports` map and
+  every condition's target (`types` and `default` alike). An `exports` map
+  with a subpath pattern (`*` in a key) or a `null` target fails closed ("the
+  exports map of <package> uses a pattern or a null target, which this rule
+  does not read yet"): precedence between overlapping keys is not resolved
+  here, and neither SDK package uses one today. The TypeScript program and type
   checker resolve each entry (`getExportsOfModule`), so `export *`, a renamed
   re-export (`export { a as B }`), a type-only export and an arbitrary string
   export name count; a default export is read by its declared name; the
   exports of a namespace (`export * as ns`, `export namespace`) are read as
-  `ns.Name`. Members of an exported interface, class, enum or const object are
+  `ns.Name`, under each namespace that reaches the module. Members of an exported interface, class, enum or const object are
   not read: the port rule of cinatra#4872
   (`scripts/ci/core-extension-border-gate.mjs`) reads port members.
-- **How a name matches.** The name is split into words on `_`, `-`, camelCase,
-  acronym runs (`CRMConnector` gives `crm`, `connector`) and digits. It is a
+- **How a name matches.** The matched text is what a pack writes: the
+  exported name (a renamed re-export by its new name, a string export name as
+  written), a default export by its declared name, and a namespace member as
+  its whole qualified name (`Ns.Member`, so a word written across the
+  namespace boundary is found). It is split into words on `.`, `_`, `-`,
+  camelCase, acronym runs (`CRMConnector` gives `crm`, `connector`) and
+  digits. It is a
   finding when one word, or a run of consecutive words written together
   (`WordPress` gives `wordpress`), equals a border word of either list
   (vendor or domain), case-insensitively. A border word inside a longer word
