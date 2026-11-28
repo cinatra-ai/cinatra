@@ -1877,3 +1877,128 @@ describe("core/extension border — single-package-declaration-reader", () => {
     }, 60_000);
   });
 });
+
+// cinatra#4531, stage 2: `pack-slug-in-core-template-span`. The literal text spans of a template with
+// a substitution (head, middle, tail; cooked) are read with the stage 1 test, under their own rule id so
+// that the base guard seeds the wider reading once and stage 1's entries stay shrink-only. A span is a
+// fragment: a part counts only when a separator of the rule or the outer end of the whole template
+// bounds it on both sides, never a substitution. Every case compares the whole list of details; on a
+// tree without the reading a case fails by assertion.
+describe("core/extension border — pack-slug-in-core-template-span", () => {
+  const RULE = "pack-slug-in-core-template-span";
+  type Leaves = { scanPackLeafLiterals?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
+  const SPAN_PACKS = new Set(["@example-org/quill-ledger-connector", "@example-org/tide-planner-agent"]);
+  const spans = (text: string, file = "src/lib/x.tsx"): string[] => {
+    const run = (gate as unknown as Leaves).scanPackLeafLiterals;
+    if (!run) return ["not a function"];
+    try {
+      return run({ file, text, packs: SPAN_PACKS }).filter((f) => f.rule === RULE).map((f) => `${f.line} ${f.detail}`);
+    } catch (e) {
+      return [`threw: ${(e as Error).message}`];
+    }
+  };
+  const QUILL = "quill-ledger-connector (@example-org/quill-ledger-connector)";
+  const TIDE = "tide-planner-agent (@example-org/tide-planner-agent)";
+
+  it("reports a leaf bounded by separators in the head, a middle and the tail of a template", () => {
+    const text = [
+      "const a = `/api/${x}/quill-ledger-connector/run`;",
+      "const b = `quill-ledger-connector/${x}`;",
+      "const c = `/a/${x}/tide-planner-agent/${y}/b`;",
+      "const d = `?q=quill-ledger-connector&n=${n}`;",
+      "const e = `${x}/@example-org/quill-ledger-connector@^1.0.0`;",
+    ].join("\n");
+    expect(spans(text)).toEqual([`1 ${QUILL}`, `2 ${QUILL} (occurrence 2)`, `3 ${TIDE}`, `4 ${QUILL} (occurrence 3)`, `5 ${QUILL} (occurrence 4)`]);
+  });
+
+  it("does not read a part that touches a substitution (a stated limit); the bounded part beside it is read", () => {
+    const text = [
+      "const a = `${x}quill-ledger-connector`;",
+      "const b = `quill-ledger-connector${x}`;",
+      "const c = `/x/${a}quill-ledger-connector/y`;",
+      "const d = `/x/quill-ledger-connector${b}`;",
+      "const e = `${p}-quill-ledger-connector/x`;",
+      "const f = `quill-ledger-connector-${n}`;",
+      "const g = `/a/${x}tide-planner-agent${y}/b`;",
+      "const h = `${x}/quill-ledger-connector/${y}`;",
+    ].join("\n");
+    expect(spans(text)).toEqual([`8 ${QUILL}`]);
+  });
+
+  it("reads a tagged template, a template literal type and the cooked text of an escape", () => {
+    const text = [
+      "const a = sql`/x/${id}/quill-ledger-connector/`;",
+      "type T = `/x/${string}/tide-planner-agent`;",
+      "const c = `/x/${id}/quill\\u002Dledger-connector`;",
+    ].join("\n");
+    expect(spans(text)).toEqual([`1 ${QUILL}`, `2 ${TIDE}`, `3 ${QUILL} (occurrence 2)`]);
+  });
+
+  it("does not report a span under the stage 1 rule, and reads no declaration file", () => {
+    const text = "const a = `/x/${b}/quill-ledger-connector`;\n";
+    const run = (gate as unknown as Leaves).scanPackLeafLiterals;
+    const rules = run ? run({ file: "src/lib/x.ts", text, packs: SPAN_PACKS }).map((f) => f.rule) : ["not a function"];
+    expect(rules).toEqual([RULE]);
+    expect(["src/lib/x.ts", "src/lib/x.d.ts"].map((f) => spans(text, f).join("|"))).toEqual([`1 ${QUILL}`, ""]);
+  });
+
+  describe("the ledger of this rule", () => {
+    const KEY = `src/lib/example-module.ts::${QUILL}`;
+    const e = (key: string, rule = RULE) => ({ rule, key, reason: "a standing leaf recorded in a fixture ledger" });
+    const growth = (baseRules: string[], base: unknown[], head: unknown[]) => {
+      const f = floorFixture.makeFloorRepo({
+        base: { [gate.FLOOR_FILE]: { rules: baseRules, entries: base } },
+        head: { [gate.FLOOR_FILE]: { rules: [...gate.KNOWN_RULES], entries: head } },
+      });
+      try {
+        return gate.checkFloorAgainstBase({ repoRoot: f.root, env: floorFixture.PULL_REQUEST_RUN });
+      } finally {
+        f.cleanup();
+      }
+    };
+
+    it("is a rule of its own: seeded once against a base that does not list it, then shrink-only; stage 1 never grows", () => {
+      expect(gate.KNOWN_RULES.has(RULE)).toBe(true);
+      const withoutRule = [...gate.KNOWN_RULES].filter((r) => r !== RULE);
+      expect(growth(withoutRule, [], [e(KEY)]).ok).toBe(true);
+      const grew = growth([...gate.KNOWN_RULES], [e(KEY)], [e(KEY), e(`${KEY} (occurrence 2)`)]);
+      expect(grew.growth).toEqual([`new entry: ${RULE}::${KEY} (occurrence 2)`]);
+      expect(growth(withoutRule, [], [e(KEY, "pack-slug-in-core")]).growth).toEqual([`new entry: pack-slug-in-core::${KEY}`]);
+    });
+
+    it("a fixture tree: a span finding outside the ledger is a violation, and an entry whose span is gone is stale", () => {
+      const root = mkdtempSync(path.join(tmpdir(), "border-template-span-"));
+      const put = (f: string, text: string) => {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), text);
+      };
+      try {
+        spawnSync("git", ["init", "-q"], { cwd: root });
+        const lock = JSON.stringify({ packages: [{ packageName: "@example-org/quill-ledger-connector" }] });
+        put("cinatra-required-extensions.lock.json", lock);
+        put("cinatra-dev-extensions.lock.json", lock);
+        put(
+          "packages/agents/src/synthetic-kind-table.ts",
+          'const RENDERER_KIND_TABLE: Readonly<Record<string, { renderer: string }>> = {\n  "list-picker": { renderer: "x" },\n};\n',
+        );
+        put("src/lib/route.ts", "export const url = (id: string) => `/api/${id}/quill-ledger-connector/run`;\n");
+        const baselinePath = path.join(root, "ledger.json");
+        const STALE = `src/lib/gone.ts::${QUILL}`;
+        writeFileSync(baselinePath, JSON.stringify({ rules: [...gate.KNOWN_RULES], entries: [e(STALE)] }));
+        const r = gate.scanRepository({ repoRoot: root, baselinePath, ports: false });
+        expect(r.violations.filter((f) => f.rule === RULE).map((f) => `${f.file}:${f.line} ${f.detail}`)).toEqual([`src/lib/route.ts:1 ${QUILL}`]);
+        expect(r.stale).toEqual([`${RULE}::${STALE}`]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("the real tree: every finding of the rule is recorded, and nothing else is", () => {
+      const r = gate.scanRepository({ repoRoot: REPO_ROOT, baselinePath: BASELINE_PATH });
+      const found = r.findings.filter((f) => f.rule === RULE).map((f) => `${f.file}::${f.detail}`).sort();
+      const doc = JSON.parse(readFileSync(BASELINE_PATH, "utf8"));
+      expect(doc.rules).toContain(RULE);
+      expect(doc.entries.filter((x: { rule: string }) => x.rule === RULE).map((x: { key: string }) => x.key).sort()).toEqual(found);
+    }, 60_000);
+  });
+});

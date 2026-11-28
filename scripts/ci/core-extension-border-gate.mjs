@@ -748,8 +748,8 @@ export function leafParts(value, leaves) {
 
 /** `pack-slug-in-core` (cinatra#4531): a string token whose value, or one of its parts, is a pack's
  *  leaf. The file is read with the TypeScript parser: a `StringLiteral` (a JSX attribute value is
- *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. A template with a substitution
- *  is not read in this stage. Comments, regular expressions and escapes are the parser's business.
+ *  one), a `NoSubstitutionTemplateLiteral`, or a `JsxText` trimmed. The literal spans of a template
+ *  with a substitution are read under their own rule (PACK_LEAF_TEMPLATE_SPAN_RULE, stage 2). Comments, regular expressions and escapes are the parser's business.
  *  A declaration file (`.d.ts`, `.d.mts`, `.d.cts`) and a fixture or test helper module
  *  (FIXTURE_OR_TEST_HELPER_MODULE_RE) are not read. A file the parser cannot read fails closed. */
 export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
@@ -761,6 +761,34 @@ export const DECLARATION_FILE_RE = /\.d\.[cm]?ts$/;
  *  `pack-slug-in-core` and `single-package-declaration-reader` do not read them (one predicate for
  *  both). `dev-fixtures.ts` is the SDK's fixture contract and is read. */
 export const FIXTURE_OR_TEST_HELPER_MODULE_RE = /(?:^|\/)(?:fixtures|conformance-fixtures|testing)\.[cm]?[jt]sx?$/;
+/** `pack-slug-in-core-template-span` (cinatra#4531, stage 2): the literal text spans of a template
+ *  with a substitution (`TemplateHead`, `TemplateMiddle`, `TemplateTail`, cooked), in an expression,
+ *  a tagged template or a template literal type. Its own rule id, because the base guard never lets
+ *  a rule it already ratchets gain an entry: stage 1's entries stay shrink-only, and this reading is
+ *  seeded once as a new rule. */
+export const PACK_LEAF_TEMPLATE_SPAN_RULE = "pack-slug-in-core-template-span";
+
+/** The leaves among the parts of one literal span of a template (cinatra#4531, stage 2). A span is a
+ *  FRAGMENT: its edge that touches a substitution may continue into the substituted value, so a part
+ *  counts only when it is bounded on both sides by a separator of the rule or by the outer end of the
+ *  whole template. The first part of a middle or tail span (after `}`) and the last part of a head or
+ *  middle span (before `${`) touch a substitution and are not read; a leaf joined to a substitution
+ *  (`${x}<leaf>`, `<leaf>${x}`) is a stated limit. */
+export function templateSpanLeafParts(value, kind, leaves) {
+  const parts = value.split(PATH_PART_SEPARATORS);
+  const touchesLeft = kind === ts.SyntaxKind.TemplateMiddle || kind === ts.SyntaxKind.TemplateTail;
+  const touchesRight = kind === ts.SyntaxKind.TemplateHead || kind === ts.SyntaxKind.TemplateMiddle;
+  const end = parts.length - (touchesRight ? 1 : 0);
+  return parts
+    .slice(touchesLeft ? 1 : 0, end)
+    .map((part) => part.trim())
+    .filter((part) => leaves.has(part));
+}
+
+function isTemplateSpanLiteral(n) {
+  return n.kind === ts.SyntaxKind.TemplateHead || n.kind === ts.SyntaxKind.TemplateMiddle || n.kind === ts.SyntaxKind.TemplateTail;
+}
+
 export function scanPackLeafLiterals({ file, text, packs }) {
   if (DECLARATION_FILE_RE.test(file) || FIXTURE_OR_TEST_HELPER_MODULE_RE.test(file)) return [];
   const leaves = packLeafNames(packs);
@@ -776,16 +804,21 @@ export function scanPackLeafLiterals({ file, text, packs }) {
   const counts = new Map();
   walk(sf, (n) => {
     let found = [];
+    let rule = "pack-slug-in-core";
     if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) found = leafParts(n.text, leaves);
     else if (ts.isJsxText(n)) found = leafParts(n.text.trim(), leaves);
+    else if (isTemplateSpanLiteral(n)) {
+      rule = PACK_LEAF_TEMPLATE_SPAN_RULE;
+      found = templateSpanLeafParts(n.text, n.kind, leaves);
+    }
     for (const leaf of found) {
       const owners = leaves.get(leaf);
       out.push(
         finding(
-          "pack-slug-in-core",
+          rule,
           file,
           sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
-          occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${owners.join(", ")})`),
+          occurrenceDetail(counts, rule, `${leaf} (${owners.join(", ")})`),
           `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
         ),
       );
@@ -1256,6 +1289,7 @@ export const KNOWN_RULES = new Set([
   "pack-step-kind-in-core",
   "unbounded-port-member",
   "pack-slug-in-core",
+  "pack-slug-in-core-template-span",
   "single-package-declaration-reader",
 ]);
 
