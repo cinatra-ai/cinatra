@@ -34,9 +34,12 @@
 //      base branch (scripts/audit/lib/floor-base-guard.mjs): a file on the head
 //      that the base does not hold fails the run, naming it; a removal passes.
 //      A base from before the list moved out of eslint.config.mjs is read from
-//      the array TYPE_ARBITRARY_MIGRATION_ALLOWLIST there. A base that cannot
-//      be read fails closed with its reason; a run with no pull request and no
-//      TYPE_ALLOWLIST_BASE (a push, a merge group, a local run) is not compared.
+//      the array TYPE_ARBITRARY_MIGRATION_ALLOWLIST there. The workflow names
+//      the base from the event itself (TYPE_ALLOWLIST_BASE: the pull request's
+//      or the merge group's base SHA), so a rerun is not compared with the
+//      moving tip of the target branch. A base that cannot be read fails closed
+//      with its reason; a merge group run with no TYPE_ALLOWLIST_BASE fails
+//      closed; a push or a local run has no base and is not compared.
 //      STATED LIMIT: the check reads only this list, so an exemption written on
 //      purpose somewhere else in eslint.config.mjs (another `files` block) is
 //      not caught here.
@@ -245,6 +248,18 @@ export function checkTypeAllowlistAgainstBase({ repoRoot, env = process.env }) {
       status: "malformed",
       ok: false,
       lines: [`[${gate}] FAIL — the floor ${TYPE_ALLOWLIST_REL} is not a readable list (${err?.message ?? err}). Failing closed.`],
+    };
+  }
+  // A merge group has no pull request base branch for the shared guard to fall
+  // back on: it would pass as "no base". The workflow always names the base.
+  if (env.GITHUB_EVENT_NAME === "merge_group" && !env[TYPE_ALLOWLIST_BASE_VAR]) {
+    return {
+      status: "unreadable",
+      ok: false,
+      lines: [
+        `[${gate}] FAIL — the floor ${TYPE_ALLOWLIST_REL} cannot be compared with the base: ` +
+          `the run is a merge group's but ${TYPE_ALLOWLIST_BASE_VAR} is empty. Failing closed.`,
+      ],
     };
   }
   return compareFloorWithBase({

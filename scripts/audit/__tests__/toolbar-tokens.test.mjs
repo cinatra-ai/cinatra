@@ -9,7 +9,7 @@
 
 import { afterAll, describe, it, expect } from "vitest";
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
@@ -315,5 +315,61 @@ describe("toolbar-tokens — the type allow list may not grow against the base",
     const r = run(fixture({ [LIST]: doc() }, { [LIST]: doc("src/new.tsx") }), NO_PULL_REQUEST_RUN);
     expect(r.ok, text(r)).toBe(true);
     expect(text(r)).toMatch(/not compared with a base on this run/);
+  });
+
+  // The event's base commit (TYPE_ALLOWLIST_BASE, set by the workflow step from
+  // the pull request's or the merge group's base SHA) is compared, not the
+  // moving tip of the target branch. In the fixture the pinned base holds
+  // `pinned`, live origin/main has moved on to `live`, and the head holds `head`.
+  function movedTip({ pinned, live, head }) {
+    const root = fixture({ [LIST]: doc(...pinned) }, { [LIST]: doc(...head) });
+    const headSha = fixtureGit(root, ["rev-parse", "HEAD"]).trim();
+    const pinnedSha = fixtureGit(root, ["rev-parse", "HEAD~1"]).trim();
+    fixtureGit(root, ["checkout", "-q", "--detach", pinnedSha]);
+    writeFileSync(resolve(root, LIST), JSON.stringify(doc(...live), null, 2) + "\n");
+    fixtureGit(root, ["commit", "-q", "-a", "--allow-empty", "-m", "live main moved on"]);
+    fixtureGit(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+    fixtureGit(root, ["checkout", "-q", "--detach", headSha]);
+    return { root, pinnedSha };
+  }
+
+  it("moved tip: an unchanged entry that live main has since removed passes against the pinned event base", () => {
+    const { root, pinnedSha } = movedTip({ pinned: ["src/old.tsx"], live: [], head: ["src/old.tsx"] });
+    const pinnedRun = run(root, { ...PULL_REQUEST_RUN, TYPE_ALLOWLIST_BASE: pinnedSha });
+    expect(pinnedRun.ok, text(pinnedRun)).toBe(true);
+    expect(text(pinnedRun)).toContain(`does not grow against the base "${pinnedSha}"`);
+    // Without the event's base the live tip is read: the unchanged entry looks like growth.
+    const tip = run(root, PULL_REQUEST_RUN);
+    expect(tip.ok).toBe(false);
+    expect(text(tip)).toContain("files src/old.tsx");
+  });
+
+  it("merge group: growth against the group's base commit fails, and an unchanged list passes", () => {
+    const grown = movedTip({ pinned: [], live: [], head: ["src/new.tsx"] });
+    const r = run(grown.root, { GITHUB_EVENT_NAME: "merge_group", TYPE_ALLOWLIST_BASE: grown.pinnedSha });
+    expect(r.ok).toBe(false);
+    expect(text(r)).toMatch(/GREW against/);
+    expect(text(r)).toContain("files src/new.tsx");
+    const same = movedTip({ pinned: ["src/old.tsx"], live: [], head: ["src/old.tsx"] });
+    const held = run(same.root, { GITHUB_EVENT_NAME: "merge_group", TYPE_ALLOWLIST_BASE: same.pinnedSha });
+    expect(held.ok, text(held)).toBe(true);
+  });
+
+  it("merge group with no base named fails closed instead of passing as no-base", () => {
+    const r = run(fixture({ [LIST]: doc() }, { [LIST]: doc("src/new.tsx") }), { GITHUB_EVENT_NAME: "merge_group" });
+    expect(r.ok).toBe(false);
+    expect(text(r)).toMatch(/merge group's but TYPE_ALLOWLIST_BASE is empty/);
+  });
+
+  it("the workflow step sets TYPE_ALLOWLIST_BASE from the merge group's or the pull request's base SHA", () => {
+    const lines = readFileSync(resolve(REPO_ROOT, ".github/workflows/gates.yml"), "utf8").split("\n");
+    const at = lines.findIndex((l) => l === "      - name: Toolbar Design-System Gate — Toolbar design-system gate");
+    expect(at, "the step is missing").toBeGreaterThan(-1);
+    const end = lines.findIndex((l, i) => i > at && /^ {6}(- |#)/.test(l));
+    const step = lines.slice(at, end === -1 ? undefined : end).join("\n");
+    expect(step).toContain(
+      "        env:\n          TYPE_ALLOWLIST_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}\n",
+    );
+    expect(step).toContain("node scripts/audit/toolbar-tokens.mjs");
   });
 });
