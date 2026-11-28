@@ -179,9 +179,10 @@ describe("§VIII — the dashboard type comes from the role claimant (cinatra#48
     }));
     try {
       const bare = await import("@/lib/dashboards/dashboard-artifact-surface");
-      expect(bare.DASHBOARD_ARTIFACT_OBJECT_TYPE).toBeNull();
+      expect(bare.DASHBOARD_ARTIFACT_OBJECT_TYPE).toBe("");
       expect(bare.isDashboardArtifactType(stored)).toBe(false);
       expect(bare.isDashboardArtifactType(null)).toBe(false);
+      expect(bare.isDashboardArtifactType("")).toBe(false);
     } finally {
       vi.doUnmock("@/lib/generated/agent-bindings");
       vi.resetModules();

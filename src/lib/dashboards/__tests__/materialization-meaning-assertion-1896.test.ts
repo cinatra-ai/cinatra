@@ -150,8 +150,8 @@ describe("materialization meaning-assertion — landed behaviour (cinatra#1896 S
     // is a no-op.
     expect(text).toContain("assertion_basis <> 'binding'");
     expect(text).toContain("WHERE NOT EXISTS");
-    // The binding-basis reconcile (the dashboard type's pack declares it with
-    // `claim: dedicated`) is STILL spliced — the meaning assertion is additive
+    // The binding-basis reconcile (a no-op for the self-registered non-dedicated
+    // generic dashboard type) is STILL spliced — the meaning assertion is additive
     // to it, not a replacement.
     expect(text).toContain(`"cinatra"."semantic_assertion"`);
   });

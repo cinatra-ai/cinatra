@@ -145,7 +145,7 @@ function byName(a: ScopeDashboardTabRow, b: ScopeDashboardTabRow): number {
  *  dashboard twin role (cinatra#4849): the type is then unknown, so nothing is
  *  read. */
 function readDashboardObjects(opts: Parameters<typeof readObjectsByType>[1]) {
-  return DASHBOARD_ARTIFACT_OBJECT_TYPE === null
+  return DASHBOARD_ARTIFACT_OBJECT_TYPE === ""
     ? []
     : readObjectsByType(DASHBOARD_ARTIFACT_OBJECT_TYPE, opts);
 }

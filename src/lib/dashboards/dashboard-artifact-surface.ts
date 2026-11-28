@@ -38,18 +38,19 @@ import { resolveExtensionRoleArtifactType } from "@/lib/extension-roles";
  * paths never import the server-only twin-writer module (which self-registers
  * into the dashboards mutation seam on import and pulls the artifact-substrate
  * builders); the equality with the twin's own value is pinned in the surface
- * unit test. Null in a build where no present pack claims the role: no row is
- * then a dashboard row, and nothing throws at import.
+ * unit test. The empty string in a build where no present pack claims the
+ * role (no `objects` row carries an empty type): no row is then a dashboard
+ * row, and nothing throws at import.
  */
-export const DASHBOARD_ARTIFACT_OBJECT_TYPE: string | null =
-  resolveExtensionRoleArtifactType("artifact-dashboard-twin") ?? null;
+export const DASHBOARD_ARTIFACT_OBJECT_TYPE: string =
+  resolveExtensionRoleArtifactType("artifact-dashboard-twin") ?? "";
 
 /** True for a dashboard-typed artifact object row (§VIII). False for every
  *  row in a build where no pack claims the dashboard twin role. */
 export function isDashboardArtifactType(
   objectType: string | null | undefined,
 ): boolean {
-  return DASHBOARD_ARTIFACT_OBJECT_TYPE !== null && objectType === DASHBOARD_ARTIFACT_OBJECT_TYPE;
+  return DASHBOARD_ARTIFACT_OBJECT_TYPE !== "" && objectType === DASHBOARD_ARTIFACT_OBJECT_TYPE;
 }
 
 /**
