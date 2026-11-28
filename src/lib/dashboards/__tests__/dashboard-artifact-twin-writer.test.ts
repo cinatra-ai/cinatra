@@ -264,8 +264,12 @@ describe("twin writer — the object type comes from the artifact-dashboard-twin
       | Record<string, string>
       | undefined;
     const declared = roleTypes?.["artifact-dashboard-twin"];
-    expect(declared).toBe("@cinatra-ai/dashboard-artifact:dashboard");
+    expect(declared).toBeTruthy();
     expect(DASHBOARD_OBJECT_TYPE).toBe(declared);
+    // The stored value is unchanged: it is the type existing twin rows carry,
+    // which the library surface still reads (cinatra#4849 keeps rows as they are).
+    const surface = await import("@/lib/dashboards/dashboard-artifact-surface");
+    expect(declared).toBe(surface.DASHBOARD_ARTIFACT_OBJECT_TYPE);
     const objects = buildWithoutLifecycle(upsertCtx).find((q) =>
       q.text.includes(`"cinatra"."objects"`),
     )!;

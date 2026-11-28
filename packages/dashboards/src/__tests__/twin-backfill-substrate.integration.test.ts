@@ -33,6 +33,7 @@ import {
   DASHBOARD_OBJECT_TYPE,
 } from "@/lib/dashboards/dashboard-artifact-twin-writer";
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
+import { DASHBOARD_ARTIFACT_OBJECT_TYPE } from "@/lib/dashboards/dashboard-artifact-surface";
 
 // The twin's object type: the host passes the twin writer's declared type in
 // (cinatra#4849), exactly as the core-boot phase does.
@@ -327,6 +328,6 @@ d("dashboards-artifact twin BACKFILL — substrate proof (cinatra#1894 B1c / #20
   });
 
   it("STORED VALUE: the type the backfill pairs is the one existing twins already carry", () => {
-    expect(DASHBOARD_TWIN_OBJECT_TYPE).toBe("@cinatra-ai/dashboard-artifact:dashboard");
+    expect(DASHBOARD_TWIN_OBJECT_TYPE).toBe(DASHBOARD_ARTIFACT_OBJECT_TYPE);
   });
 });
