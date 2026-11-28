@@ -185,8 +185,11 @@ describe("outward-effect tools on an agent run's frame", () => {
   });
 
   describe("every tool of the outward-effect set is named in the boundary module", () => {
+    // An outward-effect tool is an MCP primitive: only rows on the mcp road count (cinatra#4895).
     const inventoryNames = new Set(
-      (inventory as { primitives: Array<{ primitiveName: string }> }).primitives.map((p) => p.primitiveName),
+      (inventory as { primitives: Array<{ primitiveName: string; road?: string }> }).primitives
+        .filter((p) => p.road === "mcp")
+        .map((p) => p.primitiveName),
     );
 
     it("holds exactly the listed members", () => {

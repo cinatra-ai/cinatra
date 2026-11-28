@@ -76,9 +76,10 @@ const INVENTORY_PATH = resolve(
 
 function inventoryPrimitiveNames(): string[] {
   const parsed = JSON.parse(readFileSync(INVENTORY_PATH, "utf8")) as {
-    primitives: { primitiveName: string }[];
+    primitives: { primitiveName: string; road?: string }[];
   };
-  return [...new Set(parsed.primitives.map((p) => p.primitiveName))].sort();
+  // Delegated perimeters reach MCP primitives: only rows on the mcp road count (cinatra#4895).
+  return [...new Set(parsed.primitives.filter((p) => p.road === "mcp").map((p) => p.primitiveName))].sort();
 }
 
 const WIDGET_KINDS: WidgetDelegationKind[] = ["wordpress", "drupal"];
