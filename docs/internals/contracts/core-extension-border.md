@@ -49,6 +49,40 @@ because the namespace is spelled shorter than the package. And a pack the ledger
 names stays in the universe after it leaves a lock, so a recorded crossing cannot be
 silenced by unpinning the pack it names.
 
+### `unbounded-port-member` (cinatra#4872)
+
+A host port member that takes a FREE NAME together with an UNTYPED PAYLOAD, the shape
+`run(name: string, input: unknown)`, is a generic tunnel to any core behaviour. The rule
+reads the type checker's resolved types, never how a type is written. A call signature has
+the shape when one ordinary parameter is plain `string` (an optional `string | undefined`, `string & {}`
+and a type parameter constrained to `string` count; a union of string literals does not) and
+another ordinary parameter is `any` or `unknown` (a union holding `unknown`, and an unconstrained type
+parameter, count). Every overload is its own signature.
+
+A finding is keyed `<context property>.<member>` (a member of an object member adds `.<sub>`):
+the grant-visible port name the product itself uses (`HOST_PORT_NAMES`, `requestedHostPorts`),
+for example `jobs.enqueue`. No type name is in a key and nothing is deduplicated: every context
+property is walked on its own, so the same port type on two properties is two findings and two
+ledger entries. A union context is walked per constituent; findings merge only when file and key
+are string-equal. The anchor is the only place the rule names anything: the module
+`packages/sdk-extensions/src/register.ts`, its export `ExtensionServerEntry`, the `register`
+member, and the first parameter of its call signatures (the context). The program uses the
+product's `tsconfig.json`. An unresolved type, a missing anchor, an untyped context and a context
+written as a rest parameter ("the registration context is variadic; the border check cannot read
+it") fail the check with a plain line.
+
+A port member that needs a reported form is recorded with its reason.
+
+Stated limits. Rest parameters are not read: a free name or an untyped payload passed through a
+rest parameter (`...args`) is not found by this rule. A member typed `any` or `Function`, a name written as a template literal
+(`` `job:${string}` ``) and an index signature are not this rule's business. A payload typed
+`object`, `{}` or `Record<string, unknown>` is not untyped. Ports are read three levels deep (context
+property, member, member of an object member); a port returned by a method, held in an array or
+a `Map`, or found through an index signature on the context is not walked, and members declared in
+the TypeScript library are skipped. The rule cannot tell a tunnel from a key-value store: `set<T>(key:
+string, value: T)` is reported and recorded in the ledger. Hiding a tunnel on purpose behind
+such a form is not blocked by this check.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the
