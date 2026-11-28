@@ -44,6 +44,7 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
       [
         "apiVersion",
         "artifact",
+        "borderWords",
         "dashboardContribution",
         "dependencies",
         "displayName",

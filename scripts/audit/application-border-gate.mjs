@@ -22,7 +22,10 @@
 //     drift from it; a literal G1 counts is still refused by G1.
 //   CLASS 2 (`names`)  — a module whose path carries, as a whole sub-token of
 //     a directory or file segment (split on non-alphanumerics and camelCase,
-//     the vendor gate's subTokens), a word of the FROZEN DOMAIN_TOKENS set. The
+//     the vendor gate's subTokens), a DOMAIN WORD: the union of the
+//     `cinatra.borderWords.domain` words the pinned extensions declare and the
+//     temporary, shrink-only bridge scripts/audit/border-words-bridge.json
+//     (lib/border-words.mjs, cinatra#4848; the gate names no word). The
 //     segments read are those after `src/`; for a package, its directory name
 //     plus those after `packages/<name>/src/`. Key `<file> :: name :: <token>`,
 //     with the number of segments.
@@ -59,10 +62,15 @@
 // fails closed on a flag-like or unresolvable reference and refuses a committed
 // floor that grew against the base (no constraint when the base holds no
 // floor). ONE growth is admitted, by `--write-baseline` and by the base guard:
-// a new class 1 key (and the class 3 ceiling its module then needs) whose file
-// is BYTE-IDENTICAL at the base reference — the code did not change, only the
-// vocabulary did (an extension newly claiming an id the application already
-// spells). Every entry names its `owner`, the extension that will own the
+// a new class 1 or class 2 key (and the class 3 ceiling its module then needs)
+// whose file is BYTE-IDENTICAL at the base reference — the code did not
+// change, only the vocabulary did (an extension newly claiming an id, or newly
+// declaring a domain word, the application already spells). The domain list
+// of the bridge only shrinks against APPLICATION_BORDER_BASE, and a word
+// leaves it only when a pinned pack declares it as a domain word. A pinned
+// pack without the declaration fails unless the bridge's `packages` list
+// names it, and that list too only shrinks against APPLICATION_BORDER_BASE
+// (lib/border-words.mjs). Every entry names its `owner`, the extension that will own the
 // code; `--write-baseline` writes a new entry with owner UNASSIGNED and the
 // check fails on any UNASSIGNED or empty owner.
 //
@@ -93,6 +101,16 @@ import {
   loadClaimedTypeVocabulary,
   namespaceOf,
 } from "./lib/claimed-type-vocabulary.mjs";
+import {
+  BorderWordsError,
+  bridgeAtRef,
+  bridgeGrowth,
+  bridgeShrinkProblems,
+  fileUnchangedAtRef,
+  loadBorderWords,
+} from "./lib/border-words.mjs";
+
+export { fileUnchangedAtRef };
 
 const ts = tsDefault;
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,29 +123,13 @@ export const SECTIONS = Object.freeze(["types", "names", "ceilings"]);
 export const UNASSIGNED_OWNER = "UNASSIGNED";
 
 /**
- * The FROZEN, REVIEWED domain words of class 2. Each names one domain the
- * application must not be written for. Vendor words stay the vendor-token
- * gate's frozen set (none is here), so one path segment is counted by one gate.
- * Growing or shrinking this set is a reviewed change to this gate and its tests.
+ * The domain words of class 2 under `repoRoot`: declared ∪ bridge
+ * (lib/border-words.mjs). A word is in one list only (vendor or domain), so
+ * one path segment is counted by one gate.
  */
-export const DOMAIN_TOKENS = Object.freeze([
-  "appointment",
-  "blog",
-  "campaign",
-  "campaigns",
-  "cms",
-  "crm",
-  "email",
-  "icp",
-  "mail",
-  "newsletter",
-  "outreach",
-  "playbook",
-  "podcast",
-  "portfolio",
-  "prospecting",
-  "social",
-]);
+export function domainWords(repoRoot = REPO_ROOT) {
+  return loadBorderWords(repoRoot).words.domain;
+}
 
 /** Class 2 sanctioned modules: exact paths, each with its written reason. */
 export const SANCTIONED_MODULES = new Map([
@@ -169,7 +171,7 @@ export function classTwoSegments(rel) {
 }
 
 /** Domain tokens in a path, with the number of segments carrying each (whole sub-tokens only). */
-export function domainTokenHits(rel, tokens = DOMAIN_TOKENS) {
+export function domainTokenHits(rel, tokens) {
   const hits = new Map();
   const segments = classTwoSegments(rel).map((seg) => new Set(subTokens(seg)));
   for (const token of tokens) {
@@ -286,6 +288,7 @@ export function listScanFiles(repoRoot = REPO_ROOT) {
  */
 export function scanApplicationBorder(repoRoot = REPO_ROOT, options = {}) {
   const vocabulary = options.vocabulary ?? loadClaimedTypeVocabulary(repoRoot);
+  const words = options.domainWords ?? domainWords(repoRoot);
   const files = options.files ?? listScanFiles(repoRoot);
   const allowlist = options.allowlist ?? DATA_CONTRACT_ID_ALLOWLIST;
   const allowlistHits = options.allowlistHits;
@@ -298,7 +301,7 @@ export function scanApplicationBorder(repoRoot = REPO_ROOT, options = {}) {
     if (!existsSync(join(repoRoot, rel))) continue;
     let onFloor = false;
     if (!SANCTIONED_MODULES.has(rel)) {
-      for (const [token, n] of domainTokenHits(rel)) {
+      for (const [token, n] of domainTokenHits(rel, words)) {
         names[`${rel} :: name :: ${token}`] = n;
         onFloor = true;
       }
@@ -360,12 +363,12 @@ export function countProblems(doc) {
 }
 
 /**
- * The vocabulary-born admission: a NEW `types` key (absent from `previousDoc`),
- * or the NEW ceiling its module then needs, whose file is byte-identical at the
- * base. A key already on the previous floor is never admitted to grow.
+ * The vocabulary-born admission: a NEW `types` or `names` key (absent from
+ * `previousDoc`), or the NEW ceiling its module then needs, whose file is
+ * byte-identical at the base. A key already on the previous floor is never
+ * admitted to grow.
  */
 function admittedGrowth(section, key, previousDoc, isUnchangedAtBase) {
-  if (section === "names") return false;
   if (Object.prototype.hasOwnProperty.call(previousDoc?.[section] ?? {}, key)) return false;
   return isUnchangedAtBase(fileOfKey(key));
 }
@@ -384,7 +387,7 @@ export function ownerProblems(doc) {
 
 /**
  * Growth of `committed` against `base`, section by section, minus the one
- * admitted growth: a NEW `types` key, or the new ceiling its module then needs,
+ * admitted growth: a NEW `types` or `names` key, or the new ceiling its module then needs,
  * whose file is byte-identical at the base (`isUnchangedAtBase(file)`) — the
  * vocabulary moved, the code did not. An invalid count on either side fails.
  */
@@ -400,23 +403,6 @@ export function baseGrowth(baseDoc, committedDoc, { isUnchangedAtBase }) {
     }
   }
   return grown.sort();
-}
-
-/** Is `rel` byte-identical in the worktree and at `ref`? */
-export function fileUnchangedAtRef(repoRoot, ref, rel) {
-  let atRef;
-  try {
-    atRef = execFileSync("git", ["show", `${ref}:${rel}`], {
-      cwd: repoRoot,
-      stdio: ["ignore", "pipe", "ignore"],
-      maxBuffer: 64 * 1024 * 1024,
-    });
-  } catch {
-    return false;
-  }
-  const path = join(repoRoot, rel);
-  if (!existsSync(path)) return false;
-  return Buffer.compare(atRef, readFileSync(path)) === 0;
 }
 
 /** Why a base reference cannot be used (flag-like, unresolvable), or null. */
@@ -455,7 +441,7 @@ export function writeBaselineDoc(committedDoc, live, { isUnchangedAtBase }) {
     if (grown.length) {
       const err = new Error(
         `refusing to write a GROWN floor (shrink-only; move the code into the extension that owns it instead; a new ` +
-          `class 1 key born of a vocabulary change is admitted only with APPLICATION_BORDER_BASE set to the base branch):\n` +
+          `class 1 or class 2 key born of a vocabulary change is admitted only with APPLICATION_BORDER_BASE set to the base branch):\n` +
           grown.map((g) => `  + ${g}`).join("\n"),
       );
       err.grown = grown;
@@ -482,7 +468,7 @@ export function writeBaselineDoc(committedDoc, live, { isUnchangedAtBase }) {
   return doc;
 }
 
-function summarize(live, allowlistHits) {
+function summarize(live, allowlistHits, words) {
   const files = (o) => new Set(Object.keys(o).map(fileOfKey)).size;
   const allowlisted = [...allowlistHits.values()].reduce((a, b) => a + b, 0);
   return (
@@ -491,7 +477,8 @@ function summarize(live, allowlistHits) {
     `class 2: ${Object.keys(live.names).length} name entr(ies) in ${files(live.names)} file(s); ` +
     `class 3: ${Object.keys(live.ceilings).length} ceiling(s); ` +
     `vocabulary: ${live.vocabulary.ids.size} claimed id(s) under ${live.vocabulary.namespaces.size} namespace(s) ` +
-    `from ${live.vocabulary.extensionCount} extension package(s)`
+    `from ${live.vocabulary.extensionCount} extension package(s); ` +
+    `domain words: ${words.words.domain.length} (${words.bridge.domain.length} from the bridge) over ${words.packCount} pinned pack(s)`
   );
 }
 
@@ -507,13 +494,22 @@ function main() {
   }
   const allowlistHits = new Map();
   let live;
+  let words;
   try {
-    live = scanApplicationBorder(REPO_ROOT, { allowlistHits });
+    words = loadBorderWords(REPO_ROOT);
+    live = scanApplicationBorder(REPO_ROOT, { allowlistHits, domainWords: words.words.domain });
   } catch (err) {
-    const why = err instanceof ClaimedTypeVocabularyError ? err.message : err?.stack ?? String(err);
+    const why =
+      err instanceof ClaimedTypeVocabularyError || err instanceof BorderWordsError ? err.message : err?.stack ?? String(err);
     console.error(`${TAG} scanner error: ${why}`);
     process.exit(2);
   }
+  if (words.problems.length) {
+    console.error(`${TAG} FAIL — ${words.problems.length} border-word problem(s) (cinatra#4848):`);
+    words.problems.forEach((p) => console.error(`  ! ${p}`));
+    process.exit(1);
+  }
+  words.warnings.forEach((w) => console.warn(`${TAG} warning: ${w}`));
   const committed = existsSync(BASELINE_PATH) ? JSON.parse(readFileSync(BASELINE_PATH, "utf8")) : null;
   // Byte identity is read at the base reference only: without APPLICATION_BORDER_BASE
   // nothing is admitted (a file committed with a new literal is identical at HEAD).
@@ -529,7 +525,7 @@ function main() {
     }
     writeFileSync(BASELINE_PATH, JSON.stringify(doc, null, 2) + "\n");
     const unassigned = ownerProblems(doc).length;
-    console.log(`${TAG} floor written — ${summarize(live, allowlistHits)}; ${unassigned} entr(ies) without an owner.`);
+    console.log(`${TAG} floor written — ${summarize(live, allowlistHits, words)}; ${unassigned} entr(ies) without an owner.`);
     return;
   }
 
@@ -545,6 +541,28 @@ function main() {
   }
 
   if (baseRef) {
+    let baseBridge;
+    try {
+      baseBridge = bridgeAtRef(REPO_ROOT, baseRef);
+    } catch (err) {
+      console.error(`${TAG} FAIL — ${err.message}`);
+      process.exit(1);
+    }
+    const bridgeGrew = baseBridge ? bridgeGrowth(baseBridge, words.bridge).filter((g) => g.startsWith("domain: ") || g.startsWith("packages: ")) : [];
+    if (bridgeGrew.length) {
+      console.error(`${TAG} FAIL — the border-word bridge GREW vs ${baseRef} (shrink-only: a pack declares its own words, and a newly pinned pack declares; cinatra#4848):`);
+      bridgeGrew.forEach((g) => console.error(`  + ${g}`));
+      process.exit(1);
+    }
+    const bridgeDropped = baseBridge ? bridgeShrinkProblems(baseBridge, words).filter((g) => g.startsWith("domain: ")) : [];
+    if (bridgeDropped.length) {
+      console.error(
+        `${TAG} FAIL — word(s) left the border-word bridge vs ${baseRef} without a pinned pack declaring them in the same list ` +
+          `(a word leaves the bridge only into a cinatra.borderWords declaration; cinatra#4848):`,
+      );
+      bridgeDropped.forEach((g) => console.error(`  - ${g}`));
+      process.exit(1);
+    }
     let baseText = null;
     try {
       baseText = execFileSync("git", ["show", `${baseRef}:${BASELINE_REL}`], {
@@ -603,7 +621,7 @@ function main() {
   }
   if (failed) process.exit(1);
 
-  console.log(`${TAG} OK — ${summarize(live, allowlistHits)}; 0 new, 0 stale (shrink-only floor — cinatra#3821; see scripts/audit/extension-coupling-gates.md).`);
+  console.log(`${TAG} OK — ${summarize(live, allowlistHits, words)}; 0 new, 0 stale (shrink-only floor — cinatra#3821; see scripts/audit/extension-coupling-gates.md).`);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
