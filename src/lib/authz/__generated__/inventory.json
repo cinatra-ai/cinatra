@@ -495,12 +495,6 @@
       "line": 28
     },
     {
-      "primitiveName": "blog_connector_list",
-      "file": "extensions/cinatra-ai/blog-connector/src/register.ts",
-      "road": "mcp",
-      "line": 137
-    },
-    {
       "primitiveName": "blog_media_image_save",
       "file": "src/lib/blog/mcp/registry.ts",
       "road": "mcp",
@@ -907,12 +901,6 @@
       "file": "extensions/cinatra-ai/email-connector/src/mcp/module.ts",
       "road": "mcp",
       "line": 59
-    },
-    {
-      "primitiveName": "email_send",
-      "file": "extensions/cinatra-ai/email-connector/src/register.ts",
-      "road": "mcp",
-      "line": 120
     },
     {
       "primitiveName": "email_test_delivery_parse_action",
@@ -1567,12 +1555,6 @@
       "file": "extensions/cinatra-ai/social-media-connector/src/mcp/module.ts",
       "road": "mcp",
       "line": 47
-    },
-    {
-      "primitiveName": "social_media_publish",
-      "file": "extensions/cinatra-ai/social-media-connector/src/register.ts",
-      "road": "mcp",
-      "line": 102
     },
     {
       "primitiveName": "trigger_config_delete",

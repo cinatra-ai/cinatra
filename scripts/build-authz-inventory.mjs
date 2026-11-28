@@ -8,12 +8,20 @@
  *   src/lib/authz/__tests__/drift-gate.test.ts
  *
  * Each row records its road (cinatra#4895):
- *   - "mcp": a tool on the MCP server — a literal `server.registerTool(name`,
- *     a `*TOOL_META*` block key, or a pack's `ctx.mcp.registerTool({ name`.
- *   - "passthrough": a name the deterministic passthrough route admits
- *     (`ALLOWED_TOOLS` in src/app/api/agents/passthrough/route.ts, with the sets
- *     it spreads in) that no MCP road registers. A name the route admits that
- *     IS an MCP tool is dispatched to that tool's handler and keeps its mcp row.
+ *   - "mcp": a tool on the MCP server — a literal `server.registerTool(name`
+ *     or a `*TOOL_META*` block key.
+ *   - "passthrough": a name the deterministic passthrough route admits that no
+ *     MCP road registers. The route's allow list (the set it checks with
+ *     `if (!LIST.has(tool))` in src/app/api/agents/passthrough/route.ts) is read
+ *     with the TypeScript parser: string literals in any quote form, constants
+ *     with a literal value, and spread sets followed to their declaration in the
+ *     same file or an imported module. An entry the parser cannot resolve to a
+ *     literal FAILS the builder. A name the route admits that IS an MCP tool is
+ *     dispatched to that tool's handler and keeps its mcp row.
+ * A pack's `register(ctx)` tools are classified at run time by the MCP boundary
+ * and are not inventory rows unless their metadata block lists them.
+ * Stated limit: indirection deeper than MAX_SET_DEPTH hops (re-export chains,
+ * sets built by code) is refused, not followed.
  * A row's `file` is its owner: a path under `extensions/<scope>/<pack>/` is
  * that pack, any other path is core.
  *
@@ -27,8 +35,9 @@
  *   pnpm authz:inventory --check  (fail if file is stale)
  */
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, posix, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 const args = process.argv.slice(2);
 const check = args.includes("--check");
@@ -47,10 +56,9 @@ const REGISTER_RE = /server\s*\.\s*registerTool\s*\(\s*["'`]([a-zA-Z0-9_]+)["'`]
 // never appear in a registerTool string arg. Scan for those too.
 const TOOL_META_BLOCK_RE = /(?:[A-Z_]*TOOL_META[A-Z_]*)\s*:\s*Record<[^>]+>\s*=\s*\{([\s\S]*?)\n\}\s*;/g;
 const TOOL_META_KEY_RE = /^\s{2,}(?:"([a-z_][a-z0-9_]*)"|([a-z_][a-z0-9_]*))\s*:\s*\{/gm;
-// A pack's `register(ctx)` registers on the host MCP server through its port.
-const CTX_REGISTER_RE = /\.mcp\s*\.\s*registerTool\s*\(\s*\{\s*name\s*:\s*["'`]([a-zA-Z0-9_]+)["'`]/g;
 // The passthrough road: the route's allow list and the sets it spreads in.
 const PASSTHROUGH_ROUTE = "src/app/api/agents/passthrough/route.ts";
+const MAX_SET_DEPTH = 5;
 
 /** @param {string} dir */
 function* walk(dir) {
@@ -99,10 +107,6 @@ function scan() {
           file: relative(ROOT, file),
           line,
         });
-      }
-      CTX_REGISTER_RE.lastIndex = 0;
-      while ((m = CTX_REGISTER_RE.exec(body)) !== null) {
-        records.push({ primitiveName: m[1], file: relative(ROOT, file), line: lineAt(body, m.index) });
       }
       // Also collect TOOL_META block keys — these are the canonical primitive
       // names every registry exposes through the per-handler iterator.
@@ -153,11 +157,6 @@ function scan() {
   return deduped;
 }
 
-/** @param {string} body @param {number} index */
-function lineAt(body, index) {
-  return body.slice(0, index).split("\n").length;
-}
-
 /** @param {string} rel */
 function readRel(rel) {
   try {
@@ -167,42 +166,133 @@ function readRel(rel) {
   }
 }
 
+/** @param {string} message */
+function fail(message) {
+  throw new Error(`authz inventory: ${message}`);
+}
+
+/** @param {string} rel */
+function parseRel(rel) {
+  const body = readRel(rel);
+  if (body === null) fail(`cannot read ${rel}`);
+  return ts.createSourceFile(rel, body, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+/** @param {ts.SourceFile} sf @param {ts.Node} node */
+function lineOf(sf, node) {
+  return sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+}
+
+/** @param {ts.Expression} e */
+function unwrap(e) {
+  while (ts.isAsExpression(e) || ts.isSatisfiesExpression(e) || ts.isParenthesizedExpression(e)) e = e.expression;
+  return e;
+}
+
+/** The allow list: the one set the route checks as `if (!LIST.has(…))`. @param {ts.SourceFile} sf */
+function allowListName(sf) {
+  const names = new Set();
+  const visit = (n) => {
+    if (ts.isIfStatement(n)) {
+      const c = unwrap(n.expression);
+      if (ts.isPrefixUnaryExpression(c) && c.operator === ts.SyntaxKind.ExclamationToken) {
+        const call = unwrap(c.operand);
+        if (
+          ts.isCallExpression(call) &&
+          ts.isPropertyAccessExpression(call.expression) &&
+          call.expression.name.text === "has" &&
+          ts.isIdentifier(call.expression.expression)
+        ) {
+          names.add(call.expression.expression.text);
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (names.size !== 1) {
+    fail(`${sf.fileName}: expected one allow-list check \`if (!LIST.has(tool))\`, found ${names.size} (${[...names].join(", ")})`);
+  }
+  return [...names][0];
+}
+
+/** @param {string} fromRel @param {string} spec */
+function resolveModule(fromRel, spec) {
+  let base;
+  if (spec.startsWith("@/")) base = `src/${spec.slice(2)}`;
+  else if (spec.startsWith(".")) base = posix.join(posix.dirname(fromRel), spec);
+  else return null;
+  for (const c of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`]) {
+    try {
+      if (statSync(join(ROOT, c)).isFile()) return c;
+    } catch {
+      // try the next form
+    }
+  }
+  return null;
+}
+
 /**
- * The names in one `NAME = new Set...([ ... ])` block of `rel`: string
- * literals, constants declared in the same file as `export const X = "name"`,
- * and `...SET` spreads followed to the file `rel` imports them from (`@/` is
- * `src/`).
- * @param {string} rel @param {string} setName @param {Set<string>} seen
+ * The top-level `const` declaration of `name` in `rel`, followed through a
+ * named import to the module it comes from.
+ * @param {string} rel @param {string} name @param {number} depth
+ * @returns {{ rel: string, sf: ts.SourceFile, decl: ts.VariableDeclaration }}
+ */
+function resolveConst(rel, name, depth) {
+  if (depth > MAX_SET_DEPTH) fail(`${rel}: ${name} is more than ${MAX_SET_DEPTH} hops from the allow list`);
+  const sf = parseRel(rel);
+  for (const st of sf.statements) {
+    if (!ts.isVariableStatement(st)) continue;
+    for (const d of st.declarationList.declarations) {
+      if (ts.isIdentifier(d.name) && d.name.text === name) return { rel, sf, decl: d };
+    }
+  }
+  for (const st of sf.statements) {
+    const bindings = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : undefined;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const el of bindings.elements) {
+      if (el.name.text !== name) continue;
+      const target = resolveModule(rel, /** @type {ts.StringLiteral} */ (st.moduleSpecifier).text);
+      if (!target) fail(`${rel}: cannot resolve the import of ${name}`);
+      return resolveConst(target, (el.propertyName ?? el.name).text, depth + 1);
+    }
+  }
+  return fail(`${rel}: no const declaration or import of ${name}`);
+}
+
+/**
+ * The names in a `new Set([...])` declaration: literals in any quote form,
+ * constants with a literal value, spread sets read the same way.
+ * @param {string} rel @param {string} name @param {number} depth
  * @returns {Array<{primitiveName:string,file:string,line:number}>}
  */
-function namesOfSet(rel, setName, seen) {
-  const key = `${rel}::${setName}`;
-  if (seen.has(key)) return [];
-  seen.add(key);
-  const body = readRel(rel);
-  if (body === null) return [];
-  const block = new RegExp(`\\b${setName}\\b[^=\\n]*=\\s*new Set(?:<[^>]*>)?\\(\\[([\\s\\S]*?)\\]\\)`).exec(body);
-  if (!block) return [];
-  const blockStart = block.index + block[0].indexOf(block[1]);
+function namesOfSet(rel, name, depth) {
+  const { rel: at, sf, decl } = resolveConst(rel, name, depth);
+  const init = decl.initializer ? unwrap(decl.initializer) : undefined;
+  const list = init && ts.isNewExpression(init) && init.arguments?.length === 1 ? unwrap(init.arguments[0]) : undefined;
+  if (!list || !ts.isArrayLiteralExpression(list)) fail(`${at}: ${name} is not a \`new Set([...])\` of literals`);
   const out = [];
-  const entryRe = /^\s*(?:"([a-z_][a-z0-9_]*)"|\.\.\.([A-Za-z_][A-Za-z0-9_]*)|([A-Z_][A-Z0-9_]*))\s*,?\s*(?:\/\/.*)?$/gm;
-  let e;
-  while ((e = entryRe.exec(block[1])) !== null) {
-    if (e[1]) {
-      out.push({ primitiveName: e[1], file: rel, line: lineAt(body, blockStart + e.index + e[0].indexOf('"')) });
-    } else if (e[2]) {
-      const imp = new RegExp(`import\\s*\\{[^}]*\\b${e[2]}\\b[^}]*\\}\\s*from\\s*["']@/([^"']+)["']`).exec(body);
-      out.push(...namesOfSet(imp ? `src/${imp[1]}.ts` : rel, e[2], seen));
-    } else if (e[3]) {
-      const decl = new RegExp(`export const ${e[3]}\\s*=\\s*"([a-z_][a-z0-9_]*)"`).exec(body);
-      if (decl) out.push({ primitiveName: decl[1], file: rel, line: lineAt(body, decl.index) });
+  for (const el of list.elements) {
+    if (ts.isStringLiteral(el) || ts.isNoSubstitutionTemplateLiteral(el)) {
+      out.push({ primitiveName: el.text, file: at, line: lineOf(sf, el) });
+    } else if (ts.isSpreadElement(el) && ts.isIdentifier(el.expression)) {
+      out.push(...namesOfSet(at, el.expression.text, depth + 1));
+    } else if (ts.isIdentifier(el)) {
+      const c = resolveConst(at, el.text, depth + 1);
+      const v = c.decl.initializer ? unwrap(c.decl.initializer) : undefined;
+      if (!v || !(ts.isStringLiteral(v) || ts.isNoSubstitutionTemplateLiteral(v))) {
+        fail(`${c.rel}: allow-list entry ${el.text} is not a const with a string literal value`);
+      }
+      out.push({ primitiveName: v.text, file: c.rel, line: lineOf(c.sf, c.decl) });
+    } else {
+      fail(`${at}: allow-list entry \`${el.getText(sf)}\` in ${name} is not a literal, a literal const or a spread set`);
     }
   }
   return out;
 }
 
 function scanPassthrough() {
-  return namesOfSet(PASSTHROUGH_ROUTE, "ALLOWED_TOOLS", new Set());
+  return namesOfSet(PASSTHROUGH_ROUTE, allowListName(parseRel(PASSTHROUGH_ROUTE)), 0);
 }
 
 function emit() {
@@ -219,7 +309,13 @@ function emit() {
   return JSON.stringify(out, null, 2) + "\n";
 }
 
-const next = emit();
+let next;
+try {
+  next = emit();
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exit(1);
+}
 if (check) {
   let current = "";
   try {

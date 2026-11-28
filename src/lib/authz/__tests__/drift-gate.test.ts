@@ -106,6 +106,21 @@ describe("authz invariant coverage", () => {
     expect(notAtRoute).toEqual([]);
   });
 
+  it("no inventory row comes from a pack's register(ctx) registration (classified at run time)", () => {
+    // A `register(ctx)` tool takes the object form `ctx.mcp.registerTool({ … })`;
+    // the MCP boundary classifies it at run time (mcp-boundary.ts), so it is no
+    // inventory row and needs no static classification.
+    const inv = loadInventory();
+    const fromRegisterCtx = inv.primitives
+      .filter((p) => {
+        const lines = readFileSync(resolve(REPO_ROOT, p.file), "utf8").split("\n");
+        const near = lines.slice(Math.max(0, p.line - 6), p.line).join("\n");
+        return /\.mcp\s*\.\s*registerTool\s*\(\s*\{/.test(near);
+      })
+      .map((p) => `${p.primitiveName} (${p.file}:${p.line})`);
+    expect(fromRegisterCtx).toEqual([]);
+  });
+
   it("every CarveOut targets a real primitive (no stale entries)", () => {
     const inv = loadInventory();
     const known = new Set(inv.primitives.map((p) => p.primitiveName));
