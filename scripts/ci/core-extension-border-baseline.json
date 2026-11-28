@@ -115,6 +115,21 @@
     },
     {
       "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/mcp/schemas.ts::blog-writing-skill (@cinatra-ai/blog-writing-skill)",
+      "reason": "The agent MCP tool schemas name a pack's unscoped name as an example inside a parameter description. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/mcp/schemas.ts::email-test-delivery-agent (@cinatra-ai/email-test-delivery-agent)",
+      "reason": "The agent MCP tool schemas name a pack's unscoped name as an example inside a parameter description. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/agents/src/mcp/schemas.ts::sales-playbook-artifact (@cinatra-ai/sales-playbook-artifact)",
+      "reason": "The agent MCP tool schemas name a pack's unscoped name as an example inside a parameter description. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
       "key": "packages/agents/src/oas-compiler.ts::drupal-agent (@cinatra-ai/drupal-agent)",
       "reason": "The OAS compiler keys the content-editor agents by their unscoped package names. It stood in core when this rule landed (cinatra#4531)."
     },
@@ -567,16 +582,6 @@
       "rule": "pack-slug-in-core",
       "key": "src/app/connectors/wordpress/page.tsx::wordpress-mcp-connector (@cinatra-ai/wordpress-mcp-connector)",
       "reason": "The legacy WordPress connector page redirects by the connector's unscoped package name. It stood in core when this rule landed (cinatra#4531)."
-    },
-    {
-      "rule": "pack-slug-in-core",
-      "key": "src/app/design-fixtures/conformance/seed-data.ts::github-connector (@cinatra-ai/github-connector)",
-      "reason": "The conformance seed data names connector packages by their unscoped names as seeded basenames. It stood in core when this rule landed (cinatra#4531)."
-    },
-    {
-      "rule": "pack-slug-in-core",
-      "key": "src/app/design-fixtures/conformance/seed-data.ts::plane-connector (@cinatra-ai/plane-connector)",
-      "reason": "The conformance seed data names connector packages by their unscoped names as seeded basenames. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-slug-in-core",

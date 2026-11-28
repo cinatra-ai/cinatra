@@ -113,6 +113,10 @@ export const HOST_RESERVED_PACKAGE = "@cinatra-ai/host";
  *  so no other directory can shelter under the name. */
 export const GENERATED_PATHS = new Set(["src/lib/generated"]);
 
+/** The design fixture tree (cinatra#4531): the routes and seeded kits the design conformance
+ *  suite renders. They are fixtures, out of the scan like every fixture, skipped by exact path. */
+export const FIXTURE_PATHS = new Set(["src/app/design-fixtures"]);
+
 export function isProductFile(name) {
   if (/\.(test|spec)\./.test(name)) return false;
   if (/\.fixture\./.test(name) || /\.stories\./.test(name)) return false;
@@ -129,7 +133,8 @@ export function walkProductFiles(dir, acc = [], repoRoot = null) {
     if (SKIP_DIRS.has(entry.name)) continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (repoRoot && GENERATED_PATHS.has(relative(repoRoot, full).split(sep).join("/"))) continue;
+      const relDir = repoRoot ? relative(repoRoot, full).split(sep).join("/") : null;
+      if (relDir && (GENERATED_PATHS.has(relDir) || FIXTURE_PATHS.has(relDir))) continue;
       walkProductFiles(full, acc, repoRoot);
       continue;
     }
@@ -270,24 +275,32 @@ export function packTypeNamespaces(packs, workspacePackages = new Set()) {
 
 /** `pack-slug-in-core` (cinatra#4531): the leaf of every pack (its package name without the
  *  scope), mapped to the package(s) that carry it. Derived from the pack universe, never
- *  hand-listed. Only a leaf that ends in a kind suffix (ROLE_SUFFIX_RE: `-agent`, `-artifact(s)`,
- *  `-connector`, `-skill`, ...) is read, so a one-word or generic leaf cannot make an ordinary word a
- *  finding; a leaf that a workspace package of this repository or a dependency name also carries is
+ *  hand-listed. Only a leaf that ends in a canonical kind suffix (KIND_SUFFIX_RE) is read, so a
+ *  one-word or generic leaf cannot make an ordinary word a finding; a leaf that a workspace package of this repository or a dependency name also carries is
  *  not read either, because there it names that package, not the pack. */
+/** The canonical package suffixes of the extension kinds, as the naming rule accepts them
+ *  (packages/extensions/src/__tests__/naming-conformance.test.ts, isAllowedDirShapeForKind):
+ *  `-agent` or `-assistant`, `-connector`, `-artifact` or `-artifacts`, `-skill`, `-workflow`. */
+const KIND_SUFFIX_RE = /-(agent|assistant|connector|artifacts?|skill|workflow)$/;
+
 export function packLeafNames(packs, { workspacePackages = new Set(), dependencyNames = new Set() } = {}) {
   const leafOf = (p) => String(p).replace(/^@[^/]+\//, "");
   const owned = new Set([...workspacePackages].map(leafOf));
   const leaves = new Map();
   for (const p of packs) {
     const leaf = leafOf(p);
-    if (!ROLE_SUFFIX_RE.test(leaf) || owned.has(leaf) || dependencyNames.has(leaf)) continue;
+    if (!KIND_SUFFIX_RE.test(leaf) || owned.has(leaf) || dependencyNames.has(leaf)) continue;
     leaves.set(leaf, [...(leaves.get(leaf) ?? []), String(p)].sort());
   }
   return leaves;
 }
 
-/** A string literal in any quote; a template literal is read as written, `${...}` pieces included. */
-const STRING_LITERAL_RE = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+/** One pattern for every leaf: a leaf counts where the character before it and the character
+ *  after it are each a quote (`"`, `'`, a backtick) or `/`. No string is parsed. */
+function leafPattern(leaves) {
+  const names = [...leaves.keys()].sort((a, b) => b.length - a.length).map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return names.length ? new RegExp(`(?<=["'\`/])(?:${names.join("|")})(?=["'\`/])`, "g") : null;
+}
 
 /** A repeated crossing is a SEPARATE crossing. The second and later occurrence
  *  of the same rule and detail carries its ordinal into the detail, so it gets
@@ -362,22 +375,21 @@ export function scanTextForCrossings({ file, text, packs, workspacePackages, dep
     }
   }
 
-  // `pack-slug-in-core` (cinatra#4531): a literal that IS a pack's leaf, or holds it as a whole
-  // `/`-separated segment. A segment right after an `@scope` segment is a package name, which the
-  // package-name rule and the coupling checks own, so it is not read here.
+  // `pack-slug-in-core` (cinatra#4531): a pack's leaf between two boundaries, each a quote or `/`:
+  // the literal `"leaf"` and the path segment `/x/leaf/y`. A leaf right after an `@scope/` is a
+  // package name, which the package-name rule and the coupling checks own, so it is not read here.
   const leaves = packLeafNames(packs, { workspacePackages, dependencyNames });
-  for (const m of masked.matchAll(STRING_LITERAL_RE)) {
-    const segments = (m[1] ?? m[2] ?? m[3]).split("/");
-    segments.forEach((segment, i) => {
-      const owners = leaves.get(segment);
-      if (!owners || segments[i - 1]?.startsWith("@")) return;
-      push(
-        "pack-slug-in-core",
-        lineOf(masked, m.index),
-        `${segment} (${owners.join(", ")})`,
-        `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
-      );
-    });
+  const pattern = leafPattern(leaves);
+  for (const m of pattern ? masked.matchAll(pattern) : []) {
+    // The segment before the leaf starts with `@` (an npm scope is at most 214 characters).
+    if (masked[m.index - 1] === "/" && /(?:^|["'`/\s])@[^"'`/\s]*$/.test(masked.slice(Math.max(0, m.index - 216), m.index - 1))) continue;
+    const owners = leaves.get(m[0]);
+    push(
+      "pack-slug-in-core",
+      lineOf(masked, m.index),
+      `${m[0]} (${owners.join(", ")})`,
+      `core names the pack ${owners.join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+    );
   }
 
   return out.sort((a, b) => a.line - b.line || a.rule.localeCompare(b.rule));

@@ -18,7 +18,8 @@ fix it, each one anchored in a contract this repository already carries.
 
 `scripts/ci/core-extension-border-gate.mjs` scans the product code under `src/` and
 `packages/` and reports each crossing with its file, its line and the rule it breaks.
-Tests, mocks, fixtures, generated maps and type declarations are outside the scan: a
+Tests, mocks, fixtures (the `src/app/design-fixtures` tree included), generated maps and
+type declarations are outside the scan: a
 pack name in a fixture is the fixture doing its job, and a pack name in a generated
 map is the materializer crossing. Comments are masked before every scan, so a comment
 that names a pack to explain a gap states knowledge without encoding it. The
@@ -52,22 +53,25 @@ silenced by unpinning the pack it names.
 ### `pack-slug-in-core` (cinatra#4531)
 
 A pack is also named by its unscoped name, its leaf: `@cinatra-ai/openai-connector` is
-`openai-connector`. The rule reports a string literal in core product code (any quote; a
-template literal is read as written) that IS a pack's leaf, or holds it as a whole
-`/`-separated path segment, such as `"/agents/cinatra-ai/<leaf>/new"`. The vocabulary is the
+`openai-connector`. The rule reports a leaf in core product code whose character before and
+character after are each a quote (`"`, `'`, a backtick) or `/`: the literal `"<leaf>"` and
+the path segment `"/agents/cinatra-ai/<leaf>/new"`. No string is parsed, so a regular
+expression beside the literal cannot hide it; a leaf quoted inside a longer string (an
+example in a description) is reported as well. The vocabulary is the
 leaves of the pack universe above (the two committed locks, plus a pack the ledger names);
 the check names no pack itself. A finding's detail is the leaf with its package,
 `openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
 occurrence, as in the other text rules.
 
 So that an ordinary word is never a finding, the rule reads only a leaf that ends in a kind
-suffix (`-agent`, `-artifact`, `-artifacts`, `-connector`, `-skill`, `-workflow`, `-mcp`, also
-plural). Every pack in the locks carries one today, so the suffix rule drops no pack now; it
+suffix: the canonical package suffixes the naming rule accepts
+(`packages/extensions/src/__tests__/naming-conformance.test.ts`): `-agent`, `-assistant`,
+`-connector`, `-artifact`, `-artifacts`, `-skill`, `-workflow`. Every pack in the locks carries one today, so the suffix rule drops no pack now; it
 keeps a future one-word pack (`@cinatra-ai/chart`) from turning a generic word into a
 finding. A leaf that a workspace package of this repository or a dependency name in the
 repository's manifests also carries is not read: there it names that package, not the pack.
-Only a whole segment counts, so `"<leaf>-v2"` or `"my-<leaf>"` is not read, and a segment
-right after an `@scope` segment is a package name, which the package-name rule and the
+Only a whole segment counts, so `"<leaf>-v2"` or `"my-<leaf>"` is not read, and a leaf
+right after an `@scope/` is a package name, which the package-name rule and the
 coupling checks own. The role-suffix stem (`blog-content` of `blog-content-skill`) and a tool
 or table name under a pack's stem are not this rule's business. A leaf assembled on purpose
 from pieces (concatenation, a `${...}` part, a computed name) is not found by this check.

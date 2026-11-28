@@ -1474,6 +1474,40 @@ describe("core/extension border — pack-slug-in-core", () => {
     ]);
   });
 
+  it("a leaf after a regular expression holding a quote is found", () => {
+    expect(slugs('if (/["]/.test(x)) return "quill-ledger-connector";\nconst r = /[\'`]/;\nconst s = \'/agents/x/tide-planner-agent\';\n')).toEqual([
+      `1 ${QUILL}`,
+      `3 ${TIDE}`,
+    ]);
+  });
+
+  it("a leaf with the assistant suffix of an agent package is read", () => {
+    const found = gate
+      .scanTextForCrossings({
+        file: "src/lib/x.ts",
+        text: 'const a = "sample-assistant";\n',
+        packs: new Set(["@example-org/sample-assistant"]),
+        workspacePackages: WORKSPACE,
+      })
+      .filter((f) => f.rule === RULE)
+      .map((f) => f.detail);
+    expect(found).toEqual(["sample-assistant (@example-org/sample-assistant)"]);
+  });
+
+  it("a file under the design fixture tree is out of the scan, like every fixture", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "border-fixture-tree-"));
+    try {
+      for (const f of ["src/app/design-fixtures/conformance/seed-data.ts", "src/lib/a.ts"]) {
+        mkdirSync(path.dirname(path.join(root, f)), { recursive: true });
+        writeFileSync(path.join(root, f), 'export const A = "quill-ledger-connector";\n');
+      }
+      const files = gate.walkProductFiles(path.join(root, "src"), [], root).map((f) => path.relative(root, f).split(path.sep).join("/"));
+      expect(files).toEqual(["src/lib/a.ts"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   describe("the ledger of this rule", () => {
     const KEY = `src/lib/example-module.ts::${QUILL}`;
     const e = (key: string) => ({ rule: RULE, key, reason: "a standing leaf recorded in a fixture ledger" });
