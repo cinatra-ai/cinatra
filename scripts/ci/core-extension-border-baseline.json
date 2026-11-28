@@ -200,6 +200,21 @@
     },
     {
       "rule": "pack-slug-in-core",
+      "key": "packages/chat/src/renderer/README.md::chart-artifact (@cinatra-ai/chart-artifact)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/chat/src/renderer/README.md::chart-artifact (@cinatra-ai/chart-artifact) (occurrence 2)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/connectors-catalog/README.md::gmail-connector (@cinatra-ai/gmail-connector)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
       "key": "packages/connectors-catalog/src/descriptors.mjs::a2a-server-connector (@cinatra-ai/a2a-server-connector)",
       "reason": "The connector catalog keys each connector descriptor by the connector package's unscoped name. It stood in core when this rule landed (cinatra#4531)."
     },
@@ -410,8 +425,43 @@
     },
     {
       "rule": "pack-slug-in-core",
+      "key": "packages/llm/AGENTS.md::anthropic-connector (@cinatra-ai/anthropic-connector)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/llm/AGENTS.md::anthropic-connector (@cinatra-ai/anthropic-connector) (occurrence 2)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
       "key": "packages/llm/src/index.ts::openai-connector (@cinatra-ai/openai-connector)",
       "reason": "The LLM package loads the OpenAI connector module by its unscoped package name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/objects/AGENTS.md::crm-connector (@cinatra-ai/crm-connector)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/sdk-extensions/README.md::crm-connector (@cinatra-ai/crm-connector)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/sdk-extensions/README.md::crm-connector (@cinatra-ai/crm-connector) (occurrence 2)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/sdk-ui/README.md::email-outreach-agent (@cinatra-ai/email-outreach-agent)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
+    },
+    {
+      "rule": "pack-slug-in-core",
+      "key": "packages/skills/AGENTS.md::email-outreach-agent (@cinatra-ai/email-outreach-agent)",
+      "reason": "The package documentation names the pack by its unscoped name. It stood in core when this rule landed (cinatra#4531)."
     },
     {
       "rule": "pack-slug-in-core",

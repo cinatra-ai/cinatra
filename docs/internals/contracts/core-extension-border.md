@@ -83,13 +83,35 @@ itself. A finding's detail is the leaf with its package,
 `openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
 occurrence, as in the other text rules.
 
-A stylesheet is parsed with postcss, which keeps comments apart from selectors, declaration values
-and at-rule params. The rule takes the value of every attribute selector, quoted or not
-(`[data-connector-slug="openai-connector"]`, `[data-x=openai-connector i]`, with `= ~= |= ^= $=
-*=`), and every quoted string of a declaration value or at-rule params, and splits them like
-every other value; a CSS comment is not read. A stylesheet that does not parse fails the check
-with its name. postcss is loaded through `@tailwindcss/postcss`, a direct root dependency that
-depends on it, so the check adds no dependency; if it does not resolve, the check fails.
+A stylesheet is parsed with postcss into rules, declarations and at-rules. Before a selector, a
+declaration value or at-rule params is read, the rule removes every `/* ... */` comment outside a
+quoted string (a `/*` inside a string is content), resolves CSS escapes (a backslash and up to six
+hex digits and one optional whitespace, or a backslash and any other character) and lower-cases
+the text, so a comparison in CSS is always case-insensitive, with or without the `i` flag. CSS
+whitespace is space, tab, line feed, carriage return and form feed, in every position. The CSS
+positions read:
+
+- in a selector: every type, class and id name, and in an attribute selector its name and its
+  value, quoted or not, with `= ~= |= ^= $= *=` and a flag `i` or `s`
+  (`[data-connector-slug="openai-connector"]`, `[ data-x = openai-connector i ]`); the arguments
+  of `:is()`, `:not()`, `:where()` and `:has()`, and nested rules, are selectors too; a pseudo
+  name is not read;
+- in a declaration value and in at-rule params (`@media`, `@supports selector(...)`,
+  `@container` and `@layer` names): every quoted string and every unquoted token between
+  whitespace and `( ) , ; [ ]`, so `url("...")`, `url(...)`, `content` and a custom property's
+  value are read;
+- not read: a declaration's property name (a custom property `--<leaf>` is a joined name).
+
+A stylesheet that does not parse fails the check with its name. postcss is loaded through
+`@tailwindcss/postcss`, a direct root dependency that depends on it, so the check adds no
+dependency; if it does not resolve, the check fails.
+
+A run-time text file (`.md` `.txt` `.yaml` `.yml` `.html`) is read as text: every maximal run of
+the characters `[A-Za-z0-9_@.:/-]`, with a sentence's final dots dropped, is a value, split and
+compared like every other value. Product code loads such files into live model calls and pages
+(`SKILL.md` files, `prompt.md` of the skill matcher, package READMEs, the memory seed bundle), so
+a pack named there is a crossing like one in code. The test and fixture exclusions of the code
+walk apply.
 
 What is read, per format in the product tree:
 
@@ -97,10 +119,9 @@ What is read, per format in the product tree:
 | --- | --- | --- |
 | `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` | yes | product code, through the TypeScript parser |
 | `.json` | yes | imported data modules can drive behaviour; `tsconfig*.json` is a compiler config and is left out |
-| `.css` | yes | a selector on a real attribute can branch on a pack |
-| `.md` | no | READMEs, agent notes and skill text are content for people and models, not behaviour |
+| `.css` | yes | a selector or a value can branch on a pack |
+| `.md` `.txt` `.yaml` `.yml` `.html` | yes | product code reads skill, prompt and package text at run time |
 | `.svg` | no | drawings (icons) |
-| `.yaml` | no | the one file, the memory conventions seed bundle, is content and holds no leaf today |
 
 So that an ordinary word is never a finding, only a leaf that ends in a canonical kind suffix
 is read, the suffixes the naming rule accepts
@@ -109,8 +130,7 @@ is read, the suffixes the naming rule accepts
 one today; the filter keeps a future one-word pack from turning a generic word into a finding.
 
 Not read: a leaf inside a sentence or joined to other characters (`"use <leaf> now"`,
-`"<leaf>-v2"`, `"<leaf>.json"`), a regular expression literal, and an unquoted value in CSS
-outside an attribute selector. Not part of this
+`"<leaf>-v2"`, `"<leaf>.json"`), a regular expression literal, and a CSS property name. Not part of this
 rule yet, tracked in the issue: the role-suffix stem (`blog-content` of `blog-content-skill`) and
 a tool or table name under a pack's stem.
 

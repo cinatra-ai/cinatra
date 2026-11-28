@@ -133,6 +133,12 @@ export function isProductFile(name) {
 
 /** A JSON file the leaf rule reads (cinatra#4531), named like a product file: not a test or a
  *  fixture, and not a `tsconfig*.json` (a compiler config, which may hold comments). */
+/** A run-time text file the leaf rule reads (cinatra#4531): Markdown, text, YAML and HTML, named
+ *  like a product file (prompts and skills are loaded into live model calls). */
+export function isProductTextFile(name) {
+  return /\.(md|txt|ya?ml|html)$/.test(name) && !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
+}
+
 /** A stylesheet the leaf rule reads (cinatra#4531), named like a product file. */
 export function isProductCssFile(name) {
   return name.endsWith(".css") && !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
@@ -841,6 +847,29 @@ export function scanPackLeafJson({ file, text, packs }) {
   return out;
 }
 
+/** `pack-slug-in-core` in a run-time text file (cinatra#4531): every maximal run of the characters
+ *  `[A-Za-z0-9_@.:/-]` (a sentence's final dots dropped) is a value, split and compared like every
+ *  other value: `` `openai-connector` `` in prose is found, "the connector" is not. */
+export function scanPackLeafText({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  const out = [];
+  const counts = new Map();
+  for (const m of text.matchAll(/[A-Za-z0-9_@.:\/-]+/g)) {
+    for (const leaf of leafParts(m[0].replace(/\.+$/, ""), leaves)) {
+      out.push(
+        finding(
+          "pack-slug-in-core",
+          file,
+          lineOf(text, m.index),
+          occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
+          `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+        ),
+      );
+    }
+  }
+  return out;
+}
+
 /** postcss, loaded through `@tailwindcss/postcss` (cinatra#4531). The root declares no CSS parser of
  *  its own and pnpm does not hoist postcss, but `@tailwindcss/postcss` is a direct root dependency
  *  that depends on postcss: resolving postcss from it loads the copy the frozen lockfile installs
@@ -860,6 +889,43 @@ function loadPostcss() {
   return postcssModule;
 }
 
+/** CSS whitespace: space, tab, line feed, carriage return, form feed. */
+const isCssSpace = (c) => c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f";
+const isHex = (c) => c !== undefined && /[0-9a-fA-F]/.test(c);
+/** A character that continues a CSS name: a letter, a digit, `_`, `-` or any non-ASCII character. */
+const isNameChar = (c) => c !== undefined && (/[A-Za-z0-9_-]/.test(c) || c.charCodeAt(0) > 127);
+
+/** The index after the CSS escape that starts with the backslash at `i`: up to six hex digits and
+ *  one optional whitespace (a CR LF pair counts as one), or any one other character. */
+function cssEscapeEnd(text, i) {
+  let j = i + 1;
+  if (!isHex(text[j])) return Math.min(j + 1, text.length);
+  for (let k = 0; k < 6 && isHex(text[j]); k += 1) j += 1;
+  if (text[j] === "\r" && text[j + 1] === "\n") return j + 2;
+  return isCssSpace(text[j]) ? j + 1 : j;
+}
+
+/** A CSS name or string body with its escapes resolved by the CSS rule above. */
+export function unescapeCss(text) {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    if (text[i] !== "\\") {
+      out += text[i];
+      i += 1;
+      continue;
+    }
+    const end = cssEscapeEnd(text, i);
+    if (isHex(text[i + 1])) {
+      const cp = parseInt(text.slice(i + 1, end).trim(), 16);
+      out += cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? "�" : String.fromCodePoint(cp);
+    } else {
+      out += text.slice(i + 1, end);
+    }
+    i = end;
+  }
+  return out;
+}
+
 /** The end index of the quoted string that opens at `i` (a backslash escapes one character). */
 function endOfQuoted(text, i) {
   let j = i + 1;
@@ -867,55 +933,116 @@ function endOfQuoted(text, i) {
   return j;
 }
 
-/** The contents of every quoted string in a comment-free CSS value or at-rule params. */
-export function cssQuotedStrings(text) {
-  const out = [];
-  for (let i = 0; i < text.length; i += 1) {
-    if (text[i] !== '"' && text[i] !== "'") continue;
-    const end = endOfQuoted(text, i);
-    out.push(text.slice(i + 1, end));
-    i = end;
-  }
-  return out;
-}
-
-/** The value of every attribute selector in a comment-free selector, quoted or not:
- *  `[name OP value flag]` with OP one of `= ~= |= ^= $= *=` and an optional `i` or `s` flag. A small
- *  scanner walks the brackets and the quotes; a bracket without an operator has no value. */
-export function cssAttributeValues(selector) {
-  const out = [];
-  for (let i = 0; i < selector.length; i += 1) {
-    if (selector[i] === '"' || selector[i] === "'") {
-      i = endOfQuoted(selector, i);
-      continue;
-    }
-    if (selector[i] !== "[") continue;
-    let j = i + 1;
-    while (j < selector.length && selector[j] !== "=" && selector[j] !== "]") j += 1;
-    if (selector[j] !== "=") {
-      i = j;
-      continue;
-    }
-    j += 1;
-    while (selector[j] === " ") j += 1;
-    if (selector[j] === '"' || selector[j] === "'") {
-      const end = endOfQuoted(selector, j);
-      out.push(selector.slice(j + 1, end));
-      j = end + 1;
+/** The text with every `/* ... *\/` comment outside a quoted string replaced by a space; a `/*`
+ *  inside a quoted string is content. */
+export function stripCssComments(text) {
+  let out = "";
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === '"' || text[i] === "'") {
+      const end = endOfQuoted(text, i);
+      out += text.slice(i, end + 1);
+      i = end + 1;
+    } else if (text[i] === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      out += " ";
+      i = close < 0 ? text.length : close + 2;
     } else {
-      const start = j;
-      while (j < selector.length && selector[j] !== " " && selector[j] !== "]") j += 1;
-      out.push(selector.slice(start, j));
+      out += text[i];
+      i += 1;
     }
-    while (j < selector.length && selector[j] !== "]") j += 1;
-    i = j;
   }
   return out;
 }
 
-/** `pack-slug-in-core` in a stylesheet (cinatra#4531): postcss parses it and keeps comments apart;
- *  the attribute selector values of every rule's selector and the quoted strings of every
- *  declaration value and at-rule params are split and compared like every other value. A
+/** The index after the CSS name that starts at `i` (escapes included). */
+function cssNameEnd(text, i) {
+  let j = i;
+  while (j < text.length) {
+    if (text[j] === "\\") j = cssEscapeEnd(text, j);
+    else if (isNameChar(text[j])) j += 1;
+    else break;
+  }
+  return j;
+}
+
+/** The names and values a selector holds, lower-cased: every type, class and id name, and every
+ *  attribute selector's name and value, quoted or not (`[name OP value flag]`, OP one of
+ *  `= ~= |= ^= $= *=`, a flag `i` or `s`, CSS whitespace anywhere between). Pseudo-class and
+ *  pseudo-element names are skipped; their arguments (`:is(...)`, `:not(...)`) are read as selectors.
+ *  A small scanner over the comment-free selector. */
+export function cssSelectorValues(selector) {
+  const s = stripCssComments(selector);
+  const out = [];
+  const skipSpace = (j) => {
+    while (isCssSpace(s[j])) j += 1;
+    return j;
+  };
+  for (let i = 0; i < s.length; ) {
+    const c = s[i];
+    if (c === '"' || c === "'") {
+      i = endOfQuoted(s, i) + 1;
+    } else if (c === ":") {
+      i += s[i + 1] === ":" ? 2 : 1;
+      i = cssNameEnd(s, i);
+    } else if (c === "[") {
+      let j = skipSpace(i + 1);
+      const nameEnd = cssNameEnd(s, j);
+      out.push(unescapeCss(s.slice(j, nameEnd)));
+      j = skipSpace(nameEnd);
+      if ("~|^$*".includes(s[j]) && s[j + 1] === "=") j += 1;
+      if (s[j] === "=") {
+        j = skipSpace(j + 1);
+        if (s[j] === '"' || s[j] === "'") {
+          const close = endOfQuoted(s, j);
+          out.push(unescapeCss(s.slice(j + 1, close)));
+          j = close + 1;
+        } else {
+          const valueEnd = cssNameEnd(s, j);
+          out.push(unescapeCss(s.slice(j, valueEnd)));
+          j = valueEnd;
+        }
+      }
+      while (j < s.length && s[j] !== "]") j += 1;
+      i = j + 1;
+    } else if (isNameChar(c) || c === "\\") {
+      const end = cssNameEnd(s, i);
+      out.push(unescapeCss(s.slice(i, end)));
+      i = end;
+    } else {
+      i += 1;
+    }
+  }
+  return out.map((v) => v.toLowerCase());
+}
+
+/** The tokens of a declaration value or at-rule params, lower-cased: every quoted string, and every
+ *  run of other characters between CSS whitespace and `( ) , ; [ ]` (an unquoted `url(...)`, a
+ *  layer or container name, a keyword), with escapes resolved, over the comment-free text. */
+export function cssValueTokens(text) {
+  const s = stripCssComments(text);
+  const out = [];
+  const stop = (c) => isCssSpace(c) || c === '"' || c === "'" || "(),;[]".includes(c);
+  for (let i = 0; i < s.length; ) {
+    if (s[i] === '"' || s[i] === "'") {
+      const close = endOfQuoted(s, i);
+      out.push(unescapeCss(s.slice(i + 1, close)));
+      i = close + 1;
+    } else if (stop(s[i])) {
+      i += 1;
+    } else {
+      let j = i;
+      while (j < s.length && !stop(s[j])) j = s[j] === "\\" ? cssEscapeEnd(s, j) : j + 1;
+      out.push(unescapeCss(s.slice(i, j)));
+      i = j;
+    }
+  }
+  return out.map((v) => v.toLowerCase());
+}
+
+/** `pack-slug-in-core` in a stylesheet (cinatra#4531): postcss parses it into rules, declarations
+ *  and at-rules; the names and values of every rule's selector and the tokens of every declaration
+ *  value and at-rule params (comments removed outside strings, escapes resolved, lower-cased) are
+ *  split and compared like every other value. A declaration's property name is not read. A
  *  stylesheet that does not parse fails closed. */
 export function scanPackLeafCss({ file, text, packs }) {
   const leaves = packLeafNames(packs);
@@ -930,7 +1057,7 @@ export function scanPackLeafCss({ file, text, packs }) {
   const counts = new Map();
   root.walk((node) => {
     const values =
-      node.type === "rule" ? cssAttributeValues(node.selector) : node.type === "decl" ? cssQuotedStrings(node.value) : node.type === "atrule" ? cssQuotedStrings(node.params) : [];
+      node.type === "rule" ? cssSelectorValues(node.selector) : node.type === "decl" ? cssValueTokens(node.value) : node.type === "atrule" ? cssValueTokens(node.params) : [];
     for (const value of values) {
       for (const leaf of leafParts(value, leaves)) {
         out.push(
@@ -1500,6 +1627,10 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductJsonFile)) {
       const file = relative(repoRoot, abs).split(sep).join("/");
       findings.push(...scanPackLeafJson({ file, text: readFileSync(abs, "utf8"), packs }));
+    }
+    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductTextFile)) {
+      const file = relative(repoRoot, abs).split(sep).join("/");
+      findings.push(...scanPackLeafText({ file, text: readFileSync(abs, "utf8"), packs }));
     }
     for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductCssFile)) {
       const file = relative(repoRoot, abs).split(sep).join("/");
