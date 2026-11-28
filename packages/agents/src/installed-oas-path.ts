@@ -8,7 +8,7 @@
 // vendor, and resolution derives the single candidate path from the scope.
 // This is deliberately NOT the identity-segment enumeration used by the
 // slug-keyed dev-source resolvers (safeVendorSegmentsForRead /
-// resolveAgentJsonPathForRead in mcp/agent-source-paths.ts): those start from
+// resolveAgentOasPathForRead in mcp/agent-source-paths.ts): those start from
 // a slug with the vendor UNKNOWN. Enumerating vendor candidates for a fully
 // scoped name would let a same-slug package under one vendor shadow another
 // (the cinatra#538 class) and would decouple reads from the mount's own

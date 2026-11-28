@@ -45,9 +45,10 @@ export const EXTENSION_TOOL = "extension_tool";
 /**
  * THE AGENT RULE. A pinned pack is an agent when its manifest says kind
  * `agent`, OR when its pinned tree holds what the product's discovery looks
- * for at a pack root `extensions/<scope>/<name>`: `cinatra/oas.json` or the
- * transitional `cinatra/agent.json` (`collectDefinitions` in
- * src/lib/git-native-agent-ingest.ts, the vendor-namespace probe; the seed of
+ * for at a pack root `extensions/<scope>/<name>`: `cinatra/oas.json`, which it
+ * reads, or the old `cinatra/agent.json`, which it reports and does not load
+ * (`DEFINITION_PLACES` in packages/agents/src/agent-source-dirs.ts, used by
+ * `collectDefinitions` in src/lib/git-native-agent-ingest.ts; the seed of
  * scripts/extensions/build-required-oas-seed.mjs tests `cinatra/oas.json`, a
  * subset). A tree entry at, or below, such a path matches (discovery's
  * `existsSync` is true for a file, a link or a folder).
