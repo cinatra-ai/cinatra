@@ -210,49 +210,54 @@ describe("mergeRoleDeclarations", () => {
   });
 });
 
-// cinatra#4849: the dashboard FORM (`cinatra.artifact.accepts.dashboard`) has
-// one claimant, like a role. Core reads that pack's own type from the generated
-// bindings instead of spelling it.
-describe("mergeDashboardFormDeclarations", () => {
-  const merge = (declarations) => {
-    expect(typeof bindingKinds.mergeDashboardFormDeclarations).toBe("function");
-    return bindingKinds.mergeDashboardFormDeclarations(declarations);
+// cinatra#4849: the type that twins a core dashboard record is found through
+// the `artifact-dashboard-twin` ROLE (one claimant, like every role), never
+// through the dashboard representation form, which any number of packs may
+// accept.
+describe("resolveRoleArtifactTypes + the artifact-dashboard-twin role", () => {
+  const resolve = (bindings, types) => {
+    expect(typeof bindingKinds.resolveRoleArtifactTypes).toBe("function");
+    return bindingKinds.resolveRoleArtifactTypes(bindings, types);
   };
-  const ONE = {
-    packageName: "@example-org/board-artifact",
-    objectTypes: [{ type: "@example-org/board-artifact:board", claim: "dedicated" }],
+  const BOARD = "@example-org/board-artifact";
+  const PANEL = "@example-org/panel-artifact";
+  const TYPES = {
+    [BOARD]: [{ type: `${BOARD}:board`, claim: "dedicated" }],
+    // A second pack that ACCEPTS the dashboard form, without the role.
+    [PANEL]: [{ type: `${PANEL}:panel`, claim: "dedicated" }],
   };
 
-  it("returns the single claimant's own type", () => {
-    expect(merge([ONE])).toEqual({
-      type: "@example-org/board-artifact:board",
-      declaredBy: "@example-org/board-artifact",
-      errors: [],
-    });
+  it("maps the role to the one type its claimant owns; a second form-accepting pack without the role generates fine", () => {
+    const { roles, errors } = mergeRoleDeclarations([
+      { packageName: BOARD, roles: ["artifact-dashboard-twin"] },
+      { packageName: PANEL, roles: undefined },
+    ]);
+    expect(errors).toEqual([]);
+    expect(resolve(roles, TYPES)).toEqual({ "artifact-dashboard-twin": `${BOARD}:board` });
   });
 
-  it("returns no type when no pack declares the form", () => {
-    expect(merge([])).toEqual({ type: null, declaredBy: null, errors: [] });
-  });
-
-  it("FAILS when two packages declare the form (exactly one claimant)", () => {
-    const second = {
-      packageName: "@example-org/panel-artifact",
-      objectTypes: [{ type: "@example-org/panel-artifact:panel", claim: "dedicated" }],
-    };
-    const { errors } = merge([ONE, second]);
+  it("FAILS when two packs claim the artifact-dashboard-twin role", () => {
+    const { errors } = mergeRoleDeclarations([
+      { packageName: BOARD, roles: ["artifact-dashboard-twin"] },
+      { packageName: PANEL, roles: ["artifact-dashboard-twin"] },
+    ]);
     expect(errors.join("\n")).toMatch(
-      /dashboard form \(cinatra\.artifact\.accepts\.dashboard\) claimed by BOTH @example-org\/board-artifact and @example-org\/panel-artifact/,
+      /role "artifact-dashboard-twin" claimed by BOTH @example-org\/board-artifact and @example-org\/panel-artifact/,
     );
   });
 
-  it("FAILS when the claimant does not own exactly one type (foreign claims do not count)", () => {
-    const { errors } = merge([
-      {
-        packageName: "@example-org/board-artifact",
-        objectTypes: [{ type: "@example-org/other-artifact:thing", claim: "dedicated" }],
-      },
-    ]);
-    expect(errors.join("\n")).toMatch(/owns 0 object types \(it must own exactly one\)/);
+  it("gives no type to a claimant that owns none or several (foreign claims do not count)", () => {
+    expect(
+      resolve(
+        { "artifact-dashboard-twin": BOARD, "artifact-other": PANEL },
+        {
+          [BOARD]: [{ type: "@example-org/other-artifact:thing", claim: "dedicated" }],
+          [PANEL]: [
+            { type: `${PANEL}:a`, claim: "dedicated" },
+            { type: `${PANEL}:b`, claim: "dedicated" },
+          ],
+        },
+      ),
+    ).toEqual({});
   });
 });

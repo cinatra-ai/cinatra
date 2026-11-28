@@ -2567,8 +2567,8 @@ export interface TwinBackfillResult {
 export interface BackfillTwinsDeps {
   /**
    * The `objects.type` a dashboard twin carries (cinatra#4849). The host passes
-   * the twin writer's `DASHBOARD_OBJECT_TYPE`, which it reads from the dashboard
-   * pack's generated declaration; this package names no pack type. ABSENT (or
+   * the twin writer's `DASHBOARD_OBJECT_TYPE`, which it reads through the
+   * `artifact-dashboard-twin` role in the generated bindings; this package names no pack type. ABSENT (or
    * null) with a database configured, the sweep fails with the reason before it
    * scans; the boot phase logs it and retries next boot.
    */

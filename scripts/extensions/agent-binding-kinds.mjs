@@ -294,38 +294,29 @@ export function mergeRoleDeclarations(declarations) {
 }
 
 /**
- * Validate + merge the DASHBOARD FORM declarations (cinatra#4849).
- * Input: array of { packageName, objectTypes }, one entry per artifact pack
- * whose manifest declares `cinatra.artifact.accepts.dashboard`. Output:
- * `{ type, declaredBy, errors }`: the one object type the single claimant
- * OWNS (its id is namespaced by the claimant's own package), or nulls when no
- * pack declares the form. Like a role, the form has exactly one claimant: a
- * second declaring package is an ERROR, and so is a claimant that does not
- * own exactly one type (a foreign claim is not the claimant's own type).
+ * The object type each role's claimant OWNS (cinatra#4849), for host code that
+ * needs the claimant's TYPE rather than its package (the dashboards twin
+ * writes the type the `artifact-dashboard-twin` claimant owns).
+ * Input: the merged `{ role -> packageName }` map and
+ * `{ packageName -> declared objectTypes }`. Output: `{ role -> type }`
+ * (sorted keys) for every role whose claimant owns exactly ONE type (an id
+ * namespaced by the claimant's own package; a foreign claim is not owned). A
+ * claimant that owns none or several has no single type and gets no entry;
+ * the role itself still binds its package. Single claimant per role is
+ * enforced by `mergeRoleDeclarations`; what a pack accepts plays no part.
  */
-export function mergeDashboardFormDeclarations(declarations) {
-  const errors = [];
-  let claim = null;
-  for (const { packageName, objectTypes } of declarations) {
-    const owned = (Array.isArray(objectTypes) ? objectTypes : [])
-      .map((t) => (t && typeof t.type === "string" ? t.type : null))
-      .filter((type) => type !== null && type.startsWith(`${packageName}:`));
-    const unique = [...new Set(owned)];
-    if (unique.length !== 1) {
-      errors.push(
-        `${packageName}: declares the dashboard form (cinatra.artifact.accepts.dashboard) ` +
-          `but owns ${unique.length} object types (it must own exactly one)`,
-      );
-      continue;
-    }
-    if (claim && claim.declaredBy !== packageName) {
-      errors.push(
-        `the dashboard form (cinatra.artifact.accepts.dashboard) claimed by BOTH ` +
-          `${claim.declaredBy} and ${packageName} (the form must have exactly one claimant)`,
-      );
-      continue;
-    }
-    claim = { type: unique[0], declaredBy: packageName };
+export function resolveRoleArtifactTypes(roleBindings, objectTypesByPackage) {
+  const out = [];
+  for (const [role, packageName] of Object.entries(roleBindings)) {
+    const declared = objectTypesByPackage[packageName];
+    const owned = [
+      ...new Set(
+        (Array.isArray(declared) ? declared : [])
+          .map((t) => (t && typeof t.type === "string" ? t.type : null))
+          .filter((type) => type !== null && type.startsWith(`${packageName}:`)),
+      ),
+    ];
+    if (owned.length === 1) out.push([role, owned[0]]);
   }
-  return { type: claim?.type ?? null, declaredBy: claim?.declaredBy ?? null, errors };
+  return Object.fromEntries(out.sort(([a], [b]) => a.localeCompare(b)));
 }

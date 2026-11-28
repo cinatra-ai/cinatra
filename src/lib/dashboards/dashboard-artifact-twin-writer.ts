@@ -15,7 +15,7 @@ import {
   publishCallInFlightOr,
 } from "@/lib/lifecycle/lifecycle-emit";
 import { PINNED_CONFIGURATION_SIGNAL_KEY } from "@/lib/artifacts/artifact-read";
-import { GENERATED_DASHBOARD_ARTIFACT_TYPE } from "@/lib/generated/agent-bindings";
+import { resolveExtensionRoleArtifactType } from "@/lib/extension-roles";
 import {
   setDashboardArtifactTwinWriter,
   setDashboardTwinProducerRunLock,
@@ -84,13 +84,14 @@ import {
  *   2. `artifact_audit` (action='delete').
  */
 
-/** The `objects.type` a dashboard artifact carries: the type owned by the one
- *  artifact pack that declares the dashboard form
- *  (`cinatra.artifact.accepts.dashboard`), read from the generated bindings
- *  (cinatra#4849) so core spells no pack type id. The generator refuses a second
- *  claimant. Null only in a build where no present pack declares the form; a
- *  twin upsert then fails with the reason (see `buildDashboardTwinQueries`). */
-export const DASHBOARD_OBJECT_TYPE: string | null = GENERATED_DASHBOARD_ARTIFACT_TYPE;
+/** The `objects.type` a dashboard artifact carries: the type owned by the
+ *  claimant of the `artifact-dashboard-twin` role, read from the generated
+ *  bindings (cinatra#4849) so core spells no pack type id. A role has exactly
+ *  one claimant (the generator refuses a second). Null only in a build where no
+ *  present pack claims the role; a twin upsert then fails with the reason (see
+ *  `buildDashboardTwinQueries`). */
+export const DASHBOARD_OBJECT_TYPE: string | null =
+  resolveExtensionRoleArtifactType("artifact-dashboard-twin") ?? null;
 
 /** The substrate `resource.kind` + `representation.form` a dashboard uses (both
  *  admitted by the B1a CHECK-constraint widening). */
@@ -216,13 +217,13 @@ export function buildDashboardTwinQueries(
   }
 
   // operation === "upsert".
-  // No declared dashboard type in this build: fail like any other twin write
+  // No role-claimed dashboard type in this build: fail like any other twin write
   // failure, with the reason, never write an undeclared type (cinatra#4849).
   if (DASHBOARD_OBJECT_TYPE === null) {
     throw new Error(
-      "dashboards-artifact twin: no artifact pack in this build declares the dashboard " +
-        "form (cinatra.artifact.accepts.dashboard), so the twin has no object type to " +
-        "write. Re-run: node scripts/extensions/generate-extension-manifest.mjs",
+      "dashboards-artifact twin: no artifact pack in this build claims the " +
+        "artifact-dashboard-twin role with a single type of its own, so the twin has " +
+        "no object type to write. Re-run: node scripts/extensions/generate-extension-manifest.mjs",
     );
   }
   const dashboardObjectType = DASHBOARD_OBJECT_TYPE;

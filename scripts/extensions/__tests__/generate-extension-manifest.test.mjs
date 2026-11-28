@@ -1674,12 +1674,14 @@ describe("artifactKindLabelEntries — carried, never derived", () => {
 });
 
 
-describe("the dashboard form claimant is generated, not spelled by core (cinatra#4849)", () => {
-  it("emits the type the pinned dashboard pack declares for the dashboard form", async () => {
+describe("the artifact-dashboard-twin role's type is generated, not spelled by core (cinatra#4849)", () => {
+  it("emits the type the role's claimant owns, from the pinned pack declarations", async () => {
     const generated = await import("../../../src/lib/generated/agent-bindings.ts");
     const manifest = await buildManifest();
-    expect(generated.GENERATED_DASHBOARD_ARTIFACT_TYPE).toBe("@cinatra-ai/dashboard-artifact:dashboard");
-    expect(manifest.dashboardArtifactType).toBe(generated.GENERATED_DASHBOARD_ARTIFACT_TYPE);
+    expect(generated.GENERATED_ROLE_ARTIFACT_TYPES?.["artifact-dashboard-twin"]).toBe(
+      "@cinatra-ai/dashboard-artifact:dashboard",
+    );
+    expect(manifest.roleArtifactTypes).toEqual(generated.GENERATED_ROLE_ARTIFACT_TYPES);
   });
 });
 
