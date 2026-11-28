@@ -602,3 +602,65 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
 export function lookupPrimitiveClassification(name: string): PrimitiveClassification | undefined {
   return PRIMITIVE_CLASSIFICATIONS[name];
 }
+
+// ---------------------------------------------------------------------------
+// PASSTHROUGH CLASSIFICATIONS (cinatra#4895) — the inventory rows whose road is
+// "passthrough": every name the deterministic passthrough route
+// (src/app/api/agents/passthrough/route.ts) admits. The route admits them by
+// its allow list, the bridge token and the proven run; the MCP boundary does
+// not run on that road. So this map is SEPARATE from PRIMITIVE_CLASSIFICATIONS
+// and nothing at the MCP boundary reads it.
+//   - "passthrough_route": the route dispatches the name to its own scoped
+//     implementation; the resource and action are what that implementation does.
+//   - "host_handler_via_passthrough": the route calls the same host handler the
+//     MCP road registers, as the proven run's actor and without the MCP
+//     boundary; the handler's own authorization applies. Its resource and action
+//     are read from the name's host classification, never copied.
+// KEEP ALPHABETICAL by key.
+// ---------------------------------------------------------------------------
+
+export type PassthroughToolClassification = {
+  resourceType: ResourceType;
+  action: Action;
+  /** Where the tool is enforced on this road (see above); never the MCP boundary. */
+  status: "passthrough_route" | "host_handler_via_passthrough";
+};
+
+/** A name the route forwards to its host handler: the host classification's resource and action. */
+function viaHostHandler(name: string): PassthroughToolClassification {
+  const host = PRIMITIVE_CLASSIFICATIONS[name];
+  return {
+    resourceType: host?.resourceType as ResourceType,
+    action: host?.action as Action,
+    status: "host_handler_via_passthrough",
+  };
+}
+
+export const PASSTHROUGH_TOOL_CLASSIFICATIONS: Record<string, PassthroughToolClassification> = {
+  agent_run_hitl_prompts_exclude: viaHostHandler("agent_run_hitl_prompts_exclude"),
+  agent_run_hitl_prompts_list: viaHostHandler("agent_run_hitl_prompts_list"),
+  artifact_content_read:   { resourceType: "artifact",  action: "read",    status: "passthrough_route" },
+  artifact_image_generate: { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  artifact_materialize:    { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  artifact_page_capture:   { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  // The route's own scoped reads (extension-scoped-tools.ts → extension-artifact-reads.ts),
+  // limited to the artifact types the calling extension declares.
+  artifacts_get:           { resourceType: "artifact",  action: "read",    status: "passthrough_route" },
+  artifacts_list:          { resourceType: "artifact",  action: "list",    status: "passthrough_route" },
+  campaign_test_send_plan: viaHostHandler("campaign_test_send_plan"),
+  // The route's own branch (run-dashboard-create.ts) calls the host dashboards_create handler.
+  dashboards_create: viaHostHandler("dashboards_create"),
+  email_outreach_initial_drafts_update: viaHostHandler("email_outreach_initial_drafts_update"),
+  email_outreach_recipients_update: viaHostHandler("email_outreach_recipients_update"),
+  email_test_delivery_parse_action: viaHostHandler("email_test_delivery_parse_action"),
+  email_test_delivery_run_send: viaHostHandler("email_test_delivery_run_send"),
+  extension_data:          { resourceType: "agent_run", action: "execute", status: "passthrough_route" },
+  extension_tool:          { resourceType: "agent_run", action: "execute", status: "passthrough_route" },
+  objects_classify: viaHostHandler("objects_classify"),
+  objects_save: viaHostHandler("objects_save"),
+  objects_update: viaHostHandler("objects_update"),
+  run_folder_list:         { resourceType: "agent_run", action: "read",    status: "passthrough_route" },
+  run_folder_read:         { resourceType: "agent_run", action: "read",    status: "passthrough_route" },
+  run_folder_write:        { resourceType: "agent_run", action: "update",  status: "passthrough_route" },
+  trigger_config_set: viaHostHandler("trigger_config_set"),
+};
