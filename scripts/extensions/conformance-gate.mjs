@@ -57,7 +57,6 @@ import {
   CONNECTOR_KNOWN_FINDINGS_FLOOR,
 } from "./lib/conformance-rules.mjs";
 import { stripComments } from "../audit/lib/strip-comments.mjs";
-import { hasAssistantBlock, validateAssistantConfig } from "../audit/connector-access-config-gate.mjs";
 
 export const CONFORMANCE_GATE_VERSION = "0.1.0";
 
@@ -325,7 +324,7 @@ function checkManifest(pkgDir, pkg, rules) {
       });
     }
   } else if (kind === "agent") {
-    findings.push(...checkAgentManifest(pkgDir, pkg.name));
+    findings.push(...checkAgentManifest(pkgDir, pkg));
   }
   // kind === "workflow" | "skill": metadata-only, no rule (#979 addendum).
 
@@ -1492,27 +1491,42 @@ function checkWebhooksDeclaration(pkg) {
 // product reads (#4920). An old cinatra/agent.json or root agent.json is not
 // read: without cinatra/oas.json the finding names the file to move.
 // The other agent form is a config-only assistant: no cinatra/oas.json and no old
-// file, and a cinatra/config.json with a non-null `assistant` block (the product's
-// runtime-loader and assistant-declaration-host read it); it is judged by the same
-// shared predicates as scripts/ci-validate-agents.mjs `classifyAgentDefinition`.
+// file, and a cinatra/config.json that parses with a non-null object `assistant`
+// (the condition of scripts/ci-validate-agents.mjs; the product's runtime loader
+// reads the PACKAGED config). This check only requires that cinatra/config.json
+// ships; the full validation of the assistant block is the assistant check's
+// (scripts/audit/connector-access-config-gate.mjs). It imports nothing from it:
+// the reusable workflow's sparse checkout does not fetch that file.
 // Limit: only a package whose cinatra.kind is "agent" is checked here.
 const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
-function checkAgentManifest(pkgDir, packageName) {
+function declaresAssistant(configPath) {
+  try {
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    const assistant = config?.assistant;
+    return assistant !== null && typeof assistant === "object" && !Array.isArray(assistant);
+  } catch {
+    return false;
+  }
+}
+function checkAgentManifest(pkgDir, pkg) {
   const oasPath = join(pkgDir, "cinatra", "oas.json");
   if (!existsSync(oasPath)) {
     const old = OLD_AGENT_DEFINITIONS.filter((rel) => existsSync(join(pkgDir, rel)));
-    const configPath = join(pkgDir, "cinatra", "config.json");
-    if (old.length === 0 && existsSync(configPath)) {
-      let config;
-      try {
-        config = JSON.parse(readFileSync(configPath, "utf8"));
-      } catch (err) {
-        return [{ rule: "manifest.agent-assistant-invalid", file: "cinatra/config.json", detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}` }];
-      }
-      if (hasAssistantBlock(config)) {
-        const errors = validateAssistantConfig(config, packageName);
-        return errors.length ? [{ rule: "manifest.agent-assistant-invalid", file: "cinatra/config.json", detail: `assistant declaration invalid: ${errors.join("; ")}` }] : [];
-      }
+    if (old.length === 0 && declaresAssistant(join(pkgDir, "cinatra", "config.json"))) {
+      // The same shipment proof as checkDeclaredLogo: npm's packlist, the `files` heuristic only when it is unavailable.
+      const { files: packed } = resolvePacklist(pkgDir);
+      const ships = packed === null ? isInScope("cinatra/config.json", pkg.files) : packed.includes("cinatra/config.json");
+      if (ships) return [];
+      return [
+        {
+          rule: "manifest.agent-assistant-config-unpublished",
+          file: "cinatra/config.json",
+          detail:
+            `cinatra/config.json declares the assistant but does not ship in the published package` +
+            `${packed === null ? ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)' : " (per `npm pack --dry-run`)"}` +
+            `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
+        },
+      ];
     }
     const detail = old.length
       ? `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`
