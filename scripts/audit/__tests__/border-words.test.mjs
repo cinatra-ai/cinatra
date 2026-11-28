@@ -238,7 +238,6 @@ describe("B3 the bridge", () => {
     expect(() => loadBorderWords(r)).toThrow(BorderWordsError);
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: ["acme"], domain: ["acme"], packages: [] }));
     expect(() => loadBorderWords(r)).toThrow(/appears twice/);
-    // red-first-expect: AssertionError: expected [Function] to throw an error
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [] }));
     expect(() => loadBorderWords(r)).toThrow(/"packages" must be an array/);
     writeFileSync(join(r, BRIDGE_REL), JSON.stringify({ vendor: [], domain: [], packages: ["Not A Name"] }));
@@ -257,7 +256,6 @@ describe("B3 the bridge", () => {
 });
 
 describe("B3b a word leaves the bridge only into a declaration of its own list", () => {
-  // red-first-expect: TypeError: bridgeShrinkProblems is not a function
   const base = { vendor: ["acme", "legacy"], domain: ["ticket"] };
   const packs = { "@example-org/widget-artifacts": NO_WORD, "@example-org/acme-connector": { vendor: ["acme"], domain: [] } };
 
@@ -348,7 +346,6 @@ describe("B4 a pinned pack without the declaration", () => {
   });
 
   it("a newly pinned pack the list does not name fails, even while the bridge holds words", () => {
-    // red-first-expect: AssertionError: expected [] to deeply equal [ Array(1) ]
     const words = loadBorderWords(makeTree({ packs, bridge: { vendor: ["legacy"], domain: [] } }));
     expect(words.problems).toEqual([notListed(QUIET)]);
     expect(words.warnings).toEqual([]);
@@ -401,7 +398,6 @@ describe("B4 a pinned pack without the declaration", () => {
   });
 
   it("the packages list only shrinks against the base", () => {
-    // red-first-expect: AssertionError: expected [] to deeply equal [ 'packages: @example-org/new-agent' ]
     const base = { vendor: [], domain: [], packages: [QUIET] };
     expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [QUIET, "@example-org/new-agent"] })).toEqual(["packages: @example-org/new-agent"]);
     expect(bridgeGrowth(base, { vendor: [], domain: [], packages: [] })).toEqual([]);
