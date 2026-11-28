@@ -129,6 +129,43 @@ the TypeScript library are skipped. The rule cannot tell a tunnel from a key-val
 string, value: T)` is reported and recorded in the ledger. Hiding a tunnel on purpose behind
 such a form is not blocked by this check.
 
+### `single-package-declaration-reader` (cinatra#4873, stage 1)
+
+A host reader of declarations takes them from the registry or from the manifests it iterates. A
+module of core that value-imports one workspace package's per-primitive declaration array serves
+that one package's domain. Stage 1 of the rule reads every product source file of the scan above
+(a declaration file `.d.ts`, `.d.mts`, `.d.cts` imports nothing at run time and is not read, and
+neither is a fixture or test helper module that stands in a product folder, by the names these
+modules have in the tree, as for `pack-slug-in-core`: `fixtures.<ext>`, `conformance-fixtures.<ext>`
+and `testing.<ext>`; `dev-fixtures.ts`, the SDK's fixture contract, is read) with
+the TypeScript parser and takes each static import declaration with named imports,
+`import { X } from "<specifier>"` and `import { X as Y } from "<specifier>"`. A named import is a
+finding when the imported name (not the local name) ends with `PrimitiveMetadata`, the import is
+not type-only (neither `import type { … }` nor an inline `type X`), and the package of the
+specifier is not the package of the importing file. An import inside the declaring package is the
+registering side and is allowed.
+
+The package of a file is the directory `packages/<dir>` that holds it, or `src/` for the
+application. The package of a specifier is decided from facts the tree states: a relative specifier
+is resolved against the importing file and the package of the resolved path counts (so it stays
+in the file's own package unless the path leaves it); a specifier that a path alias of the root
+`tsconfig.json` matches is resolved through the alias's first target, an exact pattern before the
+wildcard pattern with the longest prefix, as the compiler matches them (`@/x` is `src/`); a bare
+specifier whose package name is a workspace package (the `name` of a `packages/<dir>/package.json`)
+is that package; any other bare specifier is a package of its own. The rule names no package and no
+primitive. A finding's detail is the imported name with the declaring package,
+`xPrimitiveMetadata (@cinatra-ai/x)` (a workspace package's name, `src/`, or the bare package
+name), and a repeated name in one file carries its occurrence. A file that does not parse fails the
+check with its name. On the day the rule landed it had no finding, so its ledger holds no entry.
+
+Not read in this stage (next stages, tracked in the issue): a re-export
+(`export { xPrimitiveMetadata } from "…"`), a namespace import used by member access
+(`import * as m` then `m.xPrimitiveMetadata`), a default import, a dynamic `import()`, `require`,
+and an array re-exported under a name that does not end with `PrimitiveMetadata`. The issue's
+other rule (`registry-word-in-core`: a registry key, a job name or a capability id that carries a
+word derived from the locks, the SDK included) is a later stage. A reader that hides the import on
+purpose behind one of these forms is not blocked by this stage.
+
 ## What the gate does not see
 
 A text scan reads what is written, so the border rules find a crossing through the
