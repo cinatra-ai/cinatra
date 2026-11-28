@@ -1537,7 +1537,8 @@ describe("core/extension border — pack-slug-in-core", () => {
       'const i = "@example-org/quill-ledger-connector/sub";',
       'const j = "/x/tide-planner-agent";',
     ].join("\n");
-    expect(leaves(text)).toEqual([`8 ${QUILL}`, `9 ${QUILL} (occurrence 2)`, "10 tide-planner-agent (@example-org/tide-planner-agent)"]);
+    // `"<leaf>:x"` (line 5) is a type id's pack part since the `:` separator (cinatra#4531 review 1 of #4961).
+    expect(leaves(text)).toEqual([`5 ${QUILL}`, `8 ${QUILL} (occurrence 2)`, `9 ${QUILL} (occurrence 3)`, "10 tide-planner-agent (@example-org/tide-planner-agent)"]);
   });
 
   it("reports a leaf that is one part of a JSON path value or a scoped key or name", () => {
@@ -1549,6 +1550,56 @@ describe("core/extension border — pack-slug-in-core", () => {
     ]);
     expect(json('{ "name": "@example-org/core-x", "dependencies": { "@example-org/quill-ledger-connector": "workspace:*" } }')).toEqual([QUILL]);
     expect(json('{ "name": "@example-org/tide-planner-agent" }')).toEqual(["tide-planner-agent (@example-org/tide-planner-agent)"]);
+  });
+
+  it("reports a leaf before a version range, before a type id, in a comma list and after an at sign", () => {
+    const text = [
+      'const a = "@example-org/quill-ledger-connector@^1.2.0";',
+      'const b = "quill-ledger-connector@1.2.0";',
+      'const c = "someone@quill-ledger-connector";',
+      'const d = "@example-org/quill-ledger-connector:invoice";',
+      'const e = "@example-org/report, @example-org/quill-ledger-connector";',
+      'const f = "@example-org/report@1.0.0";',
+      'const g = "use quill-ledger-connector now";',
+    ].join("\n");
+    expect(leaves(text).map((l) => l.split(" ")[0])).toEqual(["1", "2", "3", "4", "5"]);
+  });
+
+  describe("stylesheets", () => {
+    type Css = { scanPackLeafCss?: (input: { file: string; text: string; packs: Set<string> }) => Finding[] };
+    const css = (text: string, file = "src/app/x.css"): string[] => {
+      const run = (gate as unknown as Css).scanPackLeafCss;
+      if (!run) return ["not a function"];
+      try {
+        return run({ file, text, packs: LEAF_PACKS }).map((f) => `${f.line} ${f.detail}`);
+      } catch (e) {
+        return [`threw: ${(e as Error).message}`];
+      }
+    };
+
+    it("reports a leaf in an attribute selector value, quoted or not, and in a quoted declaration value; a comment is not read", () => {
+      const text = [
+        '@import "tailwindcss";',
+        "@theme { --color-x: #fff; }",
+        '[data-connector-slug="quill-ledger-connector"] { color: red; }',
+        "[data-agent=tide-planner-agent i] { color: red; }",
+        '.x::after { content: "/connectors/x/quill-ledger-connector/setup"; }',
+        "/* quill-ledger-connector is named only in this comment */",
+        '.y { --label: "use quill-ledger-connector now"; }',
+        '[data-x^="quill-ledger-connector-v2"] { color: red; }',
+        '@supports selector([data-kind~="sample-assistant"]) { .z { color: red; } }',
+      ].join("\n");
+      expect(css(text)).toEqual([
+        `3 ${QUILL}`,
+        "4 tide-planner-agent (@example-org/tide-planner-agent)",
+        `5 ${QUILL} (occurrence 2)`,
+        "9 sample-assistant (@example-org/sample-assistant)",
+      ]);
+    });
+
+    it("a stylesheet that does not parse fails closed with its name", () => {
+      expect(css(".a { color: red;\n", "src/app/broken.css")).toEqual([expect.stringMatching(/^threw: \[core-extension-border\] .*src\/app\/broken\.css/)]);
+    });
   });
 
   it("a test helper or stub under a tests folder is out of the scan", () => {

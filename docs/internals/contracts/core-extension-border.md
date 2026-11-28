@@ -59,14 +59,22 @@ text of every string token: a `StringLiteral` in any quote (a JSX attribute valu
 `slug="openai-connector"` is one), a template literal, the literal spans of a template with
 substitutions, and JSX text trimmed. It also reads the `.json` files of the same product tree
 (tests, fixtures and `tsconfig*.json` compiler configs left out) with `JSON.parse`, taking every
-string value and every object key. Each text is split on the characters that separate the parts
-of a path or URL (`/ ? # = &`), and every part equal to a leaf is a finding: the whole value
+string value and every object key, and the `.css` files with postcss (below). Each text is split
+on the characters that separate the parts of a package reference as the product writes and
+parses it, and each part is trimmed: `/ ? # = &` of a path or URL; `@` before a version range
+(`@cinatra-ai/openai-connector@^0.1.0`, parsed by `packages/extensions/src/required-in-prod.ts`);
+`:` before the type of a type id (`@cinatra-ai/<pack>:<type>`, parsed by
+`packages/objects/src/claims.ts`); and `,` in a list of package names (parsed by
+`src/lib/extension-auto-update.ts`). Whitespace is not a separator. Every part equal to a leaf is a
+finding, an e-mail-like `"someone@openai-connector"` included: the whole value
 `"openai-connector"`, `"/connectors/cinatra-ai/openai-connector/setup"`, `"?q=openai-connector"`,
 `` `/agents/${vendor}/openai-connector/new` ``, `"openai-connector/index"`, and the leaf of a
 scoped name, `"@cinatra-ai/openai-connector"` or `"@cinatra-ai/openai-connector/register"`, in a
 string, an import specifier or a JSON key such as a `package.json` dependency. One string can so
-be a finding of two rules (this one and `pack-package-name-branch`), each recorded in its own
-ledger entry. In a template, a part that touches a substitution (`` `<leaf>${n}` ``) is not a whole part
+be a finding of two rules, each recorded in its own ledger entry: a scoped pack name is also a
+`pack-package-name-branch` finding, and a type id whose namespace is the full package name
+(`@cinatra-ai/dashboard-artifact:dashboard`, one such string on main) is also a
+`pack-type-id-in-core` finding. In a template, a part that touches a substitution (`` `<leaf>${n}` ``) is not a whole part
 and is not read. Comments, regular expressions and escapes are the parser's: a comment, also
 inside `${...}`, and a regular expression literal are not string tokens and are not read. A
 file that does not parse fails the check with its name. The vocabulary is the leaves of the pack
@@ -75,6 +83,25 @@ itself. A finding's detail is the leaf with its package,
 `openai-connector (@cinatra-ai/openai-connector)`, and a repeated leaf in one file carries its
 occurrence, as in the other text rules.
 
+A stylesheet is parsed with postcss, which keeps comments apart from selectors, declaration values
+and at-rule params. The rule takes the value of every attribute selector, quoted or not
+(`[data-connector-slug="openai-connector"]`, `[data-x=openai-connector i]`, with `= ~= |= ^= $=
+*=`), and every quoted string of a declaration value or at-rule params, and splits them like
+every other value; a CSS comment is not read. A stylesheet that does not parse fails the check
+with its name. postcss is loaded through `@tailwindcss/postcss`, a direct root dependency that
+depends on it, so the check adds no dependency; if it does not resolve, the check fails.
+
+What is read, per format in the product tree:
+
+| Format | Read | Why |
+| --- | --- | --- |
+| `.ts` `.tsx` `.mts` `.cts` `.js` `.jsx` `.mjs` `.cjs` | yes | product code, through the TypeScript parser |
+| `.json` | yes | imported data modules can drive behaviour; `tsconfig*.json` is a compiler config and is left out |
+| `.css` | yes | a selector on a real attribute can branch on a pack |
+| `.md` | no | READMEs, agent notes and skill text are content for people and models, not behaviour |
+| `.svg` | no | drawings (icons) |
+| `.yaml` | no | the one file, the memory conventions seed bundle, is content and holds no leaf today |
+
 So that an ordinary word is never a finding, only a leaf that ends in a canonical kind suffix
 is read, the suffixes the naming rule accepts
 (`packages/extensions/src/__tests__/naming-conformance.test.ts`): `-agent`, `-assistant`,
@@ -82,7 +109,8 @@ is read, the suffixes the naming rule accepts
 one today; the filter keeps a future one-word pack from turning a generic word into a finding.
 
 Not read: a leaf inside a sentence or joined to other characters (`"use <leaf> now"`,
-`"<leaf>-v2"`, `"<leaf>.json"`, `"a:<leaf>"`), and a regular expression literal. Not part of this
+`"<leaf>-v2"`, `"<leaf>.json"`), a regular expression literal, and an unquoted value in CSS
+outside an attribute selector. Not part of this
 rule yet, tracked in the issue: the role-suffix stem (`blog-content` of `blog-content-skill`) and
 a tool or table name under a pack's stem.
 

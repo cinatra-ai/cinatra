@@ -60,6 +60,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, realpat
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 import ts from "typescript";
 import { compareFloorWithBase, readFileAtBase, reportFloorGuard } from "../audit/lib/floor-base-guard.mjs";
 
@@ -132,6 +133,11 @@ export function isProductFile(name) {
 
 /** A JSON file the leaf rule reads (cinatra#4531), named like a product file: not a test or a
  *  fixture, and not a `tsconfig*.json` (a compiler config, which may hold comments). */
+/** A stylesheet the leaf rule reads (cinatra#4531), named like a product file. */
+export function isProductCssFile(name) {
+  return name.endsWith(".css") && !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
+}
+
 export function isProductJsonFile(name) {
   if (!name.endsWith(".json") || /^tsconfig.*\.json$/.test(name)) return false;
   return !/\.(test|spec)\./.test(name) && !/\.fixture\./.test(name) && !/\.stories\./.test(name);
@@ -740,12 +746,15 @@ export function packLeafNames(packs) {
 }
 
 /** The leaves among the parts of one token value (cinatra#4531): the value split on the characters
- *  that separate the parts of a path or URL (`/ ? # = &`); the leaf of a scoped name
- *  (`@scope/<leaf>`) is a part too. `gluedStart` / `gluedEnd`: the first /
+ *  that separate the parts of a package reference as the product writes and parses it, each part
+ *  trimmed: `/ ? # = &` of a path or URL, `@` before a version range (`@scope/<leaf>@^1.0.0`,
+ *  packages/extensions/src/required-in-prod.ts), `:` before a type in a type id (`@scope/<leaf>:x`,
+ *  packages/objects/src/claims.ts) and `,` in a list (src/lib/extension-auto-update.ts). The leaf
+ *  of a scoped name (`@scope/<leaf>`) is a part too. `gluedStart` / `gluedEnd`: the first /
  *  last part touches a template substitution, so it is not a whole part and is not read. */
-const PATH_PART_SEPARATORS = /[/?#=&]/;
+const PATH_PART_SEPARATORS = /[/?#=&@:,]/;
 export function leafParts(value, leaves, { gluedStart = false, gluedEnd = false } = {}) {
-  const parts = value.split(PATH_PART_SEPARATORS);
+  const parts = value.split(PATH_PART_SEPARATORS).map((part) => part.trim());
   const out = [];
   parts.forEach((part, i) => {
     if ((gluedStart && i === 0) || (gluedEnd && i === parts.length - 1)) return;
@@ -829,6 +838,113 @@ export function scanPackLeafJson({ file, text, packs }) {
     }
   };
   visit(doc);
+  return out;
+}
+
+/** postcss, loaded through `@tailwindcss/postcss` (cinatra#4531). The root declares no CSS parser of
+ *  its own and pnpm does not hoist postcss, but `@tailwindcss/postcss` is a direct root dependency
+ *  that depends on postcss: resolving postcss from it loads the copy the frozen lockfile installs
+ *  for it, with no new dependency. If it does not resolve, the rule fails closed. */
+let postcssModule = null;
+function loadPostcss() {
+  if (postcssModule) return postcssModule;
+  try {
+    const fromRoot = createRequire(join(DEFAULT_REPO_ROOT, "package.json"));
+    postcssModule = createRequire(fromRoot.resolve("@tailwindcss/postcss"))("postcss");
+  } catch (e) {
+    throw new Error(
+      `[core-extension-border] postcss cannot be loaded through @tailwindcss/postcss (${compact(String(e?.message ?? e))}) — ` +
+        "the leaf rule fails closed rather than skipping stylesheets",
+    );
+  }
+  return postcssModule;
+}
+
+/** The end index of the quoted string that opens at `i` (a backslash escapes one character). */
+function endOfQuoted(text, i) {
+  let j = i + 1;
+  while (j < text.length && text[j] !== text[i]) j += text[j] === "\\" ? 2 : 1;
+  return j;
+}
+
+/** The contents of every quoted string in a comment-free CSS value or at-rule params. */
+export function cssQuotedStrings(text) {
+  const out = [];
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '"' && text[i] !== "'") continue;
+    const end = endOfQuoted(text, i);
+    out.push(text.slice(i + 1, end));
+    i = end;
+  }
+  return out;
+}
+
+/** The value of every attribute selector in a comment-free selector, quoted or not:
+ *  `[name OP value flag]` with OP one of `= ~= |= ^= $= *=` and an optional `i` or `s` flag. A small
+ *  scanner walks the brackets and the quotes; a bracket without an operator has no value. */
+export function cssAttributeValues(selector) {
+  const out = [];
+  for (let i = 0; i < selector.length; i += 1) {
+    if (selector[i] === '"' || selector[i] === "'") {
+      i = endOfQuoted(selector, i);
+      continue;
+    }
+    if (selector[i] !== "[") continue;
+    let j = i + 1;
+    while (j < selector.length && selector[j] !== "=" && selector[j] !== "]") j += 1;
+    if (selector[j] !== "=") {
+      i = j;
+      continue;
+    }
+    j += 1;
+    while (selector[j] === " ") j += 1;
+    if (selector[j] === '"' || selector[j] === "'") {
+      const end = endOfQuoted(selector, j);
+      out.push(selector.slice(j + 1, end));
+      j = end + 1;
+    } else {
+      const start = j;
+      while (j < selector.length && selector[j] !== " " && selector[j] !== "]") j += 1;
+      out.push(selector.slice(start, j));
+    }
+    while (j < selector.length && selector[j] !== "]") j += 1;
+    i = j;
+  }
+  return out;
+}
+
+/** `pack-slug-in-core` in a stylesheet (cinatra#4531): postcss parses it and keeps comments apart;
+ *  the attribute selector values of every rule's selector and the quoted strings of every
+ *  declaration value and at-rule params are split and compared like every other value. A
+ *  stylesheet that does not parse fails closed. */
+export function scanPackLeafCss({ file, text, packs }) {
+  const leaves = packLeafNames(packs);
+  const postcss = loadPostcss();
+  let root;
+  try {
+    root = postcss.parse(text, { from: file });
+  } catch (e) {
+    throw new Error(`[core-extension-border] ${file} does not parse as CSS (${compact(String(e?.reason ?? e?.message ?? e))}) — the leaf rule fails closed rather than skipping the file`);
+  }
+  const out = [];
+  const counts = new Map();
+  root.walk((node) => {
+    const values =
+      node.type === "rule" ? cssAttributeValues(node.selector) : node.type === "decl" ? cssQuotedStrings(node.value) : node.type === "atrule" ? cssQuotedStrings(node.params) : [];
+    for (const value of values) {
+      for (const leaf of leafParts(value, leaves)) {
+        out.push(
+          finding(
+            "pack-slug-in-core",
+            file,
+            node.source?.start?.line ?? 1,
+            occurrenceDetail(counts, "pack-slug-in-core", `${leaf} (${leaves.get(leaf).join(", ")})`),
+            `core names the pack ${leaves.get(leaf).join(", ")} by its unscoped name; behaviour follows a declaration, never a pack's name`,
+          ),
+        );
+      }
+    }
+  });
   return out;
 }
 
@@ -1384,6 +1500,10 @@ export function scanRepository({ repoRoot = DEFAULT_REPO_ROOT, baselinePath = DE
     for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductJsonFile)) {
       const file = relative(repoRoot, abs).split(sep).join("/");
       findings.push(...scanPackLeafJson({ file, text: readFileSync(abs, "utf8"), packs }));
+    }
+    for (const abs of walkProductFiles(join(repoRoot, root), [], repoRoot, isProductCssFile)) {
+      const file = relative(repoRoot, abs).split(sep).join("/");
+      findings.push(...scanPackLeafCss({ file, text: readFileSync(abs, "utf8"), packs }));
     }
   }
   keepRecordedKindDetails(findings, baseline.entries);
