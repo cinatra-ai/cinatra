@@ -1497,63 +1497,96 @@ function checkWebhooksDeclaration(pkg) {
 }
 
 // The definition of an agent extension is cinatra/oas.json, the only file the
-// product reads (#4920). An old cinatra/agent.json or root agent.json is not read:
-// without cinatra/oas.json the finding names the file to move. The other agent
-// form is a config-only assistant: no cinatra/oas.json and no old file, and a
-// cinatra/config.json with an `assistant` block (the order of
-// scripts/ci-validate-agents.mjs).
-//
-// The product reads cinatra/config.json of EVERY agent package, with or without
-// cinatra/oas.json (src/lib/assistant-declaration-host.ts,
-// packages/sdk-extensions/src/assistant-declaration.ts), so this check does too:
-//   - a config that cannot be read or parsed is refused (own lines here);
-//   - an `assistant` block (hasAssistantBlock) gets the product's file and block
-//     schema (validateAssistantConfig: formatVersion 1, no unknown keys,
-//     `protected` a boolean, every block field);
-//   - an assistant block beside a non-null `access` block is refused, the
-//     assistant/executor exclusion (hasConnectorExecutorBlock);
-//   - a declared assistant must ship cinatra/config.json, or the product never
-//     sees it (npm's packlist, own lines here).
+// product reads (#4920). The check judges the PUBLISHED files, because that is
+// what the product installs: npm's own packlist (`npm pack --dry-run`), or, only
+// when the dry run cannot run, the `files` heuristic the logo check uses
+// (isInScope: without a `files` list it counts src/ and cinatra/ only, so a root
+// agent.json then counts as not published). The dry-run failure itself is
+// reported once, by checkPacklist.
+//   - A published cinatra/oas.json must parse (the materializer refuses a
+//     tarball without it: packages/agents/src/materialize-agent-package.ts; the
+//     install compiles it). One in the checkout that is not published is
+//     reported as such unless the package is a valid published assistant.
+//   - A published old cinatra/agent.json or root agent.json without a published
+//     cinatra/oas.json fails with the file to move. An old file that is not
+//     published is ignored: the product never sees it.
+//   - The other agent form is a config-only assistant: cinatra/config.json with
+//     an `assistant` block. The product reads cinatra/config.json of EVERY agent
+//     package (src/lib/assistant-declaration-host.ts,
+//     packages/sdk-extensions/src/assistant-declaration.ts); this check reads it
+//     when it is in the checkout: a config that cannot be read or parsed is
+//     refused (own lines); an assistant block (hasAssistantBlock) gets the
+//     product's file and block schema (validateAssistantConfig); an assistant
+//     block beside a non-null `access` block is refused (the assistant/executor
+//     exclusion, hasConnectorExecutorBlock); a declared assistant must publish
+//     cinatra/config.json, or the product never sees it.
 // Not checked here: the platform-scope rule (an assistant installs only at
 // platform scope) is a property of the install request, not of the package; the
 // install gate (assertAssistantInstallConstraints) enforces it.
 const OLD_AGENT_DEFINITIONS = ["cinatra/agent.json", "agent.json"];
 
+// Whether `rel` ships in the published package: npm's packlist, or the `files`
+// heuristic when the dry run is unavailable (the same rule as checkDeclaredLogo).
+function publishedFiles(pkgDir, pkg) {
+  const { files: packed } = resolvePacklist(pkgDir);
+  return {
+    viaDryRun: packed !== null,
+    isPublished: (rel) =>
+      packed === null ? existsSync(join(pkgDir, rel)) && isInScope(rel, pkg.files) : packed.includes(rel),
+  };
+}
+
+const notPublishedHow = (viaDryRun) =>
+  viaDryRun ? " (per `npm pack --dry-run`)" : ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)';
+
 function checkAgentManifest(pkgDir, pkg) {
-  const config = checkAgentConfig(pkgDir, pkg);
-  const oasPath = join(pkgDir, "cinatra", "oas.json");
-  if (existsSync(oasPath)) {
+  const published = publishedFiles(pkgDir, pkg);
+  const config = checkAgentConfig(pkgDir, pkg, published);
+  const oasRel = "cinatra/oas.json";
+  if (published.isPublished(oasRel)) {
     try {
-      JSON.parse(readFileSync(oasPath, "utf8"));
+      JSON.parse(readFileSync(join(pkgDir, oasRel), "utf8"));
       return config.findings;
     } catch (err) {
       return [
         {
           rule: "manifest.agent-oas-invalid-json",
-          file: "cinatra/oas.json",
+          file: oasRel,
           detail: `not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
         },
         ...config.findings,
       ];
     }
   }
-  const old = OLD_AGENT_DEFINITIONS.filter((rel) => existsSync(join(pkgDir, rel)));
+  const old = OLD_AGENT_DEFINITIONS.filter((rel) => published.isPublished(rel));
   if (old.length > 0) {
     return [
       {
         rule: "manifest.agent-missing-oas",
-        file: "cinatra/oas.json",
+        file: oasRel,
         detail: `move ${old.join(" and ")} to cinatra/oas.json: the product reads only cinatra/oas.json and does not load ${old.join(" or ")}.`,
       },
       ...config.findings,
     ];
   }
-  // A config-only assistant, or a config that does not parse: its own findings.
+  // A config-only assistant (clean when valid and published), or a config that
+  // does not parse: its own findings.
   if (config.assistant || config.findings.length > 0) return config.findings;
+  if (existsSync(join(pkgDir, oasRel))) {
+    return [
+      {
+        rule: "manifest.agent-oas-unpublished",
+        file: oasRel,
+        detail:
+          `cinatra/oas.json exists but is not published${notPublishedHow(published.viaDryRun)}; ` +
+          `add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
+      },
+    ];
+  }
   return [
     {
       rule: "manifest.agent-missing-oas",
-      file: "cinatra/oas.json",
+      file: oasRel,
       detail: "agent extensions must ship cinatra/oas.json, the agent's one definition file, or declare an assistant in cinatra/config.json.",
     },
   ];
@@ -1561,7 +1594,7 @@ function checkAgentManifest(pkgDir, pkg) {
 
 // Returns { assistant: whether cinatra/config.json declares an assistant block,
 // findings }.
-function checkAgentConfig(pkgDir, pkg) {
+function checkAgentConfig(pkgDir, pkg, published) {
   const rel = "cinatra/config.json";
   const configPath = join(pkgDir, rel);
   if (!existsSync(configPath)) return { assistant: false, findings: [] };
@@ -1594,17 +1627,12 @@ function checkAgentConfig(pkgDir, pkg) {
     findings.push({ rule: "manifest.agent-assistant-executor-exclusive", file: rel, detail: `cinatra/config.json ${ASSISTANT_EXECUTOR_EXCLUSION_MESSAGE}.` });
   }
   if (findings.length > 0) return { assistant: true, findings };
-  // The same shipment proof as checkDeclaredLogo: npm's packlist, the `files`
-  // heuristic only when the dry run is unavailable.
-  const { files: packed } = resolvePacklist(pkgDir);
-  const ships = packed === null ? isInScope(rel, pkg.files) : packed.includes(rel);
-  if (!ships) {
+  if (!published.isPublished(rel)) {
     findings.push({
       rule: "manifest.agent-assistant-config-unpublished",
       file: rel,
       detail:
-        `cinatra/config.json declares the assistant but does not ship in the published package` +
-        `${packed === null ? ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)' : " (per `npm pack --dry-run`)"}` +
+        `cinatra/config.json declares the assistant but does not ship in the published package${notPublishedHow(published.viaDryRun)}` +
         `; add "cinatra" to package.json "files" and make sure no .npmignore excludes it.`,
     });
   }

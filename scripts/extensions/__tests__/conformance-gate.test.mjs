@@ -395,8 +395,10 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
       "cinatra/oas.json": JSON.stringify({ ok: true }),
       "agent.json": JSON.stringify({ formatVersion: 1 }),
     });
-    // Title kept. Since #4920 nothing writes or reads a root agent.json: beside a
-    // valid cinatra/oas.json it is not a definition, so no finding names it.
+    // The title is kept from main, but the root agent.json is no longer a
+    // "materialized" file: since #4920 nothing writes or reads it. Here it is not
+    // even published ("files" names only src and cinatra), and beside a published
+    // cinatra/oas.json it is not a definition, so no finding names it.
     const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
     const all = [...result.blocking, ...result.known, ...result.advisory];
     expect(all.filter((f) => f.file === "agent.json" || /^manifest\.agent-/.test(f.rule))).toEqual([]);
@@ -446,8 +448,9 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
   });
 
   it("fails a package that holds only an old-layout definition file and names the file to move (#4920)", () => {
+    // The old file is published: cinatra/ ships, and "files" names the root agent.json.
     for (const old of ["cinatra/agent.json", "agent.json"]) {
-      const result = gateOver(agentFixture({ [old]: JSON.stringify({ formatVersion: 2 }) }));
+      const result = gateOver(agentFixture({ [old]: JSON.stringify({ formatVersion: 2 }) }, ["cinatra", "agent.json"]));
       expect(result.conform).toBe(false);
       expect(agentFindings(result)).toEqual([
         {
@@ -526,6 +529,42 @@ describe("conformance-gate — seeded violations (the #979 acceptance proof)", (
     ]);
     expect(withOas(JSON.stringify(VALID_ASSISTANT_CONFIG))).toEqual([]);
     expect(withOas(JSON.stringify({ formatVersion: 1, access: ACCESS }))).toEqual([]);
+  });
+
+  // The check judges the PUBLISHED files (npm's packlist), as the product installs them.
+  const cleanOf = (result) => ({ blocking: result.blocking, known: result.known, advisory: result.advisory, conform: result.conform });
+  const CLEAN = { blocking: [], known: [], advisory: [], conform: true };
+
+  it("passes a valid assistant beside a root agent.json that is not published (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/config.json": JSON.stringify(VALID_ASSISTANT_CONFIG), "agent.json": JSON.stringify({ formatVersion: 2 }) }),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("fails a valid cinatra/oas.json that is not published (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }) }, ["src"]));
+    expect(result.conform).toBe(false);
+    expect(agentFindings(result).map((f) => f.rule)).toEqual(["manifest.agent-oas-unpublished"]);
+    expect(agentFindings(result)[0].detail).toContain("cinatra/oas.json exists but is not published");
+  });
+
+  it("fails a published old-layout file without a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(agentFixture({ "cinatra/agent.json": JSON.stringify({ formatVersion: 2 }) }));
+    expect(agentFindings(result).map((f) => f.detail)).toEqual([
+      "move cinatra/agent.json to cinatra/oas.json: the product reads only cinatra/oas.json and does not load cinatra/agent.json.",
+    ]);
+  });
+
+  it("ignores an unpublished old-layout file beside a published cinatra/oas.json (#4920)", () => {
+    const result = gateOver(
+      agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }), "agent.json": JSON.stringify({ formatVersion: 2 }) }),
+    );
+    expect(cleanOf(result)).toEqual(CLEAN);
+  });
+
+  it("passes a published, valid cinatra/oas.json (#4920)", () => {
+    expect(cleanOf(gateOver(agentFixture({ "cinatra/oas.json": JSON.stringify({ ok: true }) })))).toEqual(CLEAN);
   });
 });
 
