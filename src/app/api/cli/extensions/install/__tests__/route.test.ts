@@ -350,6 +350,57 @@ describe("POST /api/cli/extensions/install", () => {
     errorSpy.mockRestore();
   });
 
+  it.each([
+    [
+      "requires-rebuild",
+      {
+        success: false,
+        requiresRebuild: true,
+        packageName: "@example-org/agent-hello",
+        packageVersion: "1.2.3",
+        message: "@example-org/agent-hello requires a host rebuild",
+        compensationFailures: ["@example-org/skill-dep"],
+      },
+    ],
+    [
+      "contract-violation",
+      {
+        success: false,
+        contractViolation: true,
+        packageName: "@example-org/agent-hello",
+        packageVersion: "1.2.3",
+        missingFields: ["cinatra.riskLevel"],
+        message: "missing cinatra.riskLevel",
+        compensationFailures: ["@example-org/skill-dep"],
+      },
+    ],
+  ])("a %s result after a FAILED rollback (the primitive's structured result with compensationFailures) → the incomplete-rollback 500, not a 4xx", async (_label, result) => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    extensionsInstallMock.mockResolvedValue(result);
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error:
+        "Installing @example-org/agent-hello@1.2.3 failed and its rollback is incomplete; these packages may need manual removal: @example-org/skill-dep.",
+      needsManualRemoval: ["@example-org/skill-dep"],
+    });
+    errorSpy.mockRestore();
+  });
+
+  it("a raw structured error thrown with compensationFailures → the incomplete-rollback 500", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    extensionsInstallMock.mockRejectedValue(
+      Object.assign(new Error("refused"), {
+        code: "REQUIRES_REBUILD",
+        compensationFailures: ["@example-org/skill-dep"],
+      }),
+    );
+    const res = await POST(post(OK_BODY));
+    expect(res.status).toBe(500);
+    expect((await res.json()).needsManualRemoval).toEqual(["@example-org/skill-dep"]);
+    errorSpy.mockRestore();
+  });
+
   it("an unexpected failure → the fixed generic 500, logged server-side", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     extensionsInstallMock.mockRejectedValue(new Error("boom with internal detail"));

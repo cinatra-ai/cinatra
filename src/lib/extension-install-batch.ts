@@ -1665,6 +1665,15 @@ export async function installExtensionWithDependencies(
       await deps.ledger
         .setPhase(batch!.batchId, failures.length === 0 ? "compensated" : "failed")
         .catch(() => undefined);
+      // An INCOMPLETE rollback must leave this function on EVERY exit, not only
+      // inside BatchMemberInstallError (cinatra#4920): the two raw structured
+      // rethrows below would otherwise carry a refusal that hides packages left
+      // installed. The same `compensationFailures` field is attached to the raw
+      // error (class and `code` unchanged, so callers matching on the code keep
+      // working). A complete rollback attaches nothing.
+      if (failures.length > 0 && cause !== null && typeof cause === "object") {
+        Object.assign(cause, { compensationFailures: [...failures] });
+      }
       // REQUIRES_REBUILD: the refusing kind needs a host rebuild before this
       // install can proceed — compensation has run; rethrow the RAW error so
       // the structured { requiresRebuild } surface contract is preserved.

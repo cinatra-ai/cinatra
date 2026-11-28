@@ -4,6 +4,7 @@
 // work. Mocked at the registry read, the marketplace authorize and the batch
 // boundary, so the primitive's own resolution and kind check run for real.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Actor } from "@cinatra-ai/extension-types";
 
@@ -29,16 +30,27 @@ vi.mock("@/lib/verdaccio-config", () => ({
     token: "t",
   })),
 }));
+// A faithful stand-in for the grant context (`src/lib/extension-install-grant-context.ts`
+// is `storage.run(ctx, fn)` / `storage.getStore() ?? null` over one
+// AsyncLocalStorage) and for `resolveGatekeptInstallConfig`, which DERIVES the
+// resolution from an active context and calls the marketplace authorize only
+// outside one. So the authorize count below is the real authorize-once count.
+const grantStorage = new AsyncLocalStorage<{ rootPackageName: string; resolution: unknown }>();
 vi.mock("@/lib/gatekept-install", () => ({
   isGatekeptInstallEnabled: () => gatekeptOn(),
-  resolveGatekeptInstallConfig: (...a: unknown[]) => authorizeMock(...a),
+  resolveGatekeptInstallConfig: (...a: unknown[]) => {
+    const ctx = grantStorage.getStore();
+    if (ctx) return Promise.resolve(ctx.resolution);
+    return authorizeMock(...a);
+  },
 }));
 const grantContexts: unknown[] = [];
 vi.mock("@/lib/extension-install-grant-context", () => ({
-  withInstallGrantContext: (ctx: unknown, fn: () => unknown) => {
+  withInstallGrantContext: (ctx: { rootPackageName: string; resolution: unknown }, fn: () => unknown) => {
     grantContexts.push(ctx);
-    return fn();
+    return grantStorage.run(ctx, fn);
   },
+  getActiveInstallGrantContext: () => grantStorage.getStore() ?? null,
 }));
 vi.mock("@/lib/instance-identity-store", () => ({ readInstanceIdentity: () => ({}) }));
 vi.mock("@/lib/marketplace-credentials", () => ({ getEffectiveViewerScope: () => "@example-org" }));
@@ -125,6 +137,58 @@ describe("extensions_install allowedKinds (cinatra#4920)", () => {
     expect(err).toMatchObject({ code: "EXTENSION_KIND_NOT_ALLOWED", kind: "connector" });
     expect(summaryMock).not.toHaveBeenCalled();
     expect(installBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("gatekept: ONE authorize across resolution, the kind check and the batch, which runs inside the root's grant", async () => {
+    gatekeptOn.mockReturnValue(true);
+    authorizeMock.mockResolvedValue(authorized("agent"));
+    let rootSeenByBatch: string | null = null;
+    installBatchMock.mockImplementation(async () => {
+      // The batch adopts an active context whose root is the package it installs.
+      rootSeenByBatch = grantStorage.getStore()?.rootPackageName ?? null;
+      return {};
+    });
+    const result = await createExtensionsPrimitiveHandlers().extensions_install(
+      { packageName: "@example-org/thing", packageVersion: "1.2.3" },
+      actor,
+      { allowedKinds: ["agent", "skill"] },
+    );
+    expect(result).toEqual({ success: true, packageName: "@example-org/thing", packageVersion: "1.2.3" });
+    expect(authorizeMock).toHaveBeenCalledTimes(1);
+    expect(rootSeenByBatch).toBe("@example-org/thing");
+    expect(summaryMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["REQUIRES_REBUILD", "requiresRebuild"],
+    ["AGENT_PACKAGE_CONTRACT_VIOLATION", "contractViolation"],
+  ])("a raw %s error carrying the batch's compensationFailures keeps them on the structured result", async (code, flag) => {
+    summaryMock.mockResolvedValue(summary("agent"));
+    installBatchMock.mockRejectedValue(
+      Object.assign(new Error("refused after a partial install"), {
+        code,
+        packageName: "@example-org/thing",
+        missingFields: ["cinatra.riskLevel"],
+        compensationFailures: ["@example-org/dep-left"],
+      }),
+    );
+    const result = await createExtensionsPrimitiveHandlers().extensions_install(
+      { packageName: "@example-org/thing", packageVersion: "1.2.3" },
+      actor,
+      { allowedKinds: ["agent", "skill"] },
+    );
+    expect(result).toMatchObject({ success: false, [flag]: true, compensationFailures: ["@example-org/dep-left"] });
+  });
+
+  it("a raw structured error with no compensation failures has no compensationFailures on the result", async () => {
+    summaryMock.mockResolvedValue(summary("agent"));
+    installBatchMock.mockRejectedValue(Object.assign(new Error("rebuild"), { code: "REQUIRES_REBUILD" }));
+    const result = await createExtensionsPrimitiveHandlers().extensions_install(
+      { packageName: "@example-org/thing", packageVersion: "1.2.3" },
+      actor,
+    );
+    expect(result).toMatchObject({ success: false, requiresRebuild: true });
+    expect(result).not.toHaveProperty("compensationFailures");
   });
 
   it("gatekept: a refused authorize stops the install before the batch", async () => {

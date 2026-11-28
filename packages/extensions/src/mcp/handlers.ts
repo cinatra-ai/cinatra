@@ -29,10 +29,33 @@ import { loadDeploymentRegistryConfig } from "@/lib/deployment-registry-config";
 // `ConnectorRequiresRebuildError` and `WorkflowInstallRequiresRebuildError`
 // carry `code === "REQUIRES_REBUILD"`. Returns null for any other error (the
 // caller re-throws).
+// The install batch attaches `compensationFailures` (package names) to a raw
+// structured error when its rollback could not remove everything it had added
+// (cinatra#4920). Passed through on the structured result so a caller can tell
+// a clean refusal from one that left packages installed. Absent when the
+// rollback was complete or nothing was installed.
+function readCompensationFailures(...carriers: unknown[]): { compensationFailures?: string[] } {
+  for (const carrier of carriers) {
+    const raw = (carrier as { compensationFailures?: unknown } | null | undefined)?.compensationFailures;
+    if (Array.isArray(raw)) {
+      const names = raw.filter((n): n is string => typeof n === "string");
+      if (names.length > 0) return { compensationFailures: names };
+    }
+  }
+  return {};
+}
+
 function surfaceRequiresRebuild(
   err: unknown,
   input: { packageName: string; packageVersion: string },
-): { success: false; requiresRebuild: true; packageName: string; packageVersion: string; message: string } | null {
+): {
+  success: false;
+  requiresRebuild: true;
+  packageName: string;
+  packageVersion: string;
+  message: string;
+  compensationFailures?: string[];
+} | null {
   const code = (err as { code?: unknown } | null)?.code;
   if (code !== "REQUIRES_REBUILD") return null;
   return {
@@ -41,6 +64,7 @@ function surfaceRequiresRebuild(
     packageName: input.packageName,
     packageVersion: input.packageVersion,
     message: err instanceof Error ? err.message : String(err),
+    ...readCompensationFailures(err),
   };
 }
 
@@ -63,6 +87,7 @@ function surfaceContractViolation(
   packageVersion: string;
   missingFields: string[];
   message: string;
+  compensationFailures?: string[];
 } | null {
   let node: unknown = err;
   for (let depth = 0; depth < 5 && node != null; depth++) {
@@ -78,6 +103,7 @@ function surfaceContractViolation(
           ? viol.missingFields.filter((f): f is string => typeof f === "string")
           : [],
         message: node instanceof Error ? node.message : String(node),
+        ...readCompensationFailures(node, err),
       };
     }
     node = (node as { cause?: unknown }).cause;
@@ -98,6 +124,7 @@ type ExtensionsInstallResult =
       packageName: string;
       packageVersion: string;
       message: string;
+      compensationFailures?: string[];
     }
   | {
       success: false;
@@ -106,6 +133,7 @@ type ExtensionsInstallResult =
       packageVersion: string;
       missingFields: string[];
       message: string;
+      compensationFailures?: string[];
     };
 
 /**

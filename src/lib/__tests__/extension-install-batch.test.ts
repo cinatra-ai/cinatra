@@ -1438,6 +1438,8 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
       // RAW (un-wrapped) so the MCP surface keeps its { requiresRebuild } result.
       expect((e as { code?: string }).code).toBe("REQUIRES_REBUILD");
       expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      // A complete rollback attaches nothing.
+      expect(e).not.toHaveProperty("compensationFailures");
     }
     // The dispatcher rolled back the refusing package's placeholder row —
     // nothing durable installed for it — so the batch compensates the deps
@@ -1445,6 +1447,30 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.phase).toBe("compensated");
     expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
+  });
+
+  it("a FAILED compensation is carried out on the raw error as compensationFailures (cinatra#4920)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installRequiresRebuild: ROOT,
+    });
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("uninstall refused"),
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("root rebuild refusal must propagate");
+    } catch (e) {
+      // Still the RAW structured error (code + class unchanged)…
+      expect((e as { code?: string }).code).toBe("REQUIRES_REBUILD");
+      expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      // …now carrying the packages the rollback left installed.
+      expect((e as { compensationFailures?: string[] }).compensationFailures).toEqual([
+        "@cinatra-ai/dep-a",
+      ]);
+    }
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.phase).toBe("failed");
   });
 });
 
@@ -1481,6 +1507,29 @@ describe("installExtensionWithDependencies — AGENT_PACKAGE_CONTRACT_VIOLATION 
     expect(batch.phase).toBe("compensated");
     expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
     expect(h.events).not.toContain(`install:${ROOT}`);
+  });
+
+  it("a FAILED compensation is carried out on the raw contract-violation error as compensationFailures (cinatra#4920)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installContractViolation: "@cinatra-ai/dep-b",
+    });
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("uninstall refused"),
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("a member contract violation must propagate");
+    } catch (e) {
+      expect((e as { code?: string }).code).toBe("AGENT_PACKAGE_CONTRACT_VIOLATION");
+      expect(e).not.toBeInstanceOf(BatchMemberInstallError);
+      expect((e as { packageName?: string }).packageName).toBe("@cinatra-ai/dep-b");
+      expect((e as { compensationFailures?: string[] }).compensationFailures).toEqual([
+        "@cinatra-ai/dep-a",
+      ]);
+    }
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.phase).toBe("failed");
   });
 });
 

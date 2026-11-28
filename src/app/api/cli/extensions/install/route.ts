@@ -53,8 +53,12 @@
 // take the package-global teardown branch for a dependency other orgs use.
 //
 // ERRORS: known refusals return a fixed or composed safe message with a 4xx.
-// A failed batch member whose rollback was incomplete answers 500 naming the
-// packages that may need manual removal (names only). Anything else returns a
+// An incomplete rollback always answers 500 naming the packages that may need
+// manual removal (names only), whatever else the failure says: the batch
+// carries `compensationFailures` on its `BatchMemberInstallError` and on the
+// raw requires-rebuild / contract-violation errors it rethrows, and the
+// primitive passes the field through on its structured result. A failed batch
+// member with a complete rollback is the generic 500. Anything else returns a
 // fixed message with 500 and is logged server-side only.
 // ---------------------------------------------------------------------------
 
@@ -95,14 +99,44 @@ function json(body: Record<string, unknown>, status: number): Response {
   return NextResponse.json(body, { status });
 }
 
-/** The `BatchMemberInstallError` the error is or wraps (bounded `cause` walk), if any. */
-function findBatchMemberError(error: unknown): BatchMemberInstallError | null {
+/** Package names in a `compensationFailures` field, if it is a non-empty list. */
+function namesOf(raw: unknown): string[] | null {
+  if (!Array.isArray(raw)) return null;
+  const names = raw.filter((n): n is string => typeof n === "string");
+  return names.length > 0 ? names : null;
+}
+
+/**
+ * Bounded `cause` walk: whether the error is or wraps a
+ * `BatchMemberInstallError`, and the first non-empty `compensationFailures`
+ * list on the chain (the batch's own error or a raw structured error it
+ * rethrew after a failed rollback).
+ */
+function readBatchFailure(error: unknown): { isBatchError: boolean; leftOver: string[] | null } {
+  let isBatchError = false;
+  let leftOver: string[] | null = null;
   let node: unknown = error;
   for (let depth = 0; depth <= MAX_CAUSE_DEPTH && node != null && typeof node === "object"; depth++) {
-    if (node instanceof BatchMemberInstallError) return node;
+    if (node instanceof BatchMemberInstallError) isBatchError = true;
+    leftOver ??= namesOf((node as { compensationFailures?: unknown }).compensationFailures);
     node = (node as { cause?: unknown }).cause;
   }
-  return null;
+  return { isBatchError, leftOver };
+}
+
+function incompleteRollback(target: string, leftOver: string[]): Response {
+  const safe = leftOver.filter((name) => PACKAGE_NAME_RE.test(name));
+  return json(
+    {
+      error:
+        `Installing ${target} failed and its rollback is incomplete; ` +
+        (safe.length > 0
+          ? `these packages may need manual removal: ${safe.join(", ")}.`
+          : "some installed dependencies may need manual removal."),
+      needsManualRemoval: safe,
+    },
+    500,
+  );
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -181,32 +215,26 @@ export async function POST(request: Request): Promise<Response> {
         { status: 200, headers: { "Cache-Control": "no-store" } },
       );
     }
+    // A refusal after a failed rollback is not an ordinary refusal.
+    const leftOverAfterRefusal = namesOf(result.compensationFailures);
+    if (leftOverAfterRefusal) {
+      console.error("[cli-api/extensions/install] rollback incomplete", result.packageName);
+      return incompleteRollback(target, leftOverAfterRefusal);
+    }
     if ("contractViolation" in result) {
       return json({ error: result.message, missingFields: result.missingFields }, 422);
     }
     return json({ error: result.message }, 409);
   } catch (error) {
-    // A failed batch member: never a 4xx, whatever its cause. When the batch
-    // could not roll back what it had added, say so and name the packages.
-    const batchError = findBatchMemberError(error);
-    if (batchError) {
+    // A failed batch member, or any failure after a failed rollback: never a
+    // 4xx. When the rollback was incomplete, say so and name the packages.
+    const batchFailure = readBatchFailure(error);
+    if (batchFailure.leftOver) {
       console.error("[cli-api/extensions/install] failed", error);
-      const leftOver = batchError.compensationFailures.filter(
-        (name) => typeof name === "string" && PACKAGE_NAME_RE.test(name),
-      );
-      if (batchError.compensationFailures.length > 0) {
-        return json(
-          {
-            error:
-              `Installing ${target} failed and its rollback is incomplete; ` +
-              (leftOver.length > 0
-                ? `these packages may need manual removal: ${leftOver.join(", ")}.`
-                : "some installed dependencies may need manual removal."),
-            needsManualRemoval: leftOver,
-          },
-          500,
-        );
-      }
+      return incompleteRollback(target, batchFailure.leftOver);
+    }
+    if (batchFailure.isBatchError) {
+      console.error("[cli-api/extensions/install] failed", error);
       return json({ error: GENERIC_FAILURE }, 500);
     }
 
