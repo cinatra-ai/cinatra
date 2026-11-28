@@ -1,0 +1,4 @@
+{
+  "note": "declared-text-core-gate (cinatra#4533) — core string literals and JSX texts equal to a user-facing text a pinned extension declares. It only shrinks: a new or grown entry fails. Lower it with `node scripts/audit/declared-text-core-gate.mjs --write-baseline` once the text leaves core.",
+  "matches": {}
+}
