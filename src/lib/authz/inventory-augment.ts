@@ -602,3 +602,33 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
 export function lookupPrimitiveClassification(name: string): PrimitiveClassification | undefined {
   return PRIMITIVE_CLASSIFICATIONS[name];
 }
+
+// ---------------------------------------------------------------------------
+// PASSTHROUGH CLASSIFICATIONS (cinatra#4895) — the inventory rows whose road is
+// "passthrough": names the deterministic passthrough route
+// (src/app/api/agents/passthrough/route.ts) admits that no MCP road registers.
+// The route enforces them (bridge token, the proven run, each tool's own scope);
+// the MCP boundary never sees them. So this map is SEPARATE from
+// PRIMITIVE_CLASSIFICATIONS and nothing at the MCP boundary reads it: a pack's
+// MCP tool that takes one of these names gets no host classification from here.
+// KEEP ALPHABETICAL by key.
+// ---------------------------------------------------------------------------
+
+export type PassthroughToolClassification = {
+  resourceType: ResourceType;
+  action: Action;
+  /** Where the tool is enforced: the passthrough route, not the MCP boundary. */
+  status: "passthrough_route";
+};
+
+export const PASSTHROUGH_TOOL_CLASSIFICATIONS: Record<string, PassthroughToolClassification> = {
+  artifact_content_read:   { resourceType: "artifact",  action: "read",    status: "passthrough_route" },
+  artifact_image_generate: { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  artifact_materialize:    { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  artifact_page_capture:   { resourceType: "artifact",  action: "create",  status: "passthrough_route" },
+  extension_data:          { resourceType: "agent_run", action: "execute", status: "passthrough_route" },
+  extension_tool:          { resourceType: "agent_run", action: "execute", status: "passthrough_route" },
+  run_folder_list:         { resourceType: "agent_run", action: "read",    status: "passthrough_route" },
+  run_folder_read:         { resourceType: "agent_run", action: "read",    status: "passthrough_route" },
+  run_folder_write:        { resourceType: "agent_run", action: "update",  status: "passthrough_route" },
+};
